@@ -1,0 +1,319 @@
+import {
+  detectMinutesJsonIssues,
+  validateMinutesJson,
+  type MinutesDocument,
+} from "@/lib/minutes/schema";
+import {
+  detectMinutesV2Issues,
+  validateMinutesV2,
+  type MinutesDocumentV2,
+} from "@/lib/minutes/schema-v2";
+import {
+  validateOmissionsAnalysis,
+  validateTodoOmissionsAnalysis,
+  type OmissionsAnalysisResult,
+  type TodoOmissionFinding,
+} from "@/lib/minutes/omissions-schema";
+import {
+  validateGlobalTodosMergeResult,
+  type GlobalTodosMergeResult,
+} from "@/lib/todos/merge-global-schema";
+
+export type ParsedModelOutput = {
+  markdown: string;
+  warnings: string[];
+};
+
+/** Gemini responds with a fenced markdown block — strip fences. */
+export function unwrapMarkdownCodeBlock(raw: string): ParsedModelOutput {
+  const warnings: string[] = [];
+  let text = raw.trim();
+
+  const fenced =
+    /^```(?:markdown|md)?\s*\r?\n([\s\S]*)\r?\n```\s*$/im.exec(text);
+  if (fenced) {
+    return { markdown: fenced[1].trim(), warnings };
+  }
+
+  if (text.startsWith("```")) {
+    warnings.push(
+      "Model output was missing a closing markdown fence — minutes may be truncated.",
+    );
+    text = text.replace(/^```(?:markdown|md)?[^\n]*\n?/i, "").trim();
+  }
+
+  return { markdown: text, warnings };
+}
+
+export type ParsedJsonOutput = {
+  jsonText: string;
+  warnings: string[];
+};
+
+/** Strip \`\`\`json fences from model output. */
+export function unwrapJsonCodeBlock(raw: string): ParsedJsonOutput {
+  const warnings: string[] = [];
+  let text = raw.trim();
+
+  const fenced =
+    /^```(?:json)?\s*\r?\n([\s\S]*)\r?\n```\s*$/im.exec(text);
+  if (fenced) {
+    return { jsonText: fenced[1].trim(), warnings };
+  }
+
+  if (text.startsWith("```")) {
+    warnings.push(
+      "Model output may be missing a closing JSON fence — parsing may fail.",
+    );
+    text = text
+      .replace(/^```(?:json)?[^\n]*\n?/i, "")
+      .replace(/\r?\n```\s*$/i, "")
+      .trim();
+  }
+
+  return { jsonText: text, warnings };
+}
+
+export type ParsedMinutesJsonResult = {
+  document: MinutesDocument | null;
+  warnings: string[];
+  errors: string[];
+};
+
+export type ParsedMinutesV2Result = {
+  document: MinutesDocumentV2 | null;
+  warnings: string[];
+  errors: string[];
+};
+
+/** Parse native JSON minutes response and validate v2 schema. */
+export function parseMinutesV2Response(raw: string): ParsedMinutesV2Result {
+  const { jsonText, warnings: unwrapWarnings } = unwrapJsonCodeBlock(raw);
+  const warnings: string[] = [...unwrapWarnings];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText) as unknown;
+  } catch {
+    return {
+      document: null,
+      warnings,
+      errors: ["Model output is not valid JSON."],
+    };
+  }
+
+  const validated = validateMinutesV2(parsed);
+  const allWarnings = [...warnings, ...validated.warnings];
+
+  if (!validated.value) {
+    return {
+      document: null,
+      warnings: allWarnings,
+      errors: validated.errors,
+    };
+  }
+
+  allWarnings.push(...detectMinutesV2Issues(validated.value));
+
+  return {
+    document: validated.value,
+    warnings: allWarnings,
+    errors: [],
+  };
+}
+
+/** Unwrap fence, parse JSON, validate and run heuristics. */
+export function parseMinutesJsonResponse(raw: string): ParsedMinutesJsonResult {
+  const { jsonText, warnings } = unwrapJsonCodeBlock(raw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText) as unknown;
+  } catch {
+    return {
+      document: null,
+      warnings,
+      errors: ["Model output is not valid JSON after stripping fences."],
+    };
+  }
+
+  const validated = validateMinutesJson(parsed);
+  const allWarnings = [...warnings, ...validated.warnings];
+
+  if (!validated.value) {
+    return {
+      document: null,
+      warnings: allWarnings,
+      errors: validated.errors,
+    };
+  }
+
+  allWarnings.push(...detectMinutesJsonIssues(validated.value));
+
+  return {
+    document: validated.value,
+    warnings: allWarnings,
+    errors: [],
+  };
+}
+
+export function detectTruncatedMinutes(markdown: string): string[] {
+  const warnings: string[] = [];
+  const trimmed = markdown.trim();
+
+  if (!trimmed) {
+    warnings.push("Minutes output was empty.");
+    return warnings;
+  }
+
+  if (/["“][^"”\n]*$/.test(trimmed)) {
+    warnings.push("Minutes appear to end mid-sentence.");
+  }
+
+  if (
+    trimmed.length < 2500 &&
+    !/adjourn|concluded|meeting was (adjourned|concluded)/i.test(trimmed)
+  ) {
+    warnings.push(
+      "Minutes look unusually short and may be incomplete (no adjournment found).",
+    );
+  }
+
+  return warnings;
+}
+
+export function validateMinutesOutput(md: string): string[] {
+  const w: string[] = [];
+  if (!/motion\s+by/i.test(md)) {
+    w.push("No MOTION pattern detected.");
+  }
+  return w;
+}
+
+export function validateTodosOutput(md: string): string[] {
+  const w: string[] = [];
+  if (!/^###\s+/m.test(md)) {
+    w.push('Expected headings like "### Name - Role".');
+  }
+  if (!/^-\s*\[\s?\]/m.test(md)) {
+    w.push("Expected markdown checklists `- [ ]`.");
+  }
+  return w;
+}
+
+export type ParsedOmissionsResult = {
+  analysis: OmissionsAnalysisResult | null;
+  warnings: string[];
+  errors: string[];
+};
+
+/** Parse native JSON omissions analysis response and validate schema. */
+export function parseOmissionsResponse(raw: string): ParsedOmissionsResult {
+  const { jsonText, warnings: unwrapWarnings } = unwrapJsonCodeBlock(raw);
+  const warnings: string[] = [...unwrapWarnings];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText) as unknown;
+  } catch {
+    return {
+      analysis: null,
+      warnings,
+      errors: ["Model output is not valid JSON."],
+    };
+  }
+
+  const validated = validateOmissionsAnalysis(parsed);
+  const allWarnings = [...warnings, ...validated.warnings];
+
+  if (!validated.value) {
+    return {
+      analysis: null,
+      warnings: allWarnings,
+      errors: validated.errors,
+    };
+  }
+
+  return {
+    analysis: validated.value,
+    warnings: allWarnings,
+    errors: [],
+  };
+}
+
+export type ParsedTodoOmissionsResult = {
+  omissions: TodoOmissionFinding[];
+  noSignificantTodosOmissions?: boolean;
+  analyzedAt?: string;
+  warnings: string[];
+  errors: string[];
+};
+
+/** Parse native JSON todos omissions response. */
+export function parseTodoOmissionsResponse(raw: string): ParsedTodoOmissionsResult {
+  const { jsonText, warnings: unwrapWarnings } = unwrapJsonCodeBlock(raw);
+  const warnings: string[] = [...unwrapWarnings];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText) as unknown;
+  } catch {
+    return {
+      omissions: [],
+      warnings,
+      errors: ["Model output is not valid JSON."],
+    };
+  }
+
+  const validated = validateTodoOmissionsAnalysis(parsed);
+  const allWarnings = [...warnings, ...validated.warnings];
+
+  if (!validated.value) {
+    return {
+      omissions: [],
+      warnings: allWarnings,
+      errors: validated.errors,
+    };
+  }
+
+  return {
+    omissions: validated.value.todosOmissions,
+    noSignificantTodosOmissions: validated.value.noSignificantTodosOmissions,
+    analyzedAt: validated.value.analyzedAt,
+    warnings: allWarnings,
+    errors: [],
+  };
+}
+
+export type ParsedGlobalTodosMerge = {
+  result: GlobalTodosMergeResult | null;
+  warnings: string[];
+  errors: string[];
+};
+
+export function parseGlobalTodosMergeResponse(raw: string): ParsedGlobalTodosMerge {
+  const { jsonText, warnings } = unwrapJsonCodeBlock(raw);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText) as unknown;
+  } catch {
+    return {
+      result: null,
+      warnings,
+      errors: ["Model output is not valid JSON."],
+    };
+  }
+
+  const validated = validateGlobalTodosMergeResult(parsed);
+
+  if (!validated.ok) {
+    return {
+      result: null,
+      warnings,
+      errors: [validated.error],
+    };
+  }
+
+  return {
+    result: validated.result,
+    warnings,
+    errors: [],
+  };
+}

@@ -1,0 +1,94 @@
+import { google } from "googleapis";
+
+export type GmailAccountType = "personal_backfill" | "dedicated";
+
+export const GMAIL_READONLY_SCOPE =
+  "https://www.googleapis.com/auth/gmail.readonly";
+
+export const GMAIL_MODIFY_SCOPE =
+  "https://www.googleapis.com/auth/gmail.modify";
+
+/** @deprecated Use getGmailScopes(accountType) for account-specific scopes. */
+export const GMAIL_SCOPES = [GMAIL_READONLY_SCOPE];
+
+export function getGmailScopes(accountType: GmailAccountType): string[] {
+  if (accountType === "dedicated") {
+    return [GMAIL_MODIFY_SCOPE];
+  }
+  return [GMAIL_READONLY_SCOPE];
+}
+
+export function getAppBaseUrl(): string {
+  return process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+}
+
+export function getOAuthRedirectUri(): string {
+  return (
+    process.env.GOOGLE_REDIRECT_URI ??
+    `${getAppBaseUrl()}/api/email/oauth/callback`
+  );
+}
+
+export function getOAuth2Client() {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    throw new Error(
+      "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in .env.local",
+    );
+  }
+
+  return new google.auth.OAuth2(clientId, clientSecret, getOAuthRedirectUri());
+}
+
+export function buildOAuthState(accountType: GmailAccountType): string {
+  return Buffer.from(
+    JSON.stringify({ accountType, ts: Date.now() }),
+    "utf8",
+  ).toString("base64url");
+}
+
+export function parseOAuthState(
+  state: string,
+): { accountType: GmailAccountType } | null {
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(state, "base64url").toString("utf8"),
+    ) as { accountType?: GmailAccountType };
+
+    if (
+      parsed.accountType !== "personal_backfill" &&
+      parsed.accountType !== "dedicated"
+    ) {
+      return null;
+    }
+
+    return { accountType: parsed.accountType };
+  } catch {
+    return null;
+  }
+}
+
+export function getAuthorizationUrl(accountType: GmailAccountType): string {
+  const client = getOAuth2Client();
+  const options: {
+    access_type: "offline";
+    prompt: string;
+    scope: string[];
+    state: string;
+    login_hint?: string;
+  } = {
+    access_type: "offline",
+    prompt: "select_account consent",
+    scope: getGmailScopes(accountType),
+    state: buildOAuthState(accountType),
+  };
+
+  if (accountType === "dedicated") {
+    const loginHint = process.env.GMAIL_DEDICATED_EMAIL?.trim();
+    if (loginHint) options.login_hint = loginHint;
+  }
+
+  return client.generateAuthUrl(options);
+}

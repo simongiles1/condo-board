@@ -1,0 +1,561 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+:root {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --muted: #64748b;
+  --accent: #0d9488;
+  --border: #e2e8f0;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+code {
+  font-family: ui-monospace, monospace;
+}
+
+/* Pointer on interactive controls; not-allowed when disabled. */
+button:not(:disabled),
+a[href],
+label[for],
+select:not(:disabled),
+input[type="file"]:not(:disabled),
+input[type="checkbox"]:not(:disabled),
+input[type="radio"]:not(:disabled) {
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled,
+input:disabled {
+  cursor: not-allowed;
+}
+
+/* Selected tab segment — visible state only, not an action. */
+[role="tab"][aria-selected="true"] {
+  cursor: default;
+}
+
+/* TipTap / ProseMirror minutes body — prose plugin does not always reach nested editor nodes. */
+.minutes-editor-content .ProseMirror {
+  min-height: 360px;
+  padding: 1rem 1.25rem;
+  color: #0f172a;
+  line-height: 1.65;
+}
+
+.minutes-editor-content .ProseMirror:focus {
+  outline: none;
+}
+
+.minutes-editor-content .ProseMirror > * + * {
+  margin-top: 0.85em;
+}
+
+.minutes-editor-content .ProseMirror h1,
+.minutes-editor-content .ProseMirror h2,
+.minutes-editor-content .ProseMirror h3,
+.minutes-editor-content .ProseMirror h4 {
+  color: #0f172a;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-top: 1.35em;
+  margin-bottom: 0.45em;
+}
+
+.minutes-editor-content .ProseMirror h1 {
+  font-size: 1.35rem;
+}
+
+.minutes-editor-content .ProseMirror h2 {
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.minutes-editor-content .ProseMirror h3 {
+  font-size: 1rem;
+}
+
+.minutes-editor-content .ProseMirror p {
+  margin-top: 0.55em;
+  margin-bottom: 0.55em;
+}
+
+.minutes-editor-content .ProseMirror strong {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.minutes-editor-content .ProseMirror ul,
+.minutes-editor-content .ProseMirror ol {
+  margin-top: 0.65em;
+  margin-bottom: 0.65em;
+  padding-left: 1.35rem;
+}
+
+.minutes-editor-content .ProseMirror li {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+.minutes-editor-content .ProseMirror li p {
+  margin: 0;
+}
+
+.minutes-markdown-preview h1,
+.minutes-markdown-preview h2,
+.minutes-markdown-preview h3,
+.minutes-markdown-preview h4 {
+  margin-top: 1.35em;
+  margin-bottom: 0.45em;
+}
+
+.minutes-markdown-preview p {
+  margin-top: 0.55em;
+  margin-bottom: 0.55em;
+}
+
+.minutes-markdown-preview strong {
+  font-weight: 700;
+}
+
+.minutes-markdown-preview ul,
+.minutes-markdown-preview ol {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+  padding-left: 1.35rem;
+  list-style-position: outside;
+}
+
+.minutes-markdown-preview ul {
+  list-style-type: disc;
+}
+
+.minutes-markdown-preview ol {
+  list-style-type: decimal;
+}
+
+.minutes-markdown-preview ul ul,
+.minutes-markdown-preview ol ol,
+.minutes-markdown-preview ul ol,
+.minutes-markdown-preview ol ul {
+  margin-top: 0.35em;
+  margin-bottom: 0.35em;
+}
+
+.minutes-markdown-preview ul ul {
+  list-style-type: circle;
+}
+
+.minutes-markdown-preview ul ul ul {
+  list-style-type: square;
+}
+
+.minutes-markdown-preview li {
+  margin-top: 0.35em;
+  margin-bottom: 0.35em;
+}
+
+.minutes-markdown-preview li > p {
+  margin-top: 0.35em;
+  margin-bottom: 0.35em;
+}
+
+.minutes-markdown-preview li > p:first-child {
+  margin-top: 0;
+}
+
+/* TipTap / ProseMirror todos body */
+.todos-editor-content .ProseMirror {
+  min-height: 360px;
+  padding: 1rem 1.25rem;
+  color: #0f172a;
+  line-height: 1.65;
+}
+
+.todos-editor-content .ProseMirror:focus {
+  outline: none;
+}
+
+.todos-editor-content .ProseMirror > * + * {
+  margin-top: 0.85em;
+}
+
+.todos-editor-content .ProseMirror h3 {
+  color: #0f172a;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-top: 1.1em;
+  margin-bottom: 0.4em;
+}
+
+.todos-editor-content .ProseMirror p {
+  margin-top: 0.35em;
+  margin-bottom: 0.35em;
+}
+
+/* TaskList uses a NodeView: <li data-checked><label><input>…</label><div>…</div></li> */
+.todos-editor-content .ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  margin-top: 0.45em;
+  margin-bottom: 0.45em;
+  padding-left: 0;
+}
+
+.todos-editor-content .ProseMirror ul[data-type="taskList"] > li {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: row;
+  gap: 0.55rem;
+  list-style: none;
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.todos-editor-content .ProseMirror ul[data-type="taskList"] > li > label {
+  align-items: flex-start;
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin: 0.15rem 0 0;
+  padding: 0;
+}
+
+.todos-editor-content .ProseMirror ul[data-type="taskList"] > li > label > span {
+  display: none;
+}
+
+.todos-editor-content .ProseMirror ul[data-type="taskList"] > li input[type="checkbox"] {
+  accent-color: #0d9488;
+  cursor: pointer;
+  flex-shrink: 0;
+  height: 1rem;
+  margin: 0;
+  width: 1rem;
+}
+
+.todos-editor-content .ProseMirror ul[data-type="taskList"] > li > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.todos-editor-content .ProseMirror ul[data-type="taskList"] > li > div > p {
+  margin: 0;
+}
+
+.todos-editor-content .ProseMirror ul[data-type="taskList"] > li[data-checked="true"] > div > p {
+  color: #4338ca;
+}
+
+.todos-markdown-preview li.task-list-item:has(input[type="checkbox"]:checked) {
+  color: #4338ca;
+}
+
+.todos-markdown-preview li.task-list-item:has(input[type="checkbox"]:checked) p {
+  text-decoration: none;
+}
+
+.todos-markdown-preview ul.contains-task-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.todos-markdown-preview li.task-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.todos-markdown-preview li.task-list-item input[type="checkbox"] {
+  margin-top: 0.2rem;
+  height: 1rem;
+  width: 1rem;
+  flex-shrink: 0;
+  accent-color: #0d9488;
+  cursor: default;
+}
+
+/* Structured minutes editor — PDF-like section layout */
+.minutes-structured-editor {
+  min-height: 360px;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: #0f172a;
+}
+
+.minutes-structured-section {
+  margin-top: 1.5rem;
+  padding-top: 0.5rem;
+}
+
+.minutes-structured-section:first-child {
+  margin-top: 0;
+}
+
+.minutes-title-clause {
+  margin-bottom: 0.75rem;
+  text-align: justify;
+  line-height: 1.45;
+}
+
+.minutes-hr {
+  margin: 0.75rem 0;
+  border: none;
+  border-top: 1px solid #0f172a;
+}
+
+.minutes-attendance-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.minutes-attendance-block {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: 0.35rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.minutes-attendance-label {
+  font-weight: 400;
+  padding-top: 0.1rem;
+}
+
+.minutes-attendance-rows {
+  min-width: 0;
+}
+
+.minutes-attendance-row {
+  display: grid;
+  grid-template-columns: minmax(10rem, 12rem) 1fr;
+  column-gap: 1.25rem;
+  margin-bottom: 0.15rem;
+  align-items: baseline;
+}
+
+.minutes-attendance-name {
+  font-weight: 400;
+}
+
+.minutes-attendance-role {
+  color: #334155;
+  min-width: 0;
+}
+
+.minutes-section-heading {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 0.35rem;
+  align-items: baseline;
+  margin-bottom: 0.65rem;
+}
+
+.minutes-section-number {
+  font-family: ui-monospace, monospace;
+  font-weight: 700;
+}
+
+.minutes-section-title {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.minutes-subsection-heading {
+  display: grid;
+  grid-template-columns: 2.75rem 1fr;
+  gap: 0.35rem;
+  align-items: baseline;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.minutes-subsection-title {
+  font-weight: 600;
+}
+
+.minutes-section-row,
+.minutes-numbered-item {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 0.35rem;
+  align-items: baseline;
+}
+
+.minutes-section-marker {
+  font-family: ui-monospace, monospace;
+  text-align: right;
+  padding-right: 0.25rem;
+}
+
+.minutes-section-marker-roman {
+  font-family: ui-monospace, monospace;
+  text-align: right;
+  padding-right: 0.25rem;
+  font-style: italic;
+}
+
+.minutes-agenda-item {
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.minutes-item-body {
+  margin-left: 2.35rem;
+  margin-top: 0.35rem;
+}
+
+.minutes-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.35rem 0;
+}
+
+.minutes-meta-label {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.minutes-restricted-badge {
+  display: inline-flex;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.65rem;
+  font-style: italic;
+  font-weight: 600;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 9999px;
+}
+
+.minutes-motion-block {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.65rem;
+  background: #f8fafc;
+  border-radius: 0.5rem;
+  border: 1px solid #e2e8f0;
+}
+
+.minutes-motion-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 0.25rem;
+  margin: 0.2rem 0;
+}
+
+.minutes-motion-resolution-row {
+  flex-wrap: nowrap;
+}
+
+.minutes-motion-name-input {
+  width: auto;
+  min-width: 8rem;
+  max-width: 16rem;
+  flex: 1 1 auto;
+}
+
+.minutes-motion-resolution-input {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.minutes-motion-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.minutes-motion-keyword {
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.minutes-action-items {
+  margin: 0.35rem 0;
+}
+
+.minutes-action-row {
+  display: grid;
+  grid-template-columns: auto 1fr 2fr auto;
+  gap: 0.35rem;
+  align-items: center;
+  margin-bottom: 0.25rem;
+}
+
+.minutes-action-label {
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.minutes-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.minutes-body-paragraph {
+  margin-left: 2.35rem;
+}
+
+.minutes-approval-entry {
+  margin-left: 2.35rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  background: #fafafa;
+}
+
+.minutes-addendum {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 2px solid #cbd5e1;
+}
+
+.minutes-addendum-title {
+  text-align: center;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+}
+
+.minutes-addendum-subtitle {
+  text-align: center;
+  font-weight: 700;
+  text-decoration: underline;
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+}
+
+.minutes-addendum-confidential {
+  text-align: center;
+  font-weight: 700;
+  font-style: italic;
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+}
+
+.minutes-addendum-disclaimer {
+  font-size: 0.75rem;
+  text-align: justify;
+  margin-bottom: 1rem;
+  color: #475569;
+}

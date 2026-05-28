@@ -1,0 +1,547 @@
+import { randomUUID } from "crypto";
+
+import { eq } from "drizzle-orm";
+
+import {
+  mergeExtractionDocuments,
+  validateEmailExtraction,
+  type EmailExtractionDocument,
+} from "@/lib/email-analysis/schema";
+import {
+  buildAttachmentUserPrompt,
+  buildEmailAnalysisSystemPrompt,
+  buildEmailBodyUserPrompt,
+} from "@/lib/email-analysis/prompts";
+import { persistExtractionDocument, deleteExtractionEntities } from "@/lib/email-analysis/persist";
+import {
+  compileSkillPromptSection,
+  mergeSkillProposals,
+} from "@/lib/email-analysis/extraction-skill";
+import {
+  findExistingAttachmentExtraction,
+  getEmailAttachments,
+  getThreadContext,
+  preprocessEmailMessage,
+} from "@/lib/email-analysis/preprocess";
+import {
+  beginEmailAnalysis,
+  clearActiveQueueForEmail,
+  completeEmailAnalysis,
+  enqueueEmailsAnalysisPending,
+  failEmailAnalysis,
+} from "@/lib/email-analysis/queue";
+import { getAnalysisSettings } from "@/lib/email-analysis/settings";
+import { getDb } from "@/lib/db";
+import {
+  emailAttachments,
+  emails,
+  extractionSources,
+} from "@/lib/db/schema";
+import {
+  downloadEmailAttachment,
+  readCachedAttachment,
+} from "@/lib/gmail/attachments";
+import {
+  generateEmailExtraction,
+} from "@/lib/gemini/client";
+import { extractPdfText } from "@/lib/parsers/pdf";
+import { unwrapJsonCodeBlock } from "@/lib/gemini/parse-output";
+import {
+  estimateCostUsdForCalls,
+  serializeAiUsage,
+  type GeminiUsageCall,
+} from "@/lib/gemini/usage";
+
+/** Raw bytes; base64 encoding adds ~33% to the Gemini request payload. */
+const MAX_INLINE_ATTACHMENT_BYTES = 14 * 1024 * 1024;
+const MAX_EXTRACTED_PDF_TEXT_CHARS = 400_000;
+
+function isPdfAttachment(mimeType: string, filename: string): boolean {
+  return (
+    mimeType.toLowerCase().includes("pdf") ||
+    filename.toLowerCase().endsWith(".pdf")
+  );
+}
+
+function isTextAttachment(mimeType: string, filename: string): boolean {
+  const lowerMime = mimeType.toLowerCase();
+  const lowerName = filename.toLowerCase();
+  return (
+    lowerMime.startsWith("text/") ||
+    lowerMime.includes("json") ||
+    lowerMime.includes("xml") ||
+    lowerMime === "message/rfc822" ||
+    lowerName.endsWith(".ics") ||
+    lowerName.endsWith(".eml") ||
+    lowerName.endsWith(".csv") ||
+    lowerName.endsWith(".txt")
+  );
+}
+
+function isGeminiDocumentError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /document has no pages|unable to process input document|invalid document/i.test(
+    error.message,
+  );
+}
+
+export type AnalyzeEmailResult = {
+  sourceId: string;
+  emailId: string;
+  threadId: string | null;
+  document: EmailExtractionDocument;
+  counts: Record<string, number>;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costUsd: number;
+    modelName: string;
+    calls: GeminiUsageCall[];
+  };
+  reprocessed: boolean;
+};
+
+function parseExtractionJson(raw: string): EmailExtractionDocument {
+  const { jsonText } = unwrapJsonCodeBlock(raw);
+  const parsed = JSON.parse(jsonText) as unknown;
+  const { document, errors } = validateEmailExtraction(parsed);
+  if (errors.length) {
+    throw new Error(`Extraction validation failed: ${errors.join("; ")}`);
+  }
+  return document;
+}
+
+async function extractWithGemini(input: {
+  systemInstruction: string;
+  userText: string;
+  modelName: string;
+  maxOutputTokens: number;
+  fileParts?: Array<{ mimeType: string; data: Buffer }>;
+  step: string;
+}): Promise<{ document: EmailExtractionDocument; calls: GeminiUsageCall[] }> {
+  const result = await generateEmailExtraction({
+    systemInstruction: input.systemInstruction,
+    userText: input.userText,
+    modelName: input.modelName,
+    maxOutputTokens: input.maxOutputTokens,
+    fileParts: input.fileParts,
+    step: input.step,
+  });
+
+  return {
+    document: parseExtractionJson(result.text),
+    calls: result.usageCalls,
+  };
+}
+
+async function extractAttachmentDocument(input: {
+  bytes: Buffer;
+  mimeType: string;
+  filename: string;
+  subject?: string;
+  from?: string;
+  attachmentId: string;
+  modelName: string;
+  maxOutputTokens: number;
+  systemInstruction: string;
+}): Promise<{ document: EmailExtractionDocument; calls: GeminiUsageCall[] }> {
+  const attachmentPrompt = buildAttachmentUserPrompt({
+    filename: input.filename,
+    mimeType: input.mimeType,
+    subject: input.subject,
+    from: input.from,
+  });
+  const step = `attachment_${input.attachmentId}`;
+
+  const extractFromText = async (text: string, textStep: string) =>
+    extractWithGemini({
+      systemInstruction: input.systemInstruction,
+      userText: `${attachmentPrompt}
+
+--- EXTRACTED PDF TEXT ---
+${text}`,
+      modelName: input.modelName,
+      maxOutputTokens: input.maxOutputTokens,
+      step: textStep,
+    });
+
+  const extractFromPdfText = async () => {
+    const text = await extractPdfText(input.bytes);
+    if (!text.trim()) {
+      throw new Error(
+        `Could not extract text from PDF attachment "${input.filename}". The file may be image-only or encrypted.`,
+      );
+    }
+
+    const clipped =
+      text.length > MAX_EXTRACTED_PDF_TEXT_CHARS
+        ? `${text.slice(0, MAX_EXTRACTED_PDF_TEXT_CHARS)}\n\n[Text truncated — attachment exceeded ${MAX_EXTRACTED_PDF_TEXT_CHARS} characters.]`
+        : text;
+
+    const { document, calls } = await extractFromText(clipped, `${step}_text`);
+    return { document, calls };
+  };
+
+  if (isPdfAttachment(input.mimeType, input.filename)) {
+    if (input.bytes.length <= MAX_INLINE_ATTACHMENT_BYTES) {
+      try {
+        const { document, calls } = await extractWithGemini({
+          systemInstruction: input.systemInstruction,
+          userText: attachmentPrompt,
+          modelName: input.modelName,
+          maxOutputTokens: input.maxOutputTokens,
+          fileParts: [{ mimeType: "application/pdf", data: input.bytes }],
+          step,
+        });
+        return { document, calls };
+      } catch (error) {
+        if (!isGeminiDocumentError(error)) throw error;
+      }
+    }
+
+    return extractFromPdfText();
+  }
+
+  if (isTextAttachment(input.mimeType, input.filename)) {
+    const text = input.bytes.toString("utf8");
+    const clipped =
+      text.length > MAX_EXTRACTED_PDF_TEXT_CHARS
+        ? `${text.slice(0, MAX_EXTRACTED_PDF_TEXT_CHARS)}\n\n[Text truncated — attachment exceeded ${MAX_EXTRACTED_PDF_TEXT_CHARS} characters.]`
+        : text;
+
+    return extractFromText(clipped, `${step}_text`);
+  }
+
+  if (!input.mimeType.toLowerCase().startsWith("image/")) {
+    // CONCERN: Unsupported binary attachments are recorded as metadata-only until a parser is added.
+    return {
+      document: {
+        document_type: "unsupported_attachment",
+        summary: `Attachment "${input.filename}" was not analyzed because Gemini does not support inline ${input.mimeType} content.`,
+        tags: ["unsupported_attachment"],
+        entities: [
+          {
+            type: "attachment",
+            value: input.filename,
+            context: input.mimeType,
+          },
+        ],
+      },
+      calls: [],
+    };
+  }
+
+  if (input.bytes.length > MAX_INLINE_ATTACHMENT_BYTES) {
+    throw new Error(
+      `Attachment "${input.filename}" is too large to analyze (${input.bytes.length} bytes).`,
+    );
+  }
+
+  try {
+    const { document, calls } = await extractWithGemini({
+      systemInstruction: input.systemInstruction,
+      userText: attachmentPrompt,
+      modelName: input.modelName,
+      maxOutputTokens: input.maxOutputTokens,
+      fileParts: [{ mimeType: input.mimeType, data: input.bytes }],
+      step,
+    });
+    return { document, calls };
+  } catch (error) {
+    if (isGeminiDocumentError(error)) {
+      throw new Error(
+        `Gemini could not read attachment "${input.filename}". The file may be corrupt or unsupported.`,
+      );
+    }
+    throw error;
+  }
+}
+
+export async function analyzeEmail(input: {
+  emailId: string;
+  reprocess?: boolean;
+}): Promise<AnalyzeEmailResult> {
+  const db = getDb();
+  const settings = await getAnalysisSettings();
+
+  const [email] = await db.select().from(emails).where(eq(emails.id, input.emailId));
+  if (!email) throw new Error("Email not found.");
+
+  if (email.processedAt && !input.reprocess) {
+    const [existing] = await db
+      .select()
+      .from(extractionSources)
+      .where(
+        eq(extractionSources.sourceId, email.id),
+      )
+      .limit(1);
+
+    if (existing) {
+      await clearActiveQueueForEmail(email.id);
+      const document = JSON.parse(
+        existing.rawExtractionJson,
+      ) as EmailExtractionDocument;
+      return {
+        sourceId: existing.id,
+        emailId: email.id,
+        threadId: email.threadId,
+        document,
+        counts: {},
+        usage: {
+          inputTokens: existing.totalInputTokens,
+          outputTokens: existing.totalOutputTokens,
+          totalTokens: existing.totalInputTokens + existing.totalOutputTokens,
+          costUsd: Number(existing.totalCostUsd),
+          modelName: existing.modelName,
+          calls: [],
+        },
+        reprocessed: false,
+      };
+    }
+  }
+
+  const queueId = await beginEmailAnalysis(email.id);
+  const analysisStartedAt = Date.now();
+
+  try {
+  if (input.reprocess) {
+    const prior = await db
+      .select()
+      .from(extractionSources)
+      .where(eq(extractionSources.sourceId, email.id));
+    for (const row of prior) {
+      await deleteExtractionEntities(row.id);
+    }
+  }
+
+  const skill = await compileSkillPromptSection();
+  const systemInstruction = buildEmailAnalysisSystemPrompt({
+    skillPromptSection: skill.promptSection,
+  });
+
+  const bodyUnique = await preprocessEmailMessage(email.id);
+  const thread = await getThreadContext(email.threadId);
+  const attachments = await getEmailAttachments(email.id);
+
+  const allCalls: GeminiUsageCall[] = [];
+  const partialDocs: EmailExtractionDocument[] = [];
+
+  const bodyPrompt = buildEmailBodyUserPrompt({
+    from: email.fromAddress,
+    subject: email.subject,
+    receivedAt: email.receivedAt,
+    bodyTextUnique: bodyUnique,
+    threadSubject: thread?.subject,
+  });
+
+  const { document: bodyDoc, calls: bodyCalls } = await extractWithGemini({
+    systemInstruction,
+    userText: bodyPrompt,
+    modelName: settings.analysisModel,
+    maxOutputTokens: settings.maxOutputTokens,
+    step: "email_body",
+  });
+
+  partialDocs.push(bodyDoc);
+  allCalls.push(...bodyCalls);
+
+  for (const attachment of attachments) {
+    if (!attachment.gmailAttachmentId) continue;
+
+    let bytes: Buffer;
+    let contentHash: string;
+    let mimeType = attachment.mimeType;
+    let filename = attachment.filename;
+
+    if (attachment.contentHash && attachment.cachedFilePath) {
+      contentHash = attachment.contentHash;
+      const ext = attachment.cachedFilePath.match(/\.[^.]+$/)?.[0] ?? ".bin";
+      const cached = await readCachedAttachment(contentHash, ext);
+      if (!cached) {
+        const downloaded = await downloadEmailAttachment({
+          attachmentId: attachment.id,
+          emailId: email.id,
+        });
+        bytes = downloaded.bytes;
+        contentHash = downloaded.contentHash;
+        mimeType = downloaded.mimeType;
+        filename = downloaded.filename;
+      } else {
+        bytes = cached;
+      }
+    } else {
+      const downloaded = await downloadEmailAttachment({
+        attachmentId: attachment.id,
+        emailId: email.id,
+      });
+      bytes = downloaded.bytes;
+      contentHash = downloaded.contentHash;
+      mimeType = downloaded.mimeType;
+      filename = downloaded.filename;
+    }
+
+    const existing = await findExistingAttachmentExtraction(contentHash);
+    if (existing && !input.reprocess) {
+      const existingDoc = JSON.parse(
+        existing.rawExtractionJson,
+      ) as EmailExtractionDocument;
+      partialDocs.push(existingDoc);
+      continue;
+    }
+
+    const result = await extractAttachmentDocument({
+      bytes,
+      mimeType,
+      filename,
+      subject: email.subject,
+      from: email.fromAddress,
+      attachmentId: attachment.id,
+      modelName: settings.analysisModel,
+      maxOutputTokens: settings.maxOutputTokens,
+      systemInstruction,
+    });
+    const attachmentDoc = result.document;
+    allCalls.push(...result.calls);
+
+    partialDocs.push(attachmentDoc);
+
+    await db
+      .update(emailAttachments)
+      .set({
+        contentHash,
+        processedAt: new Date().toISOString(),
+      })
+      .where(eq(emailAttachments.id, attachment.id));
+  }
+
+  const merged = mergeExtractionDocuments(partialDocs);
+  const now = new Date().toISOString();
+  const sourceId = randomUUID();
+  const totalInput = allCalls.reduce((s, c) => s + c.inputTokens, 0);
+  const totalOutput = allCalls.reduce((s, c) => s + c.outputTokens, 0);
+  const costUsd = estimateCostUsdForCalls(allCalls);
+  const processingDurationMs = Date.now() - analysisStartedAt;
+
+  console.info("[email-analysis:complete]", {
+    emailId: email.id,
+    subject: email.subject,
+    inputTokens: totalInput,
+    outputTokens: totalOutput,
+    costUsd,
+    processingDurationMs,
+    modelName: settings.analysisModel,
+  });
+
+  await db.insert(extractionSources).values({
+    id: sourceId,
+    sourceType: "email_message",
+    sourceId: email.id,
+    emailThreadId: email.threadId,
+    processedAt: now,
+    modelName: settings.analysisModel,
+    extractionVersion: settings.extractionVersion,
+    skillVersionId: skill.skillVersionId,
+    contentHash: null,
+    rawExtractionJson: JSON.stringify(merged),
+    aiUsageJson: serializeAiUsage({
+      runs: allCalls.map((call) => ({
+        id: randomUUID(),
+        kind: "email_analysis" as const,
+        label: call.step,
+        ranAt: now,
+        modelName: call.modelName,
+        inputTokens: call.inputTokens,
+        outputTokens: call.outputTokens,
+        totalTokens: call.totalTokens,
+        costUsd: estimateCostUsdForCalls([call]),
+      })),
+    }),
+    totalInputTokens: totalInput,
+    totalOutputTokens: totalOutput,
+    totalCostUsd: String(costUsd),
+    processingDurationMs,
+  });
+
+  const { counts } = await persistExtractionDocument({
+    sourceId,
+    emailThreadId: email.threadId,
+    document: merged,
+  });
+
+  const skillUpdates = await mergeSkillProposals({
+    discoveredFacts: merged.discovered_facts,
+    proposedNewConcepts: merged.proposed_new_concepts,
+    emailId: email.id,
+    sourceId,
+  });
+  if (skill.tokenEstimate || skillUpdates.created || skillUpdates.updated) {
+    console.info("[email-analysis:skill]", {
+      emailId: email.id,
+      skillVersion: skill.skillVersionNumber,
+      skillPromptTokens: skill.tokenEstimate,
+      includedSkillEntries: skill.includedEntryCount,
+      skillUpdates,
+    });
+  }
+
+  await db
+    .update(emails)
+    .set({ processedAt: now })
+    .where(eq(emails.id, email.id));
+
+  await completeEmailAnalysis(queueId);
+
+  return {
+    sourceId,
+    emailId: email.id,
+    threadId: email.threadId,
+    document: merged,
+    counts,
+    usage: {
+      inputTokens: totalInput,
+      outputTokens: totalOutput,
+      totalTokens: totalInput + totalOutput,
+      costUsd,
+      modelName: settings.analysisModel,
+      calls: allCalls,
+    },
+    reprocessed: Boolean(input.reprocess),
+  };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Analysis failed.";
+    await failEmailAnalysis(queueId, message);
+    throw error;
+  }
+}
+
+export async function analyzeEmailBatch(input: {
+  emailIds: string[];
+  reprocess?: boolean;
+}): Promise<AnalyzeEmailResult[]> {
+  await enqueueEmailsAnalysisPending(input.emailIds);
+
+  const results: AnalyzeEmailResult[] = [];
+  for (const emailId of input.emailIds) {
+    results.push(
+      await analyzeEmail({ emailId, reprocess: input.reprocess }),
+    );
+  }
+  return results;
+}
+
+export async function analyzeAllUnprocessed(input: {
+  reprocess?: boolean;
+  limit?: number;
+}): Promise<AnalyzeEmailResult[]> {
+  const db = getDb();
+  const rows = await db.select({ id: emails.id }).from(emails).limit(input.limit ?? 10_000);
+  const unprocessed = [];
+  for (const row of rows) {
+    const [email] = await db.select().from(emails).where(eq(emails.id, row.id));
+    if (email && (!email.processedAt || input.reprocess)) {
+      unprocessed.push(email.id);
+    }
+  }
+  return analyzeEmailBatch({ emailIds: unprocessed, reprocess: input.reprocess });
+}

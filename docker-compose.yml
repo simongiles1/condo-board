@@ -14,7 +14,7 @@ services:
       timeout: 5s
       retries: 10
     ports:
-      - "5433:5432"
+      - "${DB_PORT_BINDING:-127.0.0.1:5433:5432}"
 
   migrate:
     build:
@@ -33,12 +33,12 @@ services:
       target: runner
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "14780:3000"
     env_file:
       - .env.local
     environment:
       DATABASE_URL: postgresql://condo:condo@db:5432/condo_board
-      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
     volumes:
       - uploads_data:/app/uploads
       - note_screenshots_data:/app/data/note-screenshots

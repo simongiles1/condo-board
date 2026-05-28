@@ -6,17 +6,18 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 FROM base AS deps
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+RUN mkdir -p public
 RUN npm run build
 
 FROM base AS migrator
-COPY package.json package-lock.json drizzle.config.ts ./
+COPY drizzle.config.ts ./
 COPY lib/db/schema.ts ./lib/db/schema.ts
-RUN npm ci
+RUN npm install drizzle-kit drizzle-orm pg --no-package-lock --ignore-scripts
 ENTRYPOINT ["npx", "drizzle-kit", "push"]
 
 FROM base AS runner

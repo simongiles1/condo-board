@@ -9,7 +9,7 @@
     "lint": "eslint",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:migrate-from-sqlite": "node scripts/migrate-sqlite-to-postgres.mjs"
+    "db:migrate-from-sqlite": "npx -p better-sqlite3 -p pg node scripts/migrate-sqlite-to-postgres.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -38,7 +38,6 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "@types/node-cron": "^3.0.11",
     "@types/pdf-parse": "^1.1.5",
@@ -46,7 +45,6 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/turndown": "^5.0.5",
-    "better-sqlite3": "^12.6.3",
     "drizzle-kit": "^0.31.8",
     "eslint": "^9",
     "eslint-config-next": "^15.5.11",

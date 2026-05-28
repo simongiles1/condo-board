@@ -219,7 +219,7 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
       setInfo(
         finalize
           ? "Meeting finalized. Action items regenerated for dashboards."
-          : "Draft saved to SQLite.",
+          : "Draft saved.",
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unexpected error");

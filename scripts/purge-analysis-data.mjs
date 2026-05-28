@@ -1,43 +1,44 @@
 /**
- * Wipes ALL data derived from AI processing so the user can start fresh:
- *  - meetings, global todos, meeting upload files
- *  - extraction_sources and linked insight rows
- *  - extraction skill entries/versions/audit log
- *  - emails.processed_at → NULL so the analyzer re-runs each email
- *  - email_attachments processed/hash/cache fields reset
- *  - analysis_queue rows
- *
- * Leaves Gmail connections, sync runs, emails, attachments, sender allowlist,
- * and dev notes untouched.
+ * Wipes ALL data derived from AI processing so the user can start fresh.
  *
  * Usage:  node scripts/purge-analysis-data.mjs
  */
-import Database from "better-sqlite3";
+import pg from "pg";
 
-const dbPath = process.env.DATABASE_URL?.startsWith("file:")
-  ? process.env.DATABASE_URL.slice("file:".length)
-  : process.env.DATABASE_URL ?? "./data/app.db";
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  console.error("Set DATABASE_URL to a Postgres connection string.");
+  process.exit(1);
+}
 
-const db = new Database(dbPath);
+const pool = new pg.Pool({ connectionString: DATABASE_URL });
 
-const countTable = (name) =>
-  db.prepare(`SELECT COUNT(*) AS c FROM ${name}`).get().c;
-
-const before = {
-  meetings: countTable("meetings"),
-  global_todos: countTable("global_todos"),
-  extraction_sources: countTable("extraction_sources"),
-  calendar_events: countTable("calendar_events"),
-  discovered_facts: countTable("discovered_facts"),
-  analysis_queue: countTable("analysis_queue"),
-  emails_processed: db
-    .prepare("SELECT COUNT(*) AS c FROM emails WHERE processed_at IS NOT NULL")
-    .get().c,
+const countTable = async (client, name) => {
+  const result = await client.query(`SELECT COUNT(*)::int AS c FROM ${name}`);
+  return result.rows[0].c;
 };
 
-console.log("Before:", before);
+const client = await pool.connect();
 
-const cleanup = db.transaction(() => {
+try {
+  const before = {
+    meetings: await countTable(client, "meetings"),
+    global_todos: await countTable(client, "global_todos"),
+    extraction_sources: await countTable(client, "extraction_sources"),
+    calendar_events: await countTable(client, "calendar_events"),
+    discovered_facts: await countTable(client, "discovered_facts"),
+    analysis_queue: await countTable(client, "analysis_queue"),
+    emails_processed: (
+      await client.query(
+        "SELECT COUNT(*)::int AS c FROM emails WHERE processed_at IS NOT NULL",
+      )
+    ).rows[0].c,
+  };
+
+  console.log("Before:", before);
+
+  await client.query("BEGIN");
+
   const stats = {};
   const tables = [
     "calendar_events",
@@ -63,28 +64,38 @@ const cleanup = db.transaction(() => {
   ];
 
   for (const table of tables) {
-    stats[table] = db.prepare(`DELETE FROM ${table}`).run().changes;
+    const result = await client.query(`DELETE FROM ${table}`);
+    stats[table] = result.rowCount ?? 0;
   }
 
-  stats.emails_reset = db
-    .prepare("UPDATE emails SET processed_at = NULL WHERE processed_at IS NOT NULL")
-    .run().changes;
-  stats.attachments_reset = db
-    .prepare(
+  stats.emails_reset = (
+    await client.query(
+      "UPDATE emails SET processed_at = NULL WHERE processed_at IS NOT NULL",
+    )
+  ).rowCount;
+  stats.attachments_reset = (
+    await client.query(
       "UPDATE email_attachments SET processed_at = NULL, content_hash = NULL, cached_file_path = NULL WHERE processed_at IS NOT NULL OR content_hash IS NOT NULL OR cached_file_path IS NOT NULL",
     )
-    .run().changes;
-  return stats;
-});
+  ).rowCount;
 
-const result = cleanup();
+  await client.query("COMMIT");
 
-console.log("Removed:", result);
-console.log("After:", {
-  meetings: countTable("meetings"),
-  extraction_sources: countTable("extraction_sources"),
-  calendar_events: countTable("calendar_events"),
-  emails_processed: db
-    .prepare("SELECT COUNT(*) AS c FROM emails WHERE processed_at IS NOT NULL")
-    .get().c,
-});
+  console.log("Removed:", stats);
+  console.log("After:", {
+    meetings: await countTable(client, "meetings"),
+    extraction_sources: await countTable(client, "extraction_sources"),
+    calendar_events: await countTable(client, "calendar_events"),
+    emails_processed: (
+      await client.query(
+        "SELECT COUNT(*)::int AS c FROM emails WHERE processed_at IS NOT NULL",
+      )
+    ).rows[0].c,
+  });
+} catch (error) {
+  await client.query("ROLLBACK");
+  throw error;
+} finally {
+  client.release();
+  await pool.end();
+}

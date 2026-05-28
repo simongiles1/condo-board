@@ -1,37 +1,64 @@
-import Database from "better-sqlite3";
+import pg from "pg";
 
-const db = new Database("./data/app.db");
+const DATABASE_URL =
+  process.env.DATABASE_URL ??
+  "postgresql://condo:condo@localhost:5432/condo_board";
 
-const before = {
-  emails: db.prepare("SELECT COUNT(*) AS c FROM emails").get().c,
-  threads: db.prepare("SELECT COUNT(*) AS c FROM email_threads").get().c,
-  syncRuns: db.prepare("SELECT COUNT(*) AS c FROM sync_runs").get().c,
-};
+const pool = new pg.Pool({ connectionString: DATABASE_URL });
+const client = await pool.connect();
 
-console.log("Before:", before);
+try {
+  const before = {
+    emails: (await client.query("SELECT COUNT(*)::int AS c FROM emails")).rows[0]
+      .c,
+    threads: (await client.query("SELECT COUNT(*)::int AS c FROM email_threads"))
+      .rows[0].c,
+    syncRuns: (await client.query("SELECT COUNT(*)::int AS c FROM sync_runs"))
+      .rows[0].c,
+  };
 
-const cleanup = db.transaction(() => {
-  const deletedEmails = db.prepare("DELETE FROM emails").run().changes;
-  const deletedThreads = db.prepare("DELETE FROM email_threads").run().changes;
-  const deletedSyncRuns = db.prepare("DELETE FROM sync_runs").run().changes;
-  const deletedConnections = db.prepare("DELETE FROM gmail_connections").run().changes;
+  console.log("Before:", before);
 
-  return {
+  await client.query("BEGIN");
+
+  const deletedEmails = (
+    await client.query("DELETE FROM emails")
+  ).rowCount;
+  const deletedThreads = (
+    await client.query("DELETE FROM email_threads")
+  ).rowCount;
+  const deletedSyncRuns = (
+    await client.query("DELETE FROM sync_runs")
+  ).rowCount;
+  const deletedConnections = (
+    await client.query("DELETE FROM gmail_connections")
+  ).rowCount;
+
+  await client.query("COMMIT");
+
+  console.log("Removed:", {
     deletedEmails,
     deletedThreads,
     deletedSyncRuns,
     deletedConnections,
-  };
-});
-
-const result = cleanup();
-
-console.log("Removed:", result);
-console.log("After:", {
-  emails: db.prepare("SELECT COUNT(*) AS c FROM emails").get().c,
-  threads: db.prepare("SELECT COUNT(*) AS c FROM email_threads").get().c,
-  syncRuns: db.prepare("SELECT COUNT(*) AS c FROM sync_runs").get().c,
-  connections: db
-    .prepare("SELECT account_type, email_address, last_history_id FROM gmail_connections")
-    .all(),
-});
+  });
+  console.log("After:", {
+    emails: (await client.query("SELECT COUNT(*)::int AS c FROM emails")).rows[0]
+      .c,
+    threads: (await client.query("SELECT COUNT(*)::int AS c FROM email_threads"))
+      .rows[0].c,
+    syncRuns: (await client.query("SELECT COUNT(*)::int AS c FROM sync_runs"))
+      .rows[0].c,
+    connections: (
+      await client.query(
+        "SELECT account_type, email_address, last_history_id FROM gmail_connections",
+      )
+    ).rows,
+  });
+} catch (error) {
+  await client.query("ROLLBACK");
+  throw error;
+} finally {
+  client.release();
+  await pool.end();
+}

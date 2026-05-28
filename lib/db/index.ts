@@ -1,28 +1,47 @@
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 
 import * as schema from "./schema";
 
 const globalForDb = globalThis as unknown as {
-  sqlite?: Database.Database;
+  pool?: Pool;
+  db?: NodePgDatabase<typeof schema>;
+  databaseUrl?: string;
 };
 
-export function sqlitePathFromEnv(): string {
-  const raw = process.env.DATABASE_URL ?? "file:./data/app.db";
-  return raw.startsWith("file:") ? raw.slice("file:".length) : raw;
-}
-
-function getSqlite(): Database.Database {
-  if (!globalForDb.sqlite) {
-    const path = sqlitePathFromEnv();
-    globalForDb.sqlite = new Database(path);
+function resolveDatabaseUrl(): string {
+  const connectionString = process.env.DATABASE_URL?.trim();
+  if (!connectionString) {
+    throw new Error(
+      "DATABASE_URL is required (e.g. postgresql://condo:condo@localhost:5433/condo_board)",
+    );
   }
-  return globalForDb.sqlite;
+  if (connectionString.startsWith("file:")) {
+    throw new Error(
+      "DATABASE_URL still points at SQLite (file:...). Update .env.local to a Postgres URL, start Postgres, then run npm run db:push.",
+    );
+  }
+  return connectionString;
 }
 
-/** Server-only: synchronous SQLite client for API routes / server components. */
-export function getDb() {
-  return drizzle(getSqlite(), { schema });
+function getPool(): Pool {
+  const connectionString = resolveDatabaseUrl();
+  if (globalForDb.pool && globalForDb.databaseUrl !== connectionString) {
+    void globalForDb.pool.end();
+    globalForDb.pool = undefined;
+    globalForDb.db = undefined;
+  }
+  if (!globalForDb.pool) {
+    globalForDb.pool = new Pool({ connectionString });
+    globalForDb.databaseUrl = connectionString;
+  }
+  return globalForDb.pool;
 }
 
-/** Run migrations/table creation on startup if needed — drizzle-kit push handles schema. */
+/** Server-only: Postgres client for API routes / server components. */
+export function getDb(): NodePgDatabase<typeof schema> {
+  if (!globalForDb.db) {
+    globalForDb.db = drizzle(getPool(), { schema });
+  }
+  return globalForDb.db;
+}

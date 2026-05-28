@@ -149,7 +149,7 @@ export function GenerateMeetingDialog({ open, onClose }: Props) {
             Drop in the Teams transcript and reference PDF
           </h2>
           <p className="mt-2 text-sm text-slate-600">
-            Originals land in <code>./uploads</code>; SQLite holds metadata and
+            Originals land in <code>./uploads</code>; the database holds metadata and
             editable outputs. Set <code>GEMINI_API_KEY</code> in{" "}
             <code>.env.local</code> before running the dual prompts.
           </p>

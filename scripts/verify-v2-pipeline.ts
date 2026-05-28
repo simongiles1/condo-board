@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import React from "react";
 import { pdf } from "@react-pdf/renderer";
-import Database from "better-sqlite3";
+import pg from "pg";
 
 import MinutesPdfDoc from "../lib/pdf/MinutesPdfDoc";
 import MinutesPdfDocV2 from "../lib/pdf/MinutesPdfDocV2";
@@ -186,12 +186,15 @@ async function main(): Promise<void> {
     "sample-v2.pdf",
   );
 
-  const db = new Database(path.join(root, "data", "app.db"));
-  const row = db
-    .prepare(
-      "SELECT id, minutes_json FROM meetings WHERE minutes_json IS NOT NULL LIMIT 1",
-    )
-    .get() as { id: string; minutes_json: string } | undefined;
+  const databaseUrl =
+    process.env.DATABASE_URL ??
+    "postgresql://condo:condo@localhost:5432/condo_board";
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const result = await pool.query<{ id: string; minutes_json: string }>(
+    "SELECT id, minutes_json FROM meetings WHERE minutes_json IS NOT NULL LIMIT 1",
+  );
+  const row = result.rows[0];
+  await pool.end();
 
   if (row?.minutes_json) {
     const parsed = parseMinutesJsonEnvelope(row.minutes_json);
@@ -217,7 +220,6 @@ async function main(): Promise<void> {
     console.log("No existing meeting with minutes_json in database.");
   }
 
-  db.close();
   console.log(`Verification artifacts written to ${outDir}`);
 }
 

@@ -47,11 +47,10 @@ export type PurgeProcessedDataResult = {
 export async function purgeProcessedData(): Promise<PurgeProcessedDataResult> {
   const db = getDb();
 
-  const meetingRows = db.select({ id: meetings.id }).from(meetings).all();
+  const meetingRows = await db.select({ id: meetings.id }).from(meetings);
   const meetingIds = meetingRows.map((row) => row.id);
 
-  // better-sqlite3 transactions must be synchronous (no async callback).
-  const result = db.transaction((tx) => {
+  const result = await db.transaction(async (tx) => {
     for (const table of [
       calendarEvents,
       maintenanceEvents,
@@ -63,66 +62,70 @@ export async function purgeProcessedData(): Promise<PurgeProcessedDataResult> {
       entityMentions,
       extractedActionItems,
     ] as const) {
-      tx.delete(table).where(sql`1 = 1`).run();
+      await tx.delete(table).where(sql`1 = 1`);
     }
 
-    const deletedDiscoveredFacts = tx
-      .delete(discoveredFacts)
-      .where(sql`1 = 1`)
-      .returning({ id: discoveredFacts.id })
-      .all().length;
+    const deletedDiscoveredFacts = (
+      await tx
+        .delete(discoveredFacts)
+        .where(sql`1 = 1`)
+        .returning({ id: discoveredFacts.id })
+    ).length;
 
-    const deletedExtractionSources = tx
-      .delete(extractionSources)
-      .where(sql`1 = 1`)
-      .returning({ id: extractionSources.id })
-      .all().length;
+    const deletedExtractionSources = (
+      await tx
+        .delete(extractionSources)
+        .where(sql`1 = 1`)
+        .returning({ id: extractionSources.id })
+    ).length;
 
-    tx.delete(extractionSkillAuditLog).where(sql`1 = 1`).run();
-    tx.delete(extractionSkillEntries).where(sql`1 = 1`).run();
-    tx.delete(extractionSkillVersions).where(sql`1 = 1`).run();
+    await tx.delete(extractionSkillAuditLog).where(sql`1 = 1`);
+    await tx.delete(extractionSkillEntries).where(sql`1 = 1`);
+    await tx.delete(extractionSkillVersions).where(sql`1 = 1`);
 
-    const deletedGlobalTodos = tx
-      .delete(globalTodos)
-      .where(sql`1 = 1`)
-      .returning({ id: globalTodos.id })
-      .all().length;
+    const deletedGlobalTodos = (
+      await tx
+        .delete(globalTodos)
+        .where(sql`1 = 1`)
+        .returning({ id: globalTodos.id })
+    ).length;
 
-    const deletedMeetings = tx
-      .delete(meetings)
-      .where(sql`1 = 1`)
-      .returning({ id: meetings.id })
-      .all().length;
+    const deletedMeetings = (
+      await tx.delete(meetings).where(sql`1 = 1`).returning({ id: meetings.id })
+    ).length;
 
     for (const table of [equipmentAssets, vendors, budgetCategories] as const) {
-      tx.delete(table).where(sql`1 = 1`).run();
+      await tx.delete(table).where(sql`1 = 1`);
     }
 
-    const deletedAnalysisQueue = tx
-      .delete(analysisQueue)
-      .where(sql`1 = 1`)
-      .returning({ id: analysisQueue.id })
-      .all().length;
+    const deletedAnalysisQueue = (
+      await tx
+        .delete(analysisQueue)
+        .where(sql`1 = 1`)
+        .returning({ id: analysisQueue.id })
+    ).length;
 
-    const resetEmails = tx
-      .update(emails)
-      .set({ processedAt: null })
-      .where(sql`${emails.processedAt} IS NOT NULL`)
-      .returning({ id: emails.id })
-      .all().length;
+    const resetEmails = (
+      await tx
+        .update(emails)
+        .set({ processedAt: null })
+        .where(sql`${emails.processedAt} IS NOT NULL`)
+        .returning({ id: emails.id })
+    ).length;
 
-    const resetAttachments = tx
-      .update(emailAttachments)
-      .set({
-        processedAt: null,
-        contentHash: null,
-        cachedFilePath: null,
-      })
-      .where(
-        sql`${emailAttachments.processedAt} IS NOT NULL OR ${emailAttachments.contentHash} IS NOT NULL OR ${emailAttachments.cachedFilePath} IS NOT NULL`,
-      )
-      .returning({ id: emailAttachments.id })
-      .all().length;
+    const resetAttachments = (
+      await tx
+        .update(emailAttachments)
+        .set({
+          processedAt: null,
+          contentHash: null,
+          cachedFilePath: null,
+        })
+        .where(
+          sql`${emailAttachments.processedAt} IS NOT NULL OR ${emailAttachments.contentHash} IS NOT NULL OR ${emailAttachments.cachedFilePath} IS NOT NULL`,
+        )
+        .returning({ id: emailAttachments.id })
+    ).length;
 
     return {
       deletedMeetings,

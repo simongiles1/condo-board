@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["better-sqlite3", "pdf-parse", "googleapis"],
+  output: "standalone",
+  serverExternalPackages: ["pdf-parse", "googleapis", "pg"],
 };
 
 export default nextConfig;

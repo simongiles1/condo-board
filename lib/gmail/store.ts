@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import { eq } from "drizzle-orm";
-import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 
 import { getDb } from "@/lib/db";
 import {
@@ -16,7 +16,7 @@ import { isDuplicateMessage } from "./queries";
 
 export type EmailSource = "personal_backfill" | "dedicated";
 
-type Db = BetterSQLite3Database<typeof schema>;
+type Db = NodePgDatabase<typeof schema>;
 
 export async function storeParsedMessage(input: {
   parsed: ParsedEmailMessage;
@@ -32,78 +32,72 @@ export async function storeParsedMessage(input: {
 
   const db = getDb();
 
-  db.transaction((tx) => {
-    const threadId = upsertThread(tx, input.parsed);
+  await db.transaction(async (tx) => {
+    const threadId = await upsertThread(tx, input.parsed);
     const emailId = randomUUID();
 
-    tx.insert(emails)
-      .values({
-        id: emailId,
-        threadId,
-        gmailMessageId: input.parsed.gmailMessageId,
-        messageIdHeader: input.parsed.messageIdHeader,
-        inReplyTo: input.parsed.inReplyTo,
-        referencesHeader: input.parsed.referencesHeader,
-        fromAddress: input.parsed.fromAddress,
-        toAddresses: JSON.stringify(input.parsed.toAddresses),
-        ccAddresses: JSON.stringify(input.parsed.ccAddresses),
-        subject: input.parsed.subject,
-        bodyText: input.parsed.bodyText,
-        bodyHtml: input.parsed.bodyHtml,
-        receivedAt: input.parsed.receivedAt,
-        source: input.source,
-        syncRunId: input.syncRunId,
-        processedAt: null,
-      })
-      .run();
+    await tx.insert(emails).values({
+      id: emailId,
+      threadId,
+      gmailMessageId: input.parsed.gmailMessageId,
+      messageIdHeader: input.parsed.messageIdHeader,
+      inReplyTo: input.parsed.inReplyTo,
+      referencesHeader: input.parsed.referencesHeader,
+      fromAddress: input.parsed.fromAddress,
+      toAddresses: JSON.stringify(input.parsed.toAddresses),
+      ccAddresses: JSON.stringify(input.parsed.ccAddresses),
+      subject: input.parsed.subject,
+      bodyText: input.parsed.bodyText,
+      bodyHtml: input.parsed.bodyHtml,
+      receivedAt: input.parsed.receivedAt,
+      source: input.source,
+      syncRunId: input.syncRunId,
+      processedAt: null,
+    });
 
     if (input.parsed.attachments.length > 0) {
-      tx.insert(emailAttachments)
-        .values(
-          input.parsed.attachments.map((attachment) => ({
-            id: randomUUID(),
-            emailId,
-            filename: attachment.filename,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            gmailAttachmentId: attachment.gmailAttachmentId,
-          })),
-        )
-        .run();
+      await tx.insert(emailAttachments).values(
+        input.parsed.attachments.map((attachment) => ({
+          id: randomUUID(),
+          emailId,
+          filename: attachment.filename,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          gmailAttachmentId: attachment.gmailAttachmentId,
+        })),
+      );
     }
   });
 
   return "added";
 }
 
-function upsertThread(tx: Db, parsed: ParsedEmailMessage): string {
-  const existing = tx
+async function upsertThread(tx: Db, parsed: ParsedEmailMessage): Promise<string> {
+  const [existing] = await tx
     .select()
     .from(emailThreads)
     .where(eq(emailThreads.gmailThreadId, parsed.gmailThreadId))
-    .get();
+    .limit(1);
 
   if (existing) {
     if (parsed.receivedAt > existing.lastMessageAt) {
-      tx.update(emailThreads)
+      await tx
+        .update(emailThreads)
         .set({
           subject: parsed.subject,
           lastMessageAt: parsed.receivedAt,
         })
-        .where(eq(emailThreads.id, existing.id))
-        .run();
+        .where(eq(emailThreads.id, existing.id));
     }
     return existing.id;
   }
 
   const id = randomUUID();
-  tx.insert(emailThreads)
-    .values({
-      id,
-      gmailThreadId: parsed.gmailThreadId,
-      subject: parsed.subject,
-      lastMessageAt: parsed.receivedAt,
-    })
-    .run();
+  await tx.insert(emailThreads).values({
+    id,
+    gmailThreadId: parsed.gmailThreadId,
+    subject: parsed.subject,
+    lastMessageAt: parsed.receivedAt,
+  });
   return id;
 }

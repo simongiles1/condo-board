@@ -1,3 +1,6 @@
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 

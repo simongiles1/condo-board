@@ -1,7 +1,7 @@
 import { relations } from "drizzle-orm";
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { boolean, integer, pgTable, text } from "drizzle-orm/pg-core";
 
-export const meetings = sqliteTable("meetings", {
+export const meetings = pgTable("meetings", {
   id: text("id").primaryKey(),
   meetingDate: text("meeting_date").notNull(),
   title: text("title").notNull(),
@@ -26,7 +26,7 @@ export const meetingsRelations = relations(meetings, ({ many }) => ({
   actionItems: many(actionItems),
 }));
 
-export const actionItems = sqliteTable("action_items", {
+export const actionItems = pgTable("action_items", {
   id: text("id").primaryKey(),
   meetingId: text("meeting_id")
     .notNull()
@@ -35,7 +35,7 @@ export const actionItems = sqliteTable("action_items", {
   role: text("role").notNull(),
   description: text("description").notNull(),
   deadline: text("deadline"),
-  completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+  completed: boolean("completed").notNull().default(false),
   completedAt: text("completed_at"),
 });
 
@@ -47,13 +47,13 @@ export const actionItemsRelations = relations(actionItems, ({ one }) => ({
 }));
 
 /** Board-wide consolidated to-do list (merged from meeting checklists). */
-export const globalTodos = sqliteTable("global_todos", {
+export const globalTodos = pgTable("global_todos", {
   id: text("id").primaryKey(),
   assignee: text("assignee").notNull(),
   role: text("role").notNull(),
   description: text("description").notNull(),
   deadline: text("deadline"),
-  completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+  completed: boolean("completed").notNull().default(false),
   completedAt: text("completed_at"),
   sourceMeetingId: text("source_meeting_id").references(() => meetings.id),
   createdAt: text("created_at").notNull(),
@@ -67,7 +67,7 @@ export const globalTodosRelations = relations(globalTodos, ({ one }) => ({
   }),
 }));
 
-export const senderAllowlist = sqliteTable("sender_allowlist", {
+export const senderAllowlist = pgTable("sender_allowlist", {
   id: text("id").primaryKey(),
   email: text("email").notNull().unique(),
   displayName: text("display_name"),
@@ -75,16 +75,14 @@ export const senderAllowlist = sqliteTable("sender_allowlist", {
   addedAt: text("added_at").notNull(),
 });
 
-export const emailSyncSettings = sqliteTable("email_sync_settings", {
+export const emailSyncSettings = pgTable("email_sync_settings", {
   id: text("id").primaryKey(),
   syncCron: text("sync_cron").notNull().default("0 7 * * *"),
-  schedulerEnabled: integer("scheduler_enabled", { mode: "boolean" })
-    .notNull()
-    .default(true),
+  schedulerEnabled: boolean("scheduler_enabled").notNull().default(true),
   updatedAt: text("updated_at").notNull(),
 });
 
-export const gmailConnections = sqliteTable("gmail_connections", {
+export const gmailConnections = pgTable("gmail_connections", {
   id: text("id").primaryKey(),
   accountType: text("account_type", {
     enum: ["personal_backfill", "dedicated"],
@@ -98,7 +96,7 @@ export const gmailConnections = sqliteTable("gmail_connections", {
   connectedAt: text("connected_at").notNull(),
 });
 
-export const syncRuns = sqliteTable("sync_runs", {
+export const syncRuns = pgTable("sync_runs", {
   id: text("id").primaryKey(),
   accountType: text("account_type", {
     enum: ["personal_backfill", "dedicated"],
@@ -111,14 +109,14 @@ export const syncRuns = sqliteTable("sync_runs", {
   errors: text("errors"),
 });
 
-export const emailThreads = sqliteTable("email_threads", {
+export const emailThreads = pgTable("email_threads", {
   id: text("id").primaryKey(),
   gmailThreadId: text("gmail_thread_id").notNull().unique(),
   subject: text("subject").notNull(),
   lastMessageAt: text("last_message_at").notNull(),
 });
 
-export const emails = sqliteTable("emails", {
+export const emails = pgTable("emails", {
   id: text("id").primaryKey(),
   threadId: text("thread_id").references(() => emailThreads.id),
   gmailMessageId: text("gmail_message_id").notNull().unique(),
@@ -138,7 +136,7 @@ export const emails = sqliteTable("emails", {
   processedAt: text("processed_at"),
 });
 
-export const emailAttachments = sqliteTable("email_attachments", {
+export const emailAttachments = pgTable("email_attachments", {
   id: text("id").primaryKey(),
   emailId: text("email_id")
     .notNull()
@@ -153,13 +151,13 @@ export const emailAttachments = sqliteTable("email_attachments", {
 });
 
 /** Messages intentionally removed from the app but left in dedicated Gmail. */
-export const emailSyncExclusions = sqliteTable("email_sync_exclusions", {
+export const emailSyncExclusions = pgTable("email_sync_exclusions", {
   gmailMessageId: text("gmail_message_id").primaryKey(),
   messageIdHeader: text("message_id_header"),
   excludedAt: text("excluded_at").notNull(),
 });
 
-export const appUsers = sqliteTable("app_users", {
+export const appUsers = pgTable("app_users", {
   id: text("id").primaryKey(),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
@@ -193,7 +191,7 @@ export const emailAttachmentsRelations = relations(
   }),
 );
 
-export const analysisSettings = sqliteTable("analysis_settings", {
+export const analysisSettings = pgTable("analysis_settings", {
   id: text("id").primaryKey(),
   analysisModel: text("analysis_model")
     .notNull()
@@ -204,7 +202,7 @@ export const analysisSettings = sqliteTable("analysis_settings", {
   updatedAt: text("updated_at").notNull(),
 });
 
-export const analysisQueue = sqliteTable("analysis_queue", {
+export const analysisQueue = pgTable("analysis_queue", {
   id: text("id").primaryKey(),
   unitType: text("unit_type", {
     enum: ["email_message", "email_thread", "email_attachment"],
@@ -221,7 +219,7 @@ export const analysisQueue = sqliteTable("analysis_queue", {
   finishedAt: text("finished_at"),
 });
 
-export const extractionSkillEntries = sqliteTable("extraction_skill_entries", {
+export const extractionSkillEntries = pgTable("extraction_skill_entries", {
   id: text("id").primaryKey(),
   conceptName: text("concept_name").notNull().unique(),
   description: text("description").notNull(),
@@ -243,14 +241,14 @@ export const extractionSkillEntries = sqliteTable("extraction_skill_entries", {
   updatedAt: text("updated_at").notNull(),
 });
 
-export const extractionSkillVersions = sqliteTable("extraction_skill_versions", {
+export const extractionSkillVersions = pgTable("extraction_skill_versions", {
   id: text("id").primaryKey(),
   versionNumber: integer("version_number").notNull().unique(),
   snapshotJson: text("snapshot_json").notNull(),
   createdAt: text("created_at").notNull(),
 });
 
-export const extractionSkillAuditLog = sqliteTable("extraction_skill_audit_log", {
+export const extractionSkillAuditLog = pgTable("extraction_skill_audit_log", {
   id: text("id").primaryKey(),
   entryId: text("entry_id").references(() => extractionSkillEntries.id, {
     onDelete: "set null",
@@ -260,7 +258,7 @@ export const extractionSkillAuditLog = sqliteTable("extraction_skill_audit_log",
   createdAt: text("created_at").notNull(),
 });
 
-export const extractionSources = sqliteTable("extraction_sources", {
+export const extractionSources = pgTable("extraction_sources", {
   id: text("id").primaryKey(),
   sourceType: text("source_type", {
     enum: ["email_message", "email_attachment", "email_thread", "meeting"],
@@ -282,7 +280,7 @@ export const extractionSources = sqliteTable("extraction_sources", {
   processingDurationMs: integer("processing_duration_ms"),
 });
 
-export const discoveredFacts = sqliteTable("discovered_facts", {
+export const discoveredFacts = pgTable("discovered_facts", {
   id: text("id").primaryKey(),
   conceptId: text("concept_id")
     .notNull()
@@ -297,7 +295,7 @@ export const discoveredFacts = sqliteTable("discovered_facts", {
   createdAt: text("created_at").notNull(),
 });
 
-export const equipmentAssets = sqliteTable("equipment_assets", {
+export const equipmentAssets = pgTable("equipment_assets", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   location: text("location"),
@@ -307,7 +305,7 @@ export const equipmentAssets = sqliteTable("equipment_assets", {
   createdAt: text("created_at").notNull(),
 });
 
-export const vendors = sqliteTable("vendors", {
+export const vendors = pgTable("vendors", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   contactJson: text("contact_json"),
@@ -315,13 +313,13 @@ export const vendors = sqliteTable("vendors", {
   createdAt: text("created_at").notNull(),
 });
 
-export const budgetCategories = sqliteTable("budget_categories", {
+export const budgetCategories = pgTable("budget_categories", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   parentId: text("parent_id"),
 });
 
-export const maintenanceEvents = sqliteTable("maintenance_events", {
+export const maintenanceEvents = pgTable("maintenance_events", {
   id: text("id").primaryKey(),
   equipmentId: text("equipment_id").references(() => equipmentAssets.id),
   equipmentName: text("equipment_name").notNull(),
@@ -343,7 +341,7 @@ export const maintenanceEvents = sqliteTable("maintenance_events", {
   createdAt: text("created_at").notNull(),
 });
 
-export const budgetLineItems = sqliteTable("budget_line_items", {
+export const budgetLineItems = pgTable("budget_line_items", {
   id: text("id").primaryKey(),
   categoryId: text("category_id").references(() => budgetCategories.id),
   categoryName: text("category_name").notNull(),
@@ -364,7 +362,7 @@ export const budgetLineItems = sqliteTable("budget_line_items", {
   createdAt: text("created_at").notNull(),
 });
 
-export const invoices = sqliteTable("invoices", {
+export const invoices = pgTable("invoices", {
   id: text("id").primaryKey(),
   vendorId: text("vendor_id").references(() => vendors.id),
   vendorName: text("vendor_name"),
@@ -372,7 +370,7 @@ export const invoices = sqliteTable("invoices", {
   invoiceDate: text("invoice_date"),
   invoiceNumber: text("invoice_number"),
   categoryName: text("category_name"),
-  paid: integer("paid", { mode: "boolean" }),
+  paid: boolean("paid"),
   sourceQuote: text("source_quote"),
   sourceId: text("source_id")
     .notNull()
@@ -381,7 +379,7 @@ export const invoices = sqliteTable("invoices", {
   createdAt: text("created_at").notNull(),
 });
 
-export const contracts = sqliteTable("contracts", {
+export const contracts = pgTable("contracts", {
   id: text("id").primaryKey(),
   vendorId: text("vendor_id").references(() => vendors.id),
   vendorName: text("vendor_name"),
@@ -397,7 +395,7 @@ export const contracts = sqliteTable("contracts", {
   createdAt: text("created_at").notNull(),
 });
 
-export const residentIssues = sqliteTable("resident_issues", {
+export const residentIssues = pgTable("resident_issues", {
   id: text("id").primaryKey(),
   unit: text("unit"),
   category: text("category"),
@@ -414,7 +412,7 @@ export const residentIssues = sqliteTable("resident_issues", {
   createdAt: text("created_at").notNull(),
 });
 
-export const capitalProjects = sqliteTable("capital_projects", {
+export const capitalProjects = pgTable("capital_projects", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   phase: text("phase"),
@@ -431,12 +429,12 @@ export const capitalProjects = sqliteTable("capital_projects", {
   createdAt: text("created_at").notNull(),
 });
 
-export const extractedActionItems = sqliteTable("extracted_action_items", {
+export const extractedActionItems = pgTable("extracted_action_items", {
   id: text("id").primaryKey(),
   assignee: text("assignee").notNull(),
   description: text("description").notNull(),
   deadline: text("deadline"),
-  completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+  completed: boolean("completed").notNull().default(false),
   completedAt: text("completed_at"),
   meetingId: text("meeting_id").references(() => meetings.id),
   emailThreadId: text("email_thread_id").references(() => emailThreads.id),
@@ -448,7 +446,7 @@ export const extractedActionItems = sqliteTable("extracted_action_items", {
   createdAt: text("created_at").notNull(),
 });
 
-export const entityMentions = sqliteTable("entity_mentions", {
+export const entityMentions = pgTable("entity_mentions", {
   id: text("id").primaryKey(),
   entityType: text("entity_type").notNull(),
   entityValue: text("entity_value").notNull(),
@@ -459,7 +457,7 @@ export const entityMentions = sqliteTable("entity_mentions", {
   createdAt: text("created_at").notNull(),
 });
 
-export const calendarEvents = sqliteTable("calendar_events", {
+export const calendarEvents = pgTable("calendar_events", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
   eventType: text("event_type").notNull(),
@@ -474,7 +472,7 @@ export const calendarEvents = sqliteTable("calendar_events", {
 });
 
 /** Product bugs and feature requests tracked from the Notes page. */
-export const devNotes = sqliteTable("dev_notes", {
+export const devNotes = pgTable("dev_notes", {
   id: text("id").primaryKey(),
   kind: text("kind", { enum: ["bug", "feature"] }).notNull(),
   status: text("status", {
@@ -487,7 +485,7 @@ export const devNotes = sqliteTable("dev_notes", {
   createdAt: text("created_at").notNull(),
 });
 
-export const devNoteScreenshots = sqliteTable("dev_note_screenshots", {
+export const devNoteScreenshots = pgTable("dev_note_screenshots", {
   id: text("id").primaryKey(),
   noteId: text("note_id")
     .notNull()

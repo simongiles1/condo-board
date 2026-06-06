@@ -5,7 +5,11 @@ import { NextResponse } from "next/server";
 
 import { upsertGmailConnection } from "@/lib/gmail/client";
 import { getExpectedDedicatedEmail } from "@/lib/gmail/verify";
-import { getOAuth2Client, parseOAuthState } from "@/lib/gmail/oauth";
+import {
+  getAppBaseUrl,
+  getOAuth2Client,
+  parseOAuthState,
+} from "@/lib/gmail/oauth";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -13,7 +17,7 @@ export async function GET(req: Request) {
   const state = searchParams.get("state");
   const oauthError = searchParams.get("error");
 
-  const settingsUrl = new URL("/emails/settings", req.url);
+  const settingsUrl = new URL("/emails/settings", getAppBaseUrl());
 
   if (oauthError) {
     settingsUrl.searchParams.set("error", oauthError);

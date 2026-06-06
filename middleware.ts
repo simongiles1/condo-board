@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { getAppBaseUrl } from "@/lib/app-url";
+
 const PUBLIC_PATHS = [
   "/login",
   "/api/auth/login",
@@ -28,7 +30,7 @@ export function middleware(request: NextRequest) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const loginUrl = new URL("/login", request.url);
+    const loginUrl = new URL("/login", getAppBaseUrl());
     loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);
   }

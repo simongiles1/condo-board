@@ -6,6 +6,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gmail OAuth callback redirect** — after connecting Gmail in production, the
+  app now redirects to `NEXT_PUBLIC_APP_URL` instead of the container’s internal
+  `0.0.0.0:3000` address when running behind Coolify or another reverse proxy.
+
 ### Changed
 
 - **Building email side panel** — attachments appear in a clickable row above

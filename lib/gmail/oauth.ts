@@ -1,6 +1,10 @@
 import { google } from "googleapis";
 
+import { getAppBaseUrl } from "@/lib/app-url";
+
 export type GmailAccountType = "personal_backfill" | "dedicated";
+
+export { getAppBaseUrl };
 
 export const GMAIL_READONLY_SCOPE =
   "https://www.googleapis.com/auth/gmail.readonly";
@@ -16,10 +20,6 @@ export function getGmailScopes(accountType: GmailAccountType): string[] {
     return [GMAIL_MODIFY_SCOPE];
   }
   return [GMAIL_READONLY_SCOPE];
-}
-
-export function getAppBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 }
 
 export function getOAuthRedirectUri(): string {

@@ -34,7 +34,8 @@ type ConnectionInfo = {
 type SyncSettings = {
   syncCron: string;
   schedulerEnabled: boolean;
-  backfillCutoffDate: string | null;
+  backfillCutoffAt: string | null;
+  oldestDedicatedReceivedAt: string | null;
   updatedAt: string;
 };
 
@@ -74,7 +75,10 @@ export function EmailSettingsClient(props: {
   );
   const [customCron, setCustomCron] = useState<string | null>(null);
   const [schedulerEnabled, setSchedulerEnabled] = useState(true);
-  const [backfillCutoffDate, setBackfillCutoffDate] = useState("");
+  const [backfillCutoffAt, setBackfillCutoffAt] = useState<string | null>(null);
+  const [oldestDedicatedReceivedAt, setOldestDedicatedReceivedAt] = useState<
+    string | null
+  >(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const schedulePreview = useMemo(() => {
@@ -121,7 +125,8 @@ export function EmailSettingsClient(props: {
         setCustomCron(parsed.cron);
       }
       setSchedulerEnabled(settingsData.schedulerEnabled);
-      setBackfillCutoffDate(settingsData.backfillCutoffDate ?? "");
+      setBackfillCutoffAt(settingsData.backfillCutoffAt ?? null);
+      setOldestDedicatedReceivedAt(settingsData.oldestDedicatedReceivedAt ?? null);
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Could not load settings.",
@@ -214,7 +219,6 @@ export function EmailSettingsClient(props: {
         body: JSON.stringify({
           syncCron,
           schedulerEnabled,
-          backfillCutoffDate: backfillCutoffDate || null,
         }),
       });
 
@@ -279,14 +283,13 @@ export function EmailSettingsClient(props: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...(senderEmail ? { senderEmail } : {}),
-          cutoffDate: backfillCutoffDate || null,
         }),
       });
       const result = (await response.json()) as SyncResult & { error?: string };
       if (!response.ok) throw new Error(result.error ?? "Backfill failed.");
       setStatusMessage(
-        backfillCutoffDate
-          ? `Backfill complete (on or before ${backfillCutoffDate}): ${result.messagesAdded} added, ${result.messagesSkipped} skipped.`
+        backfillCutoffAt
+          ? `Backfill complete (on or before ${formatDate(backfillCutoffAt)}): ${result.messagesAdded} added, ${result.messagesSkipped} skipped.`
           : `Backfill complete: ${result.messagesAdded} added, ${result.messagesSkipped} skipped.`,
       );
       if (result.errors?.length) {
@@ -352,10 +355,29 @@ export function EmailSettingsClient(props: {
               >
                 <h3 className="font-medium text-slate-900">{label}</h3>
                 {accountType === "dedicated" ? (
-                  <p className="mt-1 text-xs text-slate-600">
-                    Reconnect after upgrading if delete-from-Gmail fails with a
-                    permissions error.
-                  </p>
+                  <>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Reconnect after upgrading if delete-from-Gmail fails with a
+                      permissions error.
+                    </p>
+                    <p className="mt-1 text-xs text-amber-800">
+                      If Google consent hangs on Continue, add{" "}
+                      <code className="rounded bg-amber-100 px-1">
+                        gmail.modify
+                      </code>{" "}
+                      to your Google Cloud OAuth consent screen scopes, revoke
+                      Condo board at{" "}
+                      <a
+                        href="https://myaccount.google.com/permissions"
+                        className="underline"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Google Account permissions
+                      </a>
+                      , then reconnect the dedicated mailbox first.
+                    </p>
+                  </>
                 ) : null}
                 {connection ? (
                   <div className="mt-2 space-y-1 text-sm text-slate-700">
@@ -406,21 +428,21 @@ export function EmailSettingsClient(props: {
             </p>
           </div>
           <div className="flex flex-wrap items-end gap-3">
-            <label className="block text-sm">
+            <div className="block text-sm">
               <span className="mb-1 block font-medium text-slate-800">
-                Backfill cutoff date
+                Backfill cutoff
               </span>
-              <input
-                type="date"
-                value={backfillCutoffDate}
-                onChange={(event) => setBackfillCutoffDate(event.target.value)}
-                className="rounded-md border border-slate-300 bg-white px-3 py-2"
-              />
+              <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800">
+                {backfillCutoffAt
+                  ? formatDate(backfillCutoffAt)
+                  : "Not set — run dedicated sync first"}
+              </p>
               <span className="mt-1 block text-xs text-slate-500">
-                Only import personal Gmail mail received on or before this date.
-                Leave blank to include all history.
+                {oldestDedicatedReceivedAt
+                  ? `One second before the oldest dedicated sync message (${formatDate(oldestDedicatedReceivedAt)}). Personal backfill will not import mail after this point.`
+                  : "After your first dedicated sync, backfill stops one second before the oldest imported message to avoid duplicates."}
               </span>
-            </label>
+            </div>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"

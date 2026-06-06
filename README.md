@@ -49,11 +49,17 @@ Visit `http://localhost:3000`.
 
 1. Create a **Google Cloud OAuth client** (Web application) with redirect URI `http://localhost:3000/api/email/oauth/callback`.
 2. Enable the **Gmail API** for that project.
-3. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GMAIL_TOKEN_ENCRYPTION_KEY` in `.env.local`.
-4. Open **Emails → Email settings** in the app.
-5. Connect the **dedicated condo mailbox** for ongoing sync, and **personal Gmail** for historical backfill.
-6. Add condo senders to the allowlist, then run **Backfill all history** once.
-7. Configure the cron schedule (default `0 7 * * *`) or use **Sync now** manually.
+3. On the OAuth consent screen, add both Gmail scopes the app uses:
+   `https://www.googleapis.com/auth/gmail.readonly` (personal backfill) and
+   `https://www.googleapis.com/auth/gmail.modify` (dedicated mailbox). Add your
+   Google account as a **test user** while the app is in Testing mode.
+4. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GMAIL_TOKEN_ENCRYPTION_KEY` in `.env.local`.
+5. Set `GMAIL_DEDICATED_EMAIL` to the condo mailbox address so OAuth skips the
+   account picker.
+6. Open **Emails → Email settings** in the app.
+7. Connect the **dedicated condo mailbox** for ongoing sync, and **personal Gmail** for historical backfill.
+8. Add condo senders to the allowlist, then run **Backfill all history** once.
+9. Configure the cron schedule (default `0 7 * * *`) or use **Sync now** manually.
 
 Autoforward condo-related senders from your personal Gmail to the dedicated mailbox using Gmail filters so ongoing sync stays isolated.
 
@@ -75,6 +81,16 @@ Outputs remain on-disk per PRD §3.4 (`./uploads` + `./data`), so back up both f
 
 ## Troubleshooting
 
+- **Gmail OAuth consent hangs on Continue (dedicated mailbox)** — The dedicated
+  connection requests `gmail.modify`, which must be listed on your Google Cloud
+  OAuth consent screen (APIs & Services → OAuth consent screen → Edit app → Scopes).
+  If you connected personal backfill first, revoke **Condo board** at
+  [Google Account permissions](https://myaccount.google.com/permissions), then
+  reconnect the dedicated mailbox before personal backfill. Confirm
+  `GOOGLE_REDIRECT_URI` matches `http://localhost:3000/api/email/oauth/callback`
+  locally (`GET /api/email/oauth/config` shows the active redirect URI and scopes).
+  Google Workspace accounts may need an admin to allow third-party `gmail.modify`
+  access.
 - **Gemini failures** — Verify `GEMINI_API_KEY`, model env vars (`gemini-2.0-flash` must exist on your account), inspect server logs emitted by `/api/generate`.
 - **`better-sqlite3` compile errors (Windows)** — Install “Desktop development with C++” workload plus current Windows SDK, reopen shell, rerun `npm install`.
 - **`pdf-parse` errors** — Only text-based PDFs work; OCR scans yield empty precedent text and the API rejects the upload.
@@ -83,7 +99,7 @@ Outputs remain on-disk per PRD §3.4 (`./uploads` + `./data`), so back up both f
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev` | `next dev` |
+| `npm run dev` | `next dev -p 3000` (fixed port for OAuth redirect URI) |
 | `npm run build` | Production build (`next build`) |
 | `npm run start` | `next start` after build |
 | `npm run lint` | ESLint |

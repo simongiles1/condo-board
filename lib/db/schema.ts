@@ -81,7 +81,7 @@ export const emailSyncSettings = pgTable("email_sync_settings", {
   id: text("id").primaryKey(),
   syncCron: text("sync_cron").notNull().default("0 7 * * *"),
   schedulerEnabled: boolean("scheduler_enabled").notNull().default(true),
-  /** ISO date (YYYY-MM-DD); personal backfill imports mail on or before this day. */
+  /** Deprecated: manual backfill cutoff; computed from dedicated sync instead. */
   backfillCutoffDate: text("backfill_cutoff_date"),
   updatedAt: text("updated_at").notNull(),
 });

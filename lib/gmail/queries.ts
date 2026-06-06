@@ -29,10 +29,16 @@ export function buildSenderBackfillQuery(email: string): string {
   return `${buildAddressParticipationClause(email)} -in:spam -in:trash`;
 }
 
-/** Gmail `before:` is exclusive; add one day so the cutoff date itself is included. */
-export function gmailBeforeDateInclusive(cutoffDate: string): string {
-  const [year, month, day] = cutoffDate.split("-").map(Number);
-  const nextDay = new Date(Date.UTC(year, month - 1, day + 1));
+/** Gmail `before:` is exclusive; use the UTC day after cutoff so same-day mail is searched. */
+export function gmailBeforeDateExclusive(cutoffAt: string): string {
+  const cutoff = new Date(cutoffAt);
+  const nextDay = new Date(
+    Date.UTC(
+      cutoff.getUTCFullYear(),
+      cutoff.getUTCMonth(),
+      cutoff.getUTCDate() + 1,
+    ),
+  );
   const y = nextDay.getUTCFullYear();
   const m = String(nextDay.getUTCMonth() + 1).padStart(2, "0");
   const d = String(nextDay.getUTCDate()).padStart(2, "0");
@@ -41,19 +47,16 @@ export function gmailBeforeDateInclusive(cutoffDate: string): string {
 
 export function appendBackfillCutoffToQuery(
   query: string,
-  cutoffDate: string,
+  cutoffAt: string,
 ): string {
-  return `${query} before:${gmailBeforeDateInclusive(cutoffDate)}`;
+  return `${query} before:${gmailBeforeDateExclusive(cutoffAt)}`;
 }
 
 export function isMessageOnOrBeforeCutoff(
   receivedAt: string,
-  cutoffDate: string,
+  cutoffAt: string,
 ): boolean {
-  const received = new Date(receivedAt);
-  const [year, month, day] = cutoffDate.split("-").map(Number);
-  const cutoffEnd = new Date(year, month - 1, day, 23, 59, 59, 999);
-  return received <= cutoffEnd;
+  return new Date(receivedAt).getTime() <= new Date(cutoffAt).getTime();
 }
 
 export const DEDICATED_SYNC_QUERY = "-in:spam -in:trash";

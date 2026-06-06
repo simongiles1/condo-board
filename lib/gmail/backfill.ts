@@ -55,7 +55,7 @@ async function importThread(
   gmail: gmail_v1.Gmail,
   threadId: string,
   syncRunId: string,
-  cutoffDate?: string,
+  cutoffAt?: string,
 ): Promise<{ added: number; skipped: number; errors: string[] }> {
   let added = 0;
   let skipped = 0;
@@ -77,8 +77,8 @@ async function importThread(
         }
 
         if (
-          cutoffDate &&
-          !isMessageOnOrBeforeCutoff(parsed.receivedAt, cutoffDate)
+          cutoffAt &&
+          !isMessageOnOrBeforeCutoff(parsed.receivedAt, cutoffAt)
         ) {
           skipped += 1;
           continue;
@@ -109,8 +109,8 @@ async function importThread(
 
 export async function backfillPersonalAccount(options?: {
   senderEmail?: string;
-  /** ISO date (YYYY-MM-DD); only import mail received on or before this day. */
-  cutoffDate?: string;
+  /** ISO timestamp; only import mail received on or before this instant. */
+  cutoffAt?: string;
 }): Promise<BackfillResult> {
   const db = getDb();
   const syncRunId = randomUUID();
@@ -134,8 +134,8 @@ export async function backfillPersonalAccount(options?: {
       ? buildSenderBackfillQuery(options.senderEmail)
       : buildAllowlistQuery(await getAllowlistEmails());
 
-    if (options?.cutoffDate) {
-      query = appendBackfillCutoffToQuery(query, options.cutoffDate);
+    if (options?.cutoffAt) {
+      query = appendBackfillCutoffToQuery(query, options.cutoffAt);
     }
 
     const { gmail } = await getGmailClient("personal_backfill");
@@ -146,7 +146,7 @@ export async function backfillPersonalAccount(options?: {
         gmail,
         threadId,
         syncRunId,
-        options?.cutoffDate,
+        options?.cutoffAt,
       );
       messagesAdded += result.added;
       messagesSkipped += result.skipped;

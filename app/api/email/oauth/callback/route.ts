@@ -17,6 +17,12 @@ export async function GET(req: Request) {
   const state = searchParams.get("state");
   const oauthError = searchParams.get("error");
 
+  console.info("[email:oauth:callback] received", {
+    hasCode: Boolean(code),
+    hasState: Boolean(state),
+    oauthError,
+  });
+
   const settingsUrl = new URL("/emails/settings", getAppBaseUrl());
 
   if (oauthError) {

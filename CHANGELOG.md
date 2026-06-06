@@ -12,7 +12,19 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   app now redirects to `NEXT_PUBLIC_APP_URL` instead of the container’s internal
   `0.0.0.0:3000` address when running behind Coolify or another reverse proxy.
 
+- **Gmail dedicated OAuth consent hang** — dedicated mailbox connect now uses
+  incremental scope consent (`include_granted_scopes`) and a pinned-account
+  flow when `GMAIL_DEDICATED_EMAIL` is set. Settings documents the Google Cloud
+  `gmail.modify` scope requirement when consent stalls on Continue.
+
 ### Changed
+
+- **Local dev server** — `npm run dev` now always binds to port 3000 so Gmail OAuth
+  redirect URIs stay aligned with `GOOGLE_REDIRECT_URI` in `.env.local`.
+
+- **Email backfill cutoff** — the backfill boundary on Email Settings is now
+  computed automatically from dedicated sync: one second before the oldest
+  message imported from the condo mailbox. The manual date picker was removed.
 
 - **Building email side panel** — attachments appear in a clickable row above
   the message body; tapping opens an inline preview (images and PDFs) without

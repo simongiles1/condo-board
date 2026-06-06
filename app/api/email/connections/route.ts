@@ -10,6 +10,22 @@ import {
   verifyGmailConnection,
 } from "@/lib/gmail/verify";
 
+const VERIFY_TIMEOUT_MS = 8_000;
+
+async function verifyGmailConnectionWithTimeout(
+  accountType: Parameters<typeof verifyGmailConnection>[0],
+) {
+  return Promise.race([
+    verifyGmailConnection(accountType),
+    new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new Error("Gmail verification timed out.")),
+        VERIFY_TIMEOUT_MS,
+      );
+    }),
+  ]);
+}
+
 export async function GET() {
   try {
     const db = getDb();
@@ -20,7 +36,9 @@ export async function GET() {
     const enrichedConnections = await Promise.all(
       connections.map(async (connection) => {
         try {
-          const verification = await verifyGmailConnection(connection.accountType);
+          const verification = await verifyGmailConnectionWithTimeout(
+            connection.accountType,
+          );
           return {
             accountType: connection.accountType,
             emailAddress: connection.emailAddress,

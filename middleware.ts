@@ -6,7 +6,9 @@ const PUBLIC_PATHS = [
   "/login",
   "/api/auth/login",
   "/api/auth/logout",
+  "/api/email/oauth/start",
   "/api/email/oauth/callback",
+  "/api/email/oauth/config",
 ];
 
 function isPublicPath(pathname: string) {

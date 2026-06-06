@@ -77,17 +77,26 @@ export function getAuthorizationUrl(accountType: GmailAccountType): string {
     prompt: string;
     scope: string[];
     state: string;
+    include_granted_scopes?: boolean;
     login_hint?: string;
   } = {
     access_type: "offline",
-    prompt: "select_account consent",
+    prompt: "consent",
     scope: getGmailScopes(accountType),
     state: buildOAuthState(accountType),
+    include_granted_scopes: true,
   };
 
   if (accountType === "dedicated") {
     const loginHint = process.env.GMAIL_DEDICATED_EMAIL?.trim();
-    if (loginHint) options.login_hint = loginHint;
+    if (loginHint) {
+      options.login_hint = loginHint;
+    } else {
+      // Avoid authuser/session confusion when the dedicated address is not pinned.
+      options.prompt = "select_account consent";
+    }
+  } else {
+    options.prompt = "select_account consent";
   }
 
   return client.generateAuthUrl(options);

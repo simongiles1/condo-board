@@ -2,14 +2,11 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 
-import {
-  getEmailSyncSettings,
-  isValidBackfillCutoffDate,
-} from "@/lib/email/settings";
+import { getBackfillCutoff } from "@/lib/email/backfill-cutoff";
 import { backfillPersonalAccount } from "@/lib/gmail/backfill";
 
 export async function POST(req: Request) {
-  let body: { senderEmail?: string; cutoffDate?: string | null } = {};
+  let body: { senderEmail?: string } = {};
 
   try {
     const text = await req.text();
@@ -20,22 +17,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Malformed JSON body." }, { status: 400 });
   }
 
-  let cutoffDate: string | undefined;
-  if (body.cutoffDate === null || body.cutoffDate === "") {
-    cutoffDate = undefined;
-  } else if (typeof body.cutoffDate === "string") {
-    const trimmed = body.cutoffDate.trim();
-    if (!isValidBackfillCutoffDate(trimmed)) {
-      return NextResponse.json(
-        { error: "Invalid backfill cutoff date. Use YYYY-MM-DD." },
-        { status: 400 },
-      );
-    }
-    cutoffDate = trimmed;
-  } else {
-    const settings = await getEmailSyncSettings();
-    cutoffDate = settings.backfillCutoffDate ?? undefined;
-  }
+  const { cutoffAt } = await getBackfillCutoff();
 
   try {
     const result = await backfillPersonalAccount({
@@ -43,7 +25,7 @@ export async function POST(req: Request) {
         typeof body.senderEmail === "string"
           ? body.senderEmail.trim()
           : undefined,
-      cutoffDate,
+      cutoffAt: cutoffAt ?? undefined,
     });
     return NextResponse.json(result);
   } catch (error) {

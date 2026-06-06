@@ -8,6 +8,16 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Building email side panel** — attachments appear in a clickable row above
+  the message body; tapping opens an inline preview (images and PDFs) without
+  download actions. PDF chips use amber styling (not error red); PDF previews
+  render with pdf.js instead of a blank iframe.
+
+- **Building 3D viewer (POC)** — temporary model updated to approximate the
+  real footprint: six underground parking levels, a wide nine-floor podium, and
+  a narrower fifteen-floor tower centered on the podium. Equipment markers and
+  floor labels use parking levels (P1–P6) below street level.
+
 - **Email analysis prompts** — calendar-facing fields (`maintenance_events`
   action/equipment, `meetings` type, `deadlines` description) must use sentence
   case, not all lowercase or title case on every word.
@@ -16,6 +26,29 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   use **Individual** or `?view=messages` for the per-message list.
 
 ### Added
+
+- **Emails inbox extraction badge** — each thread and message row shows a violet
+  metadata badge when analysis has run. Hover to open a popover with document
+  type, summary, urgency, tags, per-domain counts, and key extracted facts;
+  thread rows group metadata by message when multiple emails were analyzed.
+
+- **Email backfill cutoff date** — on Email settings, set a cutoff date before
+  running personal Gmail backfill so only mail received on or before that day is
+  imported. Avoids duplicating messages already synced through the dedicated
+  mailbox.
+
+- **Building 3D viewer (POC)** — new `/building` page with an interactive
+  fictitious multi-floor model: orbit/zoom controls, glowing color-coded equipment
+  markers by category (pumps, air handlers, boilers, etc.), hover/click tooltips,
+  and a legend to toggle categories. A tab strip switches between the 3D render
+  and a table view of equipment assets and maintenance events extracted from
+  analyzed emails; the table view has its own Assets / Events tabs. Asset rows
+  include a hover popover of linked source emails; event rows link to the source
+  email in a side panel without leaving the page.
+
+- **Board package page picker** — when generating a meeting, upload the full
+  management report PDF, preview pages, and choose which pages to include (e.g.
+  first 15–20); unchecked pages are stripped before Gemini ingestion.
 
 - **Emails inbox bulk analyze** — checkbox per row (messages or threads), select-all
   on the current page, and **Analyze selected** calling the existing batch analysis

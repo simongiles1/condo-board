@@ -1,25 +1,41 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { FileCategorySection } from "@/components/FileCategorySection";
 import { FilesTabStrip } from "@/components/FilesTabStrip";
+import { filterVisibleAttachments } from "@/lib/email/attachment-visibility";
 import {
   FILE_CATEGORY_ORDER,
   type CategorizedFiles,
   type FileCategory,
 } from "@/lib/email/file-categories";
+import { useAttachmentVisibilitySettings } from "@/lib/settings/attachment-visibility-settings";
 
 type Props = {
   categorizedFiles: CategorizedFiles;
 };
 
 export function FilesPageClient({ categorizedFiles }: Props) {
+  const visibilitySettings = useAttachmentVisibilitySettings();
   const [activeTab, setActiveTab] = useState<FileCategory>("meeting-minutes");
+
+  const visibleCategorizedFiles = useMemo(
+    () =>
+      FILE_CATEGORY_ORDER.reduce((acc, category) => {
+        acc[category] = filterVisibleAttachments(
+          categorizedFiles[category],
+          "files",
+          visibilitySettings,
+        );
+        return acc;
+      }, {} as CategorizedFiles),
+    [categorizedFiles, visibilitySettings],
+  );
 
   const counts = FILE_CATEGORY_ORDER.reduce(
     (acc, category) => {
-      acc[category] = categorizedFiles[category].length;
+      acc[category] = visibleCategorizedFiles[category].length;
       return acc;
     },
     {} as Record<FileCategory, number>,
@@ -36,7 +52,7 @@ export function FilesPageClient({ categorizedFiles }: Props) {
       </div>
       <FileCategorySection
         category={activeTab}
-        files={categorizedFiles[activeTab]}
+        files={visibleCategorizedFiles[activeTab]}
         showHeader={false}
         scrollable
       />

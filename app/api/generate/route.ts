@@ -32,6 +32,11 @@ import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
 import { extractPdfText } from "@/lib/parsers/pdf";
 import { vttToReadableTranscript } from "@/lib/parsers/vtt";
 import { mainRunModelOverridesFromFormData } from "@/lib/settings/model-settings";
+import {
+  inputTruncationWarning,
+  PROMPT_INPUT_LIMITS,
+  sliceForPrompt,
+} from "@/lib/gemini/prompt-input-limits";
 
 export const maxDuration = 300;
 
@@ -44,9 +49,11 @@ CRITICAL RETRY — YOUR PREVIOUS JSON WAS INCOMPLETE (attendance-only or empty a
 Re-read the ENTIRE transcript above and produce COMPLETE minutes:
 - call_to_order with chair_name and time
 - approval_of_previous_minutes when prior minutes were approved
-- financial_matters and management_report items for every contract, ratification, or discussion topic
+- financial_matters and management_report items for every contract, ratification, or discussion topic (include EVERY section 4.1 ratification line item from the board package, even if batch-approved in the transcript)
 - motions with moved_by, seconded_by, resolution_text, status on every approval
 - new_or_other_business, date_of_next_meeting, termination when stated
+- special_presentations for extended guest segments (sub_items per distinct point; guest departure times when stated)
+- brief informational items even without debate (status-only findings, quote counts, satisfactory inspections)
 - For confidential s. 55(4) topics (suite disputes, holdback/insurance settlements, legal/compliance matters), keep them in their natural bucket and set "restricted": true on each item. Place restricted items at the END of their bucket array.
 - Never use empty topic/summary; use [] for empty buckets.`;
 }
@@ -93,6 +100,7 @@ function assertFile(value: unknown): value is File {
 
 function buildMinutesPrompt(
   referencePdf: string,
+  boardPackage: string,
   transcript: string,
   meetingDate: string,
   title: string,
@@ -102,13 +110,58 @@ Meeting date: ${meetingDate}
 
 REFERENCE PDF TEXT (STYLE + STRUCTURAL CUES ONLY — NO FACTUAL USE)
 <<<
-${referencePdf.slice(0, 120000)}
+${referencePdf}
 >>>
 
-FACTUAL TRANSCRIPT (AUTHORITATIVE — merged speaker blocks with timestamps)
+BOARD MEETING PACKAGE / MANAGEMENT REPORT (FACTUAL — authoritative for agenda structure, ratification line items, contractor names, dollar amounts, quote dates)
 <<<
-${transcript.slice(0, 200000)}
+${boardPackage}
+>>>
+
+FACTUAL TRANSCRIPT (AUTHORITATIVE for discussion, decisions, motions carried, and who said what — merged speaker blocks with timestamps)
+<<<
+${transcript}
 >>>`;
+}
+
+function buildPromptInputWarnings(
+  referencePdf: ReturnType<typeof sliceForPrompt>,
+  boardPackage: ReturnType<typeof sliceForPrompt>,
+  transcript: ReturnType<typeof sliceForPrompt>,
+): string[] {
+  const warnings: string[] = [];
+
+  if (referencePdf.truncated) {
+    warnings.push(
+      inputTruncationWarning(
+        "Reference minutes PDF",
+        referencePdf,
+        PROMPT_INPUT_LIMITS.referencePdf,
+      ),
+    );
+  }
+
+  if (boardPackage.truncated) {
+    warnings.push(
+      inputTruncationWarning(
+        "Board package PDF",
+        boardPackage,
+        PROMPT_INPUT_LIMITS.boardPackage,
+      ),
+    );
+  }
+
+  if (transcript.truncated) {
+    warnings.push(
+      inputTruncationWarning(
+        "Meeting transcript",
+        transcript,
+        PROMPT_INPUT_LIMITS.transcript,
+      ),
+    );
+  }
+
+  return warnings;
 }
 
 function buildTodosPrompt(
@@ -121,7 +174,7 @@ Meeting date: ${meetingDate}
 
 TRANSCRIPT (AUTHORITATIVE — merged speaker blocks with timestamps)
 <<<
-${transcript.slice(0, 200000)}
+${transcript}
 >>>`;
 }
 
@@ -133,6 +186,7 @@ export async function POST(req: Request) {
   const meetingDateRaw = formData.get("meetingDate");
   const transcriptFile = formData.get("transcript");
   const pdfFile = formData.get("referencePdf");
+  const boardPackageFile = formData.get("boardPackage");
 
   if (
     typeof titleRaw !== "string" ||
@@ -158,6 +212,13 @@ export async function POST(req: Request) {
     });
   }
 
+  if (!assertFile(boardPackageFile)) {
+    return NextResponse.json(
+      { error: "Board meeting package / management report PDF is required." },
+      { status: 400 },
+    );
+  }
+
   if (!transcriptFile.name.toLowerCase().endsWith(".vtt")) {
     return NextResponse.json({ error: "Transcript must be a .vtt file." }, {
       status: 400,
@@ -170,10 +231,18 @@ export async function POST(req: Request) {
     });
   }
 
+  if (!boardPackageFile.name.toLowerCase().endsWith(".pdf")) {
+    return NextResponse.json(
+      { error: "Board package must be a .pdf file." },
+      { status: 400 },
+    );
+  }
+
   const meetingId = randomUUID();
 
   const vttBuffer = Buffer.from(await transcriptFile.arrayBuffer());
   const pdfBuffer = Buffer.from(await pdfFile.arrayBuffer());
+  const boardPackageBuffer = Buffer.from(await boardPackageFile.arrayBuffer());
 
   let transcriptReadable: string;
   try {
@@ -216,12 +285,55 @@ export async function POST(req: Request) {
     );
   }
 
+  let boardPackageText: string;
+  try {
+    boardPackageText = await extractPdfText(boardPackageBuffer);
+  } catch (error) {
+    console.error(error);
+    return NextResponse.json(
+      {
+        error:
+          "Could not extract text from the board package PDF — ensure text is selectable (not scanned).",
+      },
+      { status: 400 },
+    );
+  }
+
+  if (!boardPackageText.trim()) {
+    return NextResponse.json(
+      {
+        error:
+          "Board package PDF yielded no selectable text — try exporting again from Acrobat.",
+      },
+      { status: 400 },
+    );
+  }
+
   const uploadRoot = path.join(process.cwd(), "uploads", meetingId);
+
+  const referencePdfInput = sliceForPrompt(
+    referenceStyle,
+    PROMPT_INPUT_LIMITS.referencePdf,
+  );
+  const boardPackageInput = sliceForPrompt(
+    boardPackageText,
+    PROMPT_INPUT_LIMITS.boardPackage,
+  );
+  const transcriptInput = sliceForPrompt(
+    transcriptReadable,
+    PROMPT_INPUT_LIMITS.transcript,
+  );
+  const promptInputWarnings = buildPromptInputWarnings(
+    referencePdfInput,
+    boardPackageInput,
+    transcriptInput,
+  );
 
   try {
     const baseMinutesPrompt = buildMinutesPrompt(
-      referenceStyle,
-      transcriptReadable,
+      referencePdfInput.text,
+      boardPackageInput.text,
+      transcriptInput.text,
       meetingDateRaw,
       titleRaw.trim(),
     );
@@ -323,7 +435,10 @@ export async function POST(req: Request) {
       throw new Error("Minutes generation did not produce a document.");
     }
 
-    const minuteStructuralWarnings = [...minuteParse.warnings];
+    const minuteStructuralWarnings = [
+      ...promptInputWarnings,
+      ...minuteParse.warnings,
+    ];
 
     if (minutesGeneration.truncated) {
       minuteStructuralWarnings.push(
@@ -368,7 +483,7 @@ export async function POST(req: Request) {
     const todosGeneration = await generateTodos({
       systemInstruction: TODO_SYSTEM_PROMPT,
       userText: buildTodosPrompt(
-        transcriptReadable,
+        transcriptInput.text,
         meetingDateRaw,
         titleRaw.trim(),
       ),
@@ -379,15 +494,28 @@ export async function POST(req: Request) {
 
     const todoParse = unwrapMarkdownCodeBlock(todosGeneration.text);
 
-    const todosStructuralWarnings = validateTodosOutput(todoParse.markdown);
+    const todosStructuralWarnings = [
+      ...(transcriptInput.truncated
+        ? [
+            inputTruncationWarning(
+              "Meeting transcript",
+              transcriptInput,
+              PROMPT_INPUT_LIMITS.transcript,
+            ),
+          ]
+        : []),
+      ...validateTodosOutput(todoParse.markdown),
+    ];
 
     await mkdir(uploadRoot, { recursive: true });
 
     const vttAbsolute = path.join(uploadRoot, "transcript.vtt");
     const pdfAbsolute = path.join(uploadRoot, "reference.pdf");
+    const boardPackageAbsolute = path.join(uploadRoot, "board-package.pdf");
 
     await writeFile(vttAbsolute, vttBuffer);
     await writeFile(pdfAbsolute, pdfBuffer);
+    await writeFile(boardPackageAbsolute, boardPackageBuffer);
 
     const db = getDb();
     const createdAt = new Date().toISOString();
@@ -410,6 +538,9 @@ export async function POST(req: Request) {
         .replace(/\\/g, "/"),
       pdfFilePath: path
         .relative(process.cwd(), pdfAbsolute)
+        .replace(/\\/g, "/"),
+      boardPackageFilePath: path
+        .relative(process.cwd(), boardPackageAbsolute)
         .replace(/\\/g, "/"),
       createdAt,
       aiUsageJson: serializeAiUsage({ runs: [initialUsageRun] }),

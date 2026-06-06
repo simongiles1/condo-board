@@ -16,6 +16,7 @@ export type Meeting = {
   globalTodosMergedAt: string | null;
   vttFilePath: string;
   pdfFilePath: string;
+  boardPackageFilePath: string | null;
   createdAt: string;
   finalizedAt: string | null;
 };

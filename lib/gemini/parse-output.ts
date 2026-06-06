@@ -74,6 +74,58 @@ export function unwrapJsonCodeBlock(raw: string): ParsedJsonOutput {
   return { jsonText: text, warnings };
 }
 
+/** Unwrap fences, then extract the outermost `{…}` if needed for best-effort parse. */
+export function extractBestEffortJson(raw: string): ParsedJsonOutput {
+  const unwrapped = unwrapJsonCodeBlock(raw);
+
+  if (!unwrapped.jsonText) {
+    return unwrapped;
+  }
+
+  try {
+    JSON.parse(unwrapped.jsonText);
+    return unwrapped;
+  } catch {
+    const start = unwrapped.jsonText.indexOf("{");
+    const end = unwrapped.jsonText.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      const slice = unwrapped.jsonText.slice(start, end + 1);
+      try {
+        JSON.parse(slice);
+        return {
+          jsonText: slice,
+          warnings: [
+            ...unwrapped.warnings,
+            "Extracted JSON object from surrounding non-JSON text.",
+          ],
+        };
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+
+  return unwrapped;
+}
+
+function jsonParseFailureDetail(jsonText: string): string {
+  const trimmed = jsonText.trim();
+  if (!trimmed) {
+    return "Model output was empty.";
+  }
+
+  if (
+    trimmed.endsWith(",") ||
+    /:\s*$/.test(trimmed) ||
+    /,\s*$/.test(trimmed) ||
+    !trimmed.endsWith("}")
+  ) {
+    return "Model output looks truncated — JSON ends before the document is complete.";
+  }
+
+  return "Model output is not valid JSON.";
+}
+
 export type ParsedMinutesJsonResult = {
   document: MinutesDocument | null;
   warnings: string[];
@@ -207,7 +259,7 @@ export type ParsedOmissionsResult = {
 
 /** Parse native JSON omissions analysis response and validate schema. */
 export function parseOmissionsResponse(raw: string): ParsedOmissionsResult {
-  const { jsonText, warnings: unwrapWarnings } = unwrapJsonCodeBlock(raw);
+  const { jsonText, warnings: unwrapWarnings } = extractBestEffortJson(raw);
   const warnings: string[] = [...unwrapWarnings];
   let parsed: unknown;
   try {
@@ -216,7 +268,7 @@ export function parseOmissionsResponse(raw: string): ParsedOmissionsResult {
     return {
       analysis: null,
       warnings,
-      errors: ["Model output is not valid JSON."],
+      errors: [jsonParseFailureDetail(jsonText)],
     };
   }
 
@@ -248,7 +300,7 @@ export type ParsedTodoOmissionsResult = {
 
 /** Parse native JSON todos omissions response. */
 export function parseTodoOmissionsResponse(raw: string): ParsedTodoOmissionsResult {
-  const { jsonText, warnings: unwrapWarnings } = unwrapJsonCodeBlock(raw);
+  const { jsonText, warnings: unwrapWarnings } = extractBestEffortJson(raw);
   const warnings: string[] = [...unwrapWarnings];
   let parsed: unknown;
   try {
@@ -257,7 +309,7 @@ export function parseTodoOmissionsResponse(raw: string): ParsedTodoOmissionsResu
     return {
       omissions: [],
       warnings,
-      errors: ["Model output is not valid JSON."],
+      errors: [jsonParseFailureDetail(jsonText)],
     };
   }
 

@@ -103,6 +103,13 @@ ${input.threadSubject ? `Thread subject: ${input.threadSubject}\n` : ""}
 ${input.bodyTextUnique}`;
 }
 
+export const ATTACHMENT_VALUE_CLASSIFICATION_PROMPT = `ATTACHMENT VALUE CLASSIFICATION (required for every attachment):
+- Set has_value to false when the file is decorative or non-substantive: email signature logos, company branding images, social media icons, tracking pixels, spacer images, banner graphics, or tiny images with no board-relevant document content.
+- Set has_value to true when the attachment contains substantive board-relevant information (PDFs, invoices, meeting documents, photos of property issues, spreadsheets, calendar invites, etc.).
+- When has_value is false, set attachment_role to one of: logo, tracking_pixel, decorative_image, spacer, social_icon.
+- When has_value is true, set attachment_role to one of: document, photo, spreadsheet, calendar_invite, invoice, other_substantive.
+- If has_value is false, leave all fact arrays empty and omit substantive summary content.`;
+
 export function buildAttachmentUserPrompt(input: {
   filename: string;
   mimeType: string;
@@ -113,6 +120,8 @@ export function buildAttachmentUserPrompt(input: {
 Filename: ${input.filename}
 MIME type: ${input.mimeType}
 ${input.subject ? `Email subject: ${input.subject}\n` : ""}${input.from ? `Email from: ${input.from}\n` : ""}
+${ATTACHMENT_VALUE_CLASSIFICATION_PROMPT}
+
 Analyze the attached file and extract all relevant structured facts.`;
 }
 

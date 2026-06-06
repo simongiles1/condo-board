@@ -597,6 +597,14 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
                 <dt className="inline font-semibold text-slate-600">PDF:&nbsp;</dt>
                 <dd className="inline">{meeting.pdfFilePath}</dd>
               </div>
+              {meeting.boardPackageFilePath ? (
+                <div>
+                  <dt className="inline font-semibold text-slate-600">
+                    Package:&nbsp;
+                  </dt>
+                  <dd className="inline">{meeting.boardPackageFilePath}</dd>
+                </div>
+              ) : null}
             </dl>
           </div>
           <div className="flex flex-wrap items-center gap-3">

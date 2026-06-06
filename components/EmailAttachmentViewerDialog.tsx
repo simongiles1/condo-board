@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { MediaPreviewDialog } from "@/components/MediaPreviewDialog";
+import { PdfAttachmentPreview } from "@/components/PdfAttachmentPreview";
 import {
   attachmentKind,
   attachmentKindLabel,
@@ -15,12 +16,15 @@ type Props = {
   open: boolean;
   attachment: EmailAttachmentSummary | null;
   onClose: () => void;
+  /** Hide download actions; show inline preview only. */
+  previewOnly?: boolean;
 };
 
 export function EmailAttachmentViewerDialog({
   open,
   attachment,
   onClose,
+  previewOnly = false,
 }: Props) {
   const [loadError, setLoadError] = useState(false);
 
@@ -44,14 +48,16 @@ export function EmailAttachmentViewerDialog({
       subtitle={subtitle}
       onClose={onClose}
       footer={
-        <div className="flex justify-end">
-          <a
-            href={downloadUrl}
-            className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
-          >
-            Download
-          </a>
-        </div>
+        previewOnly ? undefined : (
+          <div className="flex justify-end">
+            <a
+              href={downloadUrl}
+              className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+            >
+              Download
+            </a>
+          </div>
+        )
       }
     >
       {kind === "image" ? (
@@ -73,23 +79,20 @@ export function EmailAttachmentViewerDialog({
           </div>
         )
       ) : kind === "pdf" ? (
-        <iframe
-          key={attachment.id}
-          src={url}
-          title={attachment.filename}
-          className="h-[75dvh] w-full rounded-lg border border-slate-200 bg-white"
-        />
+        <PdfAttachmentPreview key={attachment.id} url={url} />
       ) : (
         <div className="flex min-h-[40dvh] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center">
           <p className="text-sm text-slate-700">
             Preview is not available for this file type.
           </p>
-          <a
-            href={downloadUrl}
-            className="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700"
-          >
-            Download file
-          </a>
+          {previewOnly ? null : (
+            <a
+              href={downloadUrl}
+              className="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700"
+            >
+              Download file
+            </a>
+          )}
         </div>
       )}
     </MediaPreviewDialog>

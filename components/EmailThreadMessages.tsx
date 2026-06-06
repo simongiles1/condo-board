@@ -3,13 +3,14 @@
 import { useEffect, useState } from "react";
 
 import { DeleteEmailButton } from "@/components/DeleteEmailButton";
+import {
+  type EmailAttachmentSummary,
+} from "@/lib/email/attachment-display";
+import { filterVisibleAttachments } from "@/lib/email/attachment-visibility";
 import { formatDateTime } from "@/lib/format/datetime";
+import { useAttachmentVisibilitySettings } from "@/lib/settings/attachment-visibility-settings";
 
-type Attachment = {
-  id: string;
-  filename: string;
-  mimeType: string;
-};
+type Attachment = EmailAttachmentSummary;
 
 export type ThreadMessage = {
   id: string;
@@ -29,7 +30,14 @@ function bodyPreview(text: string, maxLength = 120): string {
   return `${normalized.slice(0, maxLength).trimEnd()}…`;
 }
 
-export function EmailThreadMessages({ messages }: { messages: ThreadMessage[] }) {
+export function EmailThreadMessages({
+  messages,
+  hideAttachments = false,
+}: {
+  messages: ThreadMessage[];
+  hideAttachments?: boolean;
+}) {
+  const visibilitySettings = useAttachmentVisibilitySettings();
   const [visibleMessages, setVisibleMessages] = useState(messages);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
     const newestId = messages.at(0)?.id;
@@ -75,6 +83,11 @@ export function EmailThreadMessages({ messages }: { messages: ThreadMessage[] })
     <div className="space-y-3">
       {visibleMessages.map((message) => {
         const expanded = expandedIds.has(message.id);
+        const visibleAttachments = filterVisibleAttachments(
+          message.attachments,
+          "emailDetail",
+          visibilitySettings,
+        );
 
         return (
           <article
@@ -151,9 +164,9 @@ export function EmailThreadMessages({ messages }: { messages: ThreadMessage[] })
                   {message.bodyText || "(No plain-text body)"}
                 </div>
 
-                {message.attachments.length > 0 ? (
+                {!hideAttachments && visibleAttachments.length > 0 ? (
                   <ul className="mt-4 space-y-1 rounded-md border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700">
-                    {message.attachments.map((attachment) => (
+                    {visibleAttachments.map((attachment) => (
                       <li key={attachment.id}>
                         {attachment.filename} ({attachment.mimeType})
                       </li>

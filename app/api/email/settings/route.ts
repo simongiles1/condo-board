@@ -4,7 +4,11 @@ import cron from "node-cron";
 import { NextResponse } from "next/server";
 
 import { refreshEmailScheduler } from "@/lib/email/scheduler";
-import { getEmailSyncSettings, updateEmailSyncSettings } from "@/lib/email/settings";
+import {
+  getEmailSyncSettings,
+  isValidBackfillCutoffDate,
+  updateEmailSyncSettings,
+} from "@/lib/email/settings";
 
 export async function GET() {
   try {
@@ -23,6 +27,7 @@ export async function PATCH(req: Request) {
   let body: {
     syncCron?: string;
     schedulerEnabled?: boolean;
+    backfillCutoffDate?: string | null;
   };
 
   try {
@@ -41,6 +46,20 @@ export async function PATCH(req: Request) {
     );
   }
 
+  let backfillCutoffDate: string | null | undefined;
+  if (body.backfillCutoffDate === null || body.backfillCutoffDate === "") {
+    backfillCutoffDate = null;
+  } else if (typeof body.backfillCutoffDate === "string") {
+    const trimmed = body.backfillCutoffDate.trim();
+    if (!isValidBackfillCutoffDate(trimmed)) {
+      return NextResponse.json(
+        { error: "Invalid backfill cutoff date. Use YYYY-MM-DD." },
+        { status: 400 },
+      );
+    }
+    backfillCutoffDate = trimmed;
+  }
+
   try {
     const updated = await updateEmailSyncSettings({
       syncCron,
@@ -48,6 +67,7 @@ export async function PATCH(req: Request) {
         typeof body.schedulerEnabled === "boolean"
           ? body.schedulerEnabled
           : undefined,
+      backfillCutoffDate,
     });
 
     await refreshEmailScheduler();

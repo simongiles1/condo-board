@@ -9,11 +9,14 @@
     "lint": "eslint",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:migrate-from-sqlite": "npx -p better-sqlite3 -p pg node scripts/migrate-sqlite-to-postgres.mjs"
+    "db:migrate-from-sqlite": "npx -p better-sqlite3 -p pg node scripts/migrate-sqlite-to-postgres.mjs",
+    "backfill:attachment-value": "npx tsx scripts/backfill-attachment-value.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@react-pdf/renderer": "^4.3.2",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
     "@tailwindcss/typography": "^0.5.19",
     "@tiptap/extension-task-item": "^2.27.2",
     "@tiptap/extension-task-list": "^2.27.2",
@@ -25,13 +28,16 @@
     "marked": "^15.0.6",
     "next": "^15.5.11",
     "node-cron": "^4.2.1",
+    "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^6.0.227",
     "pg": "^8.16.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",
+    "three": "^0.184.0",
     "turndown": "^7.2.0",
     "turndown-plugin-gfm": "^1.0.2"
   },

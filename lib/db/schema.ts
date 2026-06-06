@@ -18,6 +18,8 @@ export const meetings = pgTable("meetings", {
   globalTodosMergedAt: text("global_todos_merged_at"),
   vttFilePath: text("vtt_file_path").notNull(),
   pdfFilePath: text("pdf_file_path").notNull(),
+  /** Board package / management report PDF used as factual source at generation. */
+  boardPackageFilePath: text("board_package_file_path"),
   createdAt: text("created_at").notNull(),
   finalizedAt: text("finalized_at"),
 });
@@ -79,6 +81,8 @@ export const emailSyncSettings = pgTable("email_sync_settings", {
   id: text("id").primaryKey(),
   syncCron: text("sync_cron").notNull().default("0 7 * * *"),
   schedulerEnabled: boolean("scheduler_enabled").notNull().default(true),
+  /** ISO date (YYYY-MM-DD); personal backfill imports mail on or before this day. */
+  backfillCutoffDate: text("backfill_cutoff_date"),
   updatedAt: text("updated_at").notNull(),
 });
 
@@ -148,6 +152,8 @@ export const emailAttachments = pgTable("email_attachments", {
   contentHash: text("content_hash"),
   cachedFilePath: text("cached_file_path"),
   processedAt: text("processed_at"),
+  /** null = not yet classified; false = logo/tracking pixel/decorative */
+  hasValue: boolean("has_value"),
 });
 
 /** Messages intentionally removed from the app but left in dedicated Gmail. */

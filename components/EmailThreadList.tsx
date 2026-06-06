@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { EmailAttachmentsBadge } from "@/components/EmailAttachmentsBadge";
+import { EmailExtractionBadge } from "@/components/EmailExtractionBadge";
 import { ProcessedCostBadge } from "@/components/ProcessedCostBadge";
 import { formatDateTime } from "@/lib/format/datetime";
 import { formatCostUsd } from "@/lib/gemini/usage";
@@ -12,6 +13,7 @@ import type {
   EmailAttachmentSummary,
   ThreadAttachmentGroup,
 } from "@/lib/email/attachment-display";
+import type { InboxExtractionSummary } from "@/lib/email/extraction-display";
 import type {
   EmailProcessingStats,
   InboxAnalysisQueueState,
@@ -33,9 +35,9 @@ const EMPTY_QUEUE_STATE: InboxAnalysisQueueState = {
   processedEmails: [],
 };
 
-/** Fixed columns: checkbox | subject | status | attachments | date */
+/** Fixed columns: checkbox | subject | status | metadata | attachments | date */
 const INBOX_ROW_GRID =
-  "grid grid-cols-[auto_minmax(0,1fr)_12rem_2.75rem_11rem] items-center gap-x-3";
+  "grid grid-cols-[auto_minmax(0,1fr)_12rem_2.75rem_2.75rem_11rem] items-center gap-x-3";
 
 type BulkProgress = {
   total: number;
@@ -503,6 +505,8 @@ export function EmailThreadList({
   threadAttachmentGroups,
   threadEmailIds,
   threadProcessingDetails,
+  messageExtractionSummaries,
+  threadExtractionSummaries,
   initialQueueState = EMPTY_QUEUE_STATE,
   pagination,
   filters,
@@ -514,6 +518,8 @@ export function EmailThreadList({
   threadAttachmentGroups?: Record<string, ThreadAttachmentGroup[]>;
   threadEmailIds?: Record<string, string[]>;
   threadProcessingDetails?: Record<string, EmailProcessingStats[]>;
+  messageExtractionSummaries?: Record<string, InboxExtractionSummary>;
+  threadExtractionSummaries?: Record<string, InboxExtractionSummary>;
   initialQueueState?: InboxAnalysisQueueState;
   pagination?: Pagination;
   filters?: EmailThreadFilters;
@@ -851,6 +857,11 @@ export function EmailThreadList({
                     />
                   </div>
                   <div className="flex items-center justify-center py-4">
+                    <EmailExtractionBadge
+                      summary={messageExtractionSummaries?.[message.id]}
+                    />
+                  </div>
+                  <div className="flex items-center justify-center py-4">
                     <EmailAttachmentsBadge
                       attachments={messageAttachments?.[message.id] ?? []}
                     />
@@ -910,6 +921,12 @@ export function EmailThreadList({
                           queueState,
                         )}
                         processingEntries={processingEntries}
+                      />
+                    </div>
+                    <div className="flex items-center justify-center py-4">
+                      <EmailExtractionBadge
+                        summary={threadExtractionSummaries?.[thread.id]}
+                        multiEmail
                       />
                     </div>
                     <div className="flex items-center justify-center py-4">

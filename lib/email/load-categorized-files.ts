@@ -18,6 +18,7 @@ export async function loadCategorizedFiles(): Promise<CategorizedFiles> {
       filename: emailAttachments.filename,
       mimeType: emailAttachments.mimeType,
       sizeBytes: emailAttachments.sizeBytes,
+      hasValue: emailAttachments.hasValue,
       emailId: emails.id,
       threadId: emails.threadId,
       fromAddress: emails.fromAddress,

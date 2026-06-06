@@ -5,8 +5,10 @@ import { useEffect, useState } from "react";
 
 import type { CalendarEventSourceDetail } from "@/lib/calendar/event-source";
 import { attachmentKind } from "@/lib/email/attachment-display";
+import { filterVisibleAttachments } from "@/lib/email/attachment-visibility";
 import { emailMessageDetailHref } from "@/lib/email/thread-filter-params";
 import { formatDateTime } from "@/lib/format/datetime";
+import { useAttachmentVisibilitySettings } from "@/lib/settings/attachment-visibility-settings";
 
 type Props = {
   eventId: string | null;
@@ -34,6 +36,7 @@ function formatEventWhen(startAt: string): string {
 }
 
 export function CalendarEventDetailDialog({ eventId, onClose }: Props) {
+  const visibilitySettings = useAttachmentVisibilitySettings();
   const [detail, setDetail] = useState<CalendarEventSourceDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -183,13 +186,21 @@ export function CalendarEventDetailDialog({ eventId, onClose }: Props) {
                     </p>
                   </div>
 
-                  {detail.source.attachments.length > 0 ? (
+                  {filterVisibleAttachments(
+                    detail.source.attachments,
+                    "calendar",
+                    visibilitySettings,
+                  ).length > 0 ? (
                     <div className="space-y-2">
                       <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                         Attachments analyzed with this email
                       </h4>
                       <ul className="space-y-1">
-                        {detail.source.attachments.map((attachment) => (
+                        {filterVisibleAttachments(
+                          detail.source.attachments,
+                          "calendar",
+                          visibilitySettings,
+                        ).map((attachment) => (
                           <li
                             key={attachment.id}
                             className="flex items-center gap-2 rounded-lg border border-slate-100 bg-white px-3 py-2 text-sm"

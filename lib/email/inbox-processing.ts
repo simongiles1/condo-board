@@ -2,6 +2,13 @@ import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { analysisQueue, emails, extractionSources } from "@/lib/db/schema";
+import {
+  buildEmailExtractionPreview,
+  buildInboxExtractionSummary,
+  buildMessageExtractionSummary,
+  type EmailExtractionPreview,
+  type InboxExtractionSummary,
+} from "@/lib/email/extraction-display";
 
 import type {
   EmailProcessingStats,
@@ -14,6 +21,7 @@ export type {
   InboxAnalysisQueueState,
   ProcessedEmailSnapshot,
 } from "./processing-stats";
+export type { InboxExtractionSummary } from "@/lib/email/extraction-display";
 export { mergeLiveProcessingStats, sumProcessingStats } from "./processing-stats";
 
 export async function loadInboxAnalysisQueueState(
@@ -269,4 +277,88 @@ export async function loadThreadEmailIds(
     map[row.threadId] = ids;
   }
   return map;
+}
+
+export async function loadMessageExtractionSummaries(
+  emailIds: string[],
+): Promise<Record<string, InboxExtractionSummary>> {
+  if (emailIds.length === 0) return {};
+
+  const db = getDb();
+  const rows = await db
+    .select({
+      emailId: extractionSources.sourceId,
+      subject: emails.subject,
+      fromAddress: emails.fromAddress,
+      receivedAt: emails.receivedAt,
+      rawExtractionJson: extractionSources.rawExtractionJson,
+    })
+    .from(extractionSources)
+    .innerJoin(emails, eq(extractionSources.sourceId, emails.id))
+    .where(
+      and(
+        eq(extractionSources.sourceType, "email_message"),
+        inArray(extractionSources.sourceId, emailIds),
+      ),
+    );
+
+  const summaries: Record<string, InboxExtractionSummary> = {};
+  for (const row of rows) {
+    const summary = buildMessageExtractionSummary(row);
+    if (summary) {
+      summaries[row.emailId] = summary;
+    }
+  }
+
+  return summaries;
+}
+
+export async function loadThreadExtractionSummaries(
+  threadIds: string[],
+): Promise<Record<string, InboxExtractionSummary>> {
+  if (threadIds.length === 0) return {};
+
+  const db = getDb();
+  const rows = await db
+    .select({
+      threadId: emails.threadId,
+      emailId: emails.id,
+      subject: emails.subject,
+      fromAddress: emails.fromAddress,
+      receivedAt: emails.receivedAt,
+      rawExtractionJson: extractionSources.rawExtractionJson,
+    })
+    .from(emails)
+    .innerJoin(
+      extractionSources,
+      and(
+        eq(extractionSources.sourceId, emails.id),
+        eq(extractionSources.sourceType, "email_message"),
+      ),
+    )
+    .where(inArray(emails.threadId, threadIds))
+    .orderBy(asc(emails.receivedAt));
+
+  const grouped: Record<string, EmailExtractionPreview[]> = {};
+
+  for (const row of rows) {
+    if (!row.threadId) continue;
+
+    const preview = buildEmailExtractionPreview(row);
+    if (!preview) continue;
+
+    const previews = grouped[row.threadId] ?? [];
+    previews.push(preview);
+    grouped[row.threadId] = previews;
+  }
+
+  const summaries: Record<string, InboxExtractionSummary> = {};
+  for (const [threadId, previews] of Object.entries(grouped)) {
+    const summary = buildInboxExtractionSummary(previews);
+    if (summary) {
+      summaries[threadId] = summary;
+    }
+  }
+
+  return summaries;
 }

@@ -1,9 +1,29 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { FileDropzone } from "@/components/FileDropzone";
+import {
+  buildTrimmedBoardPackage,
+  type BoardPackageSelection,
+} from "@/lib/pdf/board-package";
+
+const BoardPackagePageSelector = dynamic(
+  () =>
+    import("@/components/BoardPackagePageSelector").then(
+      (m) => m.BoardPackagePageSelector,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="md:col-span-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+        Loading board package page picker…
+      </div>
+    ),
+  },
+);
 import {
   appendMainRunModelsToFormData,
   loadModelSettings,
@@ -27,6 +47,15 @@ export function GenerateMeetingDialog({ open, onClose }: Props) {
   const [autoTitle, setAutoTitle] = useState<string | null>(null);
   const [meetingDate, setMeetingDate] = useState("");
   const [formKey, setFormKey] = useState(0);
+  const [boardPackageSelection, setBoardPackageSelection] =
+    useState<BoardPackageSelection | null>(null);
+
+  const handleBoardPackageChange = useCallback(
+    (value: BoardPackageSelection | null) => {
+      setBoardPackageSelection(value);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -48,6 +77,7 @@ export function GenerateMeetingDialog({ open, onClose }: Props) {
     setAutoTitle(null);
     setMeetingDate("");
     setFormKey((key) => key + 1);
+    setBoardPackageSelection(null);
   }
 
   function handleClose() {
@@ -71,7 +101,23 @@ export function GenerateMeetingDialog({ open, onClose }: Props) {
     event.preventDefault();
     setError(null);
 
+    if (!boardPackageSelection || boardPackageSelection.selectedPages.length === 0) {
+      setError("Select at least one page from the board package PDF.");
+      return;
+    }
+
     const formData = new FormData(event.currentTarget);
+    formData.delete("boardPackage");
+    try {
+      const trimmed = await buildTrimmedBoardPackage(boardPackageSelection);
+      formData.append("boardPackage", trimmed);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Could not trim board package PDF.",
+      );
+      return;
+    }
+
     appendMainRunModelsToFormData(formData, loadModelSettings());
 
     try {
@@ -146,7 +192,7 @@ export function GenerateMeetingDialog({ open, onClose }: Props) {
             id="generate-meeting-dialog-title"
             className="mt-1 text-xl font-semibold text-slate-900"
           >
-            Drop in the Teams transcript and reference PDF
+            Drop in the Teams transcript, reference minutes, and board package
           </h2>
           <p className="mt-2 text-sm text-slate-600">
             Originals land in <code>./uploads</code>; the database holds metadata and
@@ -209,16 +255,22 @@ export function GenerateMeetingDialog({ open, onClose }: Props) {
                 name="referencePdf"
                 accept=".pdf,application/pdf"
                 label="Reference minutes PDF"
-                hint="Prefer text-selectable exports for precedent."
+                hint="Prior minutes for style and tone only."
               />
             </div>
+
+            <BoardPackagePageSelector
+              key={formKey}
+              disabled={loading}
+              onSelectionChange={handleBoardPackageChange}
+            />
 
             <aside className="rounded-2xl bg-slate-900 p-5 text-white">
               <h3 className="text-sm font-semibold">Compliance reminders</h3>
               <ul className="mt-3 space-y-2 text-sm text-slate-200">
                 <li>
-                  Facts must originate from the readable transcript—not from
-                  PDF precedent.
+                  Facts must originate from the transcript and board package—not
+                  from reference minutes PDF precedent.
                 </li>
                 <li>
                   Motions obey the mandated template with sanctioned fallback

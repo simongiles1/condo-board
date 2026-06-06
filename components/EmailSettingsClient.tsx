@@ -34,6 +34,7 @@ type ConnectionInfo = {
 type SyncSettings = {
   syncCron: string;
   schedulerEnabled: boolean;
+  backfillCutoffDate: string | null;
   updatedAt: string;
 };
 
@@ -73,6 +74,7 @@ export function EmailSettingsClient(props: {
   );
   const [customCron, setCustomCron] = useState<string | null>(null);
   const [schedulerEnabled, setSchedulerEnabled] = useState(true);
+  const [backfillCutoffDate, setBackfillCutoffDate] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const schedulePreview = useMemo(() => {
@@ -119,6 +121,7 @@ export function EmailSettingsClient(props: {
         setCustomCron(parsed.cron);
       }
       setSchedulerEnabled(settingsData.schedulerEnabled);
+      setBackfillCutoffDate(settingsData.backfillCutoffDate ?? "");
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Could not load settings.",
@@ -208,7 +211,11 @@ export function EmailSettingsClient(props: {
       const response = await fetch("/api/email/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ syncCron, schedulerEnabled }),
+        body: JSON.stringify({
+          syncCron,
+          schedulerEnabled,
+          backfillCutoffDate: backfillCutoffDate || null,
+        }),
       });
 
       if (!response.ok) {
@@ -270,12 +277,17 @@ export function EmailSettingsClient(props: {
       const response = await fetch("/api/email/backfill", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(senderEmail ? { senderEmail } : {}),
+        body: JSON.stringify({
+          ...(senderEmail ? { senderEmail } : {}),
+          cutoffDate: backfillCutoffDate || null,
+        }),
       });
       const result = (await response.json()) as SyncResult & { error?: string };
       if (!response.ok) throw new Error(result.error ?? "Backfill failed.");
       setStatusMessage(
-        `Backfill complete: ${result.messagesAdded} added, ${result.messagesSkipped} skipped.`,
+        backfillCutoffDate
+          ? `Backfill complete (on or before ${backfillCutoffDate}): ${result.messagesAdded} added, ${result.messagesSkipped} skipped.`
+          : `Backfill complete: ${result.messagesAdded} added, ${result.messagesSkipped} skipped.`,
       );
       if (result.errors?.length) {
         setErrorMessage(result.errors.join("\n"));
@@ -393,23 +405,40 @@ export function EmailSettingsClient(props: {
               recurring schedule.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void runSync()}
-              disabled={busyAction !== null}
-              className="rounded-md bg-teal-700 px-3 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-50"
-            >
-              {busyAction === "sync" ? "Syncing…" : "Sync now"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void runBackfill()}
-              disabled={busyAction !== null}
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-            >
-              {busyAction === "backfill-all" ? "Backfilling…" : "Backfill all history"}
-            </button>
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium text-slate-800">
+                Backfill cutoff date
+              </span>
+              <input
+                type="date"
+                value={backfillCutoffDate}
+                onChange={(event) => setBackfillCutoffDate(event.target.value)}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2"
+              />
+              <span className="mt-1 block text-xs text-slate-500">
+                Only import personal Gmail mail received on or before this date.
+                Leave blank to include all history.
+              </span>
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void runSync()}
+                disabled={busyAction !== null}
+                className="rounded-md bg-teal-700 px-3 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-50"
+              >
+                {busyAction === "sync" ? "Syncing…" : "Sync now"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void runBackfill()}
+                disabled={busyAction !== null}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {busyAction === "backfill-all" ? "Backfilling…" : "Backfill all history"}
+              </button>
+            </div>
           </div>
         </div>
 

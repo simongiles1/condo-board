@@ -3,6 +3,7 @@ export type EmailAttachmentSummary = {
   filename: string;
   mimeType: string;
   sizeBytes: number | null;
+  hasValue?: boolean | null;
 };
 
 export type ThreadAttachmentGroup = {
@@ -64,7 +65,7 @@ export function attachmentKindClasses(kind: ReturnType<typeof attachmentKind>): 
     case "image":
       return "bg-violet-50 text-violet-700 ring-violet-100";
     case "pdf":
-      return "bg-red-50 text-red-700 ring-red-100";
+      return "bg-amber-50 text-amber-900 ring-amber-100";
     case "doc":
       return "bg-blue-50 text-blue-700 ring-blue-100";
     case "sheet":

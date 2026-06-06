@@ -165,6 +165,10 @@ export type EmailExtractionDocument = {
   document_type?: string;
   summary?: string;
   urgency?: ExtractionUrgency;
+  /** Attachment-only: false for logos, tracking pixels, decorative images. */
+  has_value?: boolean;
+  /** Attachment-only: e.g. logo, tracking_pixel, document, invoice. */
+  attachment_role?: string;
   tags?: string[];
   equipment_mentions?: string[];
   maintenance_events?: MaintenanceEventExtraction[];
@@ -362,6 +366,8 @@ export function validateEmailExtraction(
     document_type: asString(raw.document_type),
     summary: asString(raw.summary),
     urgency: asString(raw.urgency) as ExtractionUrgency | undefined,
+    has_value: asBool(raw.has_value),
+    attachment_role: asString(raw.attachment_role),
     tags: asStringArray(raw.tags),
     equipment_mentions: asStringArray(raw.equipment_mentions),
     maintenance_events: parseMaintenanceEvents(raw.maintenance_events),

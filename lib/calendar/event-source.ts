@@ -15,6 +15,7 @@ export type CalendarEventAttachmentSummary = {
   filename: string;
   mimeType: string;
   processedAt: string | null;
+  hasValue?: boolean | null;
 };
 
 export type CalendarEventEmailSource = {
@@ -106,6 +107,7 @@ async function resolveEmailSource(input: {
       filename: emailAttachments.filename,
       mimeType: emailAttachments.mimeType,
       processedAt: emailAttachments.processedAt,
+      hasValue: emailAttachments.hasValue,
     })
     .from(emailAttachments)
     .where(eq(emailAttachments.emailId, email.id));

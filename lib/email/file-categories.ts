@@ -9,6 +9,7 @@ export type CategorizedFile = {
   filename: string;
   mimeType: string;
   sizeBytes: number | null;
+  hasValue?: boolean | null;
   emailId: string;
   threadId: string | null;
   fromAddress: string;

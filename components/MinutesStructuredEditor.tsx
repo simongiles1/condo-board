@@ -100,6 +100,12 @@ function AutoGrowTextarea({
 const btnClass =
   "rounded border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-600 hover:border-slate-300 hover:bg-slate-50";
 
+const actionAssigneeInputClass =
+  "minutes-structured-input minutes-action-assignee-input rounded border border-transparent bg-transparent px-1 py-0.5 text-sm text-slate-900 focus:border-teal-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-100";
+
+const actionTaskInputClass =
+  "minutes-structured-input minutes-action-task-input rounded border border-transparent bg-transparent px-1 py-0.5 text-sm text-slate-900 focus:border-teal-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-100";
+
 const motionNameInputClass =
   "minutes-structured-input minutes-motion-name-input rounded border border-transparent bg-transparent px-1 py-0.5 text-sm text-slate-900 focus:border-teal-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-100";
 
@@ -270,7 +276,7 @@ function ActionItemsEditor({
           <span className="minutes-action-label">Action:</span>
           <input
             type="text"
-            className={inputClass}
+            className={actionAssigneeInputClass}
             value={action.assignee}
             onChange={(e) =>
               onDocChange(
@@ -283,7 +289,7 @@ function ActionItemsEditor({
           />
           <input
             type="text"
-            className={inputClass}
+            className={actionTaskInputClass}
             value={action.taskDescription}
             onChange={(e) =>
               onDocChange(

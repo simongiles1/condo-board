@@ -10,6 +10,7 @@ const links = [
   { href: "/calendar", label: "Calendar" },
   { href: "/emails", label: "Emails" },
   { href: "/files", label: "Files" },
+  { href: "/building", label: "Building" },
   { href: "/insights", label: "Insights" },
   { href: "/skill", label: "Skill" },
   { href: "/analysis", label: "Analysis" },
@@ -31,6 +32,9 @@ function isActive(pathname: string, href: string) {
   }
   if (href === "/files") {
     return pathname === "/files" || pathname.startsWith("/files/");
+  }
+  if (href === "/building") {
+    return pathname === "/building" || pathname.startsWith("/building/");
   }
   if (href === "/insights") {
     return pathname === "/insights" || pathname.startsWith("/insights/");

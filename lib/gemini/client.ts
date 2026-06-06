@@ -388,12 +388,14 @@ ${combinedText}
   };
 }
 
+const MAX_OMISSIONS_CONTINUATIONS = 1;
+
 /** Omissions analysis — structured JSON comparison of transcript vs minutes. */
 export async function generateOmissionsAnalysis(options: {
   systemInstruction: string;
   userText: string;
   modelName?: string;
-}): Promise<GeminiGenerationResult> {
+}): Promise<GeminiGenerationResult & { retryCount: number }> {
   const client = new GoogleGenerativeAI(requireApiKey());
   const modelName =
     options.modelName?.trim() ||
@@ -403,31 +405,84 @@ export async function generateOmissionsAnalysis(options: {
 
   const maxOutputTokens = Number(
     process.env.GEMINI_MAX_OUTPUT_TOKENS_OMISSIONS ??
-      process.env.GEMINI_MAX_OUTPUT_TOKENS_TODOS ??
-      16384,
+      process.env.GEMINI_MAX_OUTPUT_TOKENS_MINUTES ??
+      65536,
   );
 
-  const generativeModel = client.getGenerativeModel({
-    model: modelName,
-    systemInstruction: options.systemInstruction,
-    generationConfig: {
-      ...buildGenerationConfig({
-        modelName,
-        maxOutputTokens,
-        temperature: 0.2,
-      }),
-      responseMimeType: "application/json",
-    },
-  });
+  let combinedText = "";
+  let retryCount = 0;
+  let finishReason: FinishReason | undefined;
+  let truncated = false;
+  const usageCalls: GeminiUsageCall[] = [];
+  let userText = options.userText;
 
-  const result = await generativeModel.generateContent([
-    `USER INPUT\n\n${options.userText}`,
-  ]);
+  for (let attempt = 0; attempt <= MAX_OMISSIONS_CONTINUATIONS; attempt++) {
+    const generativeModel = client.getGenerativeModel({
+      model: modelName,
+      systemInstruction: options.systemInstruction,
+      generationConfig: {
+        ...buildGenerationConfig({
+          modelName,
+          maxOutputTokens,
+          temperature: 0.2,
+        }),
+        responseMimeType: "application/json",
+      },
+    });
 
-  return parseGenerationResult(result.response, {
+    const result = await generativeModel.generateContent([
+      `USER INPUT\n\n${userText}`,
+    ]);
+
+    const parsed = parseGenerationResult(result.response, {
+      modelName,
+      step:
+        attempt === 0 ? "omissions_analysis" : "omissions_analysis_continuation",
+    });
+
+    usageCalls.push(...parsed.usageCalls);
+    finishReason = parsed.finishReason;
+    truncated = parsed.truncated;
+
+    if (attempt === 0) {
+      combinedText = parsed.text;
+    } else {
+      combinedText = stitchContinuedJson(combinedText, parsed.text);
+      retryCount = attempt;
+    }
+
+    if (!parsed.truncated) {
+      break;
+    }
+
+    userText = `The previous JSON response was truncated because the output token limit was reached.
+
+Continue the JSON object EXACTLY where the partial output ends. Do not repeat keys or content already written. Output only valid JSON (no markdown fences) that completes the document.
+
+PARTIAL JSON SO FAR
+<<<
+${combinedText}
+>>>`;
+  }
+
+  const usage = usageCalls.reduce(
+    (acc, call) => ({
+      inputTokens: acc.inputTokens + call.inputTokens,
+      outputTokens: acc.outputTokens + call.outputTokens,
+      totalTokens: acc.totalTokens + call.totalTokens,
+    }),
+    { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+  );
+
+  return {
+    text: combinedText,
+    finishReason,
+    truncated,
+    retryCount,
     modelName,
-    step: "omissions_analysis",
-  });
+    usage,
+    usageCalls,
+  };
 }
 
 /** Merge meeting todos into the global board checklist. */

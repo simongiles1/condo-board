@@ -19,6 +19,7 @@ import {
 } from "@/lib/email-analysis/extraction-skill";
 import {
   findExistingAttachmentExtraction,
+  findHasValueByContentHash,
   getEmailAttachments,
   getThreadContext,
   preprocessEmailMessage,
@@ -110,6 +111,23 @@ function parseExtractionJson(raw: string): EmailExtractionDocument {
     throw new Error(`Extraction validation failed: ${errors.join("; ")}`);
   }
   return document;
+}
+
+function attachmentHasValue(doc: EmailExtractionDocument): boolean {
+  return doc.has_value !== false;
+}
+
+function minimalLowValueAttachmentDoc(
+  filename: string,
+  role?: string,
+): EmailExtractionDocument {
+  return {
+    has_value: false,
+    attachment_role: role,
+    document_type: "decorative_attachment",
+    tags: ["low_value_attachment"],
+    summary: `Attachment "${filename}" classified as non-substantive.`,
+  };
 }
 
 async function extractWithGemini(input: {
@@ -381,12 +399,53 @@ export async function analyzeEmail(input: {
       filename = downloaded.filename;
     }
 
+    const nowIso = new Date().toISOString();
+
+    const cachedHasValue = await findHasValueByContentHash(contentHash);
+    if (cachedHasValue !== null && !input.reprocess) {
+      await db
+        .update(emailAttachments)
+        .set({
+          contentHash,
+          processedAt: nowIso,
+          hasValue: cachedHasValue,
+        })
+        .where(eq(emailAttachments.id, attachment.id));
+
+      if (cachedHasValue) {
+        const existing = await findExistingAttachmentExtraction(contentHash);
+        if (existing) {
+          partialDocs.push(
+            JSON.parse(existing.rawExtractionJson) as EmailExtractionDocument,
+          );
+        }
+      } else {
+        partialDocs.push(minimalLowValueAttachmentDoc(filename));
+      }
+      continue;
+    }
+
     const existing = await findExistingAttachmentExtraction(contentHash);
     if (existing && !input.reprocess) {
       const existingDoc = JSON.parse(
         existing.rawExtractionJson,
       ) as EmailExtractionDocument;
-      partialDocs.push(existingDoc);
+      const hasValue = attachmentHasValue(existingDoc);
+
+      await db
+        .update(emailAttachments)
+        .set({
+          contentHash,
+          processedAt: nowIso,
+          hasValue,
+        })
+        .where(eq(emailAttachments.id, attachment.id));
+
+      partialDocs.push(
+        hasValue
+          ? existingDoc
+          : minimalLowValueAttachmentDoc(filename, existingDoc.attachment_role),
+      );
       continue;
     }
 
@@ -402,15 +461,21 @@ export async function analyzeEmail(input: {
       systemInstruction,
     });
     const attachmentDoc = result.document;
+    const hasValue = attachmentHasValue(attachmentDoc);
     allCalls.push(...result.calls);
 
-    partialDocs.push(attachmentDoc);
+    partialDocs.push(
+      hasValue
+        ? attachmentDoc
+        : minimalLowValueAttachmentDoc(filename, attachmentDoc.attachment_role),
+    );
 
     await db
       .update(emailAttachments)
       .set({
         contentHash,
-        processedAt: new Date().toISOString(),
+        processedAt: nowIso,
+        hasValue,
       })
       .where(eq(emailAttachments.id, attachment.id));
   }
@@ -544,4 +609,104 @@ export async function analyzeAllUnprocessed(input: {
     }
   }
   return analyzeEmailBatch({ emailIds: unprocessed, reprocess: input.reprocess });
+}
+
+/** Classify a single stored attachment and persist has_value (for backfill). */
+export async function classifyEmailAttachmentHasValue(input: {
+  attachmentId: string;
+  emailId: string;
+}): Promise<boolean> {
+  const db = getDb();
+  const settings = await getAnalysisSettings();
+  const skill = await compileSkillPromptSection();
+  const systemInstruction = buildEmailAnalysisSystemPrompt({
+    skillPromptSection: skill.promptSection,
+  });
+
+  const [attachment] = await db
+    .select()
+    .from(emailAttachments)
+    .where(eq(emailAttachments.id, input.attachmentId));
+
+  if (!attachment?.gmailAttachmentId) {
+    throw new Error("Attachment is missing Gmail attachment id.");
+  }
+
+  const [email] = await db
+    .select()
+    .from(emails)
+    .where(eq(emails.id, input.emailId));
+
+  if (!email) {
+    throw new Error("Email not found.");
+  }
+
+  let bytes: Buffer;
+  let contentHash: string;
+  let mimeType = attachment.mimeType;
+  let filename = attachment.filename;
+
+  if (attachment.contentHash && attachment.cachedFilePath) {
+    contentHash = attachment.contentHash;
+    const ext = attachment.cachedFilePath.match(/\.[^.]+$/)?.[0] ?? ".bin";
+    const cached = await readCachedAttachment(contentHash, ext);
+    if (!cached) {
+      const downloaded = await downloadEmailAttachment({
+        attachmentId: attachment.id,
+        emailId: email.id,
+      });
+      bytes = downloaded.bytes;
+      contentHash = downloaded.contentHash;
+      mimeType = downloaded.mimeType;
+      filename = downloaded.filename;
+    } else {
+      bytes = cached;
+    }
+  } else {
+    const downloaded = await downloadEmailAttachment({
+      attachmentId: attachment.id,
+      emailId: email.id,
+    });
+    bytes = downloaded.bytes;
+    contentHash = downloaded.contentHash;
+    mimeType = downloaded.mimeType;
+    filename = downloaded.filename;
+  }
+
+  const cachedHasValue = await findHasValueByContentHash(contentHash);
+  if (cachedHasValue !== null) {
+    await db
+      .update(emailAttachments)
+      .set({
+        contentHash,
+        processedAt: new Date().toISOString(),
+        hasValue: cachedHasValue,
+      })
+      .where(eq(emailAttachments.id, attachment.id));
+    return cachedHasValue;
+  }
+
+  const result = await extractAttachmentDocument({
+    bytes,
+    mimeType,
+    filename,
+    subject: email.subject,
+    from: email.fromAddress,
+    attachmentId: attachment.id,
+    modelName: settings.analysisModel,
+    maxOutputTokens: settings.maxOutputTokens,
+    systemInstruction,
+  });
+  const hasValue = attachmentHasValue(result.document);
+
+  await db
+    .update(emailAttachments)
+    .set({
+      contentHash,
+      processedAt: new Date().toISOString(),
+      hasValue,
+    })
+    .where(eq(emailAttachments.id, attachment.id));
+
+  return hasValue;
 }

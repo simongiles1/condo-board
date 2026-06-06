@@ -36,6 +36,8 @@ async function loadMessageWithAttachments(message: typeof emails.$inferSelect) {
       id: attachment.id,
       filename: attachment.filename,
       mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      hasValue: attachment.hasValue,
     })),
   };
 }

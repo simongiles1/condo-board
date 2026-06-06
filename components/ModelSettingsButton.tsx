@@ -3,12 +3,18 @@
 import { useEffect, useState } from "react";
 
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
+import type { AttachmentVisibilitySettings } from "@/lib/email/attachment-visibility";
 import {
   DEFAULT_PDF_MARGINS,
   loadPdfMargins,
   savePdfMargins,
   type PdfMargins,
 } from "@/lib/pdf/margins";
+import {
+  DEFAULT_ATTACHMENT_VISIBILITY_SETTINGS,
+  loadAttachmentVisibilitySettings,
+  saveAttachmentVisibilitySettings,
+} from "@/lib/settings/attachment-visibility-settings";
 import {
   DEFAULT_MODEL_SETTINGS,
   loadModelSettings,
@@ -20,17 +26,26 @@ export function ModelSettingsButton() {
   const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState<ModelSettings>(DEFAULT_MODEL_SETTINGS);
   const [pdfMargins, setPdfMargins] = useState<PdfMargins>(DEFAULT_PDF_MARGINS);
+  const [attachmentVisibility, setAttachmentVisibility] =
+    useState<AttachmentVisibilitySettings>(DEFAULT_ATTACHMENT_VISIBILITY_SETTINGS);
 
   useEffect(() => {
     setSettings(loadModelSettings());
     setPdfMargins(loadPdfMargins());
+    setAttachmentVisibility(loadAttachmentVisibilitySettings());
   }, []);
 
-  function handleSave(next: ModelSettings, nextMargins: PdfMargins) {
+  function handleSave(
+    next: ModelSettings,
+    nextMargins: PdfMargins,
+    nextAttachmentVisibility: AttachmentVisibilitySettings,
+  ) {
     setSettings(next);
     setPdfMargins(nextMargins);
+    setAttachmentVisibility(nextAttachmentVisibility);
     saveModelSettings(next);
     savePdfMargins(nextMargins);
+    saveAttachmentVisibilitySettings(nextAttachmentVisibility);
     setOpen(false);
   }
 
@@ -63,6 +78,7 @@ export function ModelSettingsButton() {
         open={open}
         settings={settings}
         pdfMargins={pdfMargins}
+        attachmentVisibility={attachmentVisibility}
         onClose={() => setOpen(false)}
         onSave={handleSave}
       />

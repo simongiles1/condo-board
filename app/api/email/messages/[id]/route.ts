@@ -1,9 +1,59 @@
 export const runtime = "nodejs";
 
+import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 
+import { getDb } from "@/lib/db";
+import { emailAttachments, emails } from "@/lib/db/schema";
 import { deleteEmailMessage } from "@/lib/email/delete-message";
+
+export async function GET(
+  _req: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const { id } = await context.params;
+
+  try {
+    const db = getDb();
+    const [message] = await db.select().from(emails).where(eq(emails.id, id));
+
+    if (!message) {
+      return NextResponse.json({ error: "Email not found." }, { status: 404 });
+    }
+
+    const attachments = await db
+      .select({
+        id: emailAttachments.id,
+        filename: emailAttachments.filename,
+        mimeType: emailAttachments.mimeType,
+        sizeBytes: emailAttachments.sizeBytes,
+        hasValue: emailAttachments.hasValue,
+      })
+      .from(emailAttachments)
+      .where(eq(emailAttachments.emailId, message.id));
+
+    return NextResponse.json({
+      message: {
+        id: message.id,
+        subject: message.subject,
+        fromAddress: message.fromAddress,
+        toAddresses: JSON.parse(message.toAddresses) as string[],
+        receivedAt: message.receivedAt,
+        source: message.source,
+        bodyText: message.bodyText,
+        processedAt: message.processedAt,
+        attachments,
+      },
+    });
+  } catch (error) {
+    console.error("[email:messages:get]", error);
+    return NextResponse.json(
+      { error: "Could not load email." },
+      { status: 500 },
+    );
+  }
+}
 
 type DeleteBody = {
   deleteFromDb?: boolean;

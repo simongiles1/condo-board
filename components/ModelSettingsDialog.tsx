@@ -12,6 +12,11 @@ import {
   type DraftPdfMargins,
 } from "@/components/PdfMarginsFields";
 import {
+  ATTACHMENT_VISIBILITY_SURFACE_LABELS,
+  ATTACHMENT_VISIBILITY_SURFACES,
+  type AttachmentVisibilitySettings,
+} from "@/lib/email/attachment-visibility";
+import {
   AVAILABLE_ANALYSIS_MODELS,
   DEFAULT_ANALYSIS_MODEL,
   formatAnalysisModelOptionLabel,
@@ -19,6 +24,11 @@ import {
   type AnalysisSettings,
 } from "@/lib/email-analysis/settings-shared";
 import { type PdfMargins } from "@/lib/pdf/margins";
+import {
+  DEFAULT_ATTACHMENT_VISIBILITY_SETTINGS,
+  normalizeAttachmentVisibilitySettings,
+  updateAttachmentVisibilitySurface,
+} from "@/lib/settings/attachment-visibility-settings";
 import {
   AVAILABLE_GEMINI_MODELS,
   DEFAULT_MODEL_SETTINGS,
@@ -28,14 +38,19 @@ import {
   type ModelSettings,
 } from "@/lib/settings/model-settings";
 
-type SettingsTab = "models" | "pdf" | "processed";
+type SettingsTab = "models" | "pdf" | "attachments" | "processed";
 
 type Props = {
   open: boolean;
   settings: ModelSettings;
   pdfMargins: PdfMargins;
+  attachmentVisibility: AttachmentVisibilitySettings;
   onClose: () => void;
-  onSave: (settings: ModelSettings, pdfMargins: PdfMargins) => void | Promise<void>;
+  onSave: (
+    settings: ModelSettings,
+    pdfMargins: PdfMargins,
+    attachmentVisibility: AttachmentVisibilitySettings,
+  ) => void | Promise<void>;
 };
 
 function ModelSelect({
@@ -83,6 +98,7 @@ function SettingsTabs({
   const tabs: Array<{ id: SettingsTab; label: string }> = [
     { id: "models", label: "API models" },
     { id: "pdf", label: "PDF margins" },
+    { id: "attachments", label: "Attachments" },
     { id: "processed", label: "Processed data" },
   ];
 
@@ -120,6 +136,7 @@ export function ModelSettingsDialog({
   open,
   settings,
   pdfMargins,
+  attachmentVisibility,
   onClose,
   onSave,
 }: Props) {
@@ -132,6 +149,8 @@ export function ModelSettingsDialog({
   const [analysisDraft, setAnalysisDraft] = useState<AnalysisSettings | null>(
     null,
   );
+  const [attachmentVisibilityDraft, setAttachmentVisibilityDraft] =
+    useState<AttachmentVisibilitySettings>(attachmentVisibility);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -144,9 +163,12 @@ export function ModelSettingsDialog({
       setActiveTab("models");
       setDraft(normalizeModelSettings(settings));
       setMarginDraft(draftPdfMarginsFrom(pdfMargins));
+      setAttachmentVisibilityDraft(
+        normalizeAttachmentVisibilitySettings(attachmentVisibility),
+      );
       setSaveError(null);
     }
-  }, [open, settings, pdfMargins]);
+  }, [open, settings, pdfMargins, attachmentVisibility]);
 
   useEffect(() => {
     if (!open) return;
@@ -209,6 +231,7 @@ export function ModelSettingsDialog({
   function handleReset() {
     setDraft({ ...DEFAULT_MODEL_SETTINGS });
     setMarginDraft(defaultDraftPdfMargins());
+    setAttachmentVisibilityDraft(DEFAULT_ATTACHMENT_VISIBILITY_SETTINGS);
     setAnalysisDraft((current) =>
       current
         ? { ...current, analysisModel: DEFAULT_ANALYSIS_MODEL }
@@ -250,6 +273,7 @@ export function ModelSettingsDialog({
       await onSave(
         normalizeModelSettings(draft),
         normalizeDraftPdfMargins(marginDraft),
+        normalizeAttachmentVisibilitySettings(attachmentVisibilityDraft),
       );
     } catch (error) {
       setSaveError(
@@ -465,6 +489,52 @@ export function ModelSettingsDialog({
                   draft={marginDraft}
                   onChange={updateMarginField}
                 />
+              </section>
+            ) : null}
+
+            {activeTab === "attachments" ? (
+              <section className="space-y-4">
+                <div>
+                  <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                    Low-value attachments
+                  </h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    After AI analysis, logos, tracking pixels, and decorative
+                    images are hidden by default. Turn on a surface below to show
+                    them there again.
+                  </p>
+                </div>
+                <ul className="space-y-3">
+                  {ATTACHMENT_VISIBILITY_SURFACES.map((surface) => (
+                    <li key={surface}>
+                      <label className="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={attachmentVisibilityDraft[surface]}
+                          onChange={(event) => {
+                            setAttachmentVisibilityDraft((current) =>
+                              updateAttachmentVisibilitySurface(
+                                current,
+                                surface,
+                                event.target.checked,
+                              ),
+                            );
+                          }}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-slate-800">
+                            {ATTACHMENT_VISIBILITY_SURFACE_LABELS[surface]}
+                          </span>
+                          <span className="mt-0.5 block text-xs text-slate-500">
+                            Show logos, tracking pixels, and other decorative
+                            attachments in this view.
+                          </span>
+                        </span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
               </section>
             ) : null}
 

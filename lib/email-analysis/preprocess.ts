@@ -72,6 +72,20 @@ export async function findExistingAttachmentExtraction(contentHash: string) {
   return row ?? null;
 }
 
+export async function findHasValueByContentHash(
+  contentHash: string,
+): Promise<boolean | null> {
+  const db = getDb();
+  const [row] = await db
+    .select({ hasValue: emailAttachments.hasValue })
+    .from(emailAttachments)
+    .where(
+      sql`${emailAttachments.contentHash} = ${contentHash} AND ${emailAttachments.hasValue} IS NOT NULL`,
+    )
+    .limit(1);
+  return row?.hasValue ?? null;
+}
+
 export async function countUnprocessedEmails(): Promise<number> {
   const db = getDb();
   const [row] = await db

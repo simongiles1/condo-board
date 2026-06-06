@@ -14,12 +14,15 @@ import { emailAttachments, emailThreads, emails } from "@/lib/db/schema";
 import type { EmailAttachmentSummary, ThreadAttachmentGroup } from "@/lib/email/attachment-display";
 import {
   loadInboxAnalysisQueueState,
+  loadMessageExtractionSummaries,
   loadMessageProcessingStats,
   loadThreadEmailIds,
+  loadThreadExtractionSummaries,
   loadThreadProcessingCosts,
   loadThreadProcessingDetails,
   type EmailProcessingStats,
   type InboxAnalysisQueueState,
+  type InboxExtractionSummary,
 } from "@/lib/email/inbox-processing";
 import {
   buildThreadFilterWhere,
@@ -77,13 +80,19 @@ export default async function EmailsPage({
           .filter((threadId): threadId is string => Boolean(threadId)),
       ),
     ];
-    const [messageAttachments, messageStats, threadProcessingDetails, queueState] =
-      await Promise.all([
-        loadMessageAttachments(messageIds),
-        loadMessageProcessingStats(messageIds),
-        loadThreadProcessingDetails(threadIds),
-        loadInboxAnalysisQueueState(messageIds),
-      ]);
+    const [
+      messageAttachments,
+      messageStats,
+      threadProcessingDetails,
+      messageExtractionSummaries,
+      queueState,
+    ] = await Promise.all([
+      loadMessageAttachments(messageIds),
+      loadMessageProcessingStats(messageIds),
+      loadThreadProcessingDetails(threadIds),
+      loadMessageExtractionSummaries(messageIds),
+      loadInboxAnalysisQueueState(messageIds),
+    ]);
 
     return (
       <EmailsPageShell
@@ -108,6 +117,7 @@ export default async function EmailsPage({
         })}
         messageAttachments={messageAttachments}
         threadProcessingDetails={threadProcessingDetails}
+        messageExtractionSummaries={messageExtractionSummaries}
         initialQueueState={queueState}
       />
     );
@@ -149,13 +159,19 @@ export default async function EmailsPage({
     : await threadsQuery;
 
   const threadIds = threads.map((thread) => thread.id);
-  const [threadAttachmentGroups, threadCosts, threadEmailIds, threadProcessingDetails] =
-    await Promise.all([
-      loadThreadAttachmentGroups(threadIds),
-      loadThreadProcessingCosts(threadIds),
-      loadThreadEmailIds(threadIds),
-      loadThreadProcessingDetails(threadIds),
-    ]);
+  const [
+    threadAttachmentGroups,
+    threadCosts,
+    threadEmailIds,
+    threadProcessingDetails,
+    threadExtractionSummaries,
+  ] = await Promise.all([
+    loadThreadAttachmentGroups(threadIds),
+    loadThreadProcessingCosts(threadIds),
+    loadThreadEmailIds(threadIds),
+    loadThreadProcessingDetails(threadIds),
+    loadThreadExtractionSummaries(threadIds),
+  ]);
 
   const pageEmailIds = Object.values(threadEmailIds).flat();
   const initialQueueState = await loadInboxAnalysisQueueState(pageEmailIds);
@@ -178,6 +194,7 @@ export default async function EmailsPage({
       threadAttachmentGroups={threadAttachmentGroups}
       threadEmailIds={threadEmailIds}
       threadProcessingDetails={threadProcessingDetails}
+      threadExtractionSummaries={threadExtractionSummaries}
       initialQueueState={initialQueueState}
     />
   );
@@ -196,6 +213,7 @@ async function loadMessageAttachments(
       filename: emailAttachments.filename,
       mimeType: emailAttachments.mimeType,
       sizeBytes: emailAttachments.sizeBytes,
+      hasValue: emailAttachments.hasValue,
     })
     .from(emailAttachments)
     .where(inArray(emailAttachments.emailId, emailIds));
@@ -219,6 +237,7 @@ async function loadThreadAttachmentGroups(
       filename: emailAttachments.filename,
       mimeType: emailAttachments.mimeType,
       sizeBytes: emailAttachments.sizeBytes,
+      hasValue: emailAttachments.hasValue,
     })
     .from(emailAttachments)
     .innerJoin(emails, eq(emailAttachments.emailId, emails.id))
@@ -249,6 +268,7 @@ async function loadThreadAttachmentGroups(
       filename: row.filename,
       mimeType: row.mimeType,
       sizeBytes: row.sizeBytes,
+      hasValue: row.hasValue,
     });
   }
 
@@ -262,6 +282,7 @@ function groupAttachmentsByEmailId(
     filename: string;
     mimeType: string;
     sizeBytes: number | null;
+    hasValue: boolean | null;
   }>,
 ): Record<string, EmailAttachmentSummary[]> {
   const grouped: Record<string, EmailAttachmentSummary[]> = {};
@@ -273,6 +294,7 @@ function groupAttachmentsByEmailId(
       filename: row.filename,
       mimeType: row.mimeType,
       sizeBytes: row.sizeBytes,
+      hasValue: row.hasValue,
     });
     grouped[row.emailId] = attachments;
   }
@@ -291,6 +313,8 @@ function EmailsPageShell({
   threadAttachmentGroups,
   threadEmailIds,
   threadProcessingDetails,
+  messageExtractionSummaries,
+  threadExtractionSummaries,
   initialQueueState = {
     processingEmailIds: [],
     pendingEmailIds: [],
@@ -332,6 +356,8 @@ function EmailsPageShell({
   threadAttachmentGroups?: Record<string, ThreadAttachmentGroup[]>;
   threadEmailIds?: Record<string, string[]>;
   threadProcessingDetails?: Record<string, EmailProcessingStats[]>;
+  messageExtractionSummaries?: Record<string, InboxExtractionSummary>;
+  threadExtractionSummaries?: Record<string, InboxExtractionSummary>;
   initialQueueState?: InboxAnalysisQueueState;
 }) {
   return (
@@ -370,6 +396,8 @@ function EmailsPageShell({
         threadAttachmentGroups={threadAttachmentGroups}
         threadEmailIds={threadEmailIds}
         threadProcessingDetails={threadProcessingDetails}
+        messageExtractionSummaries={messageExtractionSummaries}
+        threadExtractionSummaries={threadExtractionSummaries}
         initialQueueState={initialQueueState}
         filters={filters}
         pagination={pagination}

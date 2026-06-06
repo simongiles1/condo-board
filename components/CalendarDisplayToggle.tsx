@@ -4,40 +4,40 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
 import {
-  type CalendarView,
+  type CalendarDisplayMode,
   calendarHref,
   parseCalendarDate,
   parseCalendarDisplayMode,
   parseCalendarView,
 } from "@/lib/calendar/grid";
 
-const VIEW_OPTIONS: Array<{ id: CalendarView; label: string }> = [
-  { id: "month", label: "Month" },
-  { id: "week", label: "Week" },
+const DISPLAY_OPTIONS: Array<{ id: CalendarDisplayMode; label: string }> = [
+  { id: "calendar", label: "Calendar" },
+  { id: "list", label: "List" },
 ];
 
-export function CalendarViewToggle() {
+export function CalendarDisplayToggle() {
   const searchParams = useSearchParams();
-  const activeView = parseCalendarView(searchParams.get("view"));
+  const activeDisplay = parseCalendarDisplayMode(searchParams.get("display"));
+  const view = parseCalendarView(searchParams.get("view"));
   const date = parseCalendarDate(searchParams.get("date"));
-  const display = parseCalendarDisplayMode(searchParams.get("display"));
 
   return (
     <div
-      className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5"
+      className="flex rounded-xl border border-slate-200 bg-slate-100 p-0.5"
       role="tablist"
-      aria-label="Calendar view"
+      aria-label="Calendar display mode"
     >
-      {VIEW_OPTIONS.map((option) => {
-        const selected = activeView === option.id;
+      {DISPLAY_OPTIONS.map((option) => {
+        const selected = activeDisplay === option.id;
 
         return (
           <Link
             key={option.id}
-            href={calendarHref(option.id, date, display)}
+            href={calendarHref(view, date, option.id)}
             role="tab"
             aria-selected={selected}
-            className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
+            className={`flex-1 rounded-lg px-4 py-1.5 text-center text-xs font-semibold transition sm:px-6 ${
               selected
                 ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
                 : "text-slate-600 hover:text-slate-900"

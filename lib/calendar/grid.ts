@@ -2,6 +2,8 @@ import { DISPLAY_TIME_ZONE } from "@/lib/format/datetime";
 
 export type CalendarView = "month" | "week";
 
+export type CalendarDisplayMode = "calendar" | "list";
+
 export type CalendarDay = {
   key: string;
   dayNumber: number;
@@ -53,6 +55,12 @@ export function parseCalendarView(
   value: string | null | undefined,
 ): CalendarView {
   return value === "week" ? "week" : "month";
+}
+
+export function parseCalendarDisplayMode(
+  value: string | null | undefined,
+): CalendarDisplayMode {
+  return value === "list" ? "list" : "calendar";
 }
 
 export function buildMonthGrid(anchorKey: string): CalendarDay[] {
@@ -140,8 +148,15 @@ export function formatWeekTitle(anchorKey: string): string {
   return `${startLabel}–${endLabel}, ${yearLabel}`;
 }
 
-export function calendarHref(view: CalendarView, date: string): string {
+export function calendarHref(
+  view: CalendarView,
+  date: string,
+  display: CalendarDisplayMode = "calendar",
+): string {
   const params = new URLSearchParams({ view, date });
+  if (display === "list") {
+    params.set("display", "list");
+  }
   return `/calendar?${params.toString()}`;
 }
 

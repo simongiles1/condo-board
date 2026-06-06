@@ -380,12 +380,6 @@ function EmailsPageShell({
             <EmailTimelineChartButton />
           </Suspense>
           <Link
-            href="/emails/extractions"
-            className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Extraction audit
-          </Link>
-          <Link
             href="/emails/settings"
             className="rounded-md bg-teal-700 px-3 py-2 text-sm font-medium text-white hover:bg-teal-800"
           >

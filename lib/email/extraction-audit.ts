@@ -316,6 +316,95 @@ export async function fetchExtractionAuditPage(page = 1): Promise<{
   };
 }
 
+export type ExtractionAuditPagination = {
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+};
+
+/** Paginated extraction runs for one destination, plus per-destination item counts. */
+export async function fetchExtractionByTypePage(
+  destinationId: string,
+  page = 1,
+): Promise<{
+  records: ExtractionAuditRecord[];
+  pagination: ExtractionAuditPagination;
+  destinationCounts: Record<string, number>;
+}> {
+  const db = getDb();
+
+  const sources = await db
+    .select({
+      id: extractionSources.id,
+      processedAt: extractionSources.processedAt,
+      modelName: extractionSources.modelName,
+      sourceType: extractionSources.sourceType,
+      sourceId: extractionSources.sourceId,
+      emailThreadId: extractionSources.emailThreadId,
+      rawExtractionJson: extractionSources.rawExtractionJson,
+      emailSubject: emails.subject,
+      emailFrom: emails.fromAddress,
+      emailReceivedAt: emails.receivedAt,
+    })
+    .from(extractionSources)
+    .leftJoin(emails, eq(extractionSources.sourceId, emails.id))
+    .orderBy(desc(extractionSources.processedAt));
+
+  const destinationCounts: Record<string, number> = Object.fromEntries(
+    EXTRACTION_DESTINATIONS.map((destination) => [destination.id, 0]),
+  );
+  const matchingRecords: ExtractionAuditRecord[] = [];
+
+  for (const source of sources) {
+    const record = buildAuditRecord({
+      id: source.id,
+      processedAt: source.processedAt,
+      modelName: source.modelName,
+      sourceType: source.sourceType,
+      rawExtractionJson: source.rawExtractionJson,
+      emailId:
+        source.sourceType === "email_message" ? source.sourceId : null,
+      emailSubject: source.emailSubject,
+      emailFrom: source.emailFrom,
+      emailReceivedAt: source.emailReceivedAt,
+      emailThreadId: source.emailThreadId,
+      savedRowCounts: {},
+    });
+
+    for (const group of record.destinationGroups) {
+      if (group.items.length > 0) {
+        destinationCounts[group.destination.id] =
+          (destinationCounts[group.destination.id] ?? 0) + group.items.length;
+      }
+    }
+
+    const hasDestination = record.destinationGroups.some(
+      (group) =>
+        group.destination.id === destinationId && group.items.length > 0,
+    );
+    if (hasDestination) {
+      matchingRecords.push(record);
+    }
+  }
+
+  const totalCount = matchingRecords.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const currentPage = Math.min(Math.max(1, page), totalPages);
+  const offset = (currentPage - 1) * PAGE_SIZE;
+
+  return {
+    records: matchingRecords.slice(offset, offset + PAGE_SIZE),
+    pagination: {
+      page: currentPage,
+      pageSize: PAGE_SIZE,
+      totalCount,
+      totalPages,
+    },
+    destinationCounts,
+  };
+}
+
 export function describeFieldRouting(fieldKey: string): {
   destination: ExtractionDestination | undefined;
   note?: string;

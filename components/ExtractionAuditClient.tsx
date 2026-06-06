@@ -5,7 +5,6 @@ import { createPortal } from "react-dom";
 import {
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -27,6 +26,8 @@ const POPOVER_HIDE_DELAY_MS = 500;
 const POPOVER_Z_INDEX = 60;
 
 type Props = {
+  activeTab: ExtractionAuditTabId;
+  activeDestinationId: string;
   records: ExtractionAuditRecord[];
   pagination: {
     page: number;
@@ -34,6 +35,14 @@ type Props = {
     totalCount: number;
     totalPages: number;
   };
+  byTypeRecords: ExtractionAuditRecord[];
+  byTypePagination: {
+    page: number;
+    pageSize: number;
+    totalCount: number;
+    totalPages: number;
+  };
+  destinationCounts: Record<string, number>;
 };
 
 function PersistBadge({ persisted }: { persisted: boolean }) {
@@ -48,19 +57,34 @@ function PersistBadge({ persisted }: { persisted: boolean }) {
   );
 }
 
-type AuditTabId = "routing" | "extractions";
+export type ExtractionAuditTabId = "routing" | "by-type" | "list";
 
-const AUDIT_TABS: Array<{ id: AuditTabId; label: string }> = [
+const AUDIT_TABS: Array<{ id: ExtractionAuditTabId; label: string }> = [
   { id: "routing", label: "Extraction routing" },
-  { id: "extractions", label: "Extractions" },
+  { id: "by-type", label: "Extractions (by type)" },
+  { id: "list", label: "Extractions (list view)" },
 ];
+
+function auditTabHref(
+  tab: ExtractionAuditTabId,
+  activeDestinationId: string,
+): string {
+  switch (tab) {
+    case "routing":
+      return "/extractions?tab=routing";
+    case "by-type":
+      return `/extractions?tab=by-type&destination=${activeDestinationId}`;
+    case "list":
+      return "/extractions";
+  }
+}
 
 function AuditTabStrip({
   active,
-  onChange,
+  activeDestinationId,
 }: {
-  active: AuditTabId;
-  onChange: (tab: AuditTabId) => void;
+  active: ExtractionAuditTabId;
+  activeDestinationId: string;
 }) {
   return (
     <div
@@ -71,15 +95,12 @@ function AuditTabStrip({
       {AUDIT_TABS.map((tab) => {
         const selected = active === tab.id;
         return (
-          <button
+          <Link
             key={tab.id}
-            type="button"
+            href={auditTabHref(tab.id, activeDestinationId)}
             role="tab"
             aria-selected={selected}
             tabIndex={selected ? -1 : 0}
-            onClick={() => {
-              if (!selected) onChange(tab.id);
-            }}
             className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
               selected
                 ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
@@ -87,7 +108,65 @@ function AuditTabStrip({
             }`}
           >
             {tab.label}
-          </button>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+export function ExtractionAuditMainTabs({
+  activeTab,
+  activeDestinationId,
+}: {
+  activeTab: ExtractionAuditTabId;
+  activeDestinationId: string;
+}) {
+  return (
+    <AuditTabStrip active={activeTab} activeDestinationId={activeDestinationId} />
+  );
+}
+
+function byTypeDestinationHref(destinationId: string): string {
+  return `/extractions?tab=by-type&destination=${destinationId}`;
+}
+
+function ExtractionDestinationTabStrip({
+  active,
+  counts,
+}: {
+  active: string;
+  counts: Record<string, number>;
+}) {
+  return (
+    <div
+      className="inline-flex max-w-full flex-wrap gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1"
+      role="tablist"
+      aria-label="Extraction types"
+    >
+      {EXTRACTION_DESTINATIONS.map((destination) => {
+        const selected = active === destination.id;
+        const count = counts[destination.id] ?? 0;
+        return (
+          <Link
+            key={destination.id}
+            href={byTypeDestinationHref(destination.id)}
+            role="tab"
+            aria-selected={selected}
+            tabIndex={selected ? -1 : 0}
+            className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
+              selected
+                ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            {destination.title}
+            {count > 0 ? (
+              <span className="ml-1.5 text-xs font-medium text-slate-500">
+                ({count})
+              </span>
+            ) : null}
+          </Link>
         );
       })}
     </div>
@@ -450,6 +529,104 @@ function DestinationsPopoverContent({
   );
 }
 
+function ByTypeRecordCard({
+  record,
+  destinationGroup,
+}: {
+  record: ExtractionAuditRecord;
+  destinationGroup: ExtractionAuditDestinationGroup;
+}) {
+  const { destination, items } = destinationGroup;
+  const title =
+    record.emailSubject ??
+    (record.sourceType === "meeting" ? "Meeting extraction" : "Email extraction");
+
+  return (
+    <article className="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="space-y-3 px-4 py-4">
+        <div className="space-y-1">
+          <h3 className="truncate font-semibold text-slate-900">{title}</h3>
+          <p className="text-sm text-slate-600">
+            {record.emailFrom ? (
+              <>
+                <span>{record.emailFrom}</span>
+                <span className="mx-1 text-slate-400">·</span>
+              </>
+            ) : null}
+            <time dateTime={record.processedAt}>
+              Analyzed {formatDateTime(record.processedAt)}
+            </time>
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          {record.emailId ? (
+            <Link
+              href={`/emails/${record.emailId}`}
+              className="font-medium text-teal-700 hover:underline"
+            >
+              Open source email
+            </Link>
+          ) : null}
+          <span className="text-slate-500">Model: {record.modelName}</span>
+        </div>
+
+        <section className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+          <div className="space-y-1">
+            <h4 className="font-semibold text-slate-900">{destination.title}</h4>
+            <p className="text-sm text-slate-600">{destination.description}</p>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+              {destination.dbTables.length > 0 ? (
+                <span>
+                  <span className="font-medium text-slate-700">Tables:</span>{" "}
+                  {destination.dbTables.join(", ")}
+                </span>
+              ) : null}
+              {destination.appPages.map((page) => (
+                <Link
+                  key={page.href}
+                  href={page.href}
+                  className="text-teal-700 hover:underline"
+                >
+                  {page.label}
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          <ul className="mt-3 space-y-2">
+            {items.map((item, index) => {
+              const fieldNote = destination.fieldNotes?.[item.fieldKey];
+              return (
+                <li
+                  key={`${item.fieldKey}-${index}`}
+                  className="rounded-md border border-slate-200 bg-white p-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-medium text-slate-500">
+                      {item.fieldLabel}
+                    </span>
+                    <PersistBadge persisted={item.persisted} />
+                  </div>
+                  <p className="mt-1 text-sm text-slate-900">{item.summary}</p>
+                  {item.sourceQuote ? (
+                    <blockquote className="mt-2 border-l-2 border-slate-200 pl-3 text-xs italic text-slate-600">
+                      &ldquo;{item.sourceQuote}&rdquo;
+                    </blockquote>
+                  ) : null}
+                  {fieldNote ? (
+                    <p className="mt-2 text-xs text-slate-500">{fieldNote}</p>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      </div>
+    </article>
+  );
+}
+
 function AuditRecordCard({ record }: { record: ExtractionAuditRecord }) {
   const [open, setOpen] = useState(false);
 
@@ -638,75 +815,160 @@ function AuditRecordCard({ record }: { record: ExtractionAuditRecord }) {
 
 function Pagination({
   pagination,
+  hrefForPage,
 }: {
   pagination: Props["pagination"];
+  hrefForPage: (page: number) => string;
 }) {
-  if (pagination.totalPages <= 1) return null;
+  if (pagination.totalCount === 0) return null;
 
   const prevPage = Math.max(1, pagination.page - 1);
   const nextPage = Math.min(pagination.totalPages, pagination.page + 1);
+  const rangeStart = (pagination.page - 1) * pagination.pageSize + 1;
+  const rangeEnd = Math.min(
+    pagination.page * pagination.pageSize,
+    pagination.totalCount,
+  );
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4">
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4">
       <p className="text-sm text-slate-600">
-        Page {pagination.page} of {pagination.totalPages} · {pagination.totalCount}{" "}
-        extraction{pagination.totalCount === 1 ? "" : "s"}
+        {rangeStart} to {rangeEnd} of {pagination.totalCount}
       </p>
-      <div className="flex gap-2">
-        {pagination.page > 1 ? (
-          <Link
-            href={`/emails/extractions?page=${prevPage}`}
-            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Previous
-          </Link>
-        ) : null}
-        {pagination.page < pagination.totalPages ? (
-          <Link
-            href={`/emails/extractions?page=${nextPage}`}
-            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Next
-          </Link>
-        ) : null}
-      </div>
+      {pagination.totalPages > 1 ? (
+        <div className="flex gap-2">
+          {pagination.page > 1 ? (
+            <Link
+              href={hrefForPage(prevPage)}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Previous
+            </Link>
+          ) : null}
+          {pagination.page < pagination.totalPages ? (
+            <Link
+              href={hrefForPage(nextPage)}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Next
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export function ExtractionAuditClient({ records, pagination }: Props) {
-  const [activeTab, setActiveTab] = useState<AuditTabId>("extractions");
+function byTypePageHref(destinationId: string, page: number): string {
+  return `/extractions?tab=by-type&destination=${destinationId}&typePage=${page}`;
+}
 
-  const empty = useMemo(() => records.length === 0, [records.length]);
+export function ExtractionAuditClient({
+  activeTab,
+  activeDestinationId,
+  records,
+  pagination,
+  byTypeRecords,
+  byTypePagination,
+  destinationCounts,
+}: Props) {
+  const empty = records.length === 0;
+
+  const activeDestination = EXTRACTION_DESTINATIONS.find(
+    (destination) => destination.id === activeDestinationId,
+  );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <AuditTabStrip active={activeTab} onChange={setActiveTab} />
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {activeTab === "by-type" ? (
+        <>
+          <div className="mb-4 shrink-0">
+            <ExtractionDestinationTabStrip
+              active={activeDestinationId}
+              counts={destinationCounts}
+            />
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {byTypeRecords.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+                <p className="font-medium text-slate-900">
+                  No {activeDestination?.title.toLowerCase() ?? "matching"}{" "}
+                  extractions yet
+                </p>
+                <p className="mt-2 text-sm text-slate-600">
+                  Process emails from the inbox to populate this view.
+                </p>
+                <Link
+                  href="/emails"
+                  className="mt-4 inline-block text-sm font-medium text-teal-700 hover:underline"
+                >
+                  Go to inbox
+                </Link>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {byTypeRecords.map((record) => {
+                  const destinationGroup = record.destinationGroups.find(
+                    (group) => group.destination.id === activeDestinationId,
+                  );
+                  if (!destinationGroup) return null;
 
-      {activeTab === "routing" ? (
-        <DestinationLegend />
-      ) : empty ? (
-        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-          <p className="font-medium text-slate-900">No email extractions yet</p>
-          <p className="mt-2 text-sm text-slate-600">
-            Process emails from the inbox to populate this audit view.
-          </p>
-          <Link
-            href="/emails"
-            className="mt-4 inline-block text-sm font-medium text-teal-700 hover:underline"
-          >
-            Go to inbox
-          </Link>
-        </div>
+                  return (
+                    <ByTypeRecordCard
+                      key={record.id}
+                      record={record}
+                      destinationGroup={destinationGroup}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <Pagination
+            pagination={byTypePagination}
+            hrefForPage={(page) =>
+              byTypePageHref(activeDestinationId, page)
+            }
+          />
+        </>
       ) : (
-        <div className="space-y-3">
-          {records.map((record) => (
-            <AuditRecordCard key={record.id} record={record} />
-          ))}
-        </div>
-      )}
+        <>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {activeTab === "routing" ? (
+              <DestinationLegend />
+            ) : empty ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+                <p className="font-medium text-slate-900">No email extractions yet</p>
+                <p className="mt-2 text-sm text-slate-600">
+                  Process emails from the inbox to populate this audit view.
+                </p>
+                <Link
+                  href="/emails"
+                  className="mt-4 inline-block text-sm font-medium text-teal-700 hover:underline"
+                >
+                  Go to inbox
+                </Link>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {records.map((record) => (
+                  <AuditRecordCard key={record.id} record={record} />
+                ))}
+              </div>
+            )}
+          </div>
 
-      {activeTab === "extractions" ? <Pagination pagination={pagination} /> : null}
+          {activeTab === "list" ? (
+            <Pagination
+              pagination={pagination}
+              hrefForPage={(page) =>
+                page === 1 ? "/extractions" : `/extractions?page=${page}`
+              }
+            />
+          ) : null}
+        </>
+      )}
     </div>
   );
 }

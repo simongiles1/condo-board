@@ -16,7 +16,11 @@ export async function GET() {
       getEmailSyncSettings(),
       getBackfillCutoff(),
     ]);
-    return NextResponse.json({ ...settings, ...backfillCutoff });
+    return NextResponse.json({
+      ...settings,
+      backfillCutoffAt: backfillCutoff.cutoffAt,
+      oldestDedicatedReceivedAt: backfillCutoff.oldestDedicatedReceivedAt,
+    });
   } catch (error) {
     console.error("[email:settings:get]", error);
     return NextResponse.json(
@@ -60,7 +64,11 @@ export async function PATCH(req: Request) {
     await refreshEmailScheduler();
 
     const backfillCutoff = await getBackfillCutoff();
-    return NextResponse.json({ ...updated, ...backfillCutoff });
+    return NextResponse.json({
+      ...updated,
+      backfillCutoffAt: backfillCutoff.cutoffAt,
+      oldestDedicatedReceivedAt: backfillCutoff.oldestDedicatedReceivedAt,
+    });
   } catch (error) {
     console.error("[email:settings:patch]", error);
     return NextResponse.json(

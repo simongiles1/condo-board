@@ -4,6 +4,8 @@ import { getDb } from "@/lib/db";
 import { analysisSettings } from "@/lib/db/schema";
 import {
   DEFAULT_ANALYSIS_MODEL,
+  isAllowedAnalysisModel,
+  resolveAnalysisModel,
   type AnalysisSettings,
 } from "@/lib/email-analysis/settings-shared";
 
@@ -12,14 +14,15 @@ export {
   DEFAULT_ANALYSIS_MODEL,
   formatAnalysisModelOptionLabel,
   isAllowedAnalysisModel,
+  resolveAnalysisModel,
   type AnalysisSettings,
 } from "@/lib/email-analysis/settings-shared";
 
 const SETTINGS_ID = "default";
 
 function envModel(): string {
-  return (
-    process.env.GEMINI_MODEL_EMAIL_ANALYSIS?.trim() || DEFAULT_ANALYSIS_MODEL
+  return resolveAnalysisModel(
+    process.env.GEMINI_MODEL_EMAIL_ANALYSIS?.trim() || null,
   );
 }
 
@@ -44,8 +47,11 @@ export async function getAnalysisSettings(): Promise<AnalysisSettings> {
   }
 
   return {
-    analysisModel: row.analysisModel || envModel(),
-    mergeModel: row.mergeModel,
+    analysisModel: resolveAnalysisModel(row.analysisModel || envModel()),
+    mergeModel:
+      row.mergeModel && isAllowedAnalysisModel(row.mergeModel)
+        ? row.mergeModel
+        : null,
     maxOutputTokens: row.maxOutputTokens || envMaxTokens(),
     extractionVersion: row.extractionVersion,
   };

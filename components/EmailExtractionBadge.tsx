@@ -18,6 +18,8 @@ import { formatDateTime } from "@/lib/format/datetime";
 
 const VIEWPORT_MARGIN = 8;
 const POPOVER_HIDE_DELAY_MS = 500;
+const SUB_POPOVER_HIDE_DELAY_MS = 500;
+const SUB_POPOVER_Z_INDEX = 60;
 
 function SparklesIcon() {
   return (
@@ -93,6 +95,232 @@ function computePopoverPosition(
   };
 }
 
+function computeSubPopoverPosition(
+  anchorRect: DOMRect,
+  popoverWidth: number,
+  popoverHeight: number,
+): CSSProperties {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+
+  const spaceRight = viewportWidth - anchorRect.right - VIEWPORT_MARGIN;
+  const spaceLeft = anchorRect.left - VIEWPORT_MARGIN;
+  const spaceBelow = viewportHeight - anchorRect.bottom - VIEWPORT_MARGIN;
+  const showRight = spaceRight >= popoverWidth || spaceRight >= spaceLeft;
+
+  let top = anchorRect.top;
+  let left: number;
+
+  if (showRight) {
+    left = anchorRect.right + VIEWPORT_MARGIN;
+    if (left + popoverWidth > viewportWidth - VIEWPORT_MARGIN) {
+      left = viewportWidth - VIEWPORT_MARGIN - popoverWidth;
+    }
+  } else {
+    left = anchorRect.left - VIEWPORT_MARGIN - popoverWidth;
+    if (left < VIEWPORT_MARGIN) {
+      left = VIEWPORT_MARGIN;
+    }
+  }
+
+  if (top + popoverHeight > viewportHeight - VIEWPORT_MARGIN) {
+    top = Math.max(
+      VIEWPORT_MARGIN,
+      viewportHeight - VIEWPORT_MARGIN - popoverHeight,
+    );
+  }
+
+  if (top < VIEWPORT_MARGIN) {
+    top = VIEWPORT_MARGIN;
+  }
+
+  if (top + popoverHeight > viewportHeight - VIEWPORT_MARGIN && spaceBelow >= popoverHeight) {
+    top = anchorRect.bottom + VIEWPORT_MARGIN;
+  }
+
+  return {
+    position: "fixed",
+    top,
+    left,
+    zIndex: SUB_POPOVER_Z_INDEX,
+  };
+}
+
+function FieldCountBadge({
+  fieldKey,
+  count,
+  items,
+  onHoverChange,
+}: {
+  fieldKey: string;
+  count: number;
+  items: string[];
+  onHoverChange?: (hovered: boolean) => void;
+}) {
+  const badgeRef = useRef<HTMLSpanElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const badgeHoveredRef = useRef(false);
+  const popoverHoveredRef = useRef(false);
+  const [open, setOpen] = useState(false);
+  const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
+    position: "fixed",
+    visibility: "hidden",
+    zIndex: SUB_POPOVER_Z_INDEX,
+  });
+
+  const label = formatExtractionFieldLabel(fieldKey);
+  const hasItems = items.length > 0;
+
+  function cancelHide() {
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current);
+      hideTimeoutRef.current = null;
+    }
+  }
+
+  function setHovered(hovered: boolean) {
+    onHoverChange?.(hovered);
+  }
+
+  function scheduleHide() {
+    cancelHide();
+    hideTimeoutRef.current = setTimeout(() => {
+      if (!badgeHoveredRef.current && !popoverHoveredRef.current) {
+        setOpen(false);
+        setHovered(false);
+      }
+    }, SUB_POPOVER_HIDE_DELAY_MS);
+  }
+
+  function showSubPopover() {
+    if (!hasItems) return;
+    cancelHide();
+    setOpen(true);
+    setHovered(true);
+  }
+
+  useEffect(() => {
+    return () => cancelHide();
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open || !badgeRef.current || !popoverRef.current) return;
+
+    function updatePosition() {
+      const anchorRect = badgeRef.current?.getBoundingClientRect();
+      const popover = popoverRef.current;
+      if (!anchorRect || !popover) return;
+
+      setPopoverStyle({
+        ...computeSubPopoverPosition(
+          anchorRect,
+          popover.offsetWidth,
+          popover.offsetHeight,
+        ),
+        visibility: "visible",
+      });
+    }
+
+    updatePosition();
+  }, [open, fieldKey, items]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function updatePosition() {
+      const anchorRect = badgeRef.current?.getBoundingClientRect();
+      const popover = popoverRef.current;
+      if (!anchorRect || !popover) return;
+
+      setPopoverStyle({
+        ...computeSubPopoverPosition(
+          anchorRect,
+          popover.offsetWidth,
+          popover.offsetHeight,
+        ),
+        visibility: "visible",
+      });
+    }
+
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [open, fieldKey, items]);
+
+  if (!hasItems) {
+    return (
+      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+        {label}: {count}
+      </span>
+    );
+  }
+
+  return (
+    <>
+      <span
+        ref={badgeRef}
+        role="button"
+        tabIndex={0}
+        className="cursor-default rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-200/80"
+        onMouseEnter={() => {
+          badgeHoveredRef.current = true;
+          showSubPopover();
+        }}
+        onMouseLeave={() => {
+          badgeHoveredRef.current = false;
+          scheduleHide();
+        }}
+        onFocus={showSubPopover}
+        onBlur={() => {
+          badgeHoveredRef.current = false;
+          scheduleHide();
+        }}
+      >
+        {label}: {count}
+      </span>
+
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={popoverRef}
+              role="tooltip"
+              style={popoverStyle}
+              className="w-max min-w-[12rem] max-w-[min(24rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              onMouseEnter={() => {
+                popoverHoveredRef.current = true;
+                cancelHide();
+                setHovered(true);
+              }}
+              onMouseLeave={() => {
+                popoverHoveredRef.current = false;
+                scheduleHide();
+              }}
+            >
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                {label}
+              </p>
+              <ul className="max-h-48 space-y-1 overflow-y-auto pr-1 text-xs text-slate-600">
+                {items.map((item, index) => (
+                  <li key={`${fieldKey}-${index}`} className="leading-snug">
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
 function PopoverPanel({
   panelRef,
   title,
@@ -127,7 +355,13 @@ function PopoverPanel({
   );
 }
 
-function ExtractionSummaryContent({ summary }: { summary: InboxExtractionSummary }) {
+function ExtractionSummaryContent({
+  summary,
+  onSubPopoverHoverChange,
+}: {
+  summary: InboxExtractionSummary;
+  onSubPopoverHoverChange?: (hovered: boolean) => void;
+}) {
   const countEntries = Object.entries(summary.counts).sort(([a], [b]) =>
     a.localeCompare(b),
   );
@@ -169,12 +403,13 @@ function ExtractionSummaryContent({ summary }: { summary: InboxExtractionSummary
       {countEntries.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {countEntries.map(([key, count]) => (
-            <span
+            <FieldCountBadge
               key={key}
-              className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
-            >
-              {formatExtractionFieldLabel(key)}: {count}
-            </span>
+              fieldKey={key}
+              count={count}
+              items={summary.fieldDetails[key] ?? []}
+              onHoverChange={onSubPopoverHoverChange}
+            />
           ))}
         </div>
       ) : null}
@@ -192,9 +427,20 @@ function ExtractionSummaryContent({ summary }: { summary: InboxExtractionSummary
   );
 }
 
-function ThreadExtractionContent({ summary }: { summary: InboxExtractionSummary }) {
+function ThreadExtractionContent({
+  summary,
+  onSubPopoverHoverChange,
+}: {
+  summary: InboxExtractionSummary;
+  onSubPopoverHoverChange?: (hovered: boolean) => void;
+}) {
   if (summary.emails.length <= 1) {
-    return <ExtractionSummaryContent summary={summary} />;
+    return (
+      <ExtractionSummaryContent
+        summary={summary}
+        onSubPopoverHoverChange={onSubPopoverHoverChange}
+      />
+    );
   }
 
   return (
@@ -220,9 +466,11 @@ function ThreadExtractionContent({ summary }: { summary: InboxExtractionSummary 
               urgency: email.urgency,
               tags: email.tags,
               counts: email.counts,
+              fieldDetails: email.fieldDetails,
               highlights: email.highlights,
               emails: [email],
             }}
+            onSubPopoverHoverChange={onSubPopoverHoverChange}
           />
         </div>
       ))}
@@ -242,6 +490,7 @@ export function EmailExtractionBadge({
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triggerHoveredRef = useRef(false);
   const popoverHoveredRef = useRef(false);
+  const subPopoverHoveredRef = useRef(false);
   const [open, setOpen] = useState(false);
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
@@ -265,10 +514,23 @@ export function EmailExtractionBadge({
   function scheduleHide() {
     cancelHide();
     hideTimeoutRef.current = setTimeout(() => {
-      if (!triggerHoveredRef.current && !popoverHoveredRef.current) {
+      if (
+        !triggerHoveredRef.current &&
+        !popoverHoveredRef.current &&
+        !subPopoverHoveredRef.current
+      ) {
         setOpen(false);
       }
     }, POPOVER_HIDE_DELAY_MS);
+  }
+
+  function handleSubPopoverHoverChange(hovered: boolean) {
+    subPopoverHoveredRef.current = hovered;
+    if (hovered) {
+      cancelHide();
+    } else {
+      scheduleHide();
+    }
   }
 
   function showPopover() {
@@ -377,9 +639,15 @@ export function EmailExtractionBadge({
               }}
             >
               {multiEmail ? (
-                <ThreadExtractionContent summary={summary} />
+                <ThreadExtractionContent
+                  summary={summary}
+                  onSubPopoverHoverChange={handleSubPopoverHoverChange}
+                />
               ) : (
-                <ExtractionSummaryContent summary={summary} />
+                <ExtractionSummaryContent
+                  summary={summary}
+                  onSubPopoverHoverChange={handleSubPopoverHoverChange}
+                />
               )}
             </PopoverPanel>,
             document.body,

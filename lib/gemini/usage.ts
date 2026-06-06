@@ -195,7 +195,7 @@ function primaryModelName(calls: GeminiUsageCall[]): string {
     return (
       process.env.GEMINI_MODEL_MINUTES?.trim() ||
       process.env.GEMINI_MODEL_TODOS?.trim() ||
-      "gemini-2.0-flash"
+      "gemini-2.5-flash"
     );
   }
 

@@ -13,6 +13,8 @@ import {
   type TokenUsage,
 } from "@/lib/gemini/usage";
 
+const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+
 function requireApiKey(): string {
   const key = process.env.GEMINI_API_KEY;
   if (!key?.trim()) {
@@ -103,7 +105,7 @@ export async function generateWithSystemPrompt(options: {
   const modelName =
     options.modelName?.trim() ||
     process.env.GEMINI_MODEL_MINUTES?.trim() ||
-    "gemini-2.0-flash";
+    DEFAULT_GEMINI_MODEL;
 
   const maxOutputTokens =
     options.maxOutputTokens ??
@@ -139,7 +141,7 @@ export async function generateTodos(options: {
     options.modelName?.trim() ||
     process.env.GEMINI_MODEL_TODOS?.trim() ||
     process.env.GEMINI_MODEL_MINUTES?.trim() ||
-    "gemini-2.0-flash";
+    DEFAULT_GEMINI_MODEL;
 
   const maxOutputTokens = Number(
     process.env.GEMINI_MAX_OUTPUT_TOKENS_TODOS ?? 8192,
@@ -180,7 +182,7 @@ export async function generateMinutesWithContinuation(options: {
   let modelName =
     options.modelName?.trim() ||
     process.env.GEMINI_MODEL_MINUTES?.trim() ||
-    "gemini-2.0-flash";
+    DEFAULT_GEMINI_MODEL;
 
   let userText = options.userText;
 
@@ -289,7 +291,7 @@ export async function generateMinutesV2(options: {
   const modelName =
     options.modelName?.trim() ||
     process.env.GEMINI_MODEL_MINUTES?.trim() ||
-    "gemini-2.0-flash";
+    DEFAULT_GEMINI_MODEL;
 
   const maxOutputTokens = Number(
     process.env.GEMINI_MAX_OUTPUT_TOKENS_MINUTES ?? 65536,
@@ -401,7 +403,7 @@ export async function generateOmissionsAnalysis(options: {
     options.modelName?.trim() ||
     process.env.GEMINI_MODEL_OMISSIONS?.trim() ||
     process.env.GEMINI_MODEL_MINUTES?.trim() ||
-    "gemini-2.0-flash";
+    DEFAULT_GEMINI_MODEL;
 
   const maxOutputTokens = Number(
     process.env.GEMINI_MAX_OUTPUT_TOKENS_OMISSIONS ??
@@ -496,7 +498,7 @@ export async function generateGlobalTodosMerge(options: {
     options.modelName?.trim() ||
     process.env.GEMINI_MODEL_TODOS?.trim() ||
     process.env.GEMINI_MODEL_OMISSIONS?.trim() ||
-    "gemini-2.0-flash";
+    DEFAULT_GEMINI_MODEL;
 
   const maxOutputTokens = Number(
     process.env.GEMINI_MAX_OUTPUT_TOKENS_TODOS ?? 16384,
@@ -537,7 +539,7 @@ export async function generateEmailExtraction(options: {
   const modelName =
     options.modelName?.trim() ||
     process.env.GEMINI_MODEL_EMAIL_ANALYSIS?.trim() ||
-    "gemini-2.0-flash";
+    DEFAULT_GEMINI_MODEL;
 
   const maxOutputTokens =
     options.maxOutputTokens ??
@@ -602,7 +604,7 @@ export async function generateMinutesJsonWithContinuation(options: {
   let modelName =
     options.modelName?.trim() ||
     process.env.GEMINI_MODEL_MINUTES?.trim() ||
-    "gemini-2.0-flash";
+    DEFAULT_GEMINI_MODEL;
 
   let userText = options.userText;
 

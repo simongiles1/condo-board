@@ -201,7 +201,7 @@ export const analysisSettings = pgTable("analysis_settings", {
   id: text("id").primaryKey(),
   analysisModel: text("analysis_model")
     .notNull()
-    .default("gemini-2.0-flash"),
+    .default("gemini-2.5-flash"),
   mergeModel: text("merge_model"),
   maxOutputTokens: integer("max_output_tokens").notNull().default(65536),
   extractionVersion: integer("extraction_version").notNull().default(1),

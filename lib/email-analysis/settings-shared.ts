@@ -1,6 +1,6 @@
 /** Client-safe analysis settings types and helpers (no DB imports). */
 
-export const DEFAULT_ANALYSIS_MODEL = "gemini-2.0-flash";
+export const DEFAULT_ANALYSIS_MODEL = "gemini-2.5-flash";
 
 export type AnalysisSettings = {
   analysisModel: string;
@@ -10,7 +10,6 @@ export type AnalysisSettings = {
 };
 
 export const AVAILABLE_ANALYSIS_MODELS = [
-  "gemini-2.0-flash",
   "gemini-2.0-flash-lite",
   "gemini-2.5-flash",
   "gemini-2.5-pro",
@@ -22,7 +21,6 @@ const ANALYSIS_MODEL_LABELS: Record<
   (typeof AVAILABLE_ANALYSIS_MODELS)[number],
   string
 > = {
-  "gemini-2.0-flash": "Gemini 2.0 Flash",
   "gemini-2.0-flash-lite": "Gemini 2.0 Flash Lite",
   "gemini-2.5-flash": "Gemini 2.5 Flash",
   "gemini-2.5-pro": "Gemini 2.5 Pro",
@@ -34,7 +32,6 @@ const ANALYSIS_MODEL_PRICING: Record<
   (typeof AVAILABLE_ANALYSIS_MODELS)[number],
   { input: number; output: number }
 > = {
-  "gemini-2.0-flash": { input: 0.1, output: 0.4 },
   "gemini-2.0-flash-lite": { input: 0.075, output: 0.3 },
   "gemini-2.5-flash": { input: 0.15, output: 0.6 },
   "gemini-2.5-pro": { input: 1.25, output: 10 },
@@ -57,4 +54,11 @@ export function isAllowedAnalysisModel(
     typeof value === "string" &&
     (AVAILABLE_ANALYSIS_MODELS as readonly string[]).includes(value)
   );
+}
+
+export function resolveAnalysisModel(
+  model: string | null | undefined,
+): (typeof AVAILABLE_ANALYSIS_MODELS)[number] {
+  if (model && isAllowedAnalysisModel(model)) return model;
+  return DEFAULT_ANALYSIS_MODEL;
 }

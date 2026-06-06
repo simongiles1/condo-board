@@ -26,7 +26,7 @@ const minimalTopLevel = {
   required: ["metadata", "attendance", "management_report"],
 };
 
-for (const model of ["gemini-3.5-flash", "gemini-2.0-flash"]) {
+for (const model of ["gemini-3.5-flash", "gemini-2.5-flash"]) {
   try {
     const m = client.getGenerativeModel({
       model,

@@ -3,19 +3,21 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { hasMinRole, type UserRole } from "@/lib/auth/roles";
+
 const links = [
-  { href: "/", label: "Dashboard" },
-  { href: "/meetings", label: "Meetings" },
-  { href: "/todos", label: "Todos" },
-  { href: "/calendar", label: "Calendar" },
-  { href: "/emails", label: "Emails" },
-  { href: "/extractions", label: "Extractions" },
-  { href: "/files", label: "Files" },
-  { href: "/building", label: "Building" },
-  { href: "/insights", label: "Insights" },
-  { href: "/skill", label: "Skill" },
-  { href: "/analysis", label: "Analysis" },
-  { href: "/notes", label: "Notes" },
+  { href: "/", label: "Dashboard", minRole: "user" as UserRole },
+  { href: "/meetings", label: "Meetings", minRole: "user" as UserRole },
+  { href: "/todos", label: "Todos", minRole: "user" as UserRole },
+  { href: "/calendar", label: "Calendar", minRole: "user" as UserRole },
+  { href: "/emails", label: "Emails", minRole: "user" as UserRole },
+  { href: "/files", label: "Files", minRole: "user" as UserRole },
+  { href: "/building", label: "Building", minRole: "user" as UserRole },
+  { href: "/insights", label: "Insights", minRole: "user" as UserRole },
+  { href: "/skill", label: "Concepts", minRole: "admin" as UserRole },
+  { href: "/analysis", label: "Analysis", minRole: "admin" as UserRole },
+  { href: "/notes", label: "Notes", minRole: "admin" as UserRole },
+  { href: "/users", label: "Users", minRole: "super_admin" as UserRole },
 ] as const;
 
 function isActive(pathname: string, href: string) {
@@ -30,9 +32,6 @@ function isActive(pathname: string, href: string) {
   }
   if (href === "/emails") {
     return pathname === "/emails" || pathname.startsWith("/emails/");
-  }
-  if (href === "/extractions") {
-    return pathname === "/extractions" || pathname.startsWith("/extractions/");
   }
   if (href === "/files") {
     return pathname === "/files" || pathname.startsWith("/files/");
@@ -52,15 +51,23 @@ function isActive(pathname: string, href: string) {
   if (href === "/notes") {
     return pathname === "/notes" || pathname.startsWith("/notes/");
   }
+  if (href === "/users") {
+    return pathname === "/users" || pathname.startsWith("/users/");
+  }
   return pathname === href;
 }
 
-export function HeaderNav() {
+export function HeaderNav({ role }: { role: UserRole | null }) {
   const pathname = usePathname();
+  const visibleLinks = links.filter(
+    (link) => role && hasMinRole(role, link.minRole),
+  );
+
+  if (!role) return null;
 
   return (
     <nav className="flex gap-4 text-sm font-medium">
-      {links.map(({ href, label }) => {
+      {visibleLinks.map(({ href, label }) => {
         const active = isActive(pathname, href);
 
         if (active) {

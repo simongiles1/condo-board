@@ -1,6 +1,6 @@
 import cron, { type ScheduledTask } from "node-cron";
 
-import { syncDedicatedAccount } from "@/lib/gmail/sync";
+import { syncPersonalAccount } from "@/lib/gmail/sync";
 
 import { getEmailSyncSettings } from "./settings";
 
@@ -8,8 +8,8 @@ let scheduledTask: ScheduledTask | null = null;
 let currentExpression: string | null = null;
 
 export async function runScheduledSync() {
-  console.info("[email-scheduler] Running dedicated account sync");
-  const result = await syncDedicatedAccount("cron");
+  console.info("[email-scheduler] Running personal Gmail sync");
+  const result = await syncPersonalAccount("cron");
   console.info(
     `[email-scheduler] Added ${result.messagesAdded}, skipped ${result.messagesSkipped}`,
   );

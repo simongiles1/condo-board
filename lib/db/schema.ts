@@ -113,6 +113,51 @@ export const syncRuns = pgTable("sync_runs", {
   errors: text("errors"),
 });
 
+export const emailForwardRuns = pgTable("email_forward_runs", {
+  id: text("id").primaryKey(),
+  status: text("status", {
+    enum: ["queued", "running", "paused", "completed", "failed", "cancelled"],
+  }).notNull(),
+  targetEmail: text("target_email").notNull(),
+  sourceQuery: text("source_query").notNull(),
+  totalQueued: integer("total_queued").notNull().default(0),
+  /** Unique Gmail threads among all matched messages (including skipped). */
+  threadsMatched: integer("threads_matched"),
+  forwardedCount: integer("forwarded_count").notNull().default(0),
+  skippedCount: integer("skipped_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  chunkSize: integer("chunk_size").notNull().default(50),
+  chunkDelayMs: integer("chunk_delay_ms").notNull().default(120_000),
+  nextChunkAt: text("next_chunk_at"),
+  startedAt: text("started_at").notNull(),
+  finishedAt: text("finished_at"),
+  lastError: text("last_error"),
+});
+
+export const emailForwardQueue = pgTable("email_forward_queue", {
+  id: text("id").primaryKey(),
+  runId: text("run_id")
+    .notNull()
+    .references(() => emailForwardRuns.id, { onDelete: "cascade" }),
+  gmailMessageId: text("gmail_message_id").notNull(),
+  status: text("status", {
+    enum: ["pending", "forwarded", "skipped", "failed"],
+  })
+    .notNull()
+    .default("pending"),
+  processedAt: text("processed_at"),
+  error: text("error"),
+});
+
+/** Personal Gmail messages already forwarded to the dedicated mailbox. */
+export const personalForwardedMessages = pgTable("personal_forwarded_messages", {
+  gmailMessageId: text("gmail_message_id").primaryKey(),
+  gmailThreadId: text("gmail_thread_id"),
+  forwardRunId: text("forward_run_id").references(() => emailForwardRuns.id),
+  forwardMessageIdHeader: text("forward_message_id_header"),
+  forwardedAt: text("forwarded_at").notNull(),
+});
+
 export const emailThreads = pgTable("email_threads", {
   id: text("id").primaryKey(),
   gmailThreadId: text("gmail_thread_id").notNull().unique(),
@@ -167,7 +212,11 @@ export const appUsers = pgTable("app_users", {
   id: text("id").primaryKey(),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
-  name: text("name"),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  role: text("role", { enum: ["super_admin", "admin", "user"] })
+    .notNull()
+    .default("user"),
   createdAt: text("created_at").notNull(),
 });
 
@@ -243,6 +292,11 @@ export const extractionSkillEntries = pgTable("extraction_skill_entries", {
   mergedIntoId: text("merged_into_id"),
   category: text("category"),
   userNotes: text("user_notes"),
+  /** null = skill-only (default). See lib/email/concept-routing.ts */
+  routingDestinationId: text("routing_destination_id"),
+  fieldMappingJson: text("field_mapping_json").notNull().default("{}"),
+  routingOptionsJson: text("routing_options_json").notNull().default("{}"),
+  routingConfiguredAt: text("routing_configured_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -284,6 +338,8 @@ export const extractionSources = pgTable("extraction_sources", {
   totalOutputTokens: integer("total_output_tokens").notNull().default(0),
   totalCostUsd: text("total_cost_usd").notNull().default("0"),
   processingDurationMs: integer("processing_duration_ms"),
+  /** App user who triggered this analysis run, when applicable. */
+  triggeredByUserId: text("triggered_by_user_id").references(() => appUsers.id),
 });
 
 export const discoveredFacts = pgTable("discovered_facts", {
@@ -316,6 +372,15 @@ export const vendors = pgTable("vendors", {
   name: text("name").notNull(),
   contactJson: text("contact_json"),
   servicesJson: text("services_json"),
+  reviewStatus: text("review_status").notNull().default("approved"),
+  organizationRole: text("organization_role"),
+  createdAt: text("created_at").notNull(),
+});
+
+/** User-defined organization roles beyond the built-in set in organization-roles.ts. */
+export const organizationRoleDefinitions = pgTable("organization_role_definitions", {
+  id: text("id").primaryKey(),
+  label: text("label").notNull().unique(),
   createdAt: text("created_at").notNull(),
 });
 
@@ -457,9 +522,26 @@ export const entityMentions = pgTable("entity_mentions", {
   entityType: text("entity_type").notNull(),
   entityValue: text("entity_value").notNull(),
   context: text("context"),
+  contactEmail: text("contact_email"),
+  reviewStatus: text("review_status").notNull().default("pending"),
+  organizationRole: text("organization_role"),
+  vendorCandidate: boolean("vendor_candidate").notNull().default(false),
+  dedupKey: text("dedup_key"),
+  personTitle: text("person_title"),
+  linkedOrganizationName: text("linked_organization_name"),
   sourceId: text("source_id")
     .notNull()
     .references(() => extractionSources.id, { onDelete: "cascade" }),
+  createdAt: text("created_at").notNull(),
+});
+
+/** Board-flagged entities the AI must not extract (e.g. old employer signatures). */
+export const entityExclusions = pgTable("entity_exclusions", {
+  id: text("id").primaryKey(),
+  entityType: text("entity_type").notNull(),
+  entityValue: text("entity_value").notNull(),
+  dedupKey: text("dedup_key").notNull(),
+  note: text("note"),
   createdAt: text("created_at").notNull(),
 });
 

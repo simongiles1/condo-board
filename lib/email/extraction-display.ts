@@ -4,6 +4,7 @@ import {
   type EmailExtractionDocument,
   type ExtractionUrgency,
 } from "@/lib/email-analysis/schema";
+import { buildNamedEntityAuditRecords } from "@/lib/email/named-entity-audit";
 
 const COUNTABLE_ARRAY_KEYS = [
   "equipment_mentions",
@@ -251,6 +252,19 @@ function buildFieldDetails(
   for (const key of COUNTABLE_ARRAY_KEYS) {
     const value = document[key];
     if (!Array.isArray(value) || value.length === 0) continue;
+
+    if (key === "entities") {
+      const records = buildNamedEntityAuditRecords(document);
+      const items = records.map((entity) =>
+        entity.contexts.length
+          ? `${entity.type}: ${entity.value} — ${entity.contexts[0]}`
+          : `${entity.type}: ${entity.value}`,
+      );
+      if (items.length > 0) {
+        fieldDetails[key] = items;
+      }
+      continue;
+    }
 
     const items = value
       .map((item) => formatExtractionFieldItem(key, item))

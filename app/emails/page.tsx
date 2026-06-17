@@ -1,7 +1,6 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import Link from "next/link";
 import { Suspense } from "react";
 import { count, desc, eq, inArray, asc, sql } from "drizzle-orm";
 
@@ -9,20 +8,18 @@ import { EmailFilterButton } from "@/components/EmailFilterButton";
 import { EmailTimelineChartButton } from "@/components/EmailTimelineDialog";
 import { EmailThreadList } from "@/components/EmailThreadList";
 import { EmailViewToggle } from "@/components/EmailViewToggle";
+import { getSessionUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db";
 import { emailAttachments, emailThreads, emails } from "@/lib/db/schema";
 import type { EmailAttachmentSummary, ThreadAttachmentGroup } from "@/lib/email/attachment-display";
 import {
   loadInboxAnalysisQueueState,
-  loadMessageExtractionSummaries,
   loadMessageProcessingStats,
   loadThreadEmailIds,
-  loadThreadExtractionSummaries,
   loadThreadProcessingCosts,
   loadThreadProcessingDetails,
   type EmailProcessingStats,
   type InboxAnalysisQueueState,
-  type InboxExtractionSummary,
 } from "@/lib/email/inbox-processing";
 import {
   buildThreadFilterWhere,
@@ -41,6 +38,8 @@ export default async function EmailsPage({
   const page = filters.page ?? 1;
   const filterWhere = buildThreadFilterWhere(filters);
   const view = filters.view;
+  const sessionUser = await getSessionUser();
+  const canManageEmailSettings = sessionUser?.role === "super_admin";
 
   const db = getDb();
 
@@ -84,13 +83,11 @@ export default async function EmailsPage({
       messageAttachments,
       messageStats,
       threadProcessingDetails,
-      messageExtractionSummaries,
       queueState,
     ] = await Promise.all([
       loadMessageAttachments(messageIds),
       loadMessageProcessingStats(messageIds),
       loadThreadProcessingDetails(threadIds),
-      loadMessageExtractionSummaries(messageIds),
       loadInboxAnalysisQueueState(messageIds),
     ]);
 
@@ -113,12 +110,13 @@ export default async function EmailsPage({
             processingInputTokens: stats?.inputTokens ?? null,
             processingOutputTokens: stats?.outputTokens ?? null,
             processingDurationMs: stats?.processingDurationMs ?? null,
+            triggeredByEmail: stats?.triggeredByEmail ?? null,
           };
         })}
         messageAttachments={messageAttachments}
         threadProcessingDetails={threadProcessingDetails}
-        messageExtractionSummaries={messageExtractionSummaries}
         initialQueueState={queueState}
+        canManageEmailSettings={canManageEmailSettings}
       />
     );
   }
@@ -164,13 +162,11 @@ export default async function EmailsPage({
     threadCosts,
     threadEmailIds,
     threadProcessingDetails,
-    threadExtractionSummaries,
   ] = await Promise.all([
     loadThreadAttachmentGroups(threadIds),
     loadThreadProcessingCosts(threadIds),
     loadThreadEmailIds(threadIds),
     loadThreadProcessingDetails(threadIds),
-    loadThreadExtractionSummaries(threadIds),
   ]);
 
   const pageEmailIds = Object.values(threadEmailIds).flat();
@@ -194,8 +190,8 @@ export default async function EmailsPage({
       threadAttachmentGroups={threadAttachmentGroups}
       threadEmailIds={threadEmailIds}
       threadProcessingDetails={threadProcessingDetails}
-      threadExtractionSummaries={threadExtractionSummaries}
       initialQueueState={initialQueueState}
+      canManageEmailSettings={canManageEmailSettings}
     />
   );
 }
@@ -313,14 +309,13 @@ function EmailsPageShell({
   threadAttachmentGroups,
   threadEmailIds,
   threadProcessingDetails,
-  messageExtractionSummaries,
-  threadExtractionSummaries,
   initialQueueState = {
     processingEmailIds: [],
     pendingEmailIds: [],
     failedEmails: [],
     processedEmails: [],
   },
+  canManageEmailSettings = false,
 }: {
   title: string;
   view: "messages" | "threads";
@@ -356,9 +351,8 @@ function EmailsPageShell({
   threadAttachmentGroups?: Record<string, ThreadAttachmentGroup[]>;
   threadEmailIds?: Record<string, string[]>;
   threadProcessingDetails?: Record<string, EmailProcessingStats[]>;
-  messageExtractionSummaries?: Record<string, InboxExtractionSummary>;
-  threadExtractionSummaries?: Record<string, InboxExtractionSummary>;
   initialQueueState?: InboxAnalysisQueueState;
+  canManageEmailSettings?: boolean;
 }) {
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
@@ -379,12 +373,6 @@ function EmailsPageShell({
           <Suspense fallback={null}>
             <EmailTimelineChartButton />
           </Suspense>
-          <Link
-            href="/emails/settings"
-            className="rounded-md bg-teal-700 px-3 py-2 text-sm font-medium text-white hover:bg-teal-800"
-          >
-            Email settings
-          </Link>
         </div>
       </div>
 
@@ -396,11 +384,10 @@ function EmailsPageShell({
         threadAttachmentGroups={threadAttachmentGroups}
         threadEmailIds={threadEmailIds}
         threadProcessingDetails={threadProcessingDetails}
-        messageExtractionSummaries={messageExtractionSummaries}
-        threadExtractionSummaries={threadExtractionSummaries}
         initialQueueState={initialQueueState}
         filters={filters}
         pagination={pagination}
+        canManageEmailSettings={canManageEmailSettings}
       />
     </section>
   );

@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 
+import { getAnalysisActorUserId } from "@/lib/auth/analysis-actor";
 import { analyzeEmailBatch } from "@/lib/email-analysis/worker";
 
 export async function POST(request: Request) {
@@ -25,9 +26,12 @@ export async function POST(request: Request) {
       );
     }
 
+    const triggeredByUserId = await getAnalysisActorUserId();
+
     const results = await analyzeEmailBatch({
       emailIds: body.emailIds,
       reprocess: body.reprocess ?? false,
+      triggeredByUserId,
     });
 
     return NextResponse.json({ results });

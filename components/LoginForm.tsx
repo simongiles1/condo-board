@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
@@ -85,6 +86,13 @@ export function LoginForm() {
       >
         {loading ? "Signing in…" : "Sign in"}
       </button>
+
+      <p className="text-center text-sm text-slate-600">
+        Need an account?{" "}
+        <Link href="/signup" className="font-medium text-teal-700 hover:underline">
+          Sign up
+        </Link>
+      </p>
     </form>
   );
 }

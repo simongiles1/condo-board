@@ -10,6 +10,7 @@ export type EmailProcessingStats = {
   inputTokens: number | null;
   outputTokens: number | null;
   processingDurationMs: number | null;
+  triggeredByEmail?: string | null;
 };
 
 export type ProcessedEmailSnapshot = {
@@ -19,6 +20,7 @@ export type ProcessedEmailSnapshot = {
   inputTokens: number | null;
   outputTokens: number | null;
   processingDurationMs: number | null;
+  triggeredByEmail?: string | null;
 };
 
 export type InboxAnalysisQueueState = {
@@ -49,6 +51,7 @@ export function mergeLiveProcessingStats(
       outputTokens: live.outputTokens ?? entry.outputTokens,
       processingDurationMs:
         live.processingDurationMs ?? entry.processingDurationMs,
+      triggeredByEmail: live.triggeredByEmail ?? entry.triggeredByEmail,
     };
   });
 }

@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 
+import { getAnalysisActorUserId } from "@/lib/auth/analysis-actor";
 import { compileSkillPromptSection } from "@/lib/email-analysis/extraction-skill";
 import { analyzeEmailBatch } from "@/lib/email-analysis/worker";
 import { getDb } from "@/lib/db";
@@ -36,9 +37,12 @@ export async function POST(request: Request) {
       ),
     ].slice(0, body.limit ?? 10_000);
 
+    const triggeredByUserId = await getAnalysisActorUserId();
+
     const results = await analyzeEmailBatch({
       emailIds,
       reprocess: true,
+      triggeredByUserId,
     });
 
     return NextResponse.json({

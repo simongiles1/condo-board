@@ -103,7 +103,7 @@ function TableHeaderRow() {
   );
 }
 
-function ProcessingStatsTable({ entries }: { entries: EmailProcessingStats[] }) {
+export function ProcessingStatsTable({ entries }: { entries: EmailProcessingStats[] }) {
   const totals = sumProcessingStats(entries);
   const showTotals = entries.length > 1 && totals.processedCount > 0;
 
@@ -244,12 +244,15 @@ function PopoverPanel({
 
 export function ProcessedCostBadge({
   entries,
-  badgeClassName = "inline-flex items-center rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-800 ring-1 ring-teal-200",
+  badgeClassName = "inline-flex items-center gap-1.5 rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-800 ring-1 ring-teal-200",
   children,
+  onOpenDetails,
 }: {
   entries: EmailProcessingStats[];
   badgeClassName?: string;
   children: ReactNode;
+  /** Opens extraction side panel on click. Hover still shows processing stats. */
+  onOpenDetails?: () => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -343,11 +346,16 @@ export function ProcessedCostBadge({
       ? "Processing details"
       : `Processing details · ${entries.length} emails`;
 
+  const interactiveClassName = onOpenDetails
+    ? "cursor-pointer hover:ring-2 hover:ring-teal-300/80"
+    : "";
+
   return (
     <div ref={rootRef} className="relative shrink-0">
       <span
-        tabIndex={hasPopover ? 0 : undefined}
-        className={badgeClassName}
+        tabIndex={hasPopover || onOpenDetails ? 0 : undefined}
+        role={onOpenDetails ? "button" : undefined}
+        className={`${badgeClassName} ${interactiveClassName}`}
         onMouseEnter={() => {
           triggerHoveredRef.current = true;
           showPopover();
@@ -365,6 +373,16 @@ export function ProcessedCostBadge({
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
+          if (onOpenDetails) {
+            onOpenDetails();
+          }
+        }}
+        onKeyDown={(event) => {
+          if (onOpenDetails && (event.key === "Enter" || event.key === " ")) {
+            event.preventDefault();
+            event.stopPropagation();
+            onOpenDetails();
+          }
         }}
       >
         {children}

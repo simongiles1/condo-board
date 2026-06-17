@@ -7,8 +7,15 @@ import { eq } from "drizzle-orm";
 import {
   bumpSkillVersion,
   getAllSkillEntries,
+  recordConceptRoutingDecision,
   type SkillStatus,
 } from "@/lib/email-analysis/extraction-skill";
+import {
+  inferConceptFieldMapping,
+  serializeConceptRoutingPatch,
+  SKILL_ONLY_DESTINATION_ID,
+  type ConceptFieldMapping,
+} from "@/lib/email/concept-routing";
 import { getDb } from "@/lib/db";
 import {
   discoveredFacts,
@@ -24,6 +31,8 @@ type PatchBody = {
   userNotes?: string | null;
   status?: SkillStatus;
   mergeIntoId?: string;
+  routingDestinationId?: string;
+  fieldMapping?: ConceptFieldMapping;
 };
 
 function normalizeStatus(value: string | null): SkillStatus | undefined {
@@ -31,6 +40,14 @@ function normalizeStatus(value: string | null): SkillStatus | undefined {
     return value;
   }
   return undefined;
+}
+
+function parseJson<T>(value: string, fallback: T): T {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function GET(request: Request) {
@@ -110,11 +127,60 @@ export async function PATCH(request: Request) {
         userNotes:
           body.userNotes !== undefined ? body.userNotes : entry.userNotes,
         status: body.status ?? entry.status,
+        ...(body.routingDestinationId !== undefined
+          ? serializeConceptRoutingPatch({
+              destinationId: body.routingDestinationId,
+              fieldMapping:
+                body.fieldMapping ??
+                inferConceptFieldMapping({
+                  suggestedFieldNames: parseJson<Array<{ name: string }>>(
+                    entry.suggestedFieldsJson,
+                    [],
+                  ).map((field) => field.name),
+                  payloads: [],
+                  existingMapping: parseJson<ConceptFieldMapping>(
+                    entry.fieldMappingJson,
+                    {},
+                  ),
+                }),
+            })
+          : {}),
         updatedAt: now,
       })
       .where(eq(extractionSkillEntries.id, entry.id));
 
-    await bumpSkillVersion(`updated_skill_entry:${entry.conceptName}`);
+    if (body.routingDestinationId !== undefined) {
+      await recordConceptRoutingDecision({
+        entryId: entry.id,
+        destinationId: body.routingDestinationId || SKILL_ONLY_DESTINATION_ID,
+        fieldMapping:
+          body.fieldMapping ??
+          inferConceptFieldMapping({
+            suggestedFieldNames: parseJson<Array<{ name: string }>>(
+              entry.suggestedFieldsJson,
+              [],
+            ).map((field) => field.name),
+            payloads: [],
+            existingMapping: parseJson<ConceptFieldMapping>(
+              entry.fieldMappingJson,
+              {},
+            ),
+          }),
+      });
+    }
+
+    const isRoutingOnly =
+      body.routingDestinationId !== undefined &&
+      body.conceptName === undefined &&
+      body.description === undefined &&
+      body.suggestedFields === undefined &&
+      body.category === undefined &&
+      body.userNotes === undefined &&
+      body.status === undefined;
+
+    if (!isRoutingOnly) {
+      await bumpSkillVersion(`updated_skill_entry:${entry.conceptName}`);
+    }
     revalidatePath("/skill");
 
     return NextResponse.json({ ok: true });

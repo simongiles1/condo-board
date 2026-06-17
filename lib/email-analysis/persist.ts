@@ -19,6 +19,21 @@ import {
   vendors,
 } from "@/lib/db/schema";
 import { persistDiscoveredFacts } from "@/lib/email-analysis/extraction-skill";
+import {
+  dedupeEntities,
+  entitiesMatch,
+} from "@/lib/email/entity-dedup";
+import { collectNamedEntitySources } from "@/lib/email/named-entity-audit";
+import {
+  buildEntityDedupKey,
+  findApprovedEntityMatch,
+  parseStructuredContactContext,
+  type EntityMentionRow,
+} from "@/lib/entities/entity-review";
+import {
+  isEntityExcluded,
+  loadEntityExclusions,
+} from "@/lib/entities/entity-exclusions";
 
 import type { EmailExtractionDocument } from "./schema";
 
@@ -64,18 +79,29 @@ async function upsertEquipment(name: string): Promise<string> {
 async function upsertVendor(name: string, contactJson?: string): Promise<string> {
   const db = getDb();
   const normalized = name.trim();
-  const [existing] = await db
+  const [exactMatch] = await db
     .select()
     .from(vendors)
     .where(eq(vendors.name, normalized));
 
-  if (existing) return existing.id;
+  if (exactMatch) return exactMatch.id;
+
+  const existingVendors = await db.select().from(vendors);
+  const fuzzyMatch = existingVendors.find((vendor) =>
+    entitiesMatch(
+      { type: "org", value: vendor.name },
+      { type: "org", value: normalized },
+    ),
+  );
+  if (fuzzyMatch) return fuzzyMatch.id;
 
   const id = randomUUID();
   await db.insert(vendors).values({
     id,
     name: normalized,
     contactJson: contactJson ?? null,
+    reviewStatus: "pending",
+    organizationRole: null,
     createdAt: new Date().toISOString(),
   });
   return id;
@@ -282,21 +308,21 @@ export async function persistExtractionDocument(input: {
   }
 
   for (const vendor of input.document.vendors ?? []) {
-    await upsertVendor(
-      vendor.name,
-      JSON.stringify({
-        contact: vendor.contact,
-        email: vendor.email,
-        phone: vendor.phone,
-        services: vendor.services,
-      }),
-    );
-    counts.vendors = (counts.vendors ?? 0) + 1;
+    if (vendor.name) {
+      counts.vendors = (counts.vendors ?? 0) + 1;
+    }
   }
 
   for (const contract of input.document.contracts ?? []) {
     let vendorId: string | undefined;
-    if (contract.vendor) vendorId = await upsertVendor(contract.vendor);
+    if (contract.vendor) {
+      const [existingVendor] = await db
+        .select({ id: vendors.id })
+        .from(vendors)
+        .where(eq(vendors.name, contract.vendor.trim()))
+        .limit(1);
+      vendorId = existingVendor?.id;
+    }
     const key = dedupKey(contract.vendor, contract.type, contract.start_date);
     const existing = key
       ? await db
@@ -377,6 +403,8 @@ export async function persistExtractionDocument(input: {
   }
 
   for (const item of input.document.action_items ?? []) {
+    // Exact dedupKey only — semantic obligation matching runs before insert
+    // (action-item-dedup) and after insert (action-item-reconciliation).
     const key = dedupKey(item.assignee, item.task, item.deadline);
     const existing = key
       ? await db
@@ -477,13 +505,76 @@ export async function persistExtractionDocument(input: {
     }
   }
 
-  for (const entity of input.document.entities ?? []) {
+  const namedSources = collectNamedEntitySources(input.document);
+  const dedupedEntities = dedupeEntities(
+    namedSources.map((entity) => ({
+      type: entity.type,
+      value: entity.value,
+      context: entity.context,
+    })),
+  );
+
+  const exclusions = await loadEntityExclusions();
+
+  const approvedEntityRows = await db
+    .select({
+      id: entityMentions.id,
+      entityType: entityMentions.entityType,
+      entityValue: entityMentions.entityValue,
+      context: entityMentions.context,
+      reviewStatus: entityMentions.reviewStatus,
+      organizationRole: entityMentions.organizationRole,
+      vendorCandidate: entityMentions.vendorCandidate,
+      dedupKey: entityMentions.dedupKey,
+    })
+    .from(entityMentions)
+    .where(eq(entityMentions.reviewStatus, "approved"));
+
+  for (const entity of dedupedEntities) {
     if (!entity.value) continue;
+    if (isEntityExcluded(entity, exclusions)) continue;
+
+    const vendorCandidate = namedSources.some(
+      (source) =>
+        source.vendorCandidate &&
+        entitiesMatch(source, { type: entity.type, value: entity.value }),
+    );
+
+    const [existing] = await db
+      .select({ id: entityMentions.id })
+      .from(entityMentions)
+      .where(
+        and(
+          eq(entityMentions.sourceId, input.sourceId),
+          eq(entityMentions.entityType, entity.type),
+          eq(entityMentions.entityValue, entity.value),
+        ),
+      )
+      .limit(1);
+    if (existing) continue;
+
+    const approvedMatch = findApprovedEntityMatch(
+      approvedEntityRows as EntityMentionRow[],
+      entity,
+    );
+    const dedupKey = approvedMatch?.dedupKey ?? buildEntityDedupKey(entity);
+    const context = entity.contexts[0] ?? null;
+    const parsedPersonContext =
+      entity.type === "person" && context
+        ? parseStructuredContactContext(context, entity.value)
+        : {};
+
     await db.insert(entityMentions).values({
       id: randomUUID(),
       entityType: entity.type,
-      entityValue: entity.value,
-      context: entity.context ?? null,
+      entityValue: approvedMatch?.entityValue ?? entity.value,
+      context,
+      reviewStatus: approvedMatch ? "approved" : "pending",
+      organizationRole: approvedMatch?.organizationRole ?? null,
+      vendorCandidate,
+      dedupKey,
+      personTitle: parsedPersonContext.title ?? null,
+      linkedOrganizationName: parsedPersonContext.org ?? null,
       sourceId: input.sourceId,
       createdAt: now,
     });

@@ -5,7 +5,14 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { EmailAttachmentsBadge } from "@/components/EmailAttachmentsBadge";
-import { EmailExtractionBadge } from "@/components/EmailExtractionBadge";
+import {
+  ExtractionSidePanel,
+  type ExtractionPanelTarget,
+} from "@/components/ExtractionSidePanel";
+import {
+  ProcessorInitials,
+  ProcessorInitialsGroup,
+} from "@/components/ExtractionPanelContent";
 import { ProcessedCostBadge } from "@/components/ProcessedCostBadge";
 import { formatDateTime } from "@/lib/format/datetime";
 import { formatCostUsd } from "@/lib/gemini/usage";
@@ -13,7 +20,6 @@ import type {
   EmailAttachmentSummary,
   ThreadAttachmentGroup,
 } from "@/lib/email/attachment-display";
-import type { InboxExtractionSummary } from "@/lib/email/extraction-display";
 import type {
   EmailProcessingStats,
   InboxAnalysisQueueState,
@@ -35,9 +41,9 @@ const EMPTY_QUEUE_STATE: InboxAnalysisQueueState = {
   processedEmails: [],
 };
 
-/** Fixed columns: checkbox | subject | status | metadata | attachments | date */
+/** Fixed columns: checkbox | subject | status | attachments | date */
 const INBOX_ROW_GRID =
-  "grid grid-cols-[auto_minmax(0,1fr)_12rem_2.75rem_2.75rem_11rem] items-center gap-x-3";
+  "grid grid-cols-[auto_minmax(0,1fr)_12rem_2.75rem_11rem] items-center gap-x-3";
 
 type BulkProgress = {
   total: number;
@@ -62,6 +68,7 @@ type MessageRow = {
   processingInputTokens?: number | null;
   processingOutputTokens?: number | null;
   processingDurationMs?: number | null;
+  triggeredByEmail?: string | null;
 };
 
 type ThreadRow = {
@@ -229,8 +236,27 @@ function buildMessageProcessingEntries(
       inputTokens: message.processingInputTokens ?? null,
       outputTokens: message.processingOutputTokens ?? null,
       processingDurationMs: message.processingDurationMs ?? null,
+      triggeredByEmail: message.triggeredByEmail ?? null,
     },
   ];
+}
+
+function processorEmailsFromEntries(entries: EmailProcessingStats[]): string[] {
+  return [
+    ...new Set(
+      entries
+        .filter((entry) => entry.processedAt && entry.triggeredByEmail)
+        .map((entry) => entry.triggeredByEmail!),
+    ),
+  ];
+}
+
+function ProcessorBadgeInitials({ emails }: { emails: string[] }) {
+  if (emails.length === 0) return null;
+  if (emails.length === 1) {
+    return <ProcessorInitials email={emails[0]} />;
+  }
+  return <ProcessorInitialsGroup emails={emails} />;
 }
 
 function ProcessedBadge({
@@ -239,21 +265,24 @@ function ProcessedBadge({
   processedCount,
   totalCount,
   processingCostUsd,
+  onOpenDetails,
 }: {
   entries: EmailProcessingStats[];
   processedAt?: string | null;
   processedCount?: number;
   totalCount?: number;
   processingCostUsd?: number | null;
+  onOpenDetails?: () => void;
 }) {
   const isProcessed = Boolean(processedAt) || (processedCount ?? 0) > 0;
   if (!isProcessed) return null;
 
   const costLabel =
     processingCostUsd != null ? formatCostUsd(processingCostUsd) : null;
+  const processorEmails = processorEmailsFromEntries(entries);
 
   return (
-    <ProcessedCostBadge entries={entries}>
+    <ProcessedCostBadge entries={entries} onOpenDetails={onOpenDetails}>
       Processed
       {costLabel ? (
         <span className="ml-1 tabular-nums text-teal-900">{costLabel}</span>
@@ -265,6 +294,7 @@ function ProcessedBadge({
           ({processedCount}/{totalCount})
         </span>
       ) : null}
+      <ProcessorBadgeInitials emails={processorEmails} />
     </ProcessedCostBadge>
   );
 }
@@ -274,11 +304,13 @@ function EmailStatusBadge({
   processedAt,
   processingCostUsd,
   processingEntries,
+  onOpenDetails,
 }: {
   queueStatus: ThreadQueueStatus | null;
   processedAt?: string | null;
   processingCostUsd?: number | null;
   processingEntries: EmailProcessingStats[];
+  onOpenDetails?: () => void;
 }) {
   if (queueStatus?.kind === "processing") {
     return <ProcessingBadge current={1} total={1} />;
@@ -295,6 +327,7 @@ function EmailStatusBadge({
       entries={processingEntries}
       processedAt={processedAt}
       processingCostUsd={processingCostUsd}
+      onOpenDetails={onOpenDetails}
     />
   );
 }
@@ -305,12 +338,14 @@ function ThreadStatusBadge({
   processingCostUsd,
   queueStatus,
   processingEntries,
+  onOpenDetails,
 }: {
   messageCount: number;
   processedCount: number;
   processingCostUsd?: number | null;
   queueStatus: ThreadQueueStatus | null;
   processingEntries: EmailProcessingStats[];
+  onOpenDetails?: () => void;
 }) {
   if (queueStatus?.kind === "processing") {
     return (
@@ -339,16 +374,19 @@ function ThreadStatusBadge({
       processedCount < messageCount
         ? `${processedCount}/${messageCount}`
         : String(messageCount);
+    const processorEmails = processorEmailsFromEntries(processingEntries);
 
     return (
       <ProcessedCostBadge
         entries={processingEntries}
-        badgeClassName="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium tabular-nums text-teal-800 ring-1 ring-teal-200"
+        onOpenDetails={onOpenDetails}
+        badgeClassName="inline-flex items-center gap-1.5 rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium tabular-nums text-teal-800 ring-1 ring-teal-200"
       >
         <span className="text-teal-900">{countLabel}</span>
         <span className="text-teal-700">·</span>
         <span>Processed</span>
         {costLabel ? <span className="text-teal-900">{costLabel}</span> : null}
+        <ProcessorBadgeInitials emails={processorEmails} />
       </ProcessedCostBadge>
     );
   }
@@ -371,12 +409,14 @@ function getLiveMessageProcessedSnapshot(
   processingInputTokens?: number | null,
   processingOutputTokens?: number | null,
   processingDurationMs?: number | null,
+  triggeredByEmail?: string | null,
 ): {
   processedAt?: string | null;
   processingCostUsd?: number | null;
   processingInputTokens?: number | null;
   processingOutputTokens?: number | null;
   processingDurationMs?: number | null;
+  triggeredByEmail?: string | null;
 } {
   const live = queueState.processedEmails.find(
     (entry) => entry.emailId === messageId,
@@ -388,6 +428,7 @@ function getLiveMessageProcessedSnapshot(
       processingInputTokens,
       processingOutputTokens,
       processingDurationMs,
+      triggeredByEmail,
     };
   }
   return {
@@ -396,6 +437,7 @@ function getLiveMessageProcessedSnapshot(
     processingInputTokens: live.inputTokens ?? processingInputTokens,
     processingOutputTokens: live.outputTokens ?? processingOutputTokens,
     processingDurationMs: live.processingDurationMs ?? processingDurationMs,
+    triggeredByEmail: live.triggeredByEmail ?? triggeredByEmail,
   };
 }
 
@@ -505,11 +547,10 @@ export function EmailThreadList({
   threadAttachmentGroups,
   threadEmailIds,
   threadProcessingDetails,
-  messageExtractionSummaries,
-  threadExtractionSummaries,
   initialQueueState = EMPTY_QUEUE_STATE,
   pagination,
   filters,
+  canManageEmailSettings = false,
 }: {
   view: EmailInboxView;
   messages?: MessageRow[];
@@ -518,11 +559,10 @@ export function EmailThreadList({
   threadAttachmentGroups?: Record<string, ThreadAttachmentGroup[]>;
   threadEmailIds?: Record<string, string[]>;
   threadProcessingDetails?: Record<string, EmailProcessingStats[]>;
-  messageExtractionSummaries?: Record<string, InboxExtractionSummary>;
-  threadExtractionSummaries?: Record<string, InboxExtractionSummary>;
   initialQueueState?: InboxAnalysisQueueState;
   pagination?: Pagination;
   filters?: EmailThreadFilters;
+  canManageEmailSettings?: boolean;
 }) {
   const router = useRouter();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -531,6 +571,10 @@ export function EmailThreadList({
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [queueState, setQueueState] =
     useState<InboxAnalysisQueueState>(initialQueueState);
+  const [extractionPanel, setExtractionPanel] = useState<{
+    target: ExtractionPanelTarget;
+    processingEntries: EmailProcessingStats[];
+  } | null>(null);
 
   const allPageEmailIds = useMemo(() => {
     if (view === "messages") {
@@ -723,14 +767,16 @@ export function EmailThreadList({
               Clear filters
             </Link>
           </>
-        ) : (
+        ) : canManageEmailSettings ? (
           <>
             No emails ingested yet. Connect Gmail in{" "}
-            <Link href="/emails/settings" className="text-teal-700 hover:underline">
-              Email Settings
+            <Link href="/settings" className="text-teal-700 hover:underline">
+              Settings
             </Link>{" "}
             and run a sync or backfill.
           </>
+        ) : (
+          <>No emails ingested yet. Ask a super admin to connect Gmail and run a sync.</>
         )}
       </div>
     );
@@ -743,6 +789,7 @@ export function EmailThreadList({
     view === "messages" ? selectedCount : resolveEmailIdsForSelection().length;
 
   return (
+    <>
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <InboxAnalysisStatusBar
         bulkRunning={bulkRunning}
@@ -814,6 +861,7 @@ export function EmailThreadList({
                   message.processingInputTokens,
                   message.processingOutputTokens,
                   message.processingDurationMs,
+                  message.triggeredByEmail,
                 );
                 const baseEntries = buildMessageProcessingEntries(
                   {
@@ -854,11 +902,20 @@ export function EmailThreadList({
                       processedAt={liveProcessed.processedAt}
                       processingCostUsd={liveProcessed.processingCostUsd}
                       processingEntries={processingEntries}
-                    />
-                  </div>
-                  <div className="flex items-center justify-center py-4">
-                    <EmailExtractionBadge
-                      summary={messageExtractionSummaries?.[message.id]}
+                      onOpenDetails={
+                        liveProcessed.processedAt
+                          ? () =>
+                              setExtractionPanel({
+                                target: {
+                                  kind: "email",
+                                  emailId: message.id,
+                                  subject: message.subject,
+                                  fromAddress: message.fromAddress,
+                                },
+                                processingEntries,
+                              })
+                          : undefined
+                      }
                     />
                   </div>
                   <div className="flex items-center justify-center py-4">
@@ -921,12 +978,19 @@ export function EmailThreadList({
                           queueState,
                         )}
                         processingEntries={processingEntries}
-                      />
-                    </div>
-                    <div className="flex items-center justify-center py-4">
-                      <EmailExtractionBadge
-                        summary={threadExtractionSummaries?.[thread.id]}
-                        multiEmail
+                        onOpenDetails={
+                          liveStats.processedCount > 0
+                            ? () =>
+                                setExtractionPanel({
+                                  target: {
+                                    kind: "thread",
+                                    threadId: thread.id,
+                                    subject: thread.subject,
+                                  },
+                                  processingEntries,
+                                })
+                            : undefined
+                        }
                       />
                     </div>
                     <div className="flex items-center justify-center py-4">
@@ -987,5 +1051,12 @@ export function EmailThreadList({
         </nav>
       ) : null}
     </div>
+
+    <ExtractionSidePanel
+      target={extractionPanel?.target ?? null}
+      processingEntries={extractionPanel?.processingEntries ?? []}
+      onClose={() => setExtractionPanel(null)}
+    />
+    </>
   );
 }

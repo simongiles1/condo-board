@@ -3,6 +3,8 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { emails, emailSyncExclusions, senderAllowlist } from "@/lib/db/schema";
 
+import type { ParsedEmailMessage } from "./messages";
+
 export async function getAllowlistEmails(): Promise<string[]> {
   const db = getDb();
   const rows = await db.select({ email: senderAllowlist.email }).from(senderAllowlist);
@@ -27,6 +29,26 @@ export function buildAllowlistQuery(addresses: string[]): string {
 
 export function buildSenderBackfillQuery(email: string): string {
   return `${buildAddressParticipationClause(email)} -in:spam -in:trash`;
+}
+
+function normalizeMailbox(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+export function parsedMessageMatchesAllowlist(
+  parsed: ParsedEmailMessage,
+  allowlistEmails: string[],
+): boolean {
+  if (allowlistEmails.length === 0) return false;
+
+  const allowSet = new Set(allowlistEmails.map(normalizeMailbox));
+  const participants = [
+    parsed.fromAddress,
+    ...parsed.toAddresses,
+    ...parsed.ccAddresses,
+  ].map(normalizeMailbox);
+
+  return participants.some((email) => allowSet.has(email));
 }
 
 /** Gmail `before:` is exclusive; use the UTC day after cutoff so same-day mail is searched. */

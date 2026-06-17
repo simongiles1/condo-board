@@ -49,16 +49,36 @@ export async function verifyGmailConnection(
 export function formatConnectionMismatchError(
   verification: ConnectionVerification,
 ): string {
+  const accountLabel =
+    verification.accountType === "dedicated"
+      ? "dedicated condo mailbox"
+      : "personal Gmail";
+
   const lines = [
     `Gmail OAuth token is for ${verification.verifiedEmailAddress ?? "an unknown account"}, but settings show ${verification.storedEmailAddress}.`,
-    "Click Reconnect on the dedicated mailbox and sign in with the condo account.",
+    `Click Reconnect on ${accountLabel} and sign in with the correct Google account.`,
   ];
 
-  if (verification.expectedDedicatedEmail) {
+  if (
+    verification.accountType === "dedicated" &&
+    verification.expectedDedicatedEmail
+  ) {
     lines.push(`Expected account: ${verification.expectedDedicatedEmail}`);
   }
 
   return lines.join(" ");
+}
+
+export async function assertPersonalConnectionValid(): Promise<
+  ConnectionVerification & { gmail: gmail_v1.Gmail }
+> {
+  const verification = await verifyGmailConnection("personal_backfill");
+
+  if (!verification.matchesStored) {
+    throw new Error(formatConnectionMismatchError(verification));
+  }
+
+  return verification;
 }
 
 export async function assertDedicatedConnectionValid(): Promise<

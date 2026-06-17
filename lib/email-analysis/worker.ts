@@ -14,6 +14,13 @@ import {
 } from "@/lib/email-analysis/prompts";
 import { persistExtractionDocument, deleteExtractionEntities } from "@/lib/email-analysis/persist";
 import {
+  closeCrossThreadCalendarInviteItems,
+  reconcileThreadActionItems,
+} from "@/lib/email-analysis/action-item-reconciliation";
+import { semanticDeduplicateIncomingActionItems } from "@/lib/email-analysis/action-item-dedup";
+import { reconcileThreadEntities } from "@/lib/email-analysis/entity-reconciliation";
+import { loadEntityExclusionsPromptSection } from "@/lib/entities/entity-exclusions";
+import {
   compileSkillPromptSection,
   mergeSkillProposals,
 } from "@/lib/email-analysis/extraction-skill";
@@ -279,6 +286,7 @@ ${text}`,
 export async function analyzeEmail(input: {
   emailId: string;
   reprocess?: boolean;
+  triggeredByUserId?: string | null;
 }): Promise<AnalyzeEmailResult> {
   const db = getDb();
   const settings = await getAnalysisSettings();
@@ -334,8 +342,10 @@ export async function analyzeEmail(input: {
   }
 
   const skill = await compileSkillPromptSection();
+  const excludedEntitiesSection = await loadEntityExclusionsPromptSection();
   const systemInstruction = buildEmailAnalysisSystemPrompt({
     skillPromptSection: skill.promptSection,
+    excludedEntitiesSection,
   });
 
   const bodyUnique = await preprocessEmailMessage(email.id);
@@ -483,20 +493,27 @@ export async function analyzeEmail(input: {
   const merged = mergeExtractionDocuments(partialDocs);
   const now = new Date().toISOString();
   const sourceId = randomUUID();
-  const totalInput = allCalls.reduce((s, c) => s + c.inputTokens, 0);
-  const totalOutput = allCalls.reduce((s, c) => s + c.outputTokens, 0);
-  const costUsd = estimateCostUsdForCalls(allCalls);
   const processingDurationMs = Date.now() - analysisStartedAt;
 
-  console.info("[email-analysis:complete]", {
-    emailId: email.id,
-    subject: email.subject,
-    inputTokens: totalInput,
-    outputTokens: totalOutput,
-    costUsd,
-    processingDurationMs,
-    modelName: settings.analysisModel,
-  });
+  let actionItemsDeduped = 0;
+  if (email.threadId && merged.action_items?.length) {
+    try {
+      const dedup = await semanticDeduplicateIncomingActionItems({
+        threadId: email.threadId,
+        newItems: merged.action_items,
+        modelName: settings.analysisModel,
+      });
+      merged.action_items = dedup.insertItems;
+      allCalls.push(...dedup.calls);
+      actionItemsDeduped = dedup.supersedeOpenIds.length;
+    } catch (error) {
+      console.error("[email-analysis:action-item-dedup]", {
+        emailId: email.id,
+        threadId: email.threadId,
+        error: error instanceof Error ? error.message : "Semantic dedup failed",
+      });
+    }
+  }
 
   await db.insert(extractionSources).values({
     id: sourceId,
@@ -509,23 +526,12 @@ export async function analyzeEmail(input: {
     skillVersionId: skill.skillVersionId,
     contentHash: null,
     rawExtractionJson: JSON.stringify(merged),
-    aiUsageJson: serializeAiUsage({
-      runs: allCalls.map((call) => ({
-        id: randomUUID(),
-        kind: "email_analysis" as const,
-        label: call.step,
-        ranAt: now,
-        modelName: call.modelName,
-        inputTokens: call.inputTokens,
-        outputTokens: call.outputTokens,
-        totalTokens: call.totalTokens,
-        costUsd: estimateCostUsdForCalls([call]),
-      })),
-    }),
-    totalInputTokens: totalInput,
-    totalOutputTokens: totalOutput,
-    totalCostUsd: String(costUsd),
+    aiUsageJson: serializeAiUsage({ runs: [] }),
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCostUsd: "0",
     processingDurationMs,
+    triggeredByUserId: input.triggeredByUserId ?? null,
   });
 
   const { counts } = await persistExtractionDocument({
@@ -533,6 +539,106 @@ export async function analyzeEmail(input: {
     emailThreadId: email.threadId,
     document: merged,
   });
+  if (actionItemsDeduped) {
+    counts.action_items_deduped = actionItemsDeduped;
+  }
+
+  if (email.threadId) {
+    try {
+      const reconciliation = await reconcileThreadActionItems({
+        threadId: email.threadId,
+        analyzedEmailId: email.id,
+        modelName: settings.analysisModel,
+      });
+      allCalls.push(...reconciliation.calls);
+      if (reconciliation.completed || reconciliation.superseded) {
+        counts.action_items_reconciled =
+          (counts.action_items_reconciled ?? 0) +
+          reconciliation.completed +
+          reconciliation.superseded;
+      }
+    } catch (error) {
+      console.error("[email-analysis:action-item-reconcile]", {
+        emailId: email.id,
+        threadId: email.threadId,
+        error: error instanceof Error ? error.message : "Reconciliation failed",
+      });
+    }
+
+    try {
+      const crossThreadClosed = await closeCrossThreadCalendarInviteItems({
+        emailId: email.id,
+      });
+      if (crossThreadClosed) {
+        counts.action_items_cross_thread_closed =
+          (counts.action_items_cross_thread_closed ?? 0) + crossThreadClosed;
+      }
+    } catch (error) {
+      console.error("[email-analysis:action-item-cross-thread]", {
+        emailId: email.id,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Cross-thread calendar invite closure failed",
+      });
+    }
+
+    try {
+      const entityReconciliation = await reconcileThreadEntities({
+        threadId: email.threadId,
+        sourceId,
+        modelName: settings.analysisModel,
+      });
+      allCalls.push(...entityReconciliation.calls);
+      if (entityReconciliation.afterCount !== entityReconciliation.beforeCount) {
+        counts.entities_reconciled =
+          (counts.entities_reconciled ?? 0) +
+          Math.max(0, entityReconciliation.beforeCount - entityReconciliation.afterCount);
+      }
+    } catch (error) {
+      console.error("[email-analysis:entity-reconcile]", {
+        emailId: email.id,
+        threadId: email.threadId,
+        error: error instanceof Error ? error.message : "Entity reconciliation failed",
+      });
+    }
+  }
+
+  const totalInput = allCalls.reduce((s, c) => s + c.inputTokens, 0);
+  const totalOutput = allCalls.reduce((s, c) => s + c.outputTokens, 0);
+  const costUsd = estimateCostUsdForCalls(allCalls);
+
+  console.info("[email-analysis:complete]", {
+    emailId: email.id,
+    subject: email.subject,
+    inputTokens: totalInput,
+    outputTokens: totalOutput,
+    costUsd,
+    processingDurationMs,
+    modelName: settings.analysisModel,
+  });
+
+  await db
+    .update(extractionSources)
+    .set({
+      aiUsageJson: serializeAiUsage({
+        runs: allCalls.map((call) => ({
+          id: randomUUID(),
+          kind: "email_analysis" as const,
+          label: call.step,
+          ranAt: now,
+          modelName: call.modelName,
+          inputTokens: call.inputTokens,
+          outputTokens: call.outputTokens,
+          totalTokens: call.totalTokens,
+          costUsd: estimateCostUsdForCalls([call]),
+        })),
+      }),
+      totalInputTokens: totalInput,
+      totalOutputTokens: totalOutput,
+      totalCostUsd: String(costUsd),
+    })
+    .where(eq(extractionSources.id, sourceId));
 
   const skillUpdates = await mergeSkillProposals({
     discoveredFacts: merged.discovered_facts,
@@ -583,13 +689,18 @@ export async function analyzeEmail(input: {
 export async function analyzeEmailBatch(input: {
   emailIds: string[];
   reprocess?: boolean;
+  triggeredByUserId?: string | null;
 }): Promise<AnalyzeEmailResult[]> {
   await enqueueEmailsAnalysisPending(input.emailIds);
 
   const results: AnalyzeEmailResult[] = [];
   for (const emailId of input.emailIds) {
     results.push(
-      await analyzeEmail({ emailId, reprocess: input.reprocess }),
+      await analyzeEmail({
+        emailId,
+        reprocess: input.reprocess,
+        triggeredByUserId: input.triggeredByUserId,
+      }),
     );
   }
   return results;
@@ -598,6 +709,7 @@ export async function analyzeEmailBatch(input: {
 export async function analyzeAllUnprocessed(input: {
   reprocess?: boolean;
   limit?: number;
+  triggeredByUserId?: string | null;
 }): Promise<AnalyzeEmailResult[]> {
   const db = getDb();
   const rows = await db.select({ id: emails.id }).from(emails).limit(input.limit ?? 10_000);
@@ -608,7 +720,11 @@ export async function analyzeAllUnprocessed(input: {
       unprocessed.push(email.id);
     }
   }
-  return analyzeEmailBatch({ emailIds: unprocessed, reprocess: input.reprocess });
+  return analyzeEmailBatch({
+    emailIds: unprocessed,
+    reprocess: input.reprocess,
+    triggeredByUserId: input.triggeredByUserId,
+  });
 }
 
 /** Classify a single stored attachment and persist has_value (for backfill). */
@@ -619,8 +735,10 @@ export async function classifyEmailAttachmentHasValue(input: {
   const db = getDb();
   const settings = await getAnalysisSettings();
   const skill = await compileSkillPromptSection();
+  const excludedEntitiesSection = await loadEntityExclusionsPromptSection();
   const systemInstruction = buildEmailAnalysisSystemPrompt({
     skillPromptSection: skill.promptSection,
+    excludedEntitiesSection,
   });
 
   const [attachment] = await db

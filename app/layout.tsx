@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { AuthNav } from "@/components/AuthNav";
-import { HeaderNav } from "@/components/HeaderNav";
-import { ModelSettingsButton } from "@/components/ModelSettingsButton";
+import { HeaderNavWrapper } from "@/components/HeaderNavWrapper";
 
 import "./globals.css";
 
@@ -26,9 +25,8 @@ export default function RootLayout({
               Condo Board AI Assistant
             </Link>
             <div className="flex items-center gap-4">
-              <HeaderNav />
+              <HeaderNavWrapper />
               <AuthNav />
-              <ModelSettingsButton />
             </div>
           </div>
         </header>

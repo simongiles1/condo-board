@@ -6,6 +6,156 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Smarter entity review prefill** — Contact review cards now parse role/title and
+  organization from signature-style context snippets (e.g. "Name, Project Manager,
+  Company Inc."). Organization cards are listed first. Approving an organization
+  automatically links matching pending contacts from the same email thread and
+  selects that org in their dropdown.
+
+- **Richer entity review context** — Review snippets now merge thread subject,
+  extraction summary, cached PDF attachment text, related surety/bond mentions,
+  and the original extracted line. Attachment PDF text is cached alongside the
+  file on first read so later page loads stay fast.
+
+- **Organization role customization** — Entity review organization role dropdown now
+  includes **+ Add new role…**, which opens a dialog to create reusable custom roles.
+  Built-in roles also include **Condominium corporation** for TSCC numbers and
+  similar legal corporation names (including sister buildings with different
+  corporation numbers).
+
+- **Entity review delete** — Pending entity review cards now include a **Delete**
+  button that removes unrelated extractions from the database. **Ignore** still
+  keeps the record and tells the AI to skip similar contacts in future emails.
+
+- **User accounts with roles** — Sign up and sign in pages, three roles
+  (`super_admin`, `admin`, `user`), and middleware-enforced access. Super admins
+  manage all users on `/users`; admins can access every other page; regular users
+  can view and analyze content but not admin settings, bulk analysis, concepts, or
+  dev notes.
+
+- **Analysis attribution** — Email and thread analysis runs now store
+  `triggered_by_user_id` on `extraction_sources` so you can see who ran each
+  analysis.
+
+### Changed
+
+- **Action item semantic deduplication** — before persisting new email action
+  items, a Gemini pass compares the incoming batch against open tasks in the same
+  thread using obligation-level matching (not fuzzy text or exact dedup keys).
+  Cross-assignee duplicates (e.g. "Management" vs a named contact for the same
+  police-footage request) are consolidated to one insert. Thread reconciliation
+  now also clusters open semantic duplicates first and supersedes extras even
+  when the obligation is still unresolved.
+
+- **Action item reconciliation scope** — thread reconciliation now runs only against
+  emails already analyzed in chronological order (not the full synced thread).
+  "Send calendar invite" tasks are excluded from LLM thread reconciliation and
+  close only when a separate meeting-invite email (e.g. Microsoft Teams) is
+  analyzed.
+
+- **Extractions default view** — the list view on `/extractions` now defaults to
+  **By thread** instead of by individual email.
+
+- **Named entities deduplication and display** — extracted people, orgs, dates,
+  and phone numbers are merged intelligently (e.g. "Paul" + "Paul Gartenburg",
+  "ICC Property Management" + "ICC Property Management Ltd.") in the extractions
+  audit UI, on Insights, and when persisting to `entity_mentions`. The Insights
+  page now includes a **Named entities** section matching the extraction routing
+  link.
+
+- **Named entities audit grouping** — dates are no longer shown in named entities
+  (calendar fields cover those). People, organizations, and phone numbers are
+  grouped into contact cards when they share email context. In thread audits,
+  teal tags show which email each field was extracted from.
+
+- **Named entities completeness** — the audit view now includes organizations
+  from both `entities[]` and `vendors[]`, so property managers and other orgs
+  flagged only as vendors still appear under Named entities. Vendor-flagged orgs
+  show an amber **Vendor candidate** badge.
+
+- **Vendor review queue** — newly extracted vendors are saved as `pending` until
+  a board member approves them on Insights, with rename and role selection
+  (vendor, property manager, contractor, etc.).
+
+- **Unified entity review** — all extracted people, orgs, and phones are staged
+  in `entity_mentions` as pending until approved on Insights **Entity review**.
+  Extractions and Insights now use the same grouped contact cards; standalone
+  phone-number cards are hidden. Vendor directory entries are created only after
+  org approval.
+
+- **AI entity reconciliation** — after each email in a thread is analyzed, a
+  follow-up Gemini pass reviews all pending `entity_mentions` for that thread.
+  It merges duplicates (e.g. "P. Gartenburg" + "Paul Gartenburg"), fixes wrong
+  person/org pairings using signature and From: evidence, and attaches phones to
+  the correct contact before human review. Thread view on Extractions shows the
+  reconciled entity set from the database.
+
+- **Contact-style entity review** — Insights entity review now uses standard
+  contact forms: person cards include first/last name, email, organization
+  dropdown, role/title, and phone; organization cards include name, role, email,
+  and phone. Approving an organization adds it to person dropdowns above without
+  losing in-progress edits. **Ignore** registers stale signatures (e.g. old
+  employers) in an exclusion list the AI sees during future extractions.
+
+- **Vendor directory vs organizations** — only vendor and contractor roles are
+  added to the vendor directory and shown under Vendors & contracts on
+  Extractions after review. Property managers and other roles stay in named
+  entities only.
+
+- **Personal Gmail is now the primary sync source** — Sync now and automatic
+  (scheduled) sync both pull allowlist-matching mail directly from personal
+  Gmail using incremental `historyId` tracking. The dedicated condo mailbox is
+  optional and no longer drives sync. Reset imported inbox clears personal sync
+  state so the next sync can re-import from scratch. The global backfill button
+  was removed; use **Import thread** on a sender row for full conversation
+  history per sender.
+
+### Fixed
+
+- **Entity review vendor candidate badge** — approving or ignoring an entity in
+  Insights now clears the AI **Vendor candidate** flag; the user's chosen
+  organization role is the source of truth after review.
+
+- **Personal forward workflow start** — fixed a crash when scanning large
+  personal mailboxes (Postgres parameter limit on the already-forwarded lookup).
+  Start now returns immediately and shows live progress while batches run in the
+  background.
+
+- **Allowlist personal Gmail counts** — personal From counts now paginate
+  through Gmail results instead of using `resultSizeEstimate`, which was returning
+  the same mailbox total for every sender. The allowlist table layout was fixed so
+  column headers align with their data.
+
+### Added
+
+- **Forward workflow thread count** — the personal forward status panel now
+  reports unique Gmail threads alongside individual message counts when a run
+  starts (e.g. “10,286 messages in 3,421 threads”).
+
+- **Forward workflow full threads** — matching now expands each allowlist hit to
+  the entire Gmail conversation (including your replies and other participants),
+  forwards messages oldest-first, and sets In-Reply-To / References so threads
+  stay grouped in the dedicated inbox.
+
+- **Email settings — automated personal forward workflow** — forward
+  allowlist-matching messages from personal Gmail to the dedicated condo mailbox
+  in batches of 50 every 2 minutes. Select sender rows for a subset, or use all
+  saved allowlist senders. Tracks already-forwarded messages so reruns skip
+  duplicates. Requires reconnecting personal Gmail with `gmail.send` permission.
+
+- **Email settings — sender discovery** — the allowlist shows every unique From
+  address in imported mail, with separate counts for messages in the app and in
+  connected personal Gmail. Unsaved senders get a Save button; entries already in
+  the database show a disabled Saved state with backfill and remove actions.
+  Copy a single address or the full Gmail filter OR list from the toolbar.
+  Select rows to copy a smaller OR list for split Gmail filters.
+
+- **Email settings — reset imported inbox** — delete all imported emails, threads,
+  sync runs, and email extractions from the app so you can run a fresh dedicated
+  sync. Gmail connections, allowlist, and mailbox contents are unchanged.
+
 ### Fixed
 
 - **Gmail OAuth callback redirect** — after connecting Gmail in production, the
@@ -18,6 +168,18 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `gmail.modify` scope requirement when consent stalls on Continue.
 
 ### Changed
+
+- **Extractions audit card (By email view)** — redesigned for human review
+  clarity. The collapsed card now leads with the email summary and a single
+  "N facts found" count (extracted facts only, excluding classification
+  metadata and tags) instead of the previous hover-only "extracted items" and
+  "destinations" badges. The expanded view presents one flat, scannable list of
+  extracted facts grouped by destination, with a quiet per-group save signal
+  ("Saved → table", "Partly saved", or "Archive only") replacing the per-item
+  "Saved to DB" / "Extraction only" pills and the separate "Rows saved from this
+  run" block. Summary metadata (document type, summary, urgency, tags) is now
+  visually de-emphasized and pinned to the bottom so it no longer competes with
+  real extracted facts.
 
 - **Local dev server** — `npm run dev` now always binds to port 3000 so Gmail OAuth
   redirect URIs stay aligned with `GOOGLE_REDIRECT_URI` in `.env.local`.

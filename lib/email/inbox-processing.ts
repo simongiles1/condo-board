@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
-import { analysisQueue, emails, extractionSources } from "@/lib/db/schema";
+import { analysisQueue, appUsers, emails, extractionSources } from "@/lib/db/schema";
 import {
   buildEmailExtractionPreview,
   buildInboxExtractionSummary,
@@ -116,6 +116,7 @@ export async function loadInboxAnalysisQueueState(
           inputTokens: entry?.inputTokens ?? null,
           outputTokens: entry?.outputTokens ?? null,
           processingDurationMs: entry?.processingDurationMs ?? null,
+          triggeredByEmail: entry?.triggeredByEmail ?? null,
         };
       }),
   };
@@ -143,8 +144,10 @@ export async function loadMessageProcessingStats(
       outputTokens: extractionSources.totalOutputTokens,
       processingDurationMs: extractionSources.processingDurationMs,
       processedAt: extractionSources.processedAt,
+      triggeredByEmail: appUsers.email,
     })
     .from(extractionSources)
+    .leftJoin(appUsers, eq(extractionSources.triggeredByUserId, appUsers.id))
     .where(
       and(
         eq(extractionSources.sourceType, "email_message"),
@@ -166,6 +169,7 @@ export async function loadMessageProcessingStats(
       inputTokens: row.inputTokens,
       outputTokens: row.outputTokens,
       processingDurationMs: row.processingDurationMs ?? null,
+      triggeredByEmail: row.triggeredByEmail ?? null,
     };
   }
   return stats;
@@ -225,6 +229,7 @@ export async function loadThreadProcessingDetails(
       inputTokens: extractionSources.totalInputTokens,
       outputTokens: extractionSources.totalOutputTokens,
       processingDurationMs: extractionSources.processingDurationMs,
+      triggeredByEmail: appUsers.email,
     })
     .from(emails)
     .leftJoin(
@@ -234,6 +239,7 @@ export async function loadThreadProcessingDetails(
         eq(extractionSources.sourceType, "email_message"),
       ),
     )
+    .leftJoin(appUsers, eq(extractionSources.triggeredByUserId, appUsers.id))
     .where(inArray(emails.threadId, threadIds))
     .orderBy(asc(emails.receivedAt));
 
@@ -251,6 +257,7 @@ export async function loadThreadProcessingDetails(
       inputTokens: row.inputTokens ?? null,
       outputTokens: row.outputTokens ?? null,
       processingDurationMs: row.processingDurationMs ?? null,
+      triggeredByEmail: row.triggeredByEmail ?? null,
     });
     map[row.threadId] = list;
   }

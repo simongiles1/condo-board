@@ -1,5 +1,8 @@
 /** Email/attachment extraction schema — all 7 domains in one pass. */
 
+import { dedupeEntities } from "@/lib/email/entity-dedup";
+import { filterAuditEntities } from "@/lib/email/entity-grouping";
+
 export type ExtractionConfidence = "high" | "medium" | "low";
 export type ExtractionUrgency = "low" | "normal" | "high" | "urgent";
 
@@ -533,6 +536,22 @@ export function mergeExtractionDocuments(
       const incoming = (doc[key] as unknown[] | undefined) ?? [];
       (merged as Record<string, unknown>)[key] = [...existing, ...incoming];
     }
+  }
+
+  if (merged.entities?.length) {
+    merged.entities = dedupeEntities(
+      filterAuditEntities(
+        merged.entities.map((entity) => ({
+          type: entity.type,
+          value: entity.value,
+          context: entity.context,
+        })),
+      ),
+    ).map((entity) => ({
+      type: entity.type,
+      value: entity.value,
+      context: entity.contexts[0],
+    }));
   }
 
   return merged;

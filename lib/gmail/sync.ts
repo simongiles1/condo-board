@@ -8,9 +8,17 @@ import { emails, gmailConnections, syncRuns } from "@/lib/db/schema";
 
 import { getGmailClient } from "./client";
 import { parseGmailMessage } from "./messages";
-import { DEDICATED_INITIAL_SYNC_QUERY } from "./queries";
-import { storeParsedMessage } from "./store";
-import { assertDedicatedConnectionValid } from "./verify";
+import {
+  buildAllowlistQuery,
+  DEDICATED_INITIAL_SYNC_QUERY,
+  getAllowlistEmails,
+  parsedMessageMatchesAllowlist,
+} from "./queries";
+import { storeParsedMessage, type EmailSource } from "./store";
+import {
+  assertDedicatedConnectionValid,
+  assertPersonalConnectionValid,
+} from "./verify";
 
 export type SyncTrigger = "cron" | "manual";
 
@@ -21,15 +29,16 @@ export type SyncResult = {
   errors: string[];
 };
 
+let personalSyncInProgress = false;
 let dedicatedSyncInProgress = false;
 
-async function needsInitialDedicatedImport(): Promise<boolean> {
+async function countEmailsBySource(source: EmailSource): Promise<number> {
   const db = getDb();
   const [row] = await db
     .select({ count: count() })
     .from(emails)
-    .where(eq(emails.source, "dedicated"));
-  return (row?.count ?? 0) === 0;
+    .where(eq(emails.source, source));
+  return row?.count ?? 0;
 }
 
 async function fetchFullMessage(
@@ -48,6 +57,8 @@ async function syncMessageIds(
   gmail: gmail_v1.Gmail,
   messageIds: string[],
   syncRunId: string,
+  source: EmailSource,
+  options?: { allowlistEmails?: string[] },
 ): Promise<{ added: number; skipped: number; errors: string[] }> {
   let added = 0;
   let skipped = 0;
@@ -61,9 +72,17 @@ async function syncMessageIds(
         continue;
       }
 
+      if (
+        options?.allowlistEmails &&
+        !parsedMessageMatchesAllowlist(parsed, options.allowlistEmails)
+      ) {
+        skipped += 1;
+        continue;
+      }
+
       const result = await storeParsedMessage({
         parsed,
-        source: "dedicated",
+        source,
         syncRunId,
       });
 
@@ -108,6 +127,8 @@ async function syncViaHistory(
   gmail: gmail_v1.Gmail,
   startHistoryId: string,
   syncRunId: string,
+  source: EmailSource,
+  options?: { allowlistEmails?: string[] },
 ): Promise<{ added: number; skipped: number; errors: string[]; historyId: string | null }> {
   const messageIds = new Set<string>();
   let latestHistoryId: string | null = null;
@@ -132,11 +153,20 @@ async function syncViaHistory(
     pageToken = response.data.nextPageToken ?? undefined;
   } while (pageToken);
 
-  const result = await syncMessageIds(gmail, [...messageIds], syncRunId);
+  const result = await syncMessageIds(
+    gmail,
+    [...messageIds],
+    syncRunId,
+    source,
+    options,
+  );
   return { ...result, historyId: latestHistoryId };
 }
 
-async function saveHistoryId(historyId: string) {
+async function saveHistoryId(
+  accountType: typeof gmailConnections.$inferSelect.accountType,
+  historyId: string,
+) {
   const db = getDb();
   await db
     .update(gmailConnections)
@@ -144,7 +174,7 @@ async function saveHistoryId(historyId: string) {
       lastHistoryId: historyId,
       lastSyncAt: new Date().toISOString(),
     })
-    .where(eq(gmailConnections.accountType, "dedicated"));
+    .where(eq(gmailConnections.accountType, accountType));
 }
 
 function isExpiredHistoryError(error: unknown): boolean {
@@ -152,6 +182,122 @@ function isExpiredHistoryError(error: unknown): boolean {
   return message.includes("404") || message.toLowerCase().includes("history");
 }
 
+export async function syncPersonalAccount(
+  trigger: SyncTrigger,
+): Promise<SyncResult> {
+  if (personalSyncInProgress) {
+    throw new Error(
+      "A personal Gmail sync is already running. Wait for it to finish before starting another.",
+    );
+  }
+
+  const verification = await assertPersonalConnectionValid();
+  const allowlistEmails = await getAllowlistEmails();
+  if (allowlistEmails.length === 0) {
+    throw new Error(
+      "No senders on the allowlist. Save at least one sender before syncing.",
+    );
+  }
+
+  personalSyncInProgress = true;
+
+  const db = getDb();
+  const syncRunId = randomUUID();
+  const startedAt = new Date().toISOString();
+
+  await db.insert(syncRuns).values({
+    id: syncRunId,
+    accountType: "personal_backfill",
+    trigger,
+    startedAt,
+    messagesAdded: 0,
+    messagesSkipped: 0,
+    errors: null,
+  });
+
+  const errors: string[] = [];
+  let messagesAdded = 0;
+  let messagesSkipped = 0;
+
+  try {
+    const { gmail } = verification;
+    const { connection } = await getGmailClient("personal_backfill");
+
+    if (!connection.lastHistoryId) {
+      const existingPersonalMail = await countEmailsBySource("personal_backfill");
+
+      if (existingPersonalMail === 0) {
+        const messageIds = await listAllMessageIds(
+          gmail,
+          buildAllowlistQuery(allowlistEmails),
+        );
+        const initialResult = await syncMessageIds(
+          gmail,
+          messageIds,
+          syncRunId,
+          "personal_backfill",
+        );
+        messagesAdded += initialResult.added;
+        messagesSkipped += initialResult.skipped;
+        errors.push(...initialResult.errors);
+      }
+
+      const profile = await gmail.users.getProfile({ userId: "me" });
+      if (profile.data.historyId) {
+        await saveHistoryId("personal_backfill", profile.data.historyId);
+      }
+    } else {
+      try {
+        const historyResult = await syncViaHistory(
+          gmail,
+          connection.lastHistoryId,
+          syncRunId,
+          "personal_backfill",
+          { allowlistEmails },
+        );
+        messagesAdded += historyResult.added;
+        messagesSkipped += historyResult.skipped;
+        errors.push(...historyResult.errors);
+
+        if (historyResult.historyId) {
+          await saveHistoryId("personal_backfill", historyResult.historyId);
+        }
+      } catch (historyError) {
+        if (!isExpiredHistoryError(historyError)) {
+          throw historyError;
+        }
+
+        const profile = await gmail.users.getProfile({ userId: "me" });
+        if (profile.data.historyId) {
+          await saveHistoryId("personal_backfill", profile.data.historyId);
+        }
+      }
+    }
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  } finally {
+    personalSyncInProgress = false;
+  }
+
+  await db
+    .update(syncRuns)
+    .set({
+      finishedAt: new Date().toISOString(),
+      messagesAdded,
+      messagesSkipped,
+      errors: errors.length > 0 ? errors.join("\n") : null,
+    })
+    .where(eq(syncRuns.id, syncRunId));
+
+  return {
+    syncRunId,
+    messagesAdded,
+    messagesSkipped,
+    errors,
+  };
+}
+
+/** @deprecated Dedicated mailbox sync; use syncPersonalAccount instead. */
 export async function syncDedicatedAccount(
   trigger: SyncTrigger,
 ): Promise<SyncResult> {
@@ -186,7 +332,7 @@ export async function syncDedicatedAccount(
   try {
     const { gmail } = verification;
     const { connection } = await getGmailClient("dedicated");
-    const initialImport = await needsInitialDedicatedImport();
+    const initialImport = (await countEmailsBySource("dedicated")) === 0;
 
     if (initialImport) {
       const profile = await gmail.users.getProfile({ userId: "me" });
@@ -194,13 +340,18 @@ export async function syncDedicatedAccount(
         gmail,
         DEDICATED_INITIAL_SYNC_QUERY,
       );
-      const initialResult = await syncMessageIds(gmail, messageIds, syncRunId);
+      const initialResult = await syncMessageIds(
+        gmail,
+        messageIds,
+        syncRunId,
+        "dedicated",
+      );
       messagesAdded += initialResult.added;
       messagesSkipped += initialResult.skipped;
       errors.push(...initialResult.errors);
 
       if (profile.data.historyId) {
-        await saveHistoryId(profile.data.historyId);
+        await saveHistoryId("dedicated", profile.data.historyId);
       }
     } else if (connection.lastHistoryId) {
       try {
@@ -208,13 +359,14 @@ export async function syncDedicatedAccount(
           gmail,
           connection.lastHistoryId,
           syncRunId,
+          "dedicated",
         );
         messagesAdded += historyResult.added;
         messagesSkipped += historyResult.skipped;
         errors.push(...historyResult.errors);
 
         if (historyResult.historyId) {
-          await saveHistoryId(historyResult.historyId);
+          await saveHistoryId("dedicated", historyResult.historyId);
         }
       } catch (historyError) {
         if (!isExpiredHistoryError(historyError)) {
@@ -223,13 +375,13 @@ export async function syncDedicatedAccount(
 
         const profile = await gmail.users.getProfile({ userId: "me" });
         if (profile.data.historyId) {
-          await saveHistoryId(profile.data.historyId);
+          await saveHistoryId("dedicated", profile.data.historyId);
         }
       }
     } else {
       const profile = await gmail.users.getProfile({ userId: "me" });
       if (profile.data.historyId) {
-        await saveHistoryId(profile.data.historyId);
+        await saveHistoryId("dedicated", profile.data.historyId);
       }
     }
   } catch (error) {

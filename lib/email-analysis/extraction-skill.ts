@@ -11,6 +11,12 @@ import {
 } from "@/lib/db/schema";
 
 import type {
+  ConceptFieldMapping,
+  ConceptRoutingConfig,
+} from "@/lib/email/concept-routing";
+import { parseConceptRoutingConfig } from "@/lib/email/concept-routing";
+
+import type {
   DiscoveredFactExtraction,
   ProposedNewConceptExtraction,
 } from "./schema";
@@ -35,6 +41,7 @@ export type SkillEntry = {
   mergedIntoId: string | null;
   category: string | null;
   userNotes: string | null;
+  routing: ConceptRoutingConfig;
   createdAt: string;
   updatedAt: string;
 };
@@ -108,6 +115,7 @@ function rowToEntry(row: typeof extractionSkillEntries.$inferSelect): SkillEntry
     mergedIntoId: row.mergedIntoId,
     category: row.category,
     userNotes: row.userNotes,
+    routing: parseConceptRoutingConfig(row),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -130,6 +138,24 @@ function formatEntry(entry: SkillEntry): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+export async function recordConceptRoutingDecision(input: {
+  entryId: string;
+  destinationId: string;
+  fieldMapping: ConceptFieldMapping;
+  configuredBy?: string;
+}): Promise<void> {
+  await logSkillAction({
+    entryId: input.entryId,
+    action: "routing_configured",
+    details: {
+      destinationId: input.destinationId,
+      fieldMapping: input.fieldMapping,
+      configuredBy: input.configuredBy ?? "user",
+      phase: "intent_only",
+    },
+  });
 }
 
 async function logSkillAction(input: {
@@ -338,6 +364,10 @@ async function createSkillEntry(input: {
     mergedIntoId: null,
     category: input.category ?? null,
     userNotes: null,
+    routingDestinationId: null,
+    fieldMappingJson: "{}",
+    routingOptionsJson: "{}",
+    routingConfiguredAt: null,
     createdAt: now,
     updatedAt: now,
   };

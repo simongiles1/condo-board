@@ -2,39 +2,59 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ConceptDetailPanel } from "@/components/ConceptDetailPanel";
+import {
+  SKILL_ONLY_DESTINATION_ID,
+  type ConceptFieldMapping,
+  type ConceptRoutingPreview,
+  type RoutableConceptDestination,
+} from "@/lib/email/concept-routing";
+
 type SkillEntry = {
   id: string;
   conceptName: string;
   description: string;
   suggestedFields: Array<{ name: string; type?: string; description?: string }>;
-  exampleQuotes: string[];
   occurrenceCount: number;
   status: "active" | "archived" | "merged";
-  category: string | null;
-  userNotes: string | null;
+  routing: {
+    destinationId: string;
+    fieldMapping: ConceptFieldMapping;
+    configuredAt: string | null;
+  };
 };
 
-type Fact = {
-  id: string;
-  payload: Record<string, unknown>;
-  sourceQuote: string | null;
-  confidence: string | null;
-  createdAt: string;
+type ConceptDetailResponse = {
+  entry: SkillEntry;
+  routingPreview: ConceptRoutingPreview;
+  routableDestinations: RoutableConceptDestination[];
+  routingHistory: Array<{
+    id: string;
+    createdAt: string;
+    details: Record<string, unknown>;
+  }>;
 };
 
-function parseFields(value: string) {
-  return value
-    .split(",")
-    .map((name) => ({ name: name.trim(), type: "string" }))
-    .filter((field) => field.name);
+function routingLabel(entry: SkillEntry): string {
+  const destinationId = entry.routing.destinationId || SKILL_ONLY_DESTINATION_ID;
+  if (destinationId === SKILL_ONLY_DESTINATION_ID) return "Skill only";
+  return destinationId.replace(/_/g, " ");
+}
+
+function routingBadgeClass(destinationId: string): string {
+  if (destinationId === SKILL_ONLY_DESTINATION_ID) {
+    return "bg-slate-100 text-slate-700";
+  }
+  return "bg-teal-50 text-teal-800";
 }
 
 export default function SkillPage() {
   const [entries, setEntries] = useState<SkillEntry[]>([]);
   const [status, setStatus] = useState("active");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [facts, setFacts] = useState<Fact[]>([]);
+  const [detail, setDetail] = useState<ConceptDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
 
   const selected = useMemo(
@@ -50,12 +70,19 @@ export default function SkillPage() {
     setLoading(false);
   }, [status]);
 
-  async function loadFacts(id: string) {
+  const loadDetail = useCallback(async (id: string) => {
+    setDetailLoading(true);
     setSelectedId(id);
     const response = await fetch(`/api/skill/${id}`);
-    const data = (await response.json()) as { facts: Fact[] };
-    setFacts(data.facts ?? []);
-  }
+    if (!response.ok) {
+      setDetail(null);
+      setDetailLoading(false);
+      return;
+    }
+    const data = (await response.json()) as ConceptDetailResponse;
+    setDetail(data);
+    setDetailLoading(false);
+  }, []);
 
   async function patchEntry(id: string, patch: Record<string, unknown>) {
     setSavingId(id);
@@ -65,15 +92,19 @@ export default function SkillPage() {
       body: JSON.stringify({ id, ...patch }),
     });
     await loadEntries();
-    if (selectedId === id) {
-      await loadFacts(id);
-    }
+    await loadDetail(id);
     setSavingId(null);
   }
 
   useEffect(() => {
     void loadEntries(status);
   }, [loadEntries, status]);
+
+  useEffect(() => {
+    if (entries.length && !selectedId) {
+      void loadDetail(entries[0].id);
+    }
+  }, [entries, loadDetail, selectedId]);
 
   return (
     <section className="min-h-0 flex-1 space-y-6 overflow-y-auto">
@@ -83,19 +114,23 @@ export default function SkillPage() {
             Email analysis
           </p>
           <h1 className="text-2xl font-semibold text-slate-900">
-            Dynamic extraction skill
+            Extraction concepts
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            Review concepts learned from processed emails. Active concepts are
-            injected into future extraction prompts; archived and merged entries
-            stay available for audit.
+            Review what the AI extracted, see where each concept is routed today,
+            and declare where facts should go. Promotion into destinations is
+            recorded as intent first; execution arrives in a later phase.
           </p>
         </div>
         <label className="text-sm text-slate-700">
           Status{" "}
           <select
             value={status}
-            onChange={(event) => setStatus(event.target.value)}
+            onChange={(event) => {
+              setStatus(event.target.value);
+              setSelectedId(null);
+              setDetail(null);
+            }}
             className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
           >
             <option value="active">Active</option>
@@ -105,138 +140,97 @@ export default function SkillPage() {
         </label>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="grid grid-cols-[1.4fr_80px_120px_220px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-            <span>Concept</span>
-            <span>Seen</span>
-            <span>Status</span>
-            <span>Actions</span>
+          <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+            <h2 className="text-sm font-semibold text-slate-900">Concepts</h2>
+            <p className="text-xs text-slate-600">
+              {entries.length} concept{entries.length === 1 ? "" : "s"}
+            </p>
           </div>
           {loading ? (
-            <p className="p-4 text-sm text-slate-600">Loading skill entries...</p>
+            <p className="p-4 text-sm text-slate-600">Loading concepts...</p>
           ) : entries.length ? (
-            entries.map((entry) => (
-              <div
-                key={entry.id}
-                className="grid grid-cols-[1.4fr_80px_120px_220px] gap-3 border-b border-slate-100 px-4 py-3 text-sm last:border-b-0"
-              >
-                <div className="space-y-2">
-                  <input
-                    defaultValue={entry.conceptName}
-                    onBlur={(event) => {
-                      if (event.target.value !== entry.conceptName) {
-                        void patchEntry(entry.id, {
-                          conceptName: event.target.value,
-                        });
-                      }
-                    }}
-                    className="w-full rounded-md border border-slate-200 px-2 py-1 font-semibold text-slate-900"
-                  />
-                  <textarea
-                    defaultValue={entry.description}
-                    onBlur={(event) => {
-                      if (event.target.value !== entry.description) {
-                        void patchEntry(entry.id, {
-                          description: event.target.value,
-                        });
-                      }
-                    }}
-                    className="h-16 w-full rounded-md border border-slate-200 px-2 py-1 text-slate-700"
-                  />
-                  <input
-                    defaultValue={entry.suggestedFields
-                      .map((field) => field.name)
-                      .join(", ")}
-                    onBlur={(event) =>
-                      void patchEntry(entry.id, {
-                        suggestedFields: parseFields(event.target.value),
-                      })
-                    }
-                    placeholder="field_one, field_two"
-                    className="w-full rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-700"
-                  />
-                </div>
-                <span className="pt-2 font-semibold text-slate-900">
-                  {entry.occurrenceCount}
-                </span>
-                <span className="pt-2 text-slate-700">{entry.status}</span>
-                <div className="flex flex-wrap items-start gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => void loadFacts(entry.id)}
-                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Facts
-                  </button>
-                  <button
-                    type="button"
-                    disabled={savingId === entry.id}
-                    onClick={() =>
-                      void patchEntry(entry.id, {
-                        status:
-                          entry.status === "archived" ? "active" : "archived",
-                      })
-                    }
-                    className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
-                  >
-                    {entry.status === "archived" ? "Restore" : "Archive"}
-                  </button>
-                  <select
-                    defaultValue=""
-                    onChange={(event) => {
-                      if (event.target.value) {
-                        void patchEntry(entry.id, {
-                          mergeIntoId: event.target.value,
-                        });
-                      }
-                    }}
-                    className="max-w-40 rounded-md border border-slate-300 px-2 py-1.5 text-xs"
-                  >
-                    <option value="">Merge into...</option>
-                    {entries
-                      .filter((target) => target.id !== entry.id)
-                      .map((target) => (
-                        <option key={target.id} value={target.id}>
-                          {target.conceptName}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-              </div>
-            ))
+            <ul className="divide-y divide-slate-100">
+              {entries.map((entry) => {
+                const destinationId =
+                  entry.routing.destinationId || SKILL_ONLY_DESTINATION_ID;
+                const isSelected = entry.id === selectedId;
+
+                return (
+                  <li key={entry.id}>
+                    <button
+                      type="button"
+                      onClick={() => void loadDetail(entry.id)}
+                      className={`w-full px-4 py-3 text-left transition ${
+                        isSelected ? "bg-teal-50" : "hover:bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-slate-900">
+                            {entry.conceptName}
+                          </p>
+                          <p className="mt-1 line-clamp-2 text-xs text-slate-600">
+                            {entry.description}
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-xs font-semibold text-slate-700">
+                          {entry.occurrenceCount}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${routingBadgeClass(
+                            destinationId,
+                          )}`}
+                        >
+                          {routingLabel(entry)}
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          {entry.routing.configuredAt
+                            ? "Intent saved"
+                            : "No routing intent"}
+                        </span>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           ) : (
             <p className="p-4 text-sm text-slate-600">
-              No skill entries for this status yet.
+              No concepts for this status yet.
             </p>
           )}
         </div>
 
-        <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <h2 className="font-semibold text-slate-900">
-            {selected ? selected.conceptName : "Facts"}
-          </h2>
-          <p className="mt-1 text-sm text-slate-600">
-            Click Facts on a concept to inspect extracted payloads.
-          </p>
-          <div className="mt-4 space-y-3">
-            {facts.map((fact) => (
-              <div key={fact.id} className="rounded-lg border border-slate-200 p-3">
-                <pre className="whitespace-pre-wrap text-xs text-slate-800">
-                  {JSON.stringify(fact.payload, null, 2)}
-                </pre>
-                {fact.sourceQuote ? (
-                  <blockquote className="mt-2 border-l-2 border-teal-500 pl-2 text-xs text-slate-600">
-                    {fact.sourceQuote}
-                  </blockquote>
-                ) : null}
-                <p className="mt-2 text-xs text-slate-500">
-                  {fact.confidence ?? "unknown"} confidence · {fact.createdAt}
-                </p>
-              </div>
-            ))}
-          </div>
-        </aside>
+        <div className="min-w-0">
+          {detailLoading ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+              Loading concept detail...
+            </div>
+          ) : detail && selected ? (
+            <ConceptDetailPanel
+              key={selected.id}
+              entry={detail.entry}
+              routingPreview={detail.routingPreview}
+              routableDestinations={detail.routableDestinations}
+              routingHistory={detail.routingHistory}
+              saving={savingId === selected.id}
+              onSaveRouting={async (input) => {
+                await patchEntry(selected.id, input);
+              }}
+              onPatchEntry={async (patch) => {
+                await patchEntry(selected.id, patch);
+              }}
+            />
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+              Select a concept to inspect routing transparency and declare intent.
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );

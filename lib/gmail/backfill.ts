@@ -15,6 +15,7 @@ import {
   getAllowlistEmails,
   isMessageOnOrBeforeCutoff,
 } from "./queries";
+import { listMatchingThreadIds } from "./thread-search";
 import { storeParsedMessage } from "./store";
 
 export type BackfillTrigger = "manual" | "backfill";
@@ -25,31 +26,6 @@ export type BackfillResult = {
   messagesSkipped: number;
   errors: string[];
 };
-
-async function listMatchingThreadIds(
-  gmail: gmail_v1.Gmail,
-  query: string,
-): Promise<string[]> {
-  const threadIds = new Set<string>();
-  let pageToken: string | undefined;
-
-  do {
-    const response = await gmail.users.messages.list({
-      userId: "me",
-      q: query,
-      maxResults: 100,
-      pageToken,
-    });
-
-    for (const message of response.data.messages ?? []) {
-      if (message.threadId) threadIds.add(message.threadId);
-    }
-
-    pageToken = response.data.nextPageToken ?? undefined;
-  } while (pageToken);
-
-  return [...threadIds];
-}
 
 async function importThread(
   gmail: gmail_v1.Gmail,

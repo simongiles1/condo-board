@@ -61,7 +61,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     title: "Email summary metadata",
     description:
       "High-level classification shown in inbox extraction badges. Stored only in the extraction archive, not as separate database rows.",
-    appPages: [{ href: "/emails", label: "Emails inbox badges" }],
+    appPages: [{ href: "/emails", label: "Emails processed panel" }],
     dbTables: [],
     fields: ["document_type", "summary", "urgency", "tags"],
   },
@@ -91,7 +91,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     fields: ["action_items"],
     fieldNotes: {
       action_items:
-        "Distinct from meeting To-dos (/todos) and global todos. Soft deadlines on action items are not promoted to the calendar.",
+        "Distinct from meeting To-dos (/todos) and global todos. Soft deadlines on action items are not promoted to the calendar. Before insert, new items are semantically deduplicated against open thread tasks (AI obligation matching, not fuzzy text). After each email analysis, open items in the same thread are reconciled against analyzed messages only (oldest-first) to supersede duplicates and close resolved asks. Send-calendar-invite tasks are excluded from thread reconciliation and close only when a separate meeting-invite email (e.g. Teams) is analyzed.",
     },
   },
   {
@@ -138,7 +138,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     fields: ["vendors", "contracts"],
     fieldNotes: {
       vendors:
-        "Upserted into a shared vendor directory by name (not tied to a single email row).",
+        "Flagged for entity review — not added to the vendor directory until a board member approves the contact on Insights.",
     },
   },
   {
@@ -178,8 +178,9 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
   {
     id: "entities",
     title: "Named entities",
-    description: "People, organizations, and other entities mentioned in context.",
-    appPages: [{ href: "/insights", label: "Insights" }],
+    description:
+      "All people and organizations mentioned in the thread. Vendor-flagged orgs also appear under Vendors & contracts for review.",
+    appPages: [{ href: "/insights", label: "Insights named entities" }],
     dbTables: ["entity_mentions"],
     fields: ["entities"],
   },
@@ -188,7 +189,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     title: "Extraction skill learning",
     description:
       "Facts matched to learned concepts and proposals for new reusable extraction concepts.",
-    appPages: [{ href: "/skill", label: "Skill" }],
+    appPages: [{ href: "/skill", label: "Concepts" }],
     dbTables: ["discovered_facts", "extraction_skill_entries"],
     fields: ["discovered_facts", "proposed_new_concepts"],
     fieldNotes: {
@@ -202,7 +203,6 @@ const PERSISTED_FIELDS = new Set<string>([
   "maintenance_events",
   "budget_line_items",
   "invoices",
-  "vendors",
   "contracts",
   "resident_issues",
   "capital_projects",

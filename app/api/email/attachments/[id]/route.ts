@@ -7,10 +7,17 @@ import { attachmentKind } from "@/lib/email/attachment-display";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
+function legacyContentDispositionFilename(filename: string): string {
+  // Legacy `filename=` must be a ByteString (Latin-1). Non-ASCII names use `filename*=`.
+  const sanitized = filename.replace(/[\r\n"]/g, "").replace(/[^\x20-\x7E]/g, "_");
+  return sanitized || "download";
+}
+
 function contentDisposition(filename: string, inline: boolean): string {
   const encoded = encodeURIComponent(filename);
   const type = inline ? "inline" : "attachment";
-  return `${type}; filename="${filename.replace(/"/g, "")}"; filename*=UTF-8''${encoded}`;
+  const legacy = legacyContentDispositionFilename(filename);
+  return `${type}; filename="${legacy}"; filename*=UTF-8''${encoded}`;
 }
 
 export async function GET(request: Request, context: RouteContext) {

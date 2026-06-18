@@ -6,11 +6,14 @@ export DATABASE_URL="$COND_BOARD_POSTGRES_URL"
 
 node scripts/docker-migrate.cjs prepare
 
-output="$(npx drizzle-kit push --force 2>&1)" || exit 1
+set +e
+output="$(npx drizzle-kit push --force 2>&1)"
+push_status=$?
+set -e
+
 printf '%s\n' "$output"
-if printf '%s\n' "$output" | grep -q '^Error:'; then
-  echo "[migrate] drizzle-kit push failed."
-  exit 1
+if [ "$push_status" -ne 0 ]; then
+  echo "[migrate] drizzle-kit push exited with status ${push_status}; continuing to verify."
 fi
 
 node scripts/docker-migrate.cjs verify

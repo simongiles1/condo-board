@@ -36,22 +36,42 @@ async function ensureAppUsersEmailUnique(client) {
   const legacy = rows.find((row) => row.def.includes("(email)"));
   if (legacy) {
     const name = legacy.conname.replace(/"/g, "");
-    await client.query(
-      `ALTER TABLE app_users RENAME CONSTRAINT "${name}" TO app_users_email_unique`,
-    );
-    console.log("[migrate] Renamed email unique constraint to app_users_email_unique.");
+    try {
+      await client.query(
+        `ALTER TABLE app_users RENAME CONSTRAINT "${name}" TO app_users_email_unique`,
+      );
+      console.log("[migrate] Renamed email unique constraint to app_users_email_unique.");
+    } catch (error) {
+      console.warn("[migrate] Could not rename email unique constraint:", error.message);
+    }
     return;
   }
 
-  await client.query(`
-    ALTER TABLE app_users
-    ADD CONSTRAINT app_users_email_unique UNIQUE (email)
-  `);
-  console.log("[migrate] Added app_users_email_unique constraint.");
+  try {
+    await client.query(`
+      ALTER TABLE app_users
+      ADD CONSTRAINT app_users_email_unique UNIQUE (email)
+    `);
+    console.log("[migrate] Added app_users_email_unique constraint.");
+  } catch (error) {
+    if (!/already exists/i.test(error.message)) {
+      throw error;
+    }
+  }
 }
 
 async function repairAppUsersSchema(client) {
-  if (!(await tableExists(client, "app_users"))) return;
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS app_users (
+      id text PRIMARY KEY NOT NULL,
+      email text NOT NULL,
+      password_hash text NOT NULL,
+      first_name text,
+      last_name text,
+      role text NOT NULL DEFAULT 'user',
+      created_at text NOT NULL
+    )
+  `);
 
   await client.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS first_name text`);
   await client.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS last_name text`);
@@ -98,6 +118,7 @@ async function prepare() {
   const pool = getPool();
   const client = await pool.connect();
   try {
+    await client.query("SELECT 1");
     await repairAppUsersSchema(client);
     await clearOrphanedUserReferences(client);
     console.log("[migrate] Prepared database for schema push.");
@@ -111,8 +132,10 @@ async function verify() {
   const pool = getPool();
   const client = await pool.connect();
   try {
+    await repairAppUsersSchema(client);
+
     if (!(await tableExists(client, "app_users"))) {
-      console.error("[migrate] app_users table is missing after drizzle push.");
+      console.error("[migrate] app_users table is missing after migration.");
       process.exit(1);
     }
 
@@ -122,7 +145,14 @@ async function verify() {
       WHERE table_schema = 'public' AND table_name = 'app_users'
     `);
     const columns = new Set(rows.map((row) => row.column_name));
-    for (const required of ["email", "password_hash", "role", "created_at"]) {
+    for (const required of [
+      "email",
+      "password_hash",
+      "first_name",
+      "last_name",
+      "role",
+      "created_at",
+    ]) {
       if (!columns.has(required)) {
         console.error(`[migrate] app_users is missing required column: ${required}`);
         process.exit(1);

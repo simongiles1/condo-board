@@ -21,7 +21,7 @@ services:
       context: .
       target: migrator
     environment:
-      COMPOSE_DATABASE_URL: postgresql://condo:condo@db:5432/condo_board
+      COND_BOARD_POSTGRES_URL: postgresql://condo:condo@db:5432/condo_board
     depends_on:
       db:
         condition: service_healthy
@@ -38,7 +38,7 @@ services:
       - path: .env.local
         required: false
     environment:
-      COMPOSE_DATABASE_URL: postgresql://condo:condo@db:5432/condo_board
+      COND_BOARD_POSTGRES_URL: postgresql://condo:condo@db:5432/condo_board
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
     volumes:
       - uploads_data:/app/uploads

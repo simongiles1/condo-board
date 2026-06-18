@@ -11,7 +11,7 @@ const globalForDb = globalThis as unknown as {
 
 function resolveDatabaseUrl(): string {
   const connectionString =
-    process.env.COMPOSE_DATABASE_URL?.trim() ||
+    process.env.COND_BOARD_POSTGRES_URL?.trim() ||
     process.env.DATABASE_URL?.trim();
   if (!connectionString) {
     throw new Error(

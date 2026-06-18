@@ -62,7 +62,7 @@ export function formatAuthDbError(
   }
 
   if (message.includes("Failed query") && message.includes("app_users")) {
-    return `${action} could not reach the accounts table in the compose Postgres database. Remove DATABASE_URL from Coolify environment variables and redeploy.`;
+    return `${action} could not reach the accounts table. Redeploy the latest code and check migrate logs for "Verified app_users table exists."`;
   }
 
   const cause = message.includes(" | ") ? message.split(" | ").pop() : message;

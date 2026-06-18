@@ -1,12 +1,26 @@
 const { Pool } = require("pg");
 
-function getPool() {
-  const connectionString =
+function getConnectionString() {
+  return (
     process.env.COND_BOARD_POSTGRES_URL ??
     process.env.DATABASE_URL ??
-    "postgresql://condo:condo@db:5432/condo_board";
+    "postgresql://condo:condo@db:5432/condo_board"
+  );
+}
 
-  return new Pool({ connectionString });
+function getPool() {
+  return new Pool({ connectionString: getConnectionString() });
+}
+
+function logConnectionTarget() {
+  try {
+    const { hostname, port, pathname } = new URL(getConnectionString());
+    console.log(
+      `[migrate] Using Postgres at ${hostname}:${port}${pathname}`,
+    );
+  } catch {
+    console.log("[migrate] Using configured Postgres connection string.");
+  }
 }
 
 async function tableExists(client, tableName) {
@@ -73,8 +87,18 @@ async function repairAppUsersSchema(client) {
     )
   `);
 
-  await client.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS first_name text`);
-  await client.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS last_name text`);
+  for (const [name, type] of [
+    ["password_hash", "text"],
+    ["first_name", "text"],
+    ["last_name", "text"],
+    ["role", "text DEFAULT 'user'"],
+    ["created_at", "text"],
+  ]) {
+    await client.query(
+      `ALTER TABLE app_users ADD COLUMN IF NOT EXISTS ${name} ${type}`,
+    );
+  }
+
   await ensureAppUsersEmailUnique(client);
 
   const { rows: checks } = await client.query(`
@@ -114,29 +138,32 @@ async function clearOrphanedUserReferences(client) {
   `);
 }
 
-async function prepare() {
+async function withClient(fn) {
   const pool = getPool();
   const client = await pool.connect();
   try {
-    await client.query("SELECT 1");
-    await repairAppUsersSchema(client);
-    await clearOrphanedUserReferences(client);
-    console.log("[migrate] Prepared database for schema push.");
+    return await fn(client);
   } finally {
     client.release();
     await pool.end();
   }
 }
 
+async function prepare() {
+  await withClient(async (client) => {
+    await client.query("SELECT 1");
+    await repairAppUsersSchema(client);
+    await clearOrphanedUserReferences(client);
+    console.log("[migrate] Prepared app_users schema.");
+  });
+}
+
 async function verify() {
-  const pool = getPool();
-  const client = await pool.connect();
-  try {
+  await withClient(async (client) => {
     await repairAppUsersSchema(client);
 
     if (!(await tableExists(client, "app_users"))) {
-      console.error("[migrate] app_users table is missing after migration.");
-      process.exit(1);
+      throw new Error("app_users table is missing after migration.");
     }
 
     const { rows } = await client.query(`
@@ -154,20 +181,23 @@ async function verify() {
       "created_at",
     ]) {
       if (!columns.has(required)) {
-        console.error(`[migrate] app_users is missing required column: ${required}`);
-        process.exit(1);
+        throw new Error(`app_users is missing required column: ${required}`);
       }
     }
 
     console.log("[migrate] Verified app_users table exists.");
-  } finally {
-    client.release();
-    await pool.end();
-  }
+  });
+}
+
+async function run() {
+  logConnectionTarget();
+  await prepare();
+  await verify();
+  console.log("[migrate] Database ready.");
 }
 
 async function main() {
-  const command = process.argv[2];
+  const command = process.argv[2] ?? "run";
   if (command === "prepare") {
     await prepare();
     return;
@@ -176,9 +206,12 @@ async function main() {
     await verify();
     return;
   }
+  if (command === "run") {
+    await run();
+    return;
+  }
 
-  console.error("[migrate] Usage: node scripts/docker-migrate.cjs <prepare|verify>");
-  process.exit(1);
+  throw new Error("Usage: node scripts/docker-migrate.cjs [run|prepare|verify]");
 }
 
 main().catch((error) => {

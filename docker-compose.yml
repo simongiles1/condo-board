@@ -16,17 +16,6 @@ services:
     ports:
       - "${DB_PORT_BINDING:-127.0.0.1:5433:5432}"
 
-  migrate:
-    build:
-      context: .
-      target: migrator
-    environment:
-      COND_BOARD_POSTGRES_URL: postgresql://condo:condo@db:5432/condo_board
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: "no"
-
   app:
     build:
       context: .
@@ -46,8 +35,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
 
 volumes:
   postgres_data:

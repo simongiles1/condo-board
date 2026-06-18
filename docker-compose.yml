@@ -35,7 +35,8 @@ services:
     ports:
       - "14780:3000"
     env_file:
-      - .env.local
+      - path: .env.local
+        required: false
     environment:
       DATABASE_URL: postgresql://condo:condo@db:5432/condo_board
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}

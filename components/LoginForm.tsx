@@ -26,7 +26,20 @@ export function LoginForm() {
         body: JSON.stringify({ email, password }),
       });
 
-      const body = (await response.json()) as { error?: string };
+      const raw = await response.text();
+      let body: { error?: string } = {};
+      if (raw) {
+        try {
+          body = JSON.parse(raw) as { error?: string };
+        } catch {
+          throw new Error(
+            `Login failed (${response.status}). Server returned a non-JSON response.`,
+          );
+        }
+      } else if (!response.ok) {
+        throw new Error(`Login failed (${response.status}).`);
+      }
+
       if (!response.ok) {
         throw new Error(body.error ?? "Login failed.");
       }

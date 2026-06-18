@@ -26,7 +26,20 @@ export function SignupForm() {
         body: JSON.stringify({ firstName, lastName, email, password }),
       });
 
-      const body = (await response.json()) as { error?: string };
+      const raw = await response.text();
+      let body: { error?: string } = {};
+      if (raw) {
+        try {
+          body = JSON.parse(raw) as { error?: string };
+        } catch {
+          throw new Error(
+            `Sign up failed (${response.status}). Server returned a non-JSON response.`,
+          );
+        }
+      } else if (!response.ok) {
+        throw new Error(`Sign up failed (${response.status}).`);
+      }
+
       if (!response.ok) {
         throw new Error(body.error ?? "Sign up failed.");
       }

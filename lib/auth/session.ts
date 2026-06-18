@@ -3,6 +3,8 @@ import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import { asc, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 
+import { NextResponse } from "next/server";
+
 import { isUserRole, type UserRole } from "@/lib/auth/roles";
 import {
   createSignedSessionToken,
@@ -12,6 +14,24 @@ import { getDb } from "@/lib/db";
 import { appUsers } from "@/lib/db/schema";
 
 import { SESSION_COOKIE } from "@/lib/auth/constants";
+
+export function sessionCookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 14,
+  };
+}
+
+export function attachSessionCookie(
+  response: NextResponse,
+  token: string,
+): NextResponse {
+  response.cookies.set(SESSION_COOKIE, token, sessionCookieOptions());
+  return response;
+}
 export type AppUser = {
   id: string;
   email: string;
@@ -236,13 +256,7 @@ export async function getSessionUser(): Promise<AppUser | null> {
 
 export async function setSessionCookie(token: string) {
   const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 14,
-  });
+  cookieStore.set(SESSION_COOKIE, token, sessionCookieOptions());
 }
 
 export async function clearSessionCookie() {

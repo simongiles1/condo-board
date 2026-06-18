@@ -1,28 +1,48 @@
 function collectErrorText(error: unknown): string {
   const parts: string[] = [];
   let current: unknown = error;
+  const seen = new Set<unknown>();
 
-  while (current instanceof Error) {
-    parts.push(current.message);
-    current = current.cause;
-  }
+  while (current != null && !seen.has(current)) {
+    seen.add(current);
 
-  if (current != null && !(current instanceof Error)) {
+    if (current instanceof Error) {
+      parts.push(current.message);
+      const enriched = current as Error & { code?: string; detail?: string };
+      if (enriched.code) parts.push(`code=${enriched.code}`);
+      if (enriched.detail) parts.push(enriched.detail);
+      current = current.cause;
+      continue;
+    }
+
+    if (typeof current === "object") {
+      const record = current as Record<string, unknown>;
+      if (typeof record.message === "string") parts.push(record.message);
+      if (typeof record.detail === "string") parts.push(record.detail);
+      if (typeof record.code === "string") parts.push(`code=${record.code}`);
+      current = record.cause;
+      continue;
+    }
+
     parts.push(String(current));
+    break;
   }
 
   return parts.join(" | ");
 }
 
-export function formatAuthDbError(error: unknown): string {
+export function formatAuthDbError(
+  error: unknown,
+  action: "Sign up" | "Login" = "Sign up",
+): string {
   const message = collectErrorText(error);
 
   if (message.includes('relation "app_users" does not exist')) {
-    return "Accounts database is not set up yet. Redeploy and check migrate logs.";
+    return "Accounts table is missing. Remove DATABASE_URL from Coolify env vars, redeploy, and check migrate logs.";
   }
 
   if (message.includes('column "first_name"') || message.includes('column "last_name"')) {
-    return "Accounts database schema is outdated. Redeploy so migrate can update it.";
+    return "Accounts table schema is outdated. Redeploy so migrate can update it.";
   }
 
   if (
@@ -30,7 +50,7 @@ export function formatAuthDbError(error: unknown): string {
     message.includes("ENOTFOUND") ||
     message.includes("getaddrinfo")
   ) {
-    return "Database connection failed. Check DATABASE_URL in deployment settings.";
+    return "Database connection failed. Remove DATABASE_URL from Coolify env vars and redeploy.";
   }
 
   if (message.includes("duplicate key") || message.includes("app_users_email_unique")) {
@@ -38,11 +58,13 @@ export function formatAuthDbError(error: unknown): string {
   }
 
   if (message.includes("check constraint") && message.includes("role")) {
-    return "Accounts database role constraint is outdated. Redeploy so migrate can update it.";
+    return "Accounts role constraint is outdated. Redeploy so migrate can update it.";
+  }
+
+  if (message.includes("Failed query") && message.includes("app_users")) {
+    return `${action} could not reach the accounts table in the compose Postgres database. Remove DATABASE_URL from Coolify environment variables and redeploy.`;
   }
 
   const cause = message.includes(" | ") ? message.split(" | ").pop() : message;
-  return cause?.startsWith("Sign up failed:")
-    ? cause
-    : `Sign up failed: ${cause ?? "Unknown database error."}`;
+  return `${action} failed: ${cause ?? "Unknown database error."}`;
 }

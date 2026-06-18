@@ -28,24 +28,27 @@ export async function POST(req: Request) {
   }
 
   try {
-    const user = await authenticateUser(email, password);
-    if (!user) {
+    const result = await authenticateUser(email, password);
+    if (result && "error" in result) {
+      return NextResponse.json({ error: result.error }, { status: 500 });
+    }
+    if (!result) {
       return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
     }
 
     const token = createSessionToken({
-      id: user.id,
-      email: user.email,
-      role: user.role,
+      id: result.id,
+      email: result.email,
+      role: result.role,
     });
 
     const response = NextResponse.json({
       ok: true,
       user: {
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
+        email: result.email,
+        firstName: result.firstName,
+        lastName: result.lastName,
+        role: result.role,
       },
     });
     return attachSessionCookie(response, token);

@@ -10,7 +10,9 @@ const globalForDb = globalThis as unknown as {
 };
 
 function resolveDatabaseUrl(): string {
-  const connectionString = process.env.DATABASE_URL?.trim();
+  const connectionString =
+    process.env.COMPOSE_DATABASE_URL?.trim() ||
+    process.env.DATABASE_URL?.trim();
   if (!connectionString) {
     throw new Error(
       "DATABASE_URL is required (e.g. postgresql://condo:condo@localhost:5433/condo_board)",

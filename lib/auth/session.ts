@@ -172,29 +172,37 @@ export async function registerUser(input: {
     return user;
   } catch (error) {
     console.error("[auth/registerUser] Failed:", error);
-    return { error: formatAuthDbError(error) };
+    return { error: formatAuthDbError(error, "Sign up") };
   }
 }
 
-export async function authenticateUser(email: string, password: string) {
-  await ensureDefaultUsers();
-  const db = getDb();
-  const normalized = email.trim().toLowerCase();
+export async function authenticateUser(
+  email: string,
+  password: string,
+): Promise<(typeof appUsers.$inferSelect) | { error: string } | null> {
+  try {
+    await ensureDefaultUsers();
+    const db = getDb();
+    const normalized = email.trim().toLowerCase();
 
-  const [user] = await db
-    .select()
-    .from(appUsers)
-    .where(eq(appUsers.email, normalized));
+    const [user] = await db
+      .select()
+      .from(appUsers)
+      .where(eq(appUsers.email, normalized));
 
-  if (!user) return null;
+    if (!user) return null;
 
-  const candidate = hashPassword(password);
-  const userBuf = Buffer.from(user.passwordHash, "utf8");
-  const candidateBuf = Buffer.from(candidate, "utf8");
-  if (userBuf.length !== candidateBuf.length) return null;
-  if (!timingSafeEqual(userBuf, candidateBuf)) return null;
+    const candidate = hashPassword(password);
+    const userBuf = Buffer.from(user.passwordHash, "utf8");
+    const candidateBuf = Buffer.from(candidate, "utf8");
+    if (userBuf.length !== candidateBuf.length) return null;
+    if (!timingSafeEqual(userBuf, candidateBuf)) return null;
 
-  return user;
+    return user;
+  } catch (error) {
+    console.error("[auth/authenticateUser] Failed:", error);
+    return { error: formatAuthDbError(error, "Login") };
+  }
 }
 
 export function createSessionToken(user: {

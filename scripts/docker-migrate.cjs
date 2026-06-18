@@ -111,30 +111,42 @@ async function applyMigrationFile(client, migrationId, filePath) {
   console.log(`[migrate] Applied ${migrationId}.`);
 }
 
+async function isBaselineSchemaComplete(client) {
+  for (const tableName of [
+    "email_sync_settings",
+    "extraction_sources",
+    "gmail_connections",
+  ]) {
+    if (!(await tableExists(client, tableName))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 async function applySchemaMigrations(client) {
   const migrations = loadMigrationJournal();
   if (migrations.length === 0) {
-    console.warn("[migrate] No drizzle migration journal found; skipping baseline SQL.");
-    return;
+    throw new Error(
+      "Drizzle migration journal missing from /app/drizzle/meta/_journal.json.",
+    );
   }
 
   await ensureMigrationTable(client);
 
   for (const migration of migrations) {
-    if (await isMigrationApplied(client, migration.id)) {
+    const alreadyApplied = await isMigrationApplied(client, migration.id);
+    const schemaComplete = await isBaselineSchemaComplete(client);
+
+    if (alreadyApplied && schemaComplete) {
       console.log(`[migrate] ${migration.id} already applied, skipping.`);
       continue;
     }
 
-    if (
-      migration.id.startsWith("0000") &&
-      (await tableExists(client, "meetings"))
-    ) {
+    if (alreadyApplied && !schemaComplete) {
       console.log(
-        "[migrate] Existing schema detected; marking baseline migration applied.",
+        `[migrate] ${migration.id} recorded but schema incomplete; re-applying SQL.`,
       );
-      await markMigrationApplied(client, migration.id);
-      continue;
     }
 
     if (!fs.existsSync(migration.file)) {

@@ -59,6 +59,16 @@ export function isSignupEnabled(): boolean {
   return process.env.AUTH_ALLOW_SIGNUP === "true";
 }
 
+async function isBootstrapSignupAllowed(): Promise<boolean> {
+  const db = getDb();
+  const [existingUser] = await db.select({ id: appUsers.id }).from(appUsers).limit(1);
+  return !existingUser;
+}
+
+async function canRegisterNewUser(): Promise<boolean> {
+  return isSignupEnabled() || (await isBootstrapSignupAllowed());
+}
+
 function parseSeedRole(value: string | undefined, isFirstUser: boolean): UserRole {
   if (value && isUserRole(value)) return value;
   return isFirstUser ? "super_admin" : "user";
@@ -105,7 +115,7 @@ export async function registerUser(input: {
   if (!isAuthEnabled()) {
     return { error: "Authentication is not enabled." };
   }
-  if (!isSignupEnabled()) {
+  if (!(await canRegisterNewUser())) {
     return { error: "Sign up is disabled for this deployment." };
   }
 
@@ -122,6 +132,12 @@ export async function registerUser(input: {
   }
 
   const db = getDb();
+  const [existingUserCount] = await db
+    .select({ id: appUsers.id })
+    .from(appUsers)
+    .limit(1);
+  const isFirstUser = !existingUserCount;
+
   const [existing] = await db
     .select({ id: appUsers.id })
     .from(appUsers)
@@ -136,7 +152,7 @@ export async function registerUser(input: {
     email,
     firstName,
     lastName,
-    role: "user",
+    role: isFirstUser ? "super_admin" : "user",
   };
 
   await db.insert(appUsers).values({

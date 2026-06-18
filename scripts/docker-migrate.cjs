@@ -128,17 +128,82 @@ async function applyMigrationFile(client, migrationId, filePath) {
   console.log(`[migrate] Applied ${migrationId}.`);
 }
 
+const BASELINE_TABLES = [
+  "action_items",
+  "analysis_queue",
+  "analysis_settings",
+  "app_users",
+  "budget_categories",
+  "budget_line_items",
+  "calendar_events",
+  "capital_projects",
+  "contracts",
+  "dev_note_screenshots",
+  "dev_notes",
+  "discovered_facts",
+  "email_attachments",
+  "email_forward_queue",
+  "email_forward_runs",
+  "email_sync_exclusions",
+  "email_sync_settings",
+  "email_threads",
+  "emails",
+  "entity_exclusions",
+  "entity_mentions",
+  "equipment_assets",
+  "extracted_action_items",
+  "extraction_skill_audit_log",
+  "extraction_skill_entries",
+  "extraction_skill_versions",
+  "extraction_sources",
+  "global_todos",
+  "gmail_connections",
+  "invoices",
+  "maintenance_events",
+  "meetings",
+  "organization_role_definitions",
+  "personal_forwarded_messages",
+  "resident_issues",
+  "sender_allowlist",
+  "sync_runs",
+  "vendors",
+];
+
 async function isBaselineSchemaComplete(client) {
-  for (const tableName of [
-    "email_sync_settings",
-    "extraction_sources",
-    "gmail_connections",
-  ]) {
+  for (const tableName of BASELINE_TABLES) {
     if (!(await tableExists(client, tableName))) {
       return false;
     }
   }
   return true;
+}
+
+async function ensureForeignKey(client, tableName, constraintName, ddl) {
+  const { rows } = await client.query(
+    `
+      SELECT c.conname
+      FROM pg_constraint c
+      JOIN pg_class t ON c.conrelid = t.oid
+      WHERE t.relname = $1
+        AND c.contype = 'f'
+        AND c.conname = $2
+    `,
+    [tableName, constraintName],
+  );
+
+  if (rows.length > 0) return;
+
+  try {
+    await client.query(ddl);
+    console.log(`[migrate] Added ${tableName}.${constraintName}.`);
+  } catch (error) {
+    if (!/already exists/i.test(error.message)) {
+      console.warn(
+        `[migrate] Could not add ${constraintName}:`,
+        error.message,
+      );
+    }
+  }
 }
 
 async function applySchemaMigrations(client) {
@@ -278,33 +343,84 @@ async function repairExtractionSourcesSchema(client) {
 
   if (!(await tableExists(client, "app_users"))) return;
 
-  const { rows } = await client.query(`
-    SELECT c.conname
-    FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'extraction_sources'
-      AND c.contype = 'f'
-      AND c.conname = 'extraction_sources_triggered_by_user_id_app_users_id_fk'
-  `);
-
-  if (rows.length > 0) return;
-
-  try {
-    await client.query(`
+  await ensureForeignKey(
+    client,
+    "extraction_sources",
+    "extraction_sources_triggered_by_user_id_app_users_id_fk",
+    `
       ALTER TABLE extraction_sources
       ADD CONSTRAINT extraction_sources_triggered_by_user_id_app_users_id_fk
       FOREIGN KEY (triggered_by_user_id) REFERENCES app_users(id)
       ON DELETE no action ON UPDATE no action
-    `);
-    console.log("[migrate] Added extraction_sources.triggered_by_user_id FK.");
-  } catch (error) {
-    if (!/already exists/i.test(error.message)) {
-      console.warn(
-        "[migrate] Could not add triggered_by_user_id FK:",
-        error.message,
-      );
-    }
-  }
+    `,
+  );
+}
+
+async function repairEmailForwardSchema(client) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS email_forward_runs (
+      id text PRIMARY KEY NOT NULL,
+      status text NOT NULL,
+      target_email text NOT NULL,
+      source_query text NOT NULL,
+      total_queued integer DEFAULT 0 NOT NULL,
+      threads_matched integer,
+      forwarded_count integer DEFAULT 0 NOT NULL,
+      skipped_count integer DEFAULT 0 NOT NULL,
+      failed_count integer DEFAULT 0 NOT NULL,
+      chunk_size integer DEFAULT 50 NOT NULL,
+      chunk_delay_ms integer DEFAULT 120000 NOT NULL,
+      next_chunk_at text,
+      started_at text NOT NULL,
+      finished_at text,
+      last_error text
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS email_forward_queue (
+      id text PRIMARY KEY NOT NULL,
+      run_id text NOT NULL,
+      gmail_message_id text NOT NULL,
+      status text DEFAULT 'pending' NOT NULL,
+      processed_at text,
+      error text
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS personal_forwarded_messages (
+      gmail_message_id text PRIMARY KEY NOT NULL,
+      gmail_thread_id text,
+      forward_run_id text,
+      forward_message_id_header text,
+      forwarded_at text NOT NULL
+    )
+  `);
+
+  await ensureForeignKey(
+    client,
+    "email_forward_queue",
+    "email_forward_queue_run_id_email_forward_runs_id_fk",
+    `
+      ALTER TABLE email_forward_queue
+      ADD CONSTRAINT email_forward_queue_run_id_email_forward_runs_id_fk
+      FOREIGN KEY (run_id) REFERENCES email_forward_runs(id)
+      ON DELETE cascade ON UPDATE no action
+    `,
+  );
+
+  await ensureForeignKey(
+    client,
+    "personal_forwarded_messages",
+    "personal_forwarded_messages_forward_run_id_email_forward_runs_id_fk",
+    `
+      ALTER TABLE personal_forwarded_messages
+      ADD CONSTRAINT personal_forwarded_messages_forward_run_id_email_forward_runs_id_fk
+      FOREIGN KEY (forward_run_id) REFERENCES email_forward_runs(id)
+      ON DELETE no action ON UPDATE no action
+    `,
+  );
 }
 
 async function clearOrphanedUserReferences(client) {
@@ -348,6 +464,7 @@ async function prepare() {
     await applySchemaMigrations(client);
     await repairAppUsersSchema(client);
     await repairExtractionSourcesSchema(client);
+    await repairEmailForwardSchema(client);
     await clearOrphanedUserReferences(client);
     console.log("[migrate] Prepared database schema.");
   });
@@ -442,6 +559,7 @@ async function run() {
     withClient(async (client) => {
       await repairAppUsersSchema(client);
       await repairExtractionSourcesSchema(client);
+      await repairEmailForwardSchema(client);
       await clearOrphanedUserReferences(client);
     }),
   );

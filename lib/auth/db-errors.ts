@@ -33,7 +33,11 @@ function collectErrorText(error: unknown): string {
 
 export function formatAuthDbError(
   error: unknown,
-  action: "Sign up" | "Login" = "Sign up",
+  action:
+    | "Sign up"
+    | "Login"
+    | "Password reset request"
+    | "Password reset" = "Sign up",
 ): string {
   const message = collectErrorText(error);
 

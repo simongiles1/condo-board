@@ -105,7 +105,9 @@ export const syncRuns = pgTable("sync_runs", {
   accountType: text("account_type", {
     enum: ["personal_backfill", "dedicated"],
   }).notNull(),
-  trigger: text("trigger", { enum: ["cron", "manual", "backfill"] }).notNull(),
+  trigger: text("trigger", {
+    enum: ["cron", "manual", "backfill", "clear_all"],
+  }).notNull(),
   startedAt: text("started_at").notNull(),
   finishedAt: text("finished_at"),
   messagesAdded: integer("messages_added").notNull().default(0),

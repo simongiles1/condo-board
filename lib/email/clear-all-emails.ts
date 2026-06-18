@@ -1,5 +1,6 @@
 import { rm } from "fs/promises";
 import path from "path";
+import { randomUUID } from "crypto";
 
 import { eq, inArray, isNotNull, sql } from "drizzle-orm";
 
@@ -30,7 +31,7 @@ const EMAIL_QUEUE_TYPES = [
 export type ClearAllEmailsResult = {
   deletedEmails: number;
   deletedThreads: number;
-  deletedSyncRuns: number;
+  recordedClearAllRun: boolean;
   deletedExclusions: number;
   deletedExtractionSources: number;
   deletedAnalysisQueue: number;
@@ -81,10 +82,6 @@ export async function clearAllEmails(): Promise<ClearAllEmailsResult> {
         .returning({ gmailMessageId: emailSyncExclusions.gmailMessageId })
     ).length;
 
-    const deletedSyncRuns = (
-      await tx.delete(syncRuns).where(sql`1 = 1`).returning({ id: syncRuns.id })
-    ).length;
-
     const resetRows = await tx
       .update(gmailConnections)
       .set({
@@ -99,12 +96,23 @@ export async function clearAllEmails(): Promise<ClearAllEmailsResult> {
     return {
       deletedEmails,
       deletedThreads,
-      deletedSyncRuns,
       deletedExclusions,
       deletedExtractionSources,
       deletedAnalysisQueue,
       resetDedicatedSync: resetRows.length > 0,
     };
+  });
+
+  const clearedAt = new Date().toISOString();
+  await db.insert(syncRuns).values({
+    id: randomUUID(),
+    accountType: "personal_backfill",
+    trigger: "clear_all",
+    startedAt: clearedAt,
+    finishedAt: clearedAt,
+    messagesAdded: result.deletedEmails,
+    messagesSkipped: result.deletedThreads,
+    errors: null,
   });
 
   const attachmentCacheDir = path.join(
@@ -118,5 +126,8 @@ export async function clearAllEmails(): Promise<ClearAllEmailsResult> {
     console.warn("[clear-all-emails] attachment cache cleanup", error);
   }
 
-  return result;
+  return {
+    ...result,
+    recordedClearAllRun: true,
+  };
 }

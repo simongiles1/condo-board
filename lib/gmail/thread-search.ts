@@ -73,7 +73,16 @@ async function countMatchingMessages(
   gmail: gmail_v1.Gmail,
   query: string,
 ): Promise<number> {
-  let count = 0;
+  return (await getQueryMatchCounts(gmail, query)).emailCount;
+}
+
+/** Messages and unique threads matching a Gmail search query. */
+export async function getQueryMatchCounts(
+  gmail: gmail_v1.Gmail,
+  query: string,
+): Promise<{ emailCount: number; threadCount: number }> {
+  const threadIds = new Set<string>();
+  let emailCount = 0;
   let pageToken: string | undefined;
 
   do {
@@ -84,9 +93,13 @@ async function countMatchingMessages(
       pageToken,
     });
 
-    count += response.data.messages?.length ?? 0;
+    for (const message of response.data.messages ?? []) {
+      emailCount += 1;
+      if (message.threadId) threadIds.add(message.threadId);
+    }
+
     pageToken = response.data.nextPageToken ?? undefined;
   } while (pageToken);
 
-  return count;
+  return { emailCount, threadCount: threadIds.size };
 }

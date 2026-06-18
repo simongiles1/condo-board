@@ -5,7 +5,7 @@ import { syncRuns } from "@/lib/db/schema";
 
 export type SyncHistoryRun = {
   id: string;
-  trigger: "cron" | "manual";
+  trigger: "cron" | "manual" | "clear_all";
   startedAt: string;
   finishedAt: string | null;
   messagesAdded: number;
@@ -30,7 +30,7 @@ export async function getSyncRunHistory(limit = 60): Promise<SyncHistoryRun[]> {
       errors: syncRuns.errors,
     })
     .from(syncRuns)
-    .where(inArray(syncRuns.trigger, ["cron", "manual"]))
+    .where(inArray(syncRuns.trigger, ["cron", "manual", "clear_all"]))
     .orderBy(desc(syncRuns.startedAt))
     .limit(limit);
 

@@ -65,7 +65,7 @@ type SyncResult = {
 
 type SyncHistoryRun = {
   id: string;
-  trigger: "cron" | "manual";
+  trigger: "cron" | "manual" | "clear_all";
   startedAt: string;
   finishedAt: string | null;
   messagesAdded: number;
@@ -73,14 +73,29 @@ type SyncHistoryRun = {
   errors: string | null;
 };
 
+type AllowlistImportPreview = {
+  threadCount: number;
+  emailCount: number;
+};
+
 function formatSyncTrigger(trigger: SyncHistoryRun["trigger"]): string {
-  return trigger === "cron" ? "Cron job" : "Manual";
+  if (trigger === "cron") return "Cron job";
+  if (trigger === "clear_all") return "Clear all";
+  return "Manual";
 }
 
 function formatSyncRunResult(run: SyncHistoryRun): {
   label: string;
   className: string;
 } {
+  if (run.trigger === "clear_all") {
+    const emails = `${run.messagesAdded.toLocaleString()} email${run.messagesAdded === 1 ? "" : "s"}`;
+    const threads = `${run.messagesSkipped.toLocaleString()} thread${run.messagesSkipped === 1 ? "" : "s"}`;
+    return {
+      label: `Deleted ${emails}, ${threads}`,
+      className: "text-red-800",
+    };
+  }
   if (run.errors) {
     const interrupted = run.errors.toLowerCase().includes("interrupted");
     return {
@@ -133,6 +148,25 @@ export function EmailSettingsClient(props: {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(() => new Set());
   const [syncHistory, setSyncHistory] = useState<SyncHistoryRun[]>([]);
+  const [importPreview, setImportPreview] = useState<AllowlistImportPreview | null>(
+    null,
+  );
+  const [importPreviewLoading, setImportPreviewLoading] = useState(false);
+  const [importPreviewUnavailable, setImportPreviewUnavailable] = useState(false);
+
+  const savedAllowlistEmails = useMemo(
+    () => candidates.filter((candidate) => candidate.saved).map((candidate) => candidate.email),
+    [candidates],
+  );
+
+  const previewEmails = useMemo(() => {
+    if (selectedEmails.size > 0) {
+      return [...selectedEmails].sort((left, right) => left.localeCompare(right));
+    }
+    return savedAllowlistEmails;
+  }, [savedAllowlistEmails, selectedEmails]);
+
+  const previewEmailsKey = useMemo(() => previewEmails.join("\0"), [previewEmails]);
 
   const sortedCandidates = useMemo(() => {
     const next = [...candidates];
@@ -259,6 +293,57 @@ export function EmailSettingsClient(props: {
       setStatusMessage(`Connected ${props.initialConnected.replace("_", " ")} account.`);
     }
   }, [props.initialConnected]);
+
+  useEffect(() => {
+    if (activeTab !== "allowlist") return;
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    async function loadImportPreview() {
+      setImportPreviewLoading(true);
+      setImportPreviewUnavailable(false);
+
+      try {
+        const response = await fetch("/api/email/allowlist/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ emails: previewEmails }),
+          signal: controller.signal,
+        });
+
+        if (cancelled) return;
+
+        if (response.status === 503) {
+          setImportPreview(null);
+          setImportPreviewUnavailable(true);
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error("Could not load import preview.");
+        }
+
+        setImportPreview((await response.json()) as AllowlistImportPreview);
+      } catch (error) {
+        if (cancelled || (error instanceof DOMException && error.name === "AbortError")) {
+          return;
+        }
+        setImportPreview(null);
+      } finally {
+        if (!cancelled) {
+          setImportPreviewLoading(false);
+        }
+      }
+    }
+
+    void loadImportPreview();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [activeTab, previewEmailsKey]);
 
   async function addSender(event: React.FormEvent) {
     event.preventDefault();
@@ -822,9 +907,9 @@ export function EmailSettingsClient(props: {
               <div className="mt-5">
                 <h3 className="font-medium text-slate-900">Sync history</h3>
                 <p className="mt-1 text-sm text-slate-600">
-                  Recent manual and scheduled syncs. Check that syncs ran when
-                  expected and how many allowlist messages were imported each
-                  time.
+                  Recent manual and scheduled syncs, plus inbox resets. Check that
+                  syncs ran when expected and how many allowlist messages were
+                  imported each time.
                 </p>
                 <div className="mt-3 max-h-[300px] overflow-y-auto rounded-lg border border-slate-200">
                   <table className="w-full table-fixed text-sm">
@@ -878,10 +963,11 @@ export function EmailSettingsClient(props: {
               <div className="mt-8 rounded-lg border border-red-200 bg-red-50/40 p-4">
                 <h3 className="font-medium text-red-900">Reset imported inbox</h3>
                 <p className="mt-1 text-sm text-slate-600">
-                  Delete every imported email, thread, sync run, and email
-                  analysis from this app. Gmail connections, the sender allowlist,
-                  and messages in Gmail are not changed. The next personal Gmail
-                  sync re-imports allowlist mail into the app.
+                  Delete every imported email, thread, and email analysis from this
+                  app. Sync history is kept and records this reset. Gmail
+                  connections, the sender allowlist, and messages in Gmail are not
+                  changed. The next personal Gmail sync re-imports allowlist mail
+                  into the app.
                 </p>
                 <button
                   type="button"
@@ -940,6 +1026,37 @@ export function EmailSettingsClient(props: {
                   className="rounded-md border border-slate-300 px-3 py-2 text-sm md:col-span-3"
                 />
               </form>
+
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                <p className="font-medium text-slate-900">Estimated next sync import</p>
+                <p className="mt-1 text-slate-600">
+                  {selectedEmails.size > 0
+                    ? `Based on ${selectedEmails.size.toLocaleString()} selected sender${selectedEmails.size === 1 ? "" : "s"}.`
+                    : savedAllowlistEmails.length > 0
+                      ? `Based on ${savedAllowlistEmails.length.toLocaleString()} saved allowlist sender${savedAllowlistEmails.length === 1 ? "" : "s"}.`
+                      : "Save senders to the allowlist to see import estimates."}
+                </p>
+                {importPreviewLoading ? (
+                  <p className="mt-2 text-slate-500">Calculating…</p>
+                ) : importPreviewUnavailable ? (
+                  <p className="mt-2 text-slate-500">
+                    Connect personal Gmail to see import estimates.
+                  </p>
+                ) : importPreview && previewEmails.length > 0 ? (
+                  <p className="mt-2 tabular-nums text-slate-800">
+                    <span className="font-medium text-teal-900">
+                      {importPreview.threadCount.toLocaleString()} thread
+                      {importPreview.threadCount === 1 ? "" : "s"}
+                    </span>
+                    {" · "}
+                    <span className="font-medium text-teal-900">
+                      {importPreview.emailCount.toLocaleString()} email
+                      {importPreview.emailCount === 1 ? "" : "s"}
+                    </span>
+                    {" would be imported on the next sync."}
+                  </p>
+                ) : null}
+              </div>
 
               <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
@@ -1161,8 +1278,9 @@ export function EmailSettingsClient(props: {
         description={
           <>
             <p>
-              This permanently removes all emails, threads, attachment caches,
-              sync history, and email extractions from the app database.
+              This permanently removes all emails, threads, attachment caches, and
+              email extractions from the app database. A clear-all entry is added
+              to sync history so the next large re-import is easier to understand.
             </p>
             <p className="mt-2">
               Messages in Gmail are <strong>not</strong> deleted. After this,

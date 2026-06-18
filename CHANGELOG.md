@@ -8,6 +8,16 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Clear-all sync history** — Deleting all imported emails no longer wipes sync
+  history. A **Clear all** row is appended with how many emails and threads were
+  removed, so a large re-import on the next sync is easier to explain.
+
+### Added
+
+- **Allowlist import preview** — Sender allowlist tab shows estimated thread and
+  email counts for the next sync from personal Gmail, based on the saved
+  allowlist or the current row selection.
+
 - **Stale sync history rows** — Manual or scheduled syncs that never finished
   (e.g. dev server restart or request timeout) are now auto-closed after two
   hours and shown as **Interrupted** instead of staying on **Running…** forever.

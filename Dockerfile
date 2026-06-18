@@ -29,7 +29,7 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --chown=nextjs:nodejs drizzle ./drizzle
-COPY --chown=nextjs:nodejs scripts/docker-migrate.cjs ./scripts/docker-migrate.cjs
+COPY --chown=nextjs:nodejs scripts/db-migrate.cjs ./scripts/db-migrate.cjs
 COPY --chown=nextjs:nodejs scripts/wait-for-postgres.cjs ./scripts/wait-for-postgres.cjs
 COPY --chown=nextjs:nodejs docker-entrypoint.sh ./docker-entrypoint.sh
 RUN sed -i 's/\r$//' ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh

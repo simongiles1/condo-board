@@ -20,7 +20,7 @@ function resolveDatabaseUrl(): string {
   }
   if (connectionString.startsWith("file:")) {
     throw new Error(
-      "DATABASE_URL still points at SQLite (file:...). Update .env.local to a Postgres URL, start Postgres, then run npm run db:push.",
+      "DATABASE_URL still points at SQLite (file:...). Update .env.local to a Postgres URL, start Postgres, then run npm run db:migrate.",
     );
   }
   return connectionString;

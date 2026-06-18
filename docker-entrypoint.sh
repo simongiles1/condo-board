@@ -23,8 +23,8 @@ else
   echo "[startup] Postgres is reachable."
 fi
 
-echo "[startup] Running database setup (best effort, non-blocking)..."
-node scripts/docker-migrate.cjs run
+echo "[startup] Running database migrations..."
+node scripts/db-migrate.cjs
 
 echo "[startup] Starting Next.js..."
 exec node server.js

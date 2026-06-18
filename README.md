@@ -22,18 +22,18 @@ Fill values:
 
 ```bash
 GEMINI_API_KEY=
-DATABASE_URL=file:./data/app.db
+DATABASE_URL=postgresql://condo:condo@localhost:5433/condo_board
 # Optional overrides
 GEMINI_MODEL_MINUTES=gemini-2.0-flash
 GEMINI_MODEL_TODOS=gemini-2.0-flash
 ```
 
-Create dirs + apply schema:
+Create dirs, start Postgres (`docker compose up db -d`), and apply migrations:
 
 ```bash
 mkdir uploads
 mkdir data
-DATABASE_URL=file:./data/app.db npm run db:push
+npm run db:migrate
 ```
 
 Install + run:
@@ -103,5 +103,6 @@ Outputs remain on-disk per PRD §3.4 (`./uploads` + `./data`), so back up both f
 | `npm run build` | Production build (`next build`) |
 | `npm run start` | `next start` after build |
 | `npm run lint` | ESLint |
-| `DATABASE_URL=file:./data/app.db npm run db:push` | Apply Drizzle schema |
-| `npm run db:studio` | Drizzle Studio (inspect SQLite) |
+| `npm run db:generate` | Generate SQL migration after editing `lib/db/schema.ts` |
+| `npm run db:migrate` | Apply pending Drizzle migrations (local + Docker) |
+| `npm run db:studio` | Drizzle Studio (inspect Postgres) |

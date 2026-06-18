@@ -8,6 +8,13 @@
       "when": 1781755387298,
       "tag": "0000_thin_wraith",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781759059782,
+      "tag": "0001_prod_schema_sync",
+      "breakpoints": true
     }
   ]
 }

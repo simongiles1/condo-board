@@ -3,7 +3,7 @@
  *
  * Prerequisites:
  *   1. Postgres running and DATABASE_URL set (see .env.local.example)
- *   2. Schema applied: npm run db:push
+ *   2. Schema applied: npm run db:migrate
  *   3. SQLite file at SQLITE_DATABASE_PATH or ./data/app.db
  *
  * Usage:

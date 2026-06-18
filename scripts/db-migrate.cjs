@@ -1,5 +1,6 @@
 /**
  * Single schema application path for local dev and Docker.
+ * Uses pg only so it runs inside the Next.js standalone image.
  *
  * Workflow after editing lib/db/schema.ts:
  *   npm run db:generate   # create drizzle/000N_*.sql
@@ -9,8 +10,6 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { Pool } = require("pg");
-const { drizzle } = require("drizzle-orm/node-postgres");
-const { migrate } = require("drizzle-orm/node-postgres/migrator");
 
 const MIGRATIONS_DIR = path.join(__dirname, "..", "drizzle");
 const LEGACY_MIGRATIONS_TABLE = "__condo_board_migrations";
@@ -82,12 +81,28 @@ function loadJournal() {
   return JSON.parse(fs.readFileSync(journalPath, "utf8"));
 }
 
-function getMigrationHash(tag) {
-  const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, `${tag}.sql`), "utf8");
-  return crypto.createHash("sha256").update(sql).digest("hex");
+function loadMigrationFiles() {
+  const journal = loadJournal();
+  return journal.entries.map((entry) => {
+    const filePath = path.join(MIGRATIONS_DIR, `${entry.tag}.sql`);
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`Missing migration file: ${filePath}`);
+    }
+
+    const sql = fs.readFileSync(filePath, "utf8");
+    return {
+      tag: entry.tag,
+      folderMillis: entry.when,
+      hash: crypto.createHash("sha256").update(sql).digest("hex"),
+      statements: sql
+        .split(/--> statement-breakpoint\n?/)
+        .map((statement) => statement.trim())
+        .filter(Boolean),
+    };
+  });
 }
 
-async function bootstrapMigrationTracking(client) {
+async function ensureMigrationTable(client) {
   await client.query("CREATE SCHEMA IF NOT EXISTS drizzle");
   await client.query(`
     CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
@@ -96,14 +111,23 @@ async function bootstrapMigrationTracking(client) {
       created_at bigint
     )
   `);
+}
 
+async function getLastAppliedMigration(client) {
   const { rows } = await client.query(`
-    SELECT created_at
+    SELECT id, hash, created_at
     FROM drizzle.__drizzle_migrations
     ORDER BY created_at DESC
     LIMIT 1
   `);
-  if (rows.length > 0) return;
+  return rows[0] ?? null;
+}
+
+async function bootstrapMigrationTracking(client) {
+  await ensureMigrationTable(client);
+
+  const lastApplied = await getLastAppliedMigration(client);
+  if (lastApplied) return;
 
   const journal = loadJournal();
   let appliedTags = [];
@@ -129,16 +153,62 @@ async function bootstrapMigrationTracking(client) {
 
   if (!latestEntry) return;
 
+  const migration = loadMigrationFiles().find(
+    (item) => item.tag === latestEntry.tag,
+  );
+  if (!migration) {
+    throw new Error(`Missing migration metadata for ${latestEntry.tag}`);
+  }
+
   await client.query(
     `
       INSERT INTO drizzle.__drizzle_migrations (hash, created_at)
       VALUES ($1, $2)
     `,
-    [getMigrationHash(latestEntry.tag), latestEntry.when],
+    [migration.hash, migration.folderMillis],
   );
   console.log(
     `[db:migrate] Bootstrapped through ${latestEntry.tag} from existing database.`,
   );
+}
+
+async function applyPendingMigrations(client) {
+  await ensureMigrationTable(client);
+
+  const lastApplied = await getLastAppliedMigration(client);
+  const lastAppliedAt = lastApplied ? Number(lastApplied.created_at) : null;
+  const migrations = loadMigrationFiles();
+
+  for (const migration of migrations) {
+    if (lastAppliedAt !== null && lastAppliedAt >= migration.folderMillis) {
+      console.log(`[db:migrate] ${migration.tag} already applied, skipping.`);
+      continue;
+    }
+
+    console.log(
+      `[db:migrate] Applying ${migration.tag} (${migration.statements.length} statements)...`,
+    );
+
+    await client.query("BEGIN");
+    try {
+      for (const statement of migration.statements) {
+        await client.query(statement);
+      }
+
+      await client.query(
+        `
+          INSERT INTO drizzle.__drizzle_migrations (hash, created_at)
+          VALUES ($1, $2)
+        `,
+        [migration.hash, migration.folderMillis],
+      );
+      await client.query("COMMIT");
+      console.log(`[db:migrate] Applied ${migration.tag}.`);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 async function main() {
@@ -149,17 +219,15 @@ async function main() {
     connectionTimeoutMillis: 5000,
   });
 
-  const bootstrapClient = await pool.connect();
+  const client = await pool.connect();
   try {
-    await bootstrapClient.query("SELECT 1");
-    await bootstrapMigrationTracking(bootstrapClient);
+    await client.query("SELECT 1");
+    await bootstrapMigrationTracking(client);
+    await applyPendingMigrations(client);
   } finally {
-    bootstrapClient.release();
+    client.release();
+    await pool.end();
   }
-
-  const db = drizzle(pool);
-  await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
-  await pool.end();
 
   console.log("[db:migrate] Database migrations complete.");
 }

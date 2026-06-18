@@ -6,7 +6,27 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Stale sync history rows** — Manual or scheduled syncs that never finished
+  (e.g. dev server restart or request timeout) are now auto-closed after two
+  hours and shown as **Interrupted** instead of staying on **Running…** forever.
+
+  sign-in via middleware and a server layout guard, sending visitors to `/login`
+  when auth is enabled and they have no session.
+
+- **User menu when logged out** — The header avatar menu is hidden on login and
+  signup pages instead of showing a placeholder “U” with settings.
+
+- **Forgot password flow** — Sign-in page links to forgot password; users receive
+  a one-hour reset link by email (SMTP) or a local dev link when email is not
+  configured. Reset completes with a new password and signs them in.
+
 ### Added
+
+- **Sync history** — Email settings → Sync controls lists recent manual and
+  scheduled sync runs with start time, trigger (manual vs cron job), and how
+  many allowlist emails were imported (scrollable table, max 300px height).
 
 - **Smarter entity review prefill** — Contact review cards now parse role/title and
   organization from signature-style context snippets (e.g. "Name, Project Manager,

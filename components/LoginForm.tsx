@@ -92,6 +92,15 @@ export function LoginForm() {
         />
       </label>
 
+      <p className="text-right text-sm">
+        <Link
+          href="/forgot-password"
+          className="font-medium text-teal-700 hover:underline"
+        >
+          Forgot password?
+        </Link>
+      </p>
+
       <button
         type="submit"
         disabled={loading}

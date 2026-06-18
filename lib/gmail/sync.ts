@@ -5,6 +5,7 @@ import type { gmail_v1 } from "googleapis";
 
 import { getDb } from "@/lib/db";
 import { emails, gmailConnections, syncRuns } from "@/lib/db/schema";
+import { reconcileStaleSyncRuns } from "@/lib/email/sync-run-reconcile";
 
 import { getGmailClient } from "./client";
 import { parseGmailMessage } from "./messages";
@@ -202,6 +203,8 @@ export async function syncPersonalAccount(
   personalSyncInProgress = true;
 
   const db = getDb();
+  await reconcileStaleSyncRuns({ closeAllUnfinished: true });
+
   const syncRunId = randomUUID();
   const startedAt = new Date().toISOString();
 
@@ -277,17 +280,21 @@ export async function syncPersonalAccount(
     errors.push(error instanceof Error ? error.message : String(error));
   } finally {
     personalSyncInProgress = false;
-  }
 
-  await db
-    .update(syncRuns)
-    .set({
-      finishedAt: new Date().toISOString(),
-      messagesAdded,
-      messagesSkipped,
-      errors: errors.length > 0 ? errors.join("\n") : null,
-    })
-    .where(eq(syncRuns.id, syncRunId));
+    try {
+      await db
+        .update(syncRuns)
+        .set({
+          finishedAt: new Date().toISOString(),
+          messagesAdded,
+          messagesSkipped,
+          errors: errors.length > 0 ? errors.join("\n") : null,
+        })
+        .where(eq(syncRuns.id, syncRunId));
+    } catch (finalizeError) {
+      console.error("[gmail:sync] Could not finalize personal sync run", finalizeError);
+    }
+  }
 
   return {
     syncRunId,

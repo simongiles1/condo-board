@@ -1,8 +1,17 @@
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
 import { LoginForm } from "@/components/LoginForm";
+import { getSessionUser, isAuthEnabled } from "@/lib/auth/session";
 
-export default function LoginPage() {
+export default async function LoginPage() {
+  if (isAuthEnabled()) {
+    const user = await getSessionUser();
+    if (user) {
+      redirect("/");
+    }
+  }
+
   return (
     <Suspense
       fallback={

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { getAppBaseUrl } from "@/lib/app-url";
+import { isAuthEnabled } from "@/lib/auth/config";
 import { SESSION_COOKIE } from "@/lib/auth/constants";
 import {
   hasMinRole,
@@ -12,9 +13,13 @@ import { verifySignedSessionTokenEdge } from "@/lib/auth/token-edge";
 const PUBLIC_PATHS = [
   "/login",
   "/signup",
+  "/forgot-password",
+  "/reset-password",
   "/api/auth/login",
   "/api/auth/logout",
   "/api/auth/signup",
+  "/api/auth/forgot-password",
+  "/api/auth/reset-password",
   "/api/email/oauth/start",
   "/api/email/oauth/callback",
   "/api/email/oauth/config",
@@ -27,7 +32,7 @@ function isPublicPath(pathname: string) {
 }
 
 export async function middleware(request: NextRequest) {
-  if (process.env.AUTH_ENABLED !== "true") {
+  if (!isAuthEnabled()) {
     return NextResponse.next();
   }
 
@@ -41,7 +46,9 @@ export async function middleware(request: NextRequest) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const loginUrl = new URL("/login", getAppBaseUrl());
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = "/login";
+    loginUrl.search = "";
     loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);
   }
@@ -51,7 +58,9 @@ export async function middleware(request: NextRequest) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const loginUrl = new URL("/login", getAppBaseUrl());
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = "/login";
+    loginUrl.search = "";
     loginUrl.searchParams.set("next", pathname);
     const response = NextResponse.redirect(loginUrl);
     response.cookies.delete(SESSION_COOKIE);

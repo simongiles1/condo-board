@@ -1,12 +1,14 @@
-import { createHash, randomBytes, timingSafeEqual } from "crypto";
+import { randomBytes, timingSafeEqual } from "crypto";
 
 import { asc, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 
+import { isAuthEnabled } from "@/lib/auth/config";
 import { isUserRole, type UserRole } from "@/lib/auth/roles";
 import { SESSION_COOKIE } from "@/lib/auth/constants";
 import { sessionCookieOptions } from "@/lib/auth/cookies";
 import { formatAuthDbError } from "@/lib/auth/db-errors";
+import { hashPassword } from "@/lib/auth/password-hash";
 import {
   createSignedSessionToken,
   verifySignedSessionToken,
@@ -21,12 +23,6 @@ export type AppUser = {
   lastName: string | null;
   role: UserRole;
 };
-
-function hashPassword(password: string): string {
-  return createHash("sha256")
-    .update(`${process.env.AUTH_SECRET ?? "dev"}:${password}`)
-    .digest("hex");
-}
 
 function normalizeNamePart(value: string | undefined | null): string | null {
   const trimmed = value?.trim();
@@ -53,9 +49,7 @@ function splitFullName(fullName: string | undefined): {
   };
 }
 
-export function isAuthEnabled(): boolean {
-  return process.env.AUTH_ENABLED === "true";
-}
+export { isAuthEnabled } from "@/lib/auth/config";
 
 export function isSignupEnabled(): boolean {
   return process.env.AUTH_ALLOW_SIGNUP === "true";
@@ -136,11 +130,6 @@ export async function registerUser(input: {
     }
 
     const db = getDb();
-    const [existingUserCount] = await db
-      .select({ id: appUsers.id })
-      .from(appUsers)
-      .limit(1);
-    const isFirstUser = !existingUserCount;
 
     const [existing] = await db
       .select({ id: appUsers.id })
@@ -156,7 +145,7 @@ export async function registerUser(input: {
       email,
       firstName,
       lastName,
-      role: isFirstUser ? "super_admin" : "user",
+      role: "user",
     };
 
     await db.insert(appUsers).values({

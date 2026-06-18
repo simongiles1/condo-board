@@ -1,12 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export function SignupForm() {
-  const router = useRouter();
-
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -44,8 +41,8 @@ export function SignupForm() {
         throw new Error(body.error ?? "Sign up failed.");
       }
 
-      router.push("/");
-      router.refresh();
+      // Full navigation so the session cookie from the signup response is sent to middleware.
+      window.location.assign("/");
     } catch (submitError) {
       setError(
         submitError instanceof Error ? submitError.message : "Sign up failed.",

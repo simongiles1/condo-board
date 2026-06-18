@@ -15,6 +15,13 @@
       "when": 1781759059782,
       "tag": "0001_prod_schema_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781793602244,
+      "tag": "0002_worthless_talon",
+      "breakpoints": true
     }
   ]
 }

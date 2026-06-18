@@ -220,6 +220,16 @@ export const appUsers = pgTable("app_users", {
   createdAt: text("created_at").notNull(),
 });
 
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => appUsers.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
 export const emailThreadsRelations = relations(emailThreads, ({ many }) => ({
   emails: many(emails),
 }));

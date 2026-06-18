@@ -57,5 +57,7 @@ export function getSchedulerStatus() {
 }
 
 export function startEmailScheduler() {
-  void refreshEmailScheduler();
+  void refreshEmailScheduler().catch((error) => {
+    console.error("[email-scheduler] Failed to start:", error);
+  });
 }

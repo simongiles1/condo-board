@@ -8,6 +8,7 @@ services:
       POSTGRES_DB: condo_board
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./drizzle/0000_thin_wraith.sql:/docker-entrypoint-initdb.d/01-baseline-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U condo -d condo_board"]
       interval: 5s

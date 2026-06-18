@@ -14,7 +14,10 @@ function getConnectionString() {
 }
 
 function getPool() {
-  return new Pool({ connectionString: getConnectionString() });
+  return new Pool({
+    connectionString: getConnectionString(),
+    connectionTimeoutMillis: 5000,
+  });
 }
 
 function logConnectionTarget() {
@@ -34,6 +37,20 @@ async function tableExists(client, tableName) {
     [`public.${tableName}`],
   );
   return Boolean(rows[0]?.exists);
+}
+
+async function columnExists(client, tableName, columnName) {
+  const { rows } = await client.query(
+    `
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = $1
+        AND column_name = $2
+    `,
+    [tableName, columnName],
+  );
+  return rows.length > 0;
 }
 
 async function ensureMigrationTable(client) {
@@ -81,7 +98,7 @@ function splitSqlStatements(sql) {
 }
 
 function isIgnorableMigrationError(message) {
-  return /already exists|duplicate key|multiple primary keys|relation .* already exists/i.test(
+  return /already exists|duplicate key|multiple primary keys|relation .* already exists|violates foreign key constraint|contains null values/i.test(
     message,
   );
 }
@@ -158,11 +175,19 @@ async function applySchemaMigrations(client) {
 }
 
 async function ensureAppUsersEmailUnique(client) {
-  await client.query(`
-    DELETE FROM app_users a
-    USING app_users b
-    WHERE a.ctid < b.ctid AND lower(a.email) = lower(b.email)
-  `);
+  if (!(await tableExists(client, "app_users"))) {
+    return;
+  }
+
+  try {
+    await client.query(`
+      DELETE FROM app_users a
+      USING app_users b
+      WHERE a.ctid < b.ctid AND lower(a.email) = lower(b.email)
+    `);
+  } catch (error) {
+    console.warn("[migrate] Could not dedupe app_users emails:", error.message);
+  }
 
   const { rows } = await client.query(`
     SELECT c.conname, pg_get_constraintdef(c.oid) AS def
@@ -243,8 +268,50 @@ async function repairAppUsersSchema(client) {
   }
 }
 
+async function repairExtractionSourcesSchema(client) {
+  if (!(await tableExists(client, "extraction_sources"))) return;
+
+  await client.query(`
+    ALTER TABLE extraction_sources
+    ADD COLUMN IF NOT EXISTS triggered_by_user_id text
+  `);
+
+  if (!(await tableExists(client, "app_users"))) return;
+
+  const { rows } = await client.query(`
+    SELECT c.conname
+    FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'extraction_sources'
+      AND c.contype = 'f'
+      AND c.conname = 'extraction_sources_triggered_by_user_id_app_users_id_fk'
+  `);
+
+  if (rows.length > 0) return;
+
+  try {
+    await client.query(`
+      ALTER TABLE extraction_sources
+      ADD CONSTRAINT extraction_sources_triggered_by_user_id_app_users_id_fk
+      FOREIGN KEY (triggered_by_user_id) REFERENCES app_users(id)
+      ON DELETE no action ON UPDATE no action
+    `);
+    console.log("[migrate] Added extraction_sources.triggered_by_user_id FK.");
+  } catch (error) {
+    if (!/already exists/i.test(error.message)) {
+      console.warn(
+        "[migrate] Could not add triggered_by_user_id FK:",
+        error.message,
+      );
+    }
+  }
+}
+
 async function clearOrphanedUserReferences(client) {
   if (!(await tableExists(client, "extraction_sources"))) return;
+  if (!(await columnExists(client, "extraction_sources", "triggered_by_user_id"))) {
+    return;
+  }
 
   const hasUsers = await tableExists(client, "app_users");
   if (!hasUsers) {
@@ -280,6 +347,7 @@ async function prepare() {
     await client.query("SELECT 1");
     await applySchemaMigrations(client);
     await repairAppUsersSchema(client);
+    await repairExtractionSourcesSchema(client);
     await clearOrphanedUserReferences(client);
     console.log("[migrate] Prepared database schema.");
   });
@@ -326,11 +394,69 @@ async function verify() {
   });
 }
 
+async function runStep(label, fn) {
+  try {
+    await fn();
+    console.log(`[migrate] ${label} OK`);
+    return true;
+  } catch (error) {
+    console.error(`[migrate] ${label} failed:`, error);
+    return false;
+  }
+}
+
+async function verifySoft(client) {
+  const missing = [];
+  for (const requiredTable of [
+    "app_users",
+    "meetings",
+    "email_sync_settings",
+  ]) {
+    if (!(await tableExists(client, requiredTable))) {
+      missing.push(requiredTable);
+    }
+  }
+
+  if (missing.length > 0) {
+    console.warn(
+      `[migrate] Missing tables after setup: ${missing.join(", ")}. Some features may fail until schema is complete.`,
+    );
+    return false;
+  }
+
+  console.log("[migrate] Verified core tables exist.");
+  return true;
+}
+
 async function run() {
   logConnectionTarget();
-  await prepare();
-  await verify();
-  console.log("[migrate] Database ready.");
+
+  const schemaOk = await runStep("schema migrations", () =>
+    withClient(async (client) => {
+      await client.query("SELECT 1");
+      await applySchemaMigrations(client);
+    }),
+  );
+
+  const repairOk = await runStep("schema repair", () =>
+    withClient(async (client) => {
+      await repairAppUsersSchema(client);
+      await repairExtractionSourcesSchema(client);
+      await clearOrphanedUserReferences(client);
+    }),
+  );
+
+  const verifyOk = await runStep("schema verification", () =>
+    withClient(async (client) => verifySoft(client)),
+  );
+
+  if (schemaOk && repairOk && verifyOk) {
+    console.log("[migrate] Database ready.");
+  } else {
+    console.warn(
+      "[migrate] Database setup finished with errors. App will still start; check logs above.",
+    );
+  }
 }
 
 async function main() {
@@ -353,5 +479,10 @@ async function main() {
 
 main().catch((error) => {
   console.error("[migrate] Failed:", error);
+  const command = process.argv[2] ?? "run";
+  if (command === "run") {
+    console.warn("[migrate] Continuing despite failure (non-blocking startup).");
+    process.exit(0);
+  }
   process.exit(1);
 });

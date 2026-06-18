@@ -5,5 +5,12 @@ export COND_BOARD_POSTGRES_URL="${COND_BOARD_POSTGRES_URL:-postgresql://condo:co
 export DATABASE_URL="$COND_BOARD_POSTGRES_URL"
 
 node scripts/docker-migrate.cjs prepare
-npx drizzle-kit push
+
+output="$(npx drizzle-kit push --force 2>&1)" || exit 1
+printf '%s\n' "$output"
+if printf '%s\n' "$output" | grep -q '^Error:'; then
+  echo "[migrate] drizzle-kit push failed."
+  exit 1
+fi
+
 node scripts/docker-migrate.cjs verify

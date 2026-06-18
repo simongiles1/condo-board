@@ -17,11 +17,45 @@ async function tableExists(client, tableName) {
   return Boolean(rows[0]?.exists);
 }
 
+async function ensureAppUsersEmailUnique(client) {
+  await client.query(`
+    DELETE FROM app_users a
+    USING app_users b
+    WHERE a.ctid < b.ctid AND lower(a.email) = lower(b.email)
+  `);
+
+  const { rows } = await client.query(`
+    SELECT c.conname, pg_get_constraintdef(c.oid) AS def
+    FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'app_users' AND c.contype = 'u'
+  `);
+
+  if (rows.some((row) => row.conname === "app_users_email_unique")) return;
+
+  const legacy = rows.find((row) => row.def.includes("(email)"));
+  if (legacy) {
+    const name = legacy.conname.replace(/"/g, "");
+    await client.query(
+      `ALTER TABLE app_users RENAME CONSTRAINT "${name}" TO app_users_email_unique`,
+    );
+    console.log("[migrate] Renamed email unique constraint to app_users_email_unique.");
+    return;
+  }
+
+  await client.query(`
+    ALTER TABLE app_users
+    ADD CONSTRAINT app_users_email_unique UNIQUE (email)
+  `);
+  console.log("[migrate] Added app_users_email_unique constraint.");
+}
+
 async function repairAppUsersSchema(client) {
   if (!(await tableExists(client, "app_users"))) return;
 
   await client.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS first_name text`);
   await client.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS last_name text`);
+  await ensureAppUsersEmailUnique(client);
 
   const { rows: checks } = await client.query(`
     SELECT c.conname, pg_get_constraintdef(c.oid) AS def

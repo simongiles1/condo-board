@@ -1,4 +1,9 @@
+const fs = require("fs");
+const path = require("path");
 const { Pool } = require("pg");
+
+const MIGRATIONS_DIR = path.join(__dirname, "..", "drizzle");
+const MIGRATION_TABLE = "__condo_board_migrations";
 
 function getConnectionString() {
   return (
@@ -29,6 +34,115 @@ async function tableExists(client, tableName) {
     [`public.${tableName}`],
   );
   return Boolean(rows[0]?.exists);
+}
+
+async function ensureMigrationTable(client) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${MIGRATION_TABLE} (
+      id text PRIMARY KEY NOT NULL,
+      applied_at text NOT NULL
+    )
+  `);
+}
+
+async function isMigrationApplied(client, id) {
+  const { rows } = await client.query(
+    `SELECT 1 FROM ${MIGRATION_TABLE} WHERE id = $1`,
+    [id],
+  );
+  return rows.length > 0;
+}
+
+async function markMigrationApplied(client, id) {
+  await client.query(
+    `INSERT INTO ${MIGRATION_TABLE} (id, applied_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    [id, new Date().toISOString()],
+  );
+}
+
+function loadMigrationJournal() {
+  const journalPath = path.join(MIGRATIONS_DIR, "meta", "_journal.json");
+  if (!fs.existsSync(journalPath)) {
+    return [];
+  }
+
+  const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+  return journal.entries.map((entry) => ({
+    id: entry.tag,
+    file: path.join(MIGRATIONS_DIR, `${entry.tag}.sql`),
+  }));
+}
+
+function splitSqlStatements(sql) {
+  return sql
+    .split(/--> statement-breakpoint\n?/)
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+}
+
+function isIgnorableMigrationError(message) {
+  return /already exists|duplicate key|multiple primary keys|relation .* already exists/i.test(
+    message,
+  );
+}
+
+async function applyMigrationFile(client, migrationId, filePath) {
+  const sql = fs.readFileSync(filePath, "utf8");
+  const statements = splitSqlStatements(sql);
+  console.log(
+    `[migrate] Applying ${migrationId} (${statements.length} statements)...`,
+  );
+
+  for (const statement of statements) {
+    try {
+      await client.query(statement);
+    } catch (error) {
+      if (isIgnorableMigrationError(error.message)) {
+        console.warn(
+          `[migrate] Skipping existing object: ${error.message.split("\n")[0]}`,
+        );
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  await markMigrationApplied(client, migrationId);
+  console.log(`[migrate] Applied ${migrationId}.`);
+}
+
+async function applySchemaMigrations(client) {
+  const migrations = loadMigrationJournal();
+  if (migrations.length === 0) {
+    console.warn("[migrate] No drizzle migration journal found; skipping baseline SQL.");
+    return;
+  }
+
+  await ensureMigrationTable(client);
+
+  for (const migration of migrations) {
+    if (await isMigrationApplied(client, migration.id)) {
+      console.log(`[migrate] ${migration.id} already applied, skipping.`);
+      continue;
+    }
+
+    if (
+      migration.id.startsWith("0000") &&
+      (await tableExists(client, "meetings"))
+    ) {
+      console.log(
+        "[migrate] Existing schema detected; marking baseline migration applied.",
+      );
+      await markMigrationApplied(client, migration.id);
+      continue;
+    }
+
+    if (!fs.existsSync(migration.file)) {
+      throw new Error(`Migration file missing: ${migration.file}`);
+    }
+
+    await applyMigrationFile(client, migration.id, migration.file);
+  }
 }
 
 async function ensureAppUsersEmailUnique(client) {
@@ -152,9 +266,10 @@ async function withClient(fn) {
 async function prepare() {
   await withClient(async (client) => {
     await client.query("SELECT 1");
+    await applySchemaMigrations(client);
     await repairAppUsersSchema(client);
     await clearOrphanedUserReferences(client);
-    console.log("[migrate] Prepared app_users schema.");
+    console.log("[migrate] Prepared database schema.");
   });
 }
 
@@ -185,7 +300,17 @@ async function verify() {
       }
     }
 
-    console.log("[migrate] Verified app_users table exists.");
+    for (const requiredTable of [
+      "app_users",
+      "meetings",
+      "email_sync_settings",
+    ]) {
+      if (!(await tableExists(client, requiredTable))) {
+        throw new Error(`${requiredTable} table is missing after migration.`);
+      }
+    }
+
+    console.log("[migrate] Verified core tables exist.");
   });
 }
 

@@ -21,6 +21,7 @@ FROM base AS migrator
 COPY --from=deps /app/node_modules ./node_modules
 COPY drizzle.config.ts ./
 COPY lib/db/schema.ts ./lib/db/schema.ts
+COPY scripts/docker-migrate.cjs ./scripts/docker-migrate.cjs
 COPY migrate-entrypoint.sh ./migrate-entrypoint.sh
 RUN sed -i 's/\r$//' ./migrate-entrypoint.sh && chmod +x ./migrate-entrypoint.sh
 ENTRYPOINT ["./migrate-entrypoint.sh"]

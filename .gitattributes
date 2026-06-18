@@ -1,1 +1,2 @@
 docker-entrypoint.sh text eol=lf
+migrate-entrypoint.sh text eol=lf

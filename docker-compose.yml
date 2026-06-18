@@ -21,6 +21,7 @@ services:
       context: .
       target: migrator
     environment:
+      COMPOSE_DATABASE_URL: postgresql://condo:condo@db:5432/condo_board
       DATABASE_URL: postgresql://condo:condo@db:5432/condo_board
     depends_on:
       db:

@@ -2,8 +2,8 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 
+import { attachSessionCookie } from "@/lib/auth/cookies";
 import {
-  attachSessionCookie,
   authenticateUser,
   createSessionToken,
 } from "@/lib/auth/session";
@@ -51,8 +51,10 @@ export async function POST(req: Request) {
     return attachSessionCookie(response, token);
   } catch (error) {
     console.error("[auth/login] Failed:", error);
+    const message =
+      error instanceof Error ? error.message : "Unexpected server error.";
     return NextResponse.json(
-      { error: "Login failed on the server. Check app logs." },
+      { error: `Login failed: ${message}` },
       { status: 500 },
     );
   }

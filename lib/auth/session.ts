@@ -3,9 +3,10 @@ import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import { asc, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 
-import { NextResponse } from "next/server";
-
 import { isUserRole, type UserRole } from "@/lib/auth/roles";
+import { SESSION_COOKIE } from "@/lib/auth/constants";
+import { sessionCookieOptions } from "@/lib/auth/cookies";
+import { formatAuthDbError } from "@/lib/auth/db-errors";
 import {
   createSignedSessionToken,
   verifySignedSessionToken,
@@ -13,25 +14,6 @@ import {
 import { getDb } from "@/lib/db";
 import { appUsers } from "@/lib/db/schema";
 
-import { SESSION_COOKIE } from "@/lib/auth/constants";
-
-export function sessionCookieOptions() {
-  return {
-    httpOnly: true,
-    sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 14,
-  };
-}
-
-export function attachSessionCookie(
-  response: NextResponse,
-  token: string,
-): NextResponse {
-  response.cookies.set(SESSION_COOKIE, token, sessionCookieOptions());
-  return response;
-}
 export type AppUser = {
   id: string;
   email: string;
@@ -135,57 +117,63 @@ export async function registerUser(input: {
   if (!isAuthEnabled()) {
     return { error: "Authentication is not enabled." };
   }
-  if (!(await canRegisterNewUser())) {
-    return { error: "Sign up is disabled for this deployment." };
+
+  try {
+    if (!(await canRegisterNewUser())) {
+      return { error: "Sign up is disabled for this deployment." };
+    }
+
+    const email = input.email.trim().toLowerCase();
+    const password = input.password;
+    const firstName = normalizeNamePart(input.firstName);
+    const lastName = normalizeNamePart(input.lastName);
+
+    if (!email || !password) {
+      return { error: "Email and password are required." };
+    }
+    if (password.length < 8) {
+      return { error: "Password must be at least 8 characters." };
+    }
+
+    const db = getDb();
+    const [existingUserCount] = await db
+      .select({ id: appUsers.id })
+      .from(appUsers)
+      .limit(1);
+    const isFirstUser = !existingUserCount;
+
+    const [existing] = await db
+      .select({ id: appUsers.id })
+      .from(appUsers)
+      .where(eq(appUsers.email, email));
+    if (existing) {
+      return { error: "An account with this email already exists." };
+    }
+
+    const now = new Date().toISOString();
+    const user: AppUser = {
+      id: randomBytes(16).toString("hex"),
+      email,
+      firstName,
+      lastName,
+      role: isFirstUser ? "super_admin" : "user",
+    };
+
+    await db.insert(appUsers).values({
+      id: user.id,
+      email: user.email,
+      passwordHash: hashPassword(password),
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role,
+      createdAt: now,
+    });
+
+    return user;
+  } catch (error) {
+    console.error("[auth/registerUser] Failed:", error);
+    return { error: formatAuthDbError(error) };
   }
-
-  const email = input.email.trim().toLowerCase();
-  const password = input.password;
-  const firstName = normalizeNamePart(input.firstName);
-  const lastName = normalizeNamePart(input.lastName);
-
-  if (!email || !password) {
-    return { error: "Email and password are required." };
-  }
-  if (password.length < 8) {
-    return { error: "Password must be at least 8 characters." };
-  }
-
-  const db = getDb();
-  const [existingUserCount] = await db
-    .select({ id: appUsers.id })
-    .from(appUsers)
-    .limit(1);
-  const isFirstUser = !existingUserCount;
-
-  const [existing] = await db
-    .select({ id: appUsers.id })
-    .from(appUsers)
-    .where(eq(appUsers.email, email));
-  if (existing) {
-    return { error: "An account with this email already exists." };
-  }
-
-  const now = new Date().toISOString();
-  const user: AppUser = {
-    id: randomBytes(16).toString("hex"),
-    email,
-    firstName,
-    lastName,
-    role: isFirstUser ? "super_admin" : "user",
-  };
-
-  await db.insert(appUsers).values({
-    id: user.id,
-    email: user.email,
-    passwordHash: hashPassword(password),
-    firstName: user.firstName,
-    lastName: user.lastName,
-    role: user.role,
-    createdAt: now,
-  });
-
-  return user;
 }
 
 export async function authenticateUser(email: string, password: string) {

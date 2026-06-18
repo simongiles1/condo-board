@@ -2,11 +2,8 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 
-import {
-  attachSessionCookie,
-  createSessionToken,
-  registerUser,
-} from "@/lib/auth/session";
+import { attachSessionCookie } from "@/lib/auth/cookies";
+import { createSessionToken, registerUser } from "@/lib/auth/session";
 
 export async function POST(req: Request) {
   let body: {
@@ -52,8 +49,10 @@ export async function POST(req: Request) {
     return attachSessionCookie(response, token);
   } catch (error) {
     console.error("[auth/signup] Failed:", error);
+    const message =
+      error instanceof Error ? error.message : "Unexpected server error.";
     return NextResponse.json(
-      { error: "Sign up failed on the server. Check app logs." },
+      { error: `Sign up failed: ${message}` },
       { status: 500 },
     );
   }

@@ -31,8 +31,11 @@ export function slugifyOrganizationRoleId(label: string): string {
 export function mergeOrganizationRoles(
   customRoles: OrganizationRoleOption[],
 ): OrganizationRoleOption[] {
-  const seen = new Set(ORGANIZATION_ROLES.map((role) => role.id));
-  const merged: OrganizationRoleOption[] = [...ORGANIZATION_ROLES];
+  const seen = new Set<string>(ORGANIZATION_ROLES.map((role) => role.id));
+  const merged: OrganizationRoleOption[] = ORGANIZATION_ROLES.map((role) => ({
+    id: role.id,
+    label: role.label,
+  }));
 
   for (const role of customRoles) {
     if (!role.id || !role.label.trim() || seen.has(role.id)) continue;

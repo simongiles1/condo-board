@@ -2,14 +2,17 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 
-import { getAllowlistImportPreview } from "@/lib/gmail/allowlist-preview";
+import {
+  getAllowlistBackfillPreview,
+  getAllowlistImportPreview,
+} from "@/lib/gmail/allowlist-preview";
 import { getAllowlistEmails } from "@/lib/gmail/queries";
 
 export async function POST(req: Request) {
   try {
-    let body: { emails?: string[] } = {};
+    let body: { emails?: string[]; remaining?: boolean } = {};
     try {
-      body = (await req.json()) as { emails?: string[] };
+      body = (await req.json()) as { emails?: string[]; remaining?: boolean };
     } catch {
       body = {};
     }
@@ -19,7 +22,9 @@ export async function POST(req: Request) {
         ? body.emails
         : await getAllowlistEmails();
 
-    const preview = await getAllowlistImportPreview(emails);
+    const preview = body.remaining
+      ? await getAllowlistBackfillPreview(emails)
+      : await getAllowlistImportPreview(emails);
 
     if (!preview) {
       return NextResponse.json(

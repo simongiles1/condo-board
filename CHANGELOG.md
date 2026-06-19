@@ -27,8 +27,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Backfill all allowlist** — Sender allowlist tab includes a backfill action
   beside the import estimate that searches personal Gmail for every saved sender
-  and imports historical threads not yet in the app, with expected thread and
-  email counts shown before you run it.
+  and imports historical threads not yet in the app. The estimate shows remaining
+  unsynced thread and email counts, not the full Gmail total.
 
 - **Allowlist import preview** — Sender allowlist tab shows estimated thread and
   email counts for the next sync from personal Gmail, based on the saved

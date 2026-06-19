@@ -179,12 +179,9 @@ export function EmailSettingsClient(props: {
   }, [savedAllowlistEmails, selectedEmails]);
 
   const previewEmailsKey = useMemo(() => previewEmails.join("\0"), [previewEmails]);
-  const savedAllowlistEmailsKey = useMemo(
-    () => savedAllowlistEmails.join("\0"),
-    [savedAllowlistEmails],
-  );
-  const [savedImportPreview, setSavedImportPreview] =
+  const [backfillRemainingPreview, setBackfillRemainingPreview] =
     useState<AllowlistImportPreview | null>(null);
+  const [previewRefreshNonce, setPreviewRefreshNonce] = useState(0);
 
   const sortedCandidates = useMemo(() => {
     const next = [...candidates];
@@ -320,13 +317,17 @@ export function EmailSettingsClient(props: {
 
     async function fetchImportPreview(
       emails: string[],
+      options?: { remaining?: boolean },
     ): Promise<AllowlistImportPreview | "unavailable" | null> {
       if (emails.length === 0) return null;
 
       const response = await fetch("/api/email/allowlist/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ emails }),
+        body: JSON.stringify({
+          emails,
+          remaining: options?.remaining ?? false,
+        }),
         signal: controller.signal,
       });
 
@@ -339,15 +340,13 @@ export function EmailSettingsClient(props: {
       setImportPreviewLoading(true);
       setImportPreviewUnavailable(false);
 
-      const needsSeparateSavedPreview =
-        savedAllowlistEmailsKey !== previewEmailsKey &&
-        savedAllowlistEmails.length > 0;
+      const shouldLoadBackfillRemaining = savedAllowlistEmails.length > 0;
 
       try {
-        const [mainPreview, savedPreview] = await Promise.all([
+        const [mainPreview, remainingPreview] = await Promise.all([
           fetchImportPreview(previewEmails),
-          needsSeparateSavedPreview
-            ? fetchImportPreview(savedAllowlistEmails)
+          shouldLoadBackfillRemaining
+            ? fetchImportPreview(savedAllowlistEmails, { remaining: true })
             : Promise.resolve(null),
         ]);
 
@@ -360,19 +359,19 @@ export function EmailSettingsClient(props: {
           setImportPreview(mainPreview);
         }
 
-        if (needsSeparateSavedPreview) {
-          setSavedImportPreview(
-            savedPreview === "unavailable" ? null : savedPreview,
+        if (shouldLoadBackfillRemaining) {
+          setBackfillRemainingPreview(
+            remainingPreview === "unavailable" ? null : remainingPreview,
           );
         } else {
-          setSavedImportPreview(null);
+          setBackfillRemainingPreview(null);
         }
       } catch (error) {
         if (cancelled || (error instanceof DOMException && error.name === "AbortError")) {
           return;
         }
         setImportPreview(null);
-        setSavedImportPreview(null);
+        setBackfillRemainingPreview(null);
       } finally {
         if (!cancelled) {
           setImportPreviewLoading(false);
@@ -386,7 +385,7 @@ export function EmailSettingsClient(props: {
       cancelled = true;
       controller.abort();
     };
-  }, [activeTab, previewEmailsKey, savedAllowlistEmails, savedAllowlistEmailsKey]);
+  }, [activeTab, previewEmailsKey, previewRefreshNonce, savedAllowlistEmails]);
 
   async function addSender(event: React.FormEvent) {
     event.preventDefault();
@@ -623,6 +622,7 @@ export function EmailSettingsClient(props: {
         setErrorMessage(result.errors.join("\n"));
       }
       await loadData({ silent: true });
+      setPreviewRefreshNonce((current) => current + 1);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         setErrorMessage(
@@ -660,6 +660,7 @@ export function EmailSettingsClient(props: {
         `Deleted ${result.deletedEmails ?? 0} imported emails. Run Sync now to re-import allowlist mail from personal Gmail.`,
       );
       await loadData({ silent: true });
+      setPreviewRefreshNonce((current) => current + 1);
     } catch (error) {
       setClearError(
         error instanceof Error ? error.message : "Could not delete imported emails.",
@@ -690,6 +691,7 @@ export function EmailSettingsClient(props: {
         setErrorMessage(result.errors.join("\n"));
       }
       await loadData({ silent: true });
+      setPreviewRefreshNonce((current) => current + 1);
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Could not backfill allowlist mail.",
@@ -720,6 +722,7 @@ export function EmailSettingsClient(props: {
         setErrorMessage(result.errors.join("\n"));
       }
       await loadData({ silent: true });
+      setPreviewRefreshNonce((current) => current + 1);
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Could not import thread history.",
@@ -732,18 +735,6 @@ export function EmailSettingsClient(props: {
   const personalConnection = connections.find(
     (connection) => connection.accountType === "personal_backfill",
   );
-
-  const backfillPreview = useMemo(() => {
-    if (previewEmailsKey === savedAllowlistEmailsKey) {
-      return importPreview;
-    }
-    return savedImportPreview;
-  }, [
-    importPreview,
-    previewEmailsKey,
-    savedAllowlistEmailsKey,
-    savedImportPreview,
-  ]);
 
   if (loading) {
     return (
@@ -1155,22 +1146,24 @@ export function EmailSettingsClient(props: {
                         : importPreviewUnavailable
                           ? "Connect personal Gmail to backfill historical mail."
                           : importPreviewLoading
-                            ? "Calculating expected import…"
-                            : backfillPreview
-                              ? `Sync now only fetches new mail since your last sync. This searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"} and imports historical threads not yet in the app. Already-imported messages are skipped. Up to `
+                            ? "Calculating remaining import…"
+                            : backfillRemainingPreview
+                              ? `Sync now only fetches new mail since your last sync. This searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"} and imports historical threads not yet in the app. Already-imported messages are skipped. Approximately `
                               : `Searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"} and imports historical threads not yet in the app.`}
-                      {backfillPreview && !importPreviewLoading && !importPreviewUnavailable ? (
+                      {backfillRemainingPreview &&
+                      !importPreviewLoading &&
+                      !importPreviewUnavailable ? (
                         <>
                           <span className="font-medium tabular-nums text-teal-900">
-                            {backfillPreview.threadCount.toLocaleString()} thread
-                            {backfillPreview.threadCount === 1 ? "" : "s"}
+                            {backfillRemainingPreview.threadCount.toLocaleString()} thread
+                            {backfillRemainingPreview.threadCount === 1 ? "" : "s"}
                           </span>
                           {" · "}
                           <span className="font-medium tabular-nums text-teal-900">
-                            {backfillPreview.emailCount.toLocaleString()} email
-                            {backfillPreview.emailCount === 1 ? "" : "s"}
+                            {backfillRemainingPreview.emailCount.toLocaleString()} email
+                            {backfillRemainingPreview.emailCount === 1 ? "" : "s"}
                           </span>
-                          {" are expected."}
+                          {" remain unsynced."}
                         </>
                       ) : null}
                     </p>

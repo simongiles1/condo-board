@@ -33,11 +33,31 @@ function emailInitials(email: string): string {
   return local.slice(0, 2).toUpperCase();
 }
 
+function userInitials(
+  firstName: string | null,
+  lastName: string | null,
+  email: string,
+): string {
+  const first = firstName?.trim();
+  const last = lastName?.trim();
+  if (first && last) {
+    return (first[0] + last[0]).toUpperCase();
+  }
+  if (first) {
+    return first.slice(0, 2).toUpperCase();
+  }
+  return emailInitials(email);
+}
+
 export function AuthNavActions({
   email,
+  firstName,
+  lastName,
   role,
 }: {
   email: string | null;
+  firstName: string | null;
+  lastName: string | null;
   role: UserRole | null;
 }) {
   const router = useRouter();
@@ -51,7 +71,7 @@ export function AuthNavActions({
   const [attachmentVisibility, setAttachmentVisibility] =
     useState<AttachmentVisibilitySettings>(DEFAULT_ATTACHMENT_VISIBILITY_SETTINGS);
 
-  const initials = email ? emailInitials(email) : "U";
+  const initials = email ? userInitials(firstName, lastName, email) : "U";
 
   useEffect(() => {
     setSettings(loadModelSettings());

@@ -8,8 +8,17 @@ export async function AuthNav() {
     if (!user) {
       return null;
     }
-    return <AuthNavActions email={user.email} role={user.role} />;
+    return (
+      <AuthNavActions
+        email={user.email}
+        firstName={user.firstName}
+        lastName={user.lastName}
+        role={user.role}
+      />
+    );
   }
 
-  return <AuthNavActions email={null} role={null} />;
+  return (
+    <AuthNavActions email={null} firstName={null} lastName={null} role={null} />
+  );
 }

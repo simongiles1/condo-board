@@ -8,6 +8,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Header user initials** — The avatar badge now shows the first initial of the
+  user's first and last name instead of the first two characters of their email.
+
+- **Email analysis in production** — Deployments whose database was created before
+  extraction skill tables existed now receive an idempotent migration that creates
+  `extraction_skill_entries` and related tables, fixing immediate 500 errors when
+  analyzing threads.
+
 - **Clear-all sync history** — Deleting all imported emails no longer wipes sync
   history. A **Clear all** row is appended with how many emails and threads were
   removed, so a large re-import on the next sync is easier to explain.

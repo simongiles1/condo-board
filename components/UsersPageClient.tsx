@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { roleLabel, USER_ROLES, type UserRole } from "@/lib/auth/roles";
 import { formatDateTime } from "@/lib/format/datetime";
 
@@ -19,6 +20,8 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AppUserRow | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -109,6 +112,37 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
     return patchUser(userId, { [field]: normalized });
   }
 
+  async function confirmDeleteUser() {
+    if (!deleteTarget) return;
+
+    setSavingUserId(deleteTarget.id);
+    setDeleteError(null);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/users/${deleteTarget.id}`, {
+        method: "DELETE",
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(body.error ?? "Failed to delete user.");
+      }
+
+      setUsers((current) =>
+        current.filter((user) => user.id !== deleteTarget.id),
+      );
+      setDeleteTarget(null);
+    } catch (deleteUserError) {
+      setDeleteError(
+        deleteUserError instanceof Error
+          ? deleteUserError.message
+          : "Failed to delete user.",
+      );
+    } finally {
+      setSavingUserId(null);
+    }
+  }
+
   if (loading) {
     return <p className="text-sm text-slate-600">Loading users…</p>;
   }
@@ -141,6 +175,7 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
               </th>
               <th className="px-4 py-3 text-left font-medium text-slate-700">Role</th>
               <th className="px-4 py-3 text-left font-medium text-slate-700">Joined</th>
+              <th className="px-4 py-3 text-right font-medium text-slate-700">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -207,11 +242,63 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
                 <td className="px-4 py-3 text-slate-600">
                   {formatDateTime(user.createdAt)}
                 </td>
+                <td className="px-4 py-3 text-right">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeleteTarget(user);
+                    }}
+                    disabled={
+                      savingUserId === user.id || user.id === currentUserId
+                    }
+                    className="rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title={
+          deleteTarget
+            ? `Delete ${deleteTarget.email}?`
+            : "Delete user?"
+        }
+        description={
+          <>
+            <p>
+              Are you sure you want to delete this user? This permanently removes
+              their account, password reset tokens, and clears their name from
+              analysis history.
+            </p>
+            <p className="mt-2">
+              Imported emails, building data, and other shared app content are{" "}
+              <strong>not</strong> deleted.
+            </p>
+            {deleteError ? (
+              <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-900">
+                {deleteError}
+              </p>
+            ) : null}
+          </>
+        }
+        confirmLabel="Delete user"
+        busy={deleteTarget !== null && savingUserId === deleteTarget.id}
+        busyLabel="Deleting…"
+        onConfirm={() => void confirmDeleteUser()}
+        onCancel={() => {
+          if (!deleteTarget || savingUserId !== deleteTarget.id) {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }
+        }}
+      />
     </div>
   );
 }

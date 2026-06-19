@@ -14,6 +14,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Sender allowlist layout** — Import estimate and backfill panels now use a
+  50/50 split. Add sender moved into a dialog opened from the toolbar above the
+  sender list. The sync estimate also shows how many allowlist threads and emails
+  are already imported.
+
+- **User deletion** — Super admins can delete users from the Users page. A
+  confirmation dialog explains that the account and associated auth data are
+  removed while shared app content remains.
+
 - **Date display** — App-wide dates now use long month names (for example,
   June 20, 2026) instead of ISO-style `YYYY-MM-DD` formatting.
 

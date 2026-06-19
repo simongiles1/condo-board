@@ -10,6 +10,8 @@ import { getQueryMatchCounts } from "./thread-search";
 export type AllowlistImportPreview = {
   threadCount: number;
   emailCount: number;
+  importedThreadCount: number;
+  importedEmailCount: number;
 };
 
 function normalizeMailbox(email: string): string {
@@ -89,13 +91,28 @@ export async function getAllowlistImportPreview(
   ];
 
   if (normalized.length === 0) {
-    return { threadCount: 0, emailCount: 0 };
+    return {
+      threadCount: 0,
+      emailCount: 0,
+      importedThreadCount: 0,
+      importedEmailCount: 0,
+    };
   }
 
   try {
     const { gmail } = await getGmailClient("personal_backfill");
     const query = buildAllowlistQuery(normalized);
-    return await getQueryMatchCounts(gmail, query);
+    const [gmailCounts, imported] = await Promise.all([
+      getQueryMatchCounts(gmail, query),
+      getImportedAllowlistCounts(normalized),
+    ]);
+
+    return {
+      threadCount: gmailCounts.threadCount,
+      emailCount: gmailCounts.emailCount,
+      importedThreadCount: imported.threadCount,
+      importedEmailCount: imported.emailCount,
+    };
   } catch (error) {
     console.warn("[allowlist-preview] personal Gmail unavailable", error);
     return null;
@@ -114,5 +131,7 @@ export async function getAllowlistBackfillPreview(
   return {
     threadCount: Math.max(0, gmailPreview.threadCount - imported.threadCount),
     emailCount: Math.max(0, gmailPreview.emailCount - imported.emailCount),
+    importedThreadCount: imported.threadCount,
+    importedEmailCount: imported.emailCount,
   };
 }

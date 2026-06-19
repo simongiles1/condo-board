@@ -14,7 +14,7 @@ import {
   verifySignedSessionToken,
 } from "@/lib/auth/token";
 import { getDb } from "@/lib/db";
-import { appUsers } from "@/lib/db/schema";
+import { appUsers, extractionSources } from "@/lib/db/schema";
 
 export type AppUser = {
   id: string;
@@ -329,6 +329,44 @@ export async function updateUserNames(input: {
   }
 
   await db.update(appUsers).set(updates).where(eq(appUsers.id, input.userId));
+
+  return { ok: true };
+}
+
+export async function deleteAppUser(input: {
+  userId: string;
+  actorId: string;
+}): Promise<{ ok: true } | { error: string }> {
+  if (input.userId === input.actorId) {
+    return { error: "You cannot delete your own account." };
+  }
+
+  const db = getDb();
+  const [target] = await db
+    .select({ id: appUsers.id, role: appUsers.role })
+    .from(appUsers)
+    .where(eq(appUsers.id, input.userId));
+
+  if (!target) {
+    return { error: "User not found." };
+  }
+
+  if (target.role === "super_admin") {
+    const superAdmins = await db
+      .select({ id: appUsers.id })
+      .from(appUsers)
+      .where(eq(appUsers.role, "super_admin"));
+    if (superAdmins.length <= 1) {
+      return { error: "At least one super admin is required." };
+    }
+  }
+
+  await db
+    .update(extractionSources)
+    .set({ triggeredByUserId: null })
+    .where(eq(extractionSources.triggeredByUserId, input.userId));
+
+  await db.delete(appUsers).where(eq(appUsers.id, input.userId));
 
   return { ok: true };
 }

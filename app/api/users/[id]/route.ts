@@ -4,7 +4,11 @@ import { NextResponse } from "next/server";
 
 import { isErrorResponse, requireRole } from "@/lib/auth/authorize";
 import { isUserRole } from "@/lib/auth/roles";
-import { updateUserNames, updateUserRole } from "@/lib/auth/session";
+import {
+  deleteAppUser,
+  updateUserNames,
+  updateUserRole,
+} from "@/lib/auth/session";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -62,6 +66,20 @@ export async function PATCH(request: Request, context: RouteContext) {
     if ("error" in nameResult) {
       return NextResponse.json({ error: nameResult.error }, { status: 400 });
     }
+  }
+
+  return NextResponse.json({ ok: true });
+}
+
+export async function DELETE(_request: Request, context: RouteContext) {
+  const actor = await requireRole("super_admin");
+  if (isErrorResponse(actor)) return actor;
+
+  const { id } = await context.params;
+  const result = await deleteAppUser({ userId: id, actorId: actor.id });
+
+  if ("error" in result) {
+    return NextResponse.json({ error: result.error }, { status: 400 });
   }
 
   return NextResponse.json({ ok: true });

@@ -79,6 +79,8 @@ type SyncHistoryRun = {
 type AllowlistImportPreview = {
   threadCount: number;
   emailCount: number;
+  importedThreadCount: number;
+  importedEmailCount: number;
 };
 
 function formatSyncTrigger(trigger: SyncHistoryRun["trigger"]): string {
@@ -154,6 +156,8 @@ export function EmailSettingsClient(props: {
   const [schedulerEnabled, setSchedulerEnabled] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [addSenderOpen, setAddSenderOpen] = useState(false);
+  const [addSenderError, setAddSenderError] = useState<string | null>(null);
   const [clearError, setClearError] = useState<string | null>(null);
   const [candidateSort, setCandidateSort] =
     useState<AllowlistCandidateSort>("personal-count-desc");
@@ -390,7 +394,7 @@ export function EmailSettingsClient(props: {
   async function addSender(event: React.FormEvent) {
     event.preventDefault();
     setBusyAction("add-sender");
-    setErrorMessage(null);
+    setAddSenderError(null);
 
     try {
       const response = await fetch("/api/email/allowlist", {
@@ -446,9 +450,12 @@ export function EmailSettingsClient(props: {
       setNewEmail("");
       setNewDisplayName("");
       setNewNotes("");
+      setAddSenderOpen(false);
+      setAddSenderError(null);
       setStatusMessage("Sender added to allowlist.");
+      setPreviewRefreshNonce((current) => current + 1);
     } catch (error) {
-      setErrorMessage(
+      setAddSenderError(
         error instanceof Error ? error.message : "Could not add sender.",
       );
     } finally {
@@ -1075,39 +1082,9 @@ export function EmailSettingsClient(props: {
                 does not fetch on its own.
               </p>
 
-              <form onSubmit={addSender} className="mt-4 grid gap-3 md:grid-cols-3">
-                <input
-                  required
-                  type="email"
-                  value={newEmail}
-                  onChange={(event) => setNewEmail(event.target.value)}
-                  placeholder="Add address not yet in mail"
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                />
-                <input
-                  value={newDisplayName}
-                  onChange={(event) => setNewDisplayName(event.target.value)}
-                  placeholder="Display name (optional)"
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                />
-                <button
-                  type="submit"
-                  disabled={busyAction !== null}
-                  className="rounded-md bg-teal-700 px-3 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-50"
-                >
-                  {busyAction === "add-sender" ? "Adding…" : "Add sender"}
-                </button>
-                <input
-                  value={newNotes}
-                  onChange={(event) => setNewNotes(event.target.value)}
-                  placeholder="Notes (optional)"
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm md:col-span-3"
-                />
-              </form>
-
               <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 flex-1">
+                <div className="grid gap-4 sm:grid-cols-2 sm:gap-6">
+                  <div className="min-w-0">
                     <p className="font-medium text-slate-900">Estimated next sync import</p>
                     <p className="mt-1 text-slate-600">
                       {selectedEmails.size > 0
@@ -1123,22 +1100,36 @@ export function EmailSettingsClient(props: {
                         Connect personal Gmail to see import estimates.
                       </p>
                     ) : importPreview && previewEmails.length > 0 ? (
-                      <p className="mt-2 tabular-nums text-slate-800">
-                        <span className="font-medium text-teal-900">
-                          {importPreview.threadCount.toLocaleString()} thread
-                          {importPreview.threadCount === 1 ? "" : "s"}
-                        </span>
-                        {" · "}
-                        <span className="font-medium text-teal-900">
-                          {importPreview.emailCount.toLocaleString()} email
-                          {importPreview.emailCount === 1 ? "" : "s"}
-                        </span>
-                        {" would be imported on the next sync."}
-                      </p>
+                      <>
+                        <p className="mt-2 tabular-nums text-slate-800">
+                          <span className="font-medium text-teal-900">
+                            {importPreview.threadCount.toLocaleString()} thread
+                            {importPreview.threadCount === 1 ? "" : "s"}
+                          </span>
+                          {" · "}
+                          <span className="font-medium text-teal-900">
+                            {importPreview.emailCount.toLocaleString()} email
+                            {importPreview.emailCount === 1 ? "" : "s"}
+                          </span>
+                          {" would be imported on the next sync."}
+                        </p>
+                        <p className="mt-2 tabular-nums text-slate-800">
+                          <span className="font-medium text-teal-900">
+                            {importPreview.importedThreadCount.toLocaleString()} thread
+                            {importPreview.importedThreadCount === 1 ? "" : "s"}
+                          </span>
+                          {" · "}
+                          <span className="font-medium text-teal-900">
+                            {importPreview.importedEmailCount.toLocaleString()} email
+                            {importPreview.importedEmailCount === 1 ? "" : "s"}
+                          </span>
+                          {" already in the system."}
+                        </p>
+                      </>
                     ) : null}
                   </div>
 
-                  <div className="shrink-0 border-t border-slate-200 pt-4 sm:max-w-sm sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0">
+                  <div className="min-w-0 border-t border-slate-200 pt-4 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
                     <p className="font-medium text-slate-900">Backfill all allowlist</p>
                     <p className="mt-1 text-slate-600">
                       {savedAllowlistEmails.length === 0
@@ -1199,6 +1190,17 @@ export function EmailSettingsClient(props: {
                   ) : null}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddSenderError(null);
+                      setAddSenderOpen(true);
+                    }}
+                    disabled={busyAction !== null}
+                    className="rounded-md bg-teal-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-50"
+                  >
+                    Add sender
+                  </button>
                   <button
                     type="button"
                     onClick={() =>
@@ -1439,6 +1441,89 @@ export function EmailSettingsClient(props: {
           }
         }}
       />
+
+      {addSenderOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/40"
+            onClick={() => {
+              if (busyAction !== "add-sender") {
+                setAddSenderOpen(false);
+                setAddSenderError(null);
+              }
+            }}
+            disabled={busyAction === "add-sender"}
+            aria-label="Close dialog"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-sender-dialog-title"
+            className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-xl"
+          >
+            <h2
+              id="add-sender-dialog-title"
+              className="text-lg font-semibold text-slate-900"
+            >
+              Add sender
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Add an email address to the allowlist before it appears in imported
+              mail.
+            </p>
+            <form onSubmit={addSender} className="mt-4 space-y-3">
+              <input
+                required
+                type="email"
+                value={newEmail}
+                onChange={(event) => setNewEmail(event.target.value)}
+                placeholder="Email address"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                value={newDisplayName}
+                onChange={(event) => setNewDisplayName(event.target.value)}
+                placeholder="Display name (optional)"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                value={newNotes}
+                onChange={(event) => setNewNotes(event.target.value)}
+                placeholder="Notes (optional)"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              {addSenderError ? (
+                <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+                  {addSenderError}
+                </p>
+              ) : null}
+              <div className="flex flex-wrap justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (busyAction !== "add-sender") {
+                      setAddSenderOpen(false);
+                      setAddSenderError(null);
+                    }
+                  }}
+                  disabled={busyAction === "add-sender"}
+                  className="rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-300 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={busyAction !== null}
+                  className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
+                >
+                  {busyAction === "add-sender" ? "Adding…" : "Add sender"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

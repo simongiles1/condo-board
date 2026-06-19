@@ -13,6 +13,7 @@ import {
   timeInputFromSchedule,
   type SyncSchedule,
 } from "@/lib/email/sync-schedule";
+import { formatDateTime } from "@/lib/format/datetime";
 import { formatGmailOrEmailList } from "@/lib/email/gmail-filter-format";
 
 type AllowlistEntry = {
@@ -26,7 +27,9 @@ type AllowlistEntry = {
 type AllowlistCandidate = {
   email: string;
   messageCount: number;
+  threadCount: number;
   personalFromCount: number | null;
+  personalThreadCount: number | null;
   saved: boolean;
   id: string | null;
   displayName: string | null;
@@ -112,9 +115,18 @@ function formatSyncRunResult(run: SyncHistoryRun): {
 
 type EmailSettingsTab = "connections" | "sync" | "allowlist";
 
-function formatDate(value: string | null) {
+function formatSettingsDate(value: string | null) {
   if (!value) return "Never";
-  return new Date(value).toLocaleString();
+  return formatDateTime(value);
+}
+
+function formatEmailAndThreadCount(
+  emailCount: number,
+  threadCount: number | null,
+): string {
+  const emails = emailCount.toLocaleString();
+  if (threadCount == null) return emails;
+  return `${emails} (${threadCount.toLocaleString()})`;
 }
 
 export function EmailSettingsClient(props: {
@@ -144,7 +156,7 @@ export function EmailSettingsClient(props: {
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
   const [candidateSort, setCandidateSort] =
-    useState<AllowlistCandidateSort>("email-asc");
+    useState<AllowlistCandidateSort>("personal-count-desc");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(() => new Set());
   const [syncHistory, setSyncHistory] = useState<SyncHistoryRun[]>([]);
@@ -167,6 +179,12 @@ export function EmailSettingsClient(props: {
   }, [savedAllowlistEmails, selectedEmails]);
 
   const previewEmailsKey = useMemo(() => previewEmails.join("\0"), [previewEmails]);
+  const savedAllowlistEmailsKey = useMemo(
+    () => savedAllowlistEmails.join("\0"),
+    [savedAllowlistEmails],
+  );
+  const [savedImportPreview, setSavedImportPreview] =
+    useState<AllowlistImportPreview | null>(null);
 
   const sortedCandidates = useMemo(() => {
     const next = [...candidates];
@@ -300,36 +318,61 @@ export function EmailSettingsClient(props: {
     let cancelled = false;
     const controller = new AbortController();
 
+    async function fetchImportPreview(
+      emails: string[],
+    ): Promise<AllowlistImportPreview | "unavailable" | null> {
+      if (emails.length === 0) return null;
+
+      const response = await fetch("/api/email/allowlist/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emails }),
+        signal: controller.signal,
+      });
+
+      if (response.status === 503) return "unavailable";
+      if (!response.ok) throw new Error("Could not load import preview.");
+      return (await response.json()) as AllowlistImportPreview;
+    }
+
     async function loadImportPreview() {
       setImportPreviewLoading(true);
       setImportPreviewUnavailable(false);
 
+      const needsSeparateSavedPreview =
+        savedAllowlistEmailsKey !== previewEmailsKey &&
+        savedAllowlistEmails.length > 0;
+
       try {
-        const response = await fetch("/api/email/allowlist/preview", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ emails: previewEmails }),
-          signal: controller.signal,
-        });
+        const [mainPreview, savedPreview] = await Promise.all([
+          fetchImportPreview(previewEmails),
+          needsSeparateSavedPreview
+            ? fetchImportPreview(savedAllowlistEmails)
+            : Promise.resolve(null),
+        ]);
 
         if (cancelled) return;
 
-        if (response.status === 503) {
+        if (mainPreview === "unavailable") {
           setImportPreview(null);
           setImportPreviewUnavailable(true);
-          return;
+        } else {
+          setImportPreview(mainPreview);
         }
 
-        if (!response.ok) {
-          throw new Error("Could not load import preview.");
+        if (needsSeparateSavedPreview) {
+          setSavedImportPreview(
+            savedPreview === "unavailable" ? null : savedPreview,
+          );
+        } else {
+          setSavedImportPreview(null);
         }
-
-        setImportPreview((await response.json()) as AllowlistImportPreview);
       } catch (error) {
         if (cancelled || (error instanceof DOMException && error.name === "AbortError")) {
           return;
         }
         setImportPreview(null);
+        setSavedImportPreview(null);
       } finally {
         if (!cancelled) {
           setImportPreviewLoading(false);
@@ -343,7 +386,7 @@ export function EmailSettingsClient(props: {
       cancelled = true;
       controller.abort();
     };
-  }, [activeTab, previewEmailsKey]);
+  }, [activeTab, previewEmailsKey, savedAllowlistEmails, savedAllowlistEmailsKey]);
 
   async function addSender(event: React.FormEvent) {
     event.preventDefault();
@@ -388,7 +431,9 @@ export function EmailSettingsClient(props: {
                   {
                     email: entry.email,
                     messageCount: 0,
+                    threadCount: 0,
                     personalFromCount: null,
+                    personalThreadCount: null,
                     saved: true,
                     id: entry.id,
                     displayName: entry.displayName,
@@ -624,6 +669,36 @@ export function EmailSettingsClient(props: {
     }
   }
 
+  async function backfillAllAllowlist() {
+    setBusyAction("backfill-all");
+    setErrorMessage(null);
+
+    try {
+      const response = await fetch("/api/email/backfill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const result = (await response.json()) as SyncResult & { error?: string };
+      if (!response.ok) {
+        throw new Error(result.error ?? "Could not backfill allowlist mail.");
+      }
+      setStatusMessage(
+        `Backfill complete: ${result.messagesAdded.toLocaleString()} message${result.messagesAdded === 1 ? "" : "s"} added, ${result.messagesSkipped.toLocaleString()} skipped.`,
+      );
+      if (result.errors?.length) {
+        setErrorMessage(result.errors.join("\n"));
+      }
+      await loadData({ silent: true });
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Could not backfill allowlist mail.",
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function importSenderThread(senderEmail: string) {
     setBusyAction(`import-thread-${senderEmail}`);
     setErrorMessage(null);
@@ -657,6 +732,18 @@ export function EmailSettingsClient(props: {
   const personalConnection = connections.find(
     (connection) => connection.accountType === "personal_backfill",
   );
+
+  const backfillPreview = useMemo(() => {
+    if (previewEmailsKey === savedAllowlistEmailsKey) {
+      return importPreview;
+    }
+    return savedImportPreview;
+  }, [
+    importPreview,
+    previewEmailsKey,
+    savedAllowlistEmailsKey,
+    savedImportPreview,
+  ]);
 
   if (loading) {
     return (
@@ -727,9 +814,9 @@ export function EmailSettingsClient(props: {
                           messages in mailbox
                         </p>
                       ) : null}
-                      <p>Last sync: {formatDate(personalConnection.lastSyncAt)}</p>
+                      <p>Last sync: {formatSettingsDate(personalConnection.lastSyncAt)}</p>
                       <p>
-                        Connected: {formatDate(personalConnection.connectedAt)}
+                        Connected: {formatSettingsDate(personalConnection.connectedAt)}
                       </p>
                     </div>
                   ) : (
@@ -786,7 +873,7 @@ export function EmailSettingsClient(props: {
                         Uses your computer&apos;s local timezone while the app is
                         running.
                         {settings
-                          ? ` Scheduler ${schedulerRunning ? "active" : "inactive"} · last updated ${formatDate(settings.updatedAt)}`
+                          ? ` Scheduler ${schedulerRunning ? "active" : "inactive"} · last updated ${formatSettingsDate(settings.updatedAt)}`
                           : ""}
                       </p>
                     ) : null}
@@ -934,7 +1021,7 @@ export function EmailSettingsClient(props: {
                         syncHistory.map((run) => (
                           <tr key={run.id}>
                             <td className="px-3 py-2 text-slate-800">
-                              {formatDate(run.startedAt)}
+                              {formatSettingsDate(run.startedAt)}
                             </td>
                             <td className="px-3 py-2 text-slate-600">
                               {formatSyncTrigger(run.trigger)}
@@ -990,9 +1077,9 @@ export function EmailSettingsClient(props: {
                 Sender allowlist
               </h2>
               <p className="mt-1 text-sm text-slate-600">
-                Unique From addresses seen in imported mail. Counts show messages
-                in the app and in personal Gmail (From only). Save unsaved
-                senders, then use <strong>Import thread</strong> on a row to pull
+                Unique From addresses seen in imported mail. Counts show emails
+                with thread totals in parentheses for the app and personal Gmail
+                (From only). Save unsaved senders, then use <strong>Import thread</strong> on a row to pull
                 full conversations for that sender, including replies Sync now
                 does not fetch on its own.
               </p>
@@ -1028,34 +1115,82 @@ export function EmailSettingsClient(props: {
               </form>
 
               <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                <p className="font-medium text-slate-900">Estimated next sync import</p>
-                <p className="mt-1 text-slate-600">
-                  {selectedEmails.size > 0
-                    ? `Based on ${selectedEmails.size.toLocaleString()} selected sender${selectedEmails.size === 1 ? "" : "s"}.`
-                    : savedAllowlistEmails.length > 0
-                      ? `Based on ${savedAllowlistEmails.length.toLocaleString()} saved allowlist sender${savedAllowlistEmails.length === 1 ? "" : "s"}.`
-                      : "Save senders to the allowlist to see import estimates."}
-                </p>
-                {importPreviewLoading ? (
-                  <p className="mt-2 text-slate-500">Calculating…</p>
-                ) : importPreviewUnavailable ? (
-                  <p className="mt-2 text-slate-500">
-                    Connect personal Gmail to see import estimates.
-                  </p>
-                ) : importPreview && previewEmails.length > 0 ? (
-                  <p className="mt-2 tabular-nums text-slate-800">
-                    <span className="font-medium text-teal-900">
-                      {importPreview.threadCount.toLocaleString()} thread
-                      {importPreview.threadCount === 1 ? "" : "s"}
-                    </span>
-                    {" · "}
-                    <span className="font-medium text-teal-900">
-                      {importPreview.emailCount.toLocaleString()} email
-                      {importPreview.emailCount === 1 ? "" : "s"}
-                    </span>
-                    {" would be imported on the next sync."}
-                  </p>
-                ) : null}
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-slate-900">Estimated next sync import</p>
+                    <p className="mt-1 text-slate-600">
+                      {selectedEmails.size > 0
+                        ? `Based on ${selectedEmails.size.toLocaleString()} selected sender${selectedEmails.size === 1 ? "" : "s"}.`
+                        : savedAllowlistEmails.length > 0
+                          ? `Based on ${savedAllowlistEmails.length.toLocaleString()} saved allowlist sender${savedAllowlistEmails.length === 1 ? "" : "s"}.`
+                          : "Save senders to the allowlist to see import estimates."}
+                    </p>
+                    {importPreviewLoading ? (
+                      <p className="mt-2 text-slate-500">Calculating…</p>
+                    ) : importPreviewUnavailable ? (
+                      <p className="mt-2 text-slate-500">
+                        Connect personal Gmail to see import estimates.
+                      </p>
+                    ) : importPreview && previewEmails.length > 0 ? (
+                      <p className="mt-2 tabular-nums text-slate-800">
+                        <span className="font-medium text-teal-900">
+                          {importPreview.threadCount.toLocaleString()} thread
+                          {importPreview.threadCount === 1 ? "" : "s"}
+                        </span>
+                        {" · "}
+                        <span className="font-medium text-teal-900">
+                          {importPreview.emailCount.toLocaleString()} email
+                          {importPreview.emailCount === 1 ? "" : "s"}
+                        </span>
+                        {" would be imported on the next sync."}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="shrink-0 border-t border-slate-200 pt-4 sm:max-w-sm sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0">
+                    <p className="font-medium text-slate-900">Backfill all allowlist</p>
+                    <p className="mt-1 text-slate-600">
+                      {savedAllowlistEmails.length === 0
+                        ? "Save senders to the allowlist before backfilling."
+                        : importPreviewUnavailable
+                          ? "Connect personal Gmail to backfill historical mail."
+                          : importPreviewLoading
+                            ? "Calculating expected import…"
+                            : backfillPreview
+                              ? `Sync now only fetches new mail since your last sync. This searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"} and imports historical threads not yet in the app. Already-imported messages are skipped. Up to `
+                              : `Searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"} and imports historical threads not yet in the app.`}
+                      {backfillPreview && !importPreviewLoading && !importPreviewUnavailable ? (
+                        <>
+                          <span className="font-medium tabular-nums text-teal-900">
+                            {backfillPreview.threadCount.toLocaleString()} thread
+                            {backfillPreview.threadCount === 1 ? "" : "s"}
+                          </span>
+                          {" · "}
+                          <span className="font-medium tabular-nums text-teal-900">
+                            {backfillPreview.emailCount.toLocaleString()} email
+                            {backfillPreview.emailCount === 1 ? "" : "s"}
+                          </span>
+                          {" are expected."}
+                        </>
+                      ) : null}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void backfillAllAllowlist()}
+                      disabled={
+                        busyAction !== null ||
+                        !personalConnection ||
+                        savedAllowlistEmails.length === 0 ||
+                        importPreviewUnavailable
+                      }
+                      className="mt-3 rounded-md bg-teal-700 px-3 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-50"
+                    >
+                      {busyAction === "backfill-all"
+                        ? "Backfilling…"
+                        : "Backfill all allowlist"}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
@@ -1132,8 +1267,8 @@ export function EmailSettingsClient(props: {
                     <tr className="border-b border-slate-100">
                       <th className="w-10 px-4 py-2" aria-hidden="true" />
                       <th className="px-4 py-2 text-left">Sender</th>
-                      <th className="w-28 px-4 py-2 text-right">In app</th>
-                      <th className="w-28 px-4 py-2 text-right">Personal</th>
+                      <th className="w-32 px-4 py-2 text-right">In app</th>
+                      <th className="w-32 px-4 py-2 text-right">Personal</th>
                       <th className="w-64 px-4 py-2 text-right">Actions</th>
                     </tr>
                   </thead>
@@ -1170,12 +1305,18 @@ export function EmailSettingsClient(props: {
                             </div>
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                            {candidate.messageCount.toLocaleString()}
+                            {formatEmailAndThreadCount(
+                              candidate.messageCount,
+                              candidate.threadCount,
+                            )}
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums text-slate-700">
                             {candidate.personalFromCount == null
                               ? "—"
-                              : candidate.personalFromCount.toLocaleString()}
+                              : formatEmailAndThreadCount(
+                                  candidate.personalFromCount,
+                                  candidate.personalThreadCount,
+                                )}
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex flex-nowrap items-center justify-end gap-1.5">

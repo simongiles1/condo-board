@@ -12,7 +12,23 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   history. A **Clear all** row is appended with how many emails and threads were
   removed, so a large re-import on the next sync is easier to explain.
 
+### Changed
+
+- **Date display** — App-wide dates now use long month names (for example,
+  June 20, 2026) instead of ISO-style `YYYY-MM-DD` formatting.
+
+- **Allowlist sender sort** — Sender allowlist defaults to **Most in personal
+  Gmail** instead of email A–Z.
+
 ### Added
+
+- **Allowlist sender thread counts** — In app and Personal columns show email
+  counts with thread counts in parentheses (for example, `470 (38)`).
+
+- **Backfill all allowlist** — Sender allowlist tab includes a backfill action
+  beside the import estimate that searches personal Gmail for every saved sender
+  and imports historical threads not yet in the app, with expected thread and
+  email counts shown before you run it.
 
 - **Allowlist import preview** — Sender allowlist tab shows estimated thread and
   email counts for the next sync from personal Gmail, based on the saved

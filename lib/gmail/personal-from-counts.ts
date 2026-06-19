@@ -4,12 +4,18 @@ import { getGmailClient } from "./client";
 
 const LOOKUP_CONCURRENCY = 4;
 
-async function getPersonalFromCount(
+export type PersonalFromCounts = {
+  messageCount: number;
+  threadCount: number;
+};
+
+async function getPersonalFromCountsForSender(
   gmail: gmail_v1.Gmail,
   email: string,
-): Promise<number> {
+): Promise<PersonalFromCounts> {
   const query = `from:${email.toLowerCase()} -in:spam -in:trash`;
-  let count = 0;
+  const threadIds = new Set<string>();
+  let messageCount = 0;
   let pageToken: string | undefined;
 
   do {
@@ -20,17 +26,21 @@ async function getPersonalFromCount(
       pageToken,
     });
 
-    count += response.data.messages?.length ?? 0;
+    for (const message of response.data.messages ?? []) {
+      messageCount += 1;
+      if (message.threadId) threadIds.add(message.threadId);
+    }
+
     pageToken = response.data.nextPageToken ?? undefined;
   } while (pageToken);
 
-  return count;
+  return { messageCount, threadCount: threadIds.size };
 }
 
-/** From-message counts in the connected personal Gmail mailbox, keyed by email. */
-export async function getPersonalFromMessageCounts(
+/** From-message and thread counts in connected personal Gmail, keyed by email. */
+export async function getPersonalFromCounts(
   emails: string[],
-): Promise<Map<string, number>> {
+): Promise<Map<string, PersonalFromCounts>> {
   const normalized = [
     ...new Set(
       emails
@@ -39,7 +49,7 @@ export async function getPersonalFromMessageCounts(
     ),
   ];
 
-  const results = new Map<string, number>();
+  const results = new Map<string, PersonalFromCounts>();
   if (normalized.length === 0) return results;
 
   const { gmail } = await getGmailClient("personal_backfill");
@@ -49,7 +59,7 @@ export async function getPersonalFromMessageCounts(
     await Promise.all(
       batch.map(async (email) => {
         try {
-          results.set(email, await getPersonalFromCount(gmail, email));
+          results.set(email, await getPersonalFromCountsForSender(gmail, email));
         } catch (error) {
           console.warn("[personal-from-counts]", email, error);
         }

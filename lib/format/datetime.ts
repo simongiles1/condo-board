@@ -1,13 +1,25 @@
 const DISPLAY_LOCALE = "en-CA";
 export const DISPLAY_TIME_ZONE = "America/Toronto";
 
+/** Stable date-only formatting for SSR (avoids hydration mismatches). */
+export function formatDisplayDate(value: string | null | undefined): string {
+  if (!value) return "—";
+
+  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: DISPLAY_TIME_ZONE,
+  }).format(new Date(value));
+}
+
 /** Stable date/time formatting for SSR (avoids hydration mismatches). */
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—";
 
   return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
     year: "numeric",
-    month: "short",
+    month: "long",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",

@@ -211,6 +211,45 @@ async function applyPendingMigrations(client) {
   }
 }
 
+const ANALYSIS_SCHEMA_CHECKS = [
+  { table: "extraction_skill_entries", column: "routing_destination_id" },
+  { table: "extraction_skill_entries", column: "status" },
+  { table: "entity_mentions", column: "review_status" },
+  { table: "entity_mentions", column: "vendor_candidate" },
+  { table: "entity_exclusions", column: "dedup_key" },
+];
+
+async function columnExists(client, tableName, columnName, schemaName = "public") {
+  const { rows } = await client.query(
+    `
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = $1
+        AND table_name = $2
+        AND column_name = $3
+      LIMIT 1
+    `,
+    [schemaName, tableName, columnName],
+  );
+  return rows.length > 0;
+}
+
+async function verifyAnalysisSchema(client) {
+  for (const check of ANALYSIS_SCHEMA_CHECKS) {
+    const tablePresent = await tableExists(client, check.table);
+    if (!tablePresent) {
+      console.warn(`[db:migrate] WARN: missing table public.${check.table}`);
+      continue;
+    }
+
+    if (!(await columnExists(client, check.table, check.column))) {
+      console.warn(
+        `[db:migrate] WARN: missing column public.${check.table}.${check.column}`,
+      );
+    }
+  }
+}
+
 async function main() {
   logConnectionTarget();
 
@@ -224,6 +263,7 @@ async function main() {
     await client.query("SELECT 1");
     await bootstrapMigrationTracking(client);
     await applyPendingMigrations(client);
+    await verifyAnalysisSchema(client);
   } finally {
     client.release();
     await pool.end();

@@ -43,11 +43,11 @@ npm install
 npm run dev
 ```
 
-Visit `http://localhost:3000`.
+Visit `http://localhost:3010`.
 
 ## Phase 2 email ingestion
 
-1. Create a **Google Cloud OAuth client** (Web application) with redirect URI `http://localhost:3000/api/email/oauth/callback`.
+1. Create a **Google Cloud OAuth client** (Web application) with redirect URI `http://localhost:3010/api/email/oauth/callback`.
 2. Enable the **Gmail API** for that project.
 3. On the OAuth consent screen, add both Gmail scopes the app uses:
    `https://www.googleapis.com/auth/gmail.readonly` (personal backfill) and
@@ -87,7 +87,7 @@ Outputs remain on-disk per PRD §3.4 (`./uploads` + `./data`), so back up both f
   If you connected personal backfill first, revoke **Condo board** at
   [Google Account permissions](https://myaccount.google.com/permissions), then
   reconnect the dedicated mailbox before personal backfill. Confirm
-  `GOOGLE_REDIRECT_URI` matches `http://localhost:3000/api/email/oauth/callback`
+  `GOOGLE_REDIRECT_URI` matches `http://localhost:3010/api/email/oauth/callback`
   locally (`GET /api/email/oauth/config` shows the active redirect URI and scopes).
   Google Workspace accounts may need an admin to allow third-party `gmail.modify`
   access.
@@ -99,7 +99,8 @@ Outputs remain on-disk per PRD §3.4 (`./uploads` + `./data`), so back up both f
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev` | `next dev -p 3000` (fixed port for OAuth redirect URI) |
+| `npm run dev` | `next dev -p 3010` (fixed port for OAuth redirect URI) |
+| `npm run dev:restart` | Free port 3010, then start `npm run dev` |
 | `npm run build` | Production build (`next build`) |
 | `npm run start` | `next start` after build |
 | `npm run lint` | ESLint |

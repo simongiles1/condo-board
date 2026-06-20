@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "next dev -p 3010",
+    "dev:restart": "node scripts/dev-restart.cjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

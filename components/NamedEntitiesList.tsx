@@ -12,7 +12,11 @@ import {
   type EntityWithProvenance,
 } from "@/lib/email/entity-grouping";
 import type { ExtractionAuditItem } from "@/lib/email/extraction-audit";
-import type { ThreadEntityReviewGroup } from "@/lib/entities/entity-review";
+import type {
+  EntityReviewGroup,
+  ThreadEntityReviewGroup,
+} from "@/lib/entities/entity-review";
+import { EntityContextSnippet } from "@/components/EntityContextSnippet";
 
 function parseEntityFromAuditItem(item: ExtractionAuditItem): DedupedEntity | null {
   if (item.entity) {
@@ -114,7 +118,7 @@ function ContactAuditCard({
   multiSource,
   reviewStatus,
 }: {
-  group: ContactAuditGroup;
+  group: ContactAuditGroup & { contactEmails?: string[] };
   highlightEmailId?: string | null;
   multiSource: boolean;
   reviewStatus?: "pending" | "approved";
@@ -151,6 +155,13 @@ function ContactAuditCard({
           </span>
         ) : null}
       </div>
+
+      {group.contactEmails?.length ? (
+        <p className="mt-2 text-sm text-slate-600">
+          Emails:{" "}
+          <span className="font-medium">{group.contactEmails.join(", ")}</span>
+        </p>
+      ) : null}
 
       <div
         className={`space-y-2 ${hasMultipleFields ? "mt-2 border-t border-slate-200/80 pt-2" : "mt-2"}`}
@@ -190,9 +201,7 @@ function ContactAuditCard({
       </div>
 
       {group.linkContext ? (
-        <p className="mt-2 whitespace-pre-wrap border-l-2 border-slate-200 pl-2 text-xs leading-relaxed text-slate-600">
-          {group.linkContext}
-        </p>
+        <EntityContextSnippet text={group.linkContext} />
       ) : null}
     </li>
   );
@@ -296,7 +305,7 @@ export function ThreadEntityReviewList({
 export function ApprovedEntitiesList({
   groups,
 }: {
-  groups: ContactAuditGroup[];
+  groups: EntityReviewGroup[];
 }) {
   if (groups.length === 0) {
     return (

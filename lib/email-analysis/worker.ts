@@ -19,6 +19,7 @@ import {
 } from "@/lib/email-analysis/action-item-reconciliation";
 import { semanticDeduplicateIncomingActionItems } from "@/lib/email-analysis/action-item-dedup";
 import { reconcileThreadEntities } from "@/lib/email-analysis/entity-reconciliation";
+import { detectAdditionalContactEmailsForThread } from "@/lib/entities/contact-emails";
 import { loadEntityExclusionsPromptSection } from "@/lib/entities/entity-exclusions";
 import {
   compileSkillPromptSection,
@@ -600,6 +601,26 @@ export async function analyzeEmail(input: {
         emailId: email.id,
         threadId: email.threadId,
         error: error instanceof Error ? error.message : "Entity reconciliation failed",
+      });
+    }
+
+    try {
+      const additionalEmailsDetected = await detectAdditionalContactEmailsForThread({
+        threadId: email.threadId,
+        sourceId,
+      });
+      if (additionalEmailsDetected) {
+        counts.additional_emails_detected =
+          (counts.additional_emails_detected ?? 0) + additionalEmailsDetected;
+      }
+    } catch (error) {
+      console.error("[email-analysis:additional-email-detect]", {
+        emailId: email.id,
+        threadId: email.threadId,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Additional email detection failed",
       });
     }
   }

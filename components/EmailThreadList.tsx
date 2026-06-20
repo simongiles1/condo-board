@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
+import { DateTimeDisplay } from "@/components/DateTimeDisplay";
 import { EmailAttachmentsBadge } from "@/components/EmailAttachmentsBadge";
 import {
   ExtractionSidePanel,
@@ -14,7 +15,6 @@ import {
   ProcessorInitialsGroup,
 } from "@/components/ExtractionPanelContent";
 import { ProcessedCostBadge } from "@/components/ProcessedCostBadge";
-import { formatDateTime } from "@/lib/format/datetime";
 import { formatCostUsd } from "@/lib/gemini/usage";
 import type {
   EmailAttachmentSummary,
@@ -43,7 +43,7 @@ const EMPTY_QUEUE_STATE: InboxAnalysisQueueState = {
 
 /** Fixed columns: checkbox | subject | status | attachments | date */
 const INBOX_ROW_GRID =
-  "grid grid-cols-[auto_minmax(0,1fr)_12rem_2.75rem_11rem] items-center gap-x-3";
+  "grid grid-cols-[auto_minmax(0,1fr)_auto_2.25rem_minmax(3.5rem,auto)] items-center gap-x-2 md:grid-cols-[auto_minmax(0,1fr)_12rem_2.75rem_11rem] md:gap-x-3";
 
 type BulkProgress = {
   total: number;
@@ -115,7 +115,13 @@ function ProcessingBadge({
         className="size-1.5 animate-pulse rounded-full bg-amber-500"
         aria-hidden
       />
-      Processing {current} of {total}
+      Processing{" "}
+      <span className="hidden md:inline">
+        {current} of {total}
+      </span>
+      <span className="md:hidden">
+        {current}/{total}
+      </span>
     </span>
   );
 }
@@ -132,7 +138,13 @@ function WaitingBadge({
       title={`Waiting to analyze email ${current} of ${total}`}
       className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium tabular-nums text-sky-900 ring-1 ring-sky-200"
     >
-      Waiting {current} of {total}
+      Waiting{" "}
+      <span className="hidden md:inline">
+        {current} of {total}
+      </span>
+      <span className="md:hidden">
+        {current}/{total}
+      </span>
     </span>
   );
 }
@@ -151,7 +163,13 @@ function FailedBadge({
       title={error ?? `Analysis failed on email ${current} of ${total}`}
       className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium tabular-nums text-red-800 ring-1 ring-red-200"
     >
-      Failed {current} of {total}
+      Failed{" "}
+      <span className="hidden md:inline">
+        {current} of {total}
+      </span>
+      <span className="md:hidden">
+        {current}/{total}
+      </span>
     </span>
   );
 }
@@ -283,14 +301,16 @@ function ProcessedBadge({
 
   return (
     <ProcessedCostBadge entries={entries} onOpenDetails={onOpenDetails}>
-      Processed
+      <span className="hidden md:inline">Processed</span>
       {costLabel ? (
-        <span className="ml-1 tabular-nums text-teal-900">{costLabel}</span>
+        <span className="ml-1 hidden tabular-nums text-teal-900 md:inline">
+          {costLabel}
+        </span>
       ) : null}
       {processedCount != null &&
       totalCount != null &&
       processedCount < totalCount ? (
-        <span className="ml-1 tabular-nums text-teal-700">
+        <span className="ml-1 hidden tabular-nums text-teal-700 md:inline">
           ({processedCount}/{totalCount})
         </span>
       ) : null}
@@ -383,9 +403,11 @@ function ThreadStatusBadge({
         badgeClassName="inline-flex items-center gap-1.5 rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium tabular-nums text-teal-800 ring-1 ring-teal-200"
       >
         <span className="text-teal-900">{countLabel}</span>
-        <span className="text-teal-700">·</span>
-        <span>Processed</span>
-        {costLabel ? <span className="text-teal-900">{costLabel}</span> : null}
+        <span className="hidden text-teal-700 md:inline">·</span>
+        <span className="hidden md:inline">Processed</span>
+        {costLabel ? (
+          <span className="hidden text-teal-900 md:inline">{costLabel}</span>
+        ) : null}
         <ProcessorBadgeInitials emails={processorEmails} />
       </ProcessedCostBadge>
     );
@@ -923,12 +945,10 @@ export function EmailThreadList({
                       attachments={messageAttachments?.[message.id] ?? []}
                     />
                   </div>
-                  <time
-                    dateTime={message.receivedAt}
-                    className="whitespace-nowrap py-4 pr-4 text-right text-sm text-slate-600"
-                  >
-                    {formatDateTime(message.receivedAt)}
-                  </time>
+                  <DateTimeDisplay
+                    value={message.receivedAt}
+                    className="py-4 pr-2 text-right text-sm text-slate-600 md:pr-4"
+                  />
                 </li>
                 );
               })
@@ -996,12 +1016,10 @@ export function EmailThreadList({
                     <div className="flex items-center justify-center py-4">
                       <EmailAttachmentsBadge groups={groups} />
                     </div>
-                    <time
-                      dateTime={thread.lastMessageAt}
-                      className="whitespace-nowrap py-4 pr-4 text-right text-sm text-slate-600"
-                    >
-                      {formatDateTime(thread.lastMessageAt)}
-                    </time>
+                    <DateTimeDisplay
+                      value={thread.lastMessageAt}
+                      className="py-4 pr-2 text-right text-sm text-slate-600 md:pr-4"
+                    />
                   </li>
                 );
               })}

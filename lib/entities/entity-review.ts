@@ -33,6 +33,13 @@ export type ApprovedOrganizationOption = {
   organizationRole: string | null;
 };
 
+export type ApprovedOrganizationCard = ApprovedOrganizationOption & {
+  vendorId: string | null;
+  mentionIds: string[];
+  contactEmail?: string | null;
+  phone?: string | null;
+};
+
 export function extractEmailFromText(text: string | null | undefined): string {
   if (!text?.trim()) return "";
 
@@ -140,12 +147,97 @@ export function sortEntityReviewGroupsForApproval(
   });
 }
 
+export function isPersonContactGroup(group: EntityReviewGroup): boolean {
+  return Boolean(group.person);
+}
+
+export function isOrganizationOnlyGroup(group: EntityReviewGroup): boolean {
+  return Boolean(group.org) && !group.person;
+}
+
+export type EntityGroupKind = "contacts" | "organizations" | "other";
+
+export function getEntityGroupKind(group: EntityReviewGroup): EntityGroupKind {
+  if (isPersonContactGroup(group)) return "contacts";
+  if (isOrganizationOnlyGroup(group)) return "organizations";
+  return "other";
+}
+
+export type EditableEntityKind = "contact" | "organization";
+
+export function entityKindFromGroup(group: EntityReviewGroup): EditableEntityKind {
+  return isPersonContactGroup(group) ? "contact" : "organization";
+}
+
+export function targetEntityTypeFromKind(
+  kind: EditableEntityKind,
+): "person" | "org" {
+  return kind === "contact" ? "person" : "org";
+}
+
+export function applyEntityKindChange(
+  draft: {
+    entityKind: EditableEntityKind;
+    firstName: string;
+    lastName: string;
+    orgValue: string;
+  },
+  nextKind: EditableEntityKind,
+): Pick<
+  {
+    entityKind: EditableEntityKind;
+    firstName: string;
+    lastName: string;
+    orgValue: string;
+  },
+  "entityKind" | "firstName" | "lastName" | "orgValue"
+> {
+  if (draft.entityKind === nextKind) {
+    return {
+      entityKind: nextKind,
+      firstName: draft.firstName,
+      lastName: draft.lastName,
+      orgValue: draft.orgValue,
+    };
+  }
+
+  if (nextKind === "contact") {
+    const trimmedOrg = draft.orgValue.trim();
+    if (trimmedOrg && !draft.firstName.trim() && !draft.lastName.trim()) {
+      const parts = trimmedOrg.split(/\s+/);
+      return {
+        entityKind: nextKind,
+        firstName: parts[0] ?? "",
+        lastName: parts.slice(1).join(" "),
+        orgValue: draft.orgValue,
+      };
+    }
+
+    return {
+      entityKind: nextKind,
+      firstName: draft.firstName,
+      lastName: draft.lastName,
+      orgValue: draft.orgValue,
+    };
+  }
+
+  const joinedName = joinPersonName(draft.firstName, draft.lastName);
+  return {
+    entityKind: nextKind,
+    firstName: draft.firstName,
+    lastName: draft.lastName,
+    orgValue: joinedName || draft.orgValue,
+  };
+}
+
 export type EntityReviewGroup = ContactAuditGroup & {
   mentionIds: string[];
   /** Job title parsed from extraction metadata or context snippet. */
   personTitle?: string | null;
   /** Organization this contact belongs to (may still be pending approval). */
   extractedOrgName?: string | null;
+  /** Approved email addresses linked to this person contact. */
+  contactEmails?: string[];
 };
 
 export function isUsefulContactGroup(group: ContactAuditGroup): boolean {
@@ -355,6 +447,80 @@ export function buildApprovedOrganizationOptions(
   return [...options.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function collectMatchingOrgMentionIds(
+  rows: EntityMentionRow[],
+  orgName: string,
+): string[] {
+  return rows
+    .filter(
+      (row) =>
+        row.reviewStatus === "approved" &&
+        row.entityType === "org" &&
+        entitiesMatch(
+          { type: "org", value: row.entityValue },
+          { type: "org", value: orgName },
+        ),
+    )
+    .map((row) => row.id);
+}
+
+function firstMatchingOrgRow(
+  rows: EntityMentionRow[],
+  orgName: string,
+): EntityMentionRow | undefined {
+  return rows.find(
+    (row) =>
+      row.reviewStatus === "approved" &&
+      row.entityType === "org" &&
+      entitiesMatch(
+        { type: "org", value: row.entityValue },
+        { type: "org", value: orgName },
+      ),
+  );
+}
+
+export function buildApprovedOrganizationCards(
+  rows: EntityMentionRow[],
+  vendors: Array<{
+    id: string;
+    name: string;
+    organizationRole: string | null;
+  }>,
+): ApprovedOrganizationCard[] {
+  const cards: ApprovedOrganizationCard[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const vendor of vendors) {
+    const key = normalizeOrgName(vendor.name);
+    if (!key || seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    const orgRow = firstMatchingOrgRow(rows, vendor.name);
+    cards.push({
+      name: vendor.name,
+      organizationRole: vendor.organizationRole,
+      vendorId: vendor.id,
+      mentionIds: collectMatchingOrgMentionIds(rows, vendor.name),
+      contactEmail: orgRow?.contactEmail,
+    });
+  }
+
+  for (const row of rows) {
+    if (row.reviewStatus !== "approved" || row.entityType !== "org") continue;
+    const key = normalizeOrgName(row.entityValue);
+    if (!key || seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    cards.push({
+      name: row.entityValue,
+      organizationRole: row.organizationRole,
+      vendorId: null,
+      mentionIds: collectMatchingOrgMentionIds(rows, row.entityValue),
+      contactEmail: row.contactEmail,
+    });
+  }
+
+  return cards.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function findApprovedEntityMatch(
   approvedRows: EntityMentionRow[],
   entity: { type: string; value: string },
@@ -379,3 +545,29 @@ export function buildEntityDedupKey(entity: {
 export type ThreadEntityReviewGroup = EntityReviewGroup & {
   reviewStatus: "pending" | "approved";
 };
+
+export function attachContactEmailsToGroups(
+  groups: EntityReviewGroup[],
+  rows: EntityMentionRow[],
+  emailsByPerson: Map<string, string[]>,
+): EntityReviewGroup[] {
+  return groups.map((group) => {
+    if (!group.person) return group;
+
+    const personRow = rows.find(
+      (row) =>
+        row.entityType === "person" &&
+        group.person?.mentionIds.includes(row.id),
+    );
+    const dedupKey =
+      personRow?.dedupKey?.trim() ||
+      buildEntityDedupKey({ type: "person", value: group.person.value });
+    const contactEmails = emailsByPerson.get(dedupKey);
+    if (!contactEmails?.length) return group;
+
+    return {
+      ...group,
+      contactEmails,
+    };
+  });
+}

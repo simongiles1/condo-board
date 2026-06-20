@@ -27,6 +27,17 @@ export function formatDateTime(value: string | null | undefined): string {
   }).format(new Date(value));
 }
 
+/** Stable time-only formatting for SSR (avoids hydration mismatches). */
+export function formatDisplayTime(value: string | null | undefined): string {
+  if (!value) return "—";
+
+  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: DISPLAY_TIME_ZONE,
+  }).format(new Date(value));
+}
+
 export function formatProcessingDuration(ms: number | null | undefined): string {
   if (ms == null || ms < 0) return "—";
   if (ms < 1000) return `${ms} ms`;

@@ -1,7 +1,7 @@
 import { rm } from "fs/promises";
 import path from "path";
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import {
@@ -10,6 +10,7 @@ import {
   budgetLineItems,
   calendarEvents,
   capitalProjects,
+  contactEmails,
   contracts,
   discoveredFacts,
   emailAttachments,
@@ -64,6 +65,10 @@ export async function purgeProcessedData(): Promise<PurgeProcessedDataResult> {
     ] as const) {
       await tx.delete(table).where(sql`1 = 1`);
     }
+
+    await tx
+      .delete(contactEmails)
+      .where(eq(contactEmails.reviewStatus, "pending"));
 
     const deletedDiscoveredFacts = (
       await tx

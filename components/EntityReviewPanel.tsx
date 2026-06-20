@@ -3,43 +3,38 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 
-import { entityTypeBadgeClass } from "@/lib/email/entity-dedup";
+import { EntityContextSnippet } from "@/components/EntityContextSnippet";
+import { EntityEditFields, type EntityEditDraft } from "@/components/EntityEditFields";
+import { EntityKindBadgeSelect } from "@/components/EntityKindBadgeSelect";
 import {
+  applyEntityKindChange,
+  entityKindFromGroup,
   extractEmailFromText,
   findMatchingApprovedOrganization,
   getExtractedOrgNameForGroup,
+  isPersonContactGroup,
   joinPersonName,
   sortEntityReviewGroupsForApproval,
   splitPersonName,
+  targetEntityTypeFromKind,
   type ApprovedOrganizationOption,
   type EntityReviewGroup,
 } from "@/lib/entities/entity-review";
 import {
   isCondoCorporation,
-  organizationRoleLabel,
   type OrganizationRoleOption,
 } from "@/lib/vendors/organization-roles";
-import { OrganizationRoleSelect } from "@/components/OrganizationRoleSelect";
 
-type GroupDraft = {
-  firstName: string;
-  lastName: string;
-  emailValue: string;
-  linkedOrgName: string;
-  personRole: string;
-  phoneValue: string;
-  orgValue: string;
-  organizationRole: string;
-};
-
-type SessionApprovedOrganization = ApprovedOrganizationOption;
-
-function isOrganizationOnlyGroup(group: EntityReviewGroup): boolean {
-  return Boolean(group.org) && !group.person;
-}
-
-function isPersonContactGroup(group: EntityReviewGroup): boolean {
-  return Boolean(group.person);
+function actionButtonClassName(variant: "danger" | "neutral" | "primary") {
+  const base =
+    "rounded-lg px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60";
+  if (variant === "danger") {
+    return `${base} border border-red-200 bg-white text-red-700 hover:bg-red-50`;
+  }
+  if (variant === "primary") {
+    return `${base} bg-teal-700 font-semibold text-white hover:bg-teal-800`;
+  }
+  return `${base} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50`;
 }
 
 function defaultOrganizationRole(group: EntityReviewGroup): string {
@@ -49,10 +44,26 @@ function defaultOrganizationRole(group: EntityReviewGroup): string {
   return "property_manager";
 }
 
+type SessionApprovedOrganization = ApprovedOrganizationOption;
+
+function emptyDraft(): EntityEditDraft {
+  return {
+    entityKind: "contact",
+    firstName: "",
+    lastName: "",
+    emailValue: "",
+    linkedOrgName: "",
+    personRole: "",
+    phoneValue: "",
+    orgValue: "",
+    organizationRole: "vendor",
+  };
+}
+
 function buildDraft(
   group: EntityReviewGroup,
   availableOrganizations: ApprovedOrganizationOption[],
-): GroupDraft {
+): EntityEditDraft {
   const { firstName, lastName } = splitPersonName(group.person?.value ?? "");
   const contextText = [
     group.linkContext,
@@ -69,6 +80,7 @@ function buildDraft(
   );
 
   return {
+    entityKind: entityKindFromGroup(group),
     firstName,
     lastName,
     emailValue: extractEmailFromText(contextText),
@@ -104,24 +116,23 @@ function mergeOrganizationOptions(
   return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function fieldLabelClassName() {
+  return "text-xs font-medium uppercase tracking-wide text-slate-500";
+}
+
+function fieldInputClassName() {
+  return "mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-900";
+}
+
 function updateDraft(
-  setDrafts: Dispatch<SetStateAction<Record<string, GroupDraft>>>,
+  setDrafts: Dispatch<SetStateAction<Record<string, EntityEditDraft>>>,
   groupKey: string,
-  patch: Partial<GroupDraft>,
+  patch: Partial<EntityEditDraft>,
 ) {
   setDrafts((current) => ({
     ...current,
     [groupKey]: {
-      ...(current[groupKey] ?? {
-        firstName: "",
-        lastName: "",
-        emailValue: "",
-        linkedOrgName: "",
-        personRole: "",
-        phoneValue: "",
-        orgValue: "",
-        organizationRole: "vendor",
-      }),
+      ...(current[groupKey] ?? emptyDraft()),
       ...patch,
     },
   }));
@@ -148,7 +159,7 @@ export function EntityReviewPanel({
   const [customRoles, setCustomRoles] = useState<OrganizationRoleOption[]>(
     () => customOrganizationRoles,
   );
-  const [drafts, setDrafts] = useState<Record<string, GroupDraft>>(() =>
+  const [drafts, setDrafts] = useState<Record<string, EntityEditDraft>>(() =>
     Object.fromEntries(
       pendingGroups.map((group) => [
         group.key,
@@ -248,9 +259,15 @@ export function EntityReviewPanel({
 
   async function submitGroup(
     group: EntityReviewGroup,
-    approvalType: "person" | "organization" | "exclude",
+    action: "approve" | "exclude",
   ) {
     const draft = drafts[group.key] ?? buildDraft(group, availableOrganizations);
+    const approvalType =
+      action === "exclude"
+        ? "exclude"
+        : draft.entityKind === "contact"
+          ? "person"
+          : "organization";
     setBusyKey(group.key);
     setError(null);
 
@@ -261,6 +278,7 @@ export function EntityReviewPanel({
         body: JSON.stringify({
           mentionIds: group.mentionIds,
           approvalType,
+          targetEntityType: targetEntityTypeFromKind(draft.entityKind),
           personValue: joinPersonName(draft.firstName, draft.lastName) || undefined,
           orgValue: draft.orgValue.trim() || undefined,
           phoneValue: draft.phoneValue.trim() || undefined,
@@ -268,7 +286,9 @@ export function EntityReviewPanel({
           linkedOrgName: draft.linkedOrgName.trim() || undefined,
           personRole: draft.personRole.trim() || undefined,
           organizationRole:
-            approvalType === "organization" ? draft.organizationRole : undefined,
+            draft.entityKind === "organization"
+              ? draft.organizationRole
+              : undefined,
         }),
       });
 
@@ -311,342 +331,131 @@ export function EntityReviewPanel({
           Entity review ({visibleGroups.length})
         </h2>
         <p className="mt-1 text-sm text-slate-600">
-          Confirm extracted contacts before they enter the knowledge base. Approve
+          Confirm extracted entities before they enter the knowledge base. Approve
           organizations first when needed — person cards will then offer those orgs
-          in the dropdown. Use <span className="font-medium">Delete</span> to
-          remove an unrelated extraction from the database. Use{" "}
-          <span className="font-medium">Ignore</span> to keep it on record and
-          skip similar contacts in future emails.
+          in the dropdown. Change entity type if the AI misclassified a contact or
+          organization. Use <span className="font-medium">Delete</span> to remove
+          an unrelated extraction. Use <span className="font-medium">Ignore</span>{" "}
+          to keep it on record and skip similar extractions in future emails.
         </p>
       </div>
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
-      <div className="space-y-3">
+      <div className="space-y-2">
         {visibleGroups.map((group) => {
           const draft = drafts[group.key] ?? buildDraft(group, availableOrganizations);
           const extractedOrgName = getExtractedOrgNameForGroup(group);
           const extractedOrgPending =
+            draft.entityKind === "contact" &&
             Boolean(extractedOrgName) &&
             !availableOrganizations.some((org) =>
               findMatchingApprovedOrganization(extractedOrgName, [org]),
             );
+          const displayTitle =
+            draft.entityKind === "contact"
+              ? joinPersonName(draft.firstName, draft.lastName) || groupTitle(group)
+              : draft.orgValue.trim() || groupTitle(group);
 
-          if (isPersonContactGroup(group)) {
-            return (
-              <div
-                key={group.key}
-                className="rounded-xl border border-amber-200 bg-white p-4 shadow-sm"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-semibold text-slate-900">
-                    {groupTitle(group)}
-                  </h3>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ${entityTypeBadgeClass("person")}`}
-                  >
-                    Contact
-                  </span>
-                </div>
-
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <label className="block space-y-1">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      First name
-                    </span>
-                    <input
-                      type="text"
-                      value={draft.firstName}
-                      onChange={(event) =>
-                        updateDraft(setDrafts, group.key, {
-                          firstName: event.target.value,
-                        })
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
-                    />
-                  </label>
-
-                  <label className="block space-y-1">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      Last name
-                    </span>
-                    <input
-                      type="text"
-                      value={draft.lastName}
-                      onChange={(event) =>
-                        updateDraft(setDrafts, group.key, {
-                          lastName: event.target.value,
-                        })
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
-                    />
-                  </label>
-
-                  <label className="block space-y-1">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      Organization
-                    </span>
-                    <select
-                      value={draft.linkedOrgName}
-                      onChange={(event) =>
-                        updateDraft(setDrafts, group.key, {
-                          linkedOrgName: event.target.value,
-                        })
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
-                    >
-                      <option value="">— Select organization —</option>
-                      {availableOrganizations.map((org) => (
-                        <option key={org.name} value={org.name}>
-                          {org.name}
-                          {org.organizationRole
-                            ? ` (${organizationRoleLabel(org.organizationRole, customRoles)})`
-                            : ""}
-                        </option>
-                      ))}
-                    </select>
-                    {availableOrganizations.length === 0 ? (
-                      <p className="mt-1 text-xs text-slate-500">
-                        No organizations saved yet. Approve an organization card
-                        below to link this contact.
-                      </p>
-                    ) : null}
-                    {extractedOrgPending ? (
-                      <p className="mt-1 text-xs text-amber-700">
-                        Extracted as{" "}
-                        <span className="font-medium">{extractedOrgName}</span> —
-                        approve that organization below to link it here.
-                      </p>
-                    ) : null}
-                  </label>
-
-                  <label className="block space-y-1">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      Role / title
-                    </span>
-                    <input
-                      type="text"
-                      value={draft.personRole}
-                      placeholder="e.g. Property Manager"
-                      onChange={(event) =>
-                        updateDraft(setDrafts, group.key, {
-                          personRole: event.target.value,
-                        })
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
-                    />
-                  </label>
-
-                  <label className="block space-y-1 md:col-span-2">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      Email
-                    </span>
-                    <input
-                      type="email"
-                      value={draft.emailValue}
-                      placeholder="name@company.com"
-                      onChange={(event) =>
-                        updateDraft(setDrafts, group.key, {
-                          emailValue: event.target.value,
-                        })
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
-                    />
-                  </label>
-
-                  <label className="block space-y-1 md:col-span-2">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      Phone number
-                    </span>
-                    <input
-                      type="text"
-                      value={draft.phoneValue}
-                      placeholder="e.g. (905) 940-1234 ext 232"
-                      onChange={(event) =>
-                        updateDraft(setDrafts, group.key, {
-                          phoneValue: event.target.value,
-                        })
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
-                    />
-                  </label>
-                </div>
-
-                {group.linkContext ? (
-                  <p className="mt-3 whitespace-pre-wrap border-l-2 border-slate-200 pl-2 text-xs leading-relaxed text-slate-600">
-                    {group.linkContext}
-                  </p>
-                ) : null}
-
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={busyKey === group.key}
-                      onClick={() => deleteGroup(group)}
-                      className="rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {busyKey === group.key ? "Saving…" : "Delete"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyKey === group.key}
-                      onClick={() => submitGroup(group, "exclude")}
-                      className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {busyKey === group.key ? "Saving…" : "Ignore — don't extract again"}
-                    </button>
-                  </div>
-                  <button
-                    type="button"
+          return (
+            <div
+              key={group.key}
+              className="rounded-xl border border-amber-200 bg-white p-3 shadow-sm"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                  <h3 className="font-semibold text-slate-900">{displayTitle}</h3>
+                  <EntityKindBadgeSelect
+                    value={draft.entityKind}
                     disabled={busyKey === group.key}
-                    onClick={() => submitGroup(group, "person")}
-                    className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {busyKey === group.key ? "Saving…" : "Approve contact"}
-                  </button>
-                </div>
-              </div>
-            );
-          }
-
-          if (isOrganizationOnlyGroup(group)) {
-            return (
-              <div
-                key={group.key}
-                className="rounded-xl border border-amber-200 bg-white p-4 shadow-sm"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-semibold text-slate-900">
-                    {groupTitle(group)}
-                  </h3>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ${entityTypeBadgeClass("org")}`}
-                  >
-                    Organization
-                  </span>
-                  {group.vendorCandidate ? (
+                    onChange={(entityKind) =>
+                      updateDraft(
+                        setDrafts,
+                        group.key,
+                        applyEntityKindChange(draft, entityKind),
+                      )
+                    }
+                  />
+                  {group.vendorCandidate && draft.entityKind === "organization" ? (
                     <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200">
                       Vendor candidate
                     </span>
                   ) : null}
                 </div>
-
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <label className="block space-y-1 md:col-span-2">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      Organization name
-                    </span>
-                    <input
-                      type="text"
-                      value={draft.orgValue}
-                      onChange={(event) =>
-                        updateDraft(setDrafts, group.key, {
-                          orgValue: event.target.value,
-                        })
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
-                    />
-                  </label>
-
-                  <label className="block space-y-1 md:col-span-2">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      Organization role
-                    </span>
-                    <OrganizationRoleSelect
-                      value={draft.organizationRole}
-                      onChange={(organizationRole) =>
-                        updateDraft(setDrafts, group.key, { organizationRole })
-                      }
-                      customRoles={customRoles}
-                      onCustomRolesChange={setCustomRoles}
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
-                    />
-                    {isCondoCorporation(draft.orgValue) ? (
-                      <p className="mt-1 text-xs text-slate-600">
-                        This looks like a condominium corporation number (e.g. TSCC
-                        ####), not an external vendor or contact. Use{" "}
-                        <span className="font-medium">Condominium corporation</span>{" "}
-                        or <span className="font-medium">Ignore</span> to skip future
-                        extractions.
-                      </p>
-                    ) : null}
-                  </label>
-
-                  <label className="block space-y-1 md:col-span-2">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      Email
-                    </span>
-                    <input
-                      type="email"
-                      value={draft.emailValue}
-                      placeholder="info@company.com"
-                      onChange={(event) =>
-                        updateDraft(setDrafts, group.key, {
-                          emailValue: event.target.value,
-                        })
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
-                    />
-                  </label>
-
-                  <label className="block space-y-1 md:col-span-2">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      Phone number
-                    </span>
-                    <input
-                      type="text"
-                      value={draft.phoneValue}
-                      placeholder="Optional main line"
-                      onChange={(event) =>
-                        updateDraft(setDrafts, group.key, {
-                          phoneValue: event.target.value,
-                        })
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
-                    />
-                  </label>
-                </div>
-
-                {group.linkContext ? (
-                  <p className="mt-3 whitespace-pre-wrap border-l-2 border-slate-200 pl-2 text-xs leading-relaxed text-slate-600">
-                    {group.linkContext}
-                  </p>
-                ) : null}
-
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={busyKey === group.key}
-                      onClick={() => deleteGroup(group)}
-                      className="rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {busyKey === group.key ? "Saving…" : "Delete"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyKey === group.key}
-                      onClick={() => submitGroup(group, "exclude")}
-                      className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {busyKey === group.key ? "Saving…" : "Ignore — don't extract again"}
-                    </button>
-                  </div>
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                   <button
                     type="button"
                     disabled={busyKey === group.key}
-                    onClick={() => submitGroup(group, "organization")}
-                    className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => deleteGroup(group)}
+                    className={actionButtonClassName("danger")}
                   >
-                    {busyKey === group.key ? "Saving…" : "Approve organization"}
+                    {busyKey === group.key ? "Saving…" : "Delete"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busyKey === group.key}
+                    onClick={() => submitGroup(group, "exclude")}
+                    className={actionButtonClassName("neutral")}
+                  >
+                    {busyKey === group.key ? "Saving…" : "Ignore"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busyKey === group.key}
+                    onClick={() => submitGroup(group, "approve")}
+                    className={actionButtonClassName("primary")}
+                  >
+                    {busyKey === group.key
+                      ? "Saving…"
+                      : draft.entityKind === "contact"
+                        ? "Approve contact"
+                        : "Approve organization"}
                   </button>
                 </div>
               </div>
-            );
-          }
 
-          return null;
+              <div className="mt-2">
+                <EntityEditFields
+                  draft={draft}
+                  onChange={(patch) => updateDraft(setDrafts, group.key, patch)}
+                  orgOptions={availableOrganizations}
+                  customRoles={customRoles}
+                  onCustomRolesChange={setCustomRoles}
+                  fieldLabelClassName={fieldLabelClassName()}
+                  inputClassName={fieldInputClassName()}
+                  emailPlaceholder={
+                    draft.entityKind === "contact"
+                      ? "name@company.com"
+                      : "info@company.com"
+                  }
+                  phonePlaceholder={
+                    draft.entityKind === "contact"
+                      ? "e.g. (905) 940-1234 ext 232"
+                      : "Optional main line"
+                  }
+                  showVendorCandidateHint
+                />
+                {extractedOrgPending ? (
+                  <p className="mt-2 text-xs text-amber-700">
+                    Extracted as{" "}
+                    <span className="font-medium">{extractedOrgName}</span> — approve
+                    that organization below to link it here.
+                  </p>
+                ) : null}
+                {availableOrganizations.length === 0 &&
+                draft.entityKind === "contact" ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    No organizations saved yet. Approve an organization card below to
+                    link this contact.
+                  </p>
+                ) : null}
+              </div>
+
+              {group.linkContext ? (
+                <EntityContextSnippet text={group.linkContext} />
+              ) : null}
+            </div>
+          );
         })}
       </div>
     </section>

@@ -259,6 +259,7 @@ You receive:
 1. The chronological email thread (all messages).
 2. Raw extracted entity rows (people, organizations, phones, units) from per-message extraction.
 3. Optional approved entity registry entries already known to the board.
+4. Optional approved contacts with known email addresses.
 
 Your job: produce a cleaned set of contact cards for human review. Merge duplicates, fix wrong pairings, and attach phones to the correct person/org.
 
@@ -269,6 +270,7 @@ Rules:
 - Pair person + org + phone ONLY when the thread shows they belong together (same signature block, same From: line, explicit contact block). Do NOT attach one person's org from a signature to another person's email.
 - Use From: addresses and signature blocks as primary evidence for who someone works for.
 - Prefer approved registry names when a raw entity clearly matches an approved entry.
+- When a person clearly matches an approved contact but uses a different email address in this thread (From: line, Cc, or signature), include that email on the contact card. The downstream system will queue it as an additional email for board review — do NOT omit it just because the person is already known.
 - vendor_candidate: true only for organizations that are external vendors/contractors/suppliers to the building. Property managers and board members are NOT vendor candidates unless explicitly a billable vendor. The board's own condominium corporation (TSCC 2517) is never a vendor candidate.
 - Omit the board's own condominium corporation (TSCC 2517) entirely — do not emit it as a contact.
 - Omit dates entirely — they belong on the calendar, not in named entities.
@@ -285,6 +287,7 @@ JSON schema:
       "phone": "phone number or null",
       "unit": "unit number or null",
       "title": "job title or role or null",
+      "email": "email address for this person when stated in the thread, or null",
       "vendor_candidate": false,
       "context": "paragraph excerpt from the thread"
     }
@@ -305,6 +308,10 @@ export function buildEntityReconciliationUserPrompt(input: {
     value: string;
     organization_role: string | null;
   }>;
+  approvedContacts?: Array<{
+    person: string;
+    known_emails: string[];
+  }>;
   excludedEntitiesSection?: string;
 }): string {
   return `EMAIL THREAD (chronological)
@@ -315,7 +322,10 @@ ${JSON.stringify(input.extractedEntities, null, 2)}
 
 APPROVED ENTITY REGISTRY (use these canonical names when a raw entity clearly matches)
 ${JSON.stringify(input.approvedEntities, null, 2)}
+
+APPROVED CONTACTS WITH KNOWN EMAILS (when a person matches but the thread shows a new email, include it on the contact card)
+${JSON.stringify(input.approvedContacts ?? [], null, 2)}
 ${input.excludedEntitiesSection ?? ""}
 
-Reconcile the raw entities into contact cards ready for board review. Merge duplicates and fix incorrect person/org/phone groupings using evidence from the thread. Omit any excluded entities entirely.`;
+Reconcile the raw entities into contact cards ready for board review. Merge duplicates and fix incorrect person/org/phone groupings using evidence from the thread. When an approved contact appears under a new email address, include that email for review. Omit any excluded entities entirely.`;
 }

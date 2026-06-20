@@ -3,12 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { asc, desc, eq } from "drizzle-orm";
 
-import { BudgetYoYChart } from "@/components/BudgetYoYChart";
-import { EquipmentTimeline } from "@/components/EquipmentTimeline";
-import { EntityReviewPanel } from "@/components/EntityReviewPanel";
-import { ApprovedEntitiesList } from "@/components/NamedEntitiesList";
-import { organizationRoleLabel } from "@/lib/vendors/organization-roles";
-import { fetchCustomOrganizationRoles } from "@/lib/vendors/fetch-organization-roles";
+import { InsightsPageClient } from "@/components/InsightsPageClient";
 import { getDb } from "@/lib/db";
 import {
   actionItems,
@@ -20,12 +15,19 @@ import {
   vendors,
 } from "@/lib/db/schema";
 import {
+  attachContactEmailsToGroups,
+  buildApprovedOrganizationCards,
   buildApprovedOrganizationOptions,
   buildEntityReviewGroups,
   splitGroupsForReview,
   type EntityMentionRow,
 } from "@/lib/entities/entity-review";
 import { enrichEntityReviewGroupsWithThreadContext } from "@/lib/entities/entity-context-enrichment";
+import {
+  loadApprovedEmailsByPersonDedupKey,
+  loadPendingAdditionalEmails,
+} from "@/lib/entities/contact-emails";
+import { fetchCustomOrganizationRoles } from "@/lib/vendors/fetch-organization-roles";
 
 export default async function InsightsPage() {
   const db = getDb();
@@ -45,9 +47,9 @@ export default async function InsightsPage() {
     .orderBy(desc(maintenanceEvents.occurredAt));
 
   const budgetRows = await db.select().from(budgetLineItems);
-  const series = budgetRows.map((row) => ({
+  const budgetSeries = budgetRows.map((row) => ({
     fiscalYear: row.fiscalYear ?? 0,
-    category: row.categoryName,
+    category: row.categoryName ?? "Uncategorized",
     budgeted: Number(row.budgetedAmount ?? 0),
     actual: Number(row.actualAmount ?? 0),
   }));
@@ -71,19 +73,29 @@ export default async function InsightsPage() {
     .orderBy(asc(entityMentions.entityType), asc(entityMentions.entityValue));
 
   const mentionRows = entityRows as EntityMentionRow[];
-  const pendingGroups = await enrichEntityReviewGroupsWithThreadContext(
-    splitGroupsForReview(
-      buildEntityReviewGroups(
-        mentionRows.filter((row) => row.reviewStatus === "pending"),
+  const approvedEmailsByPerson = await loadApprovedEmailsByPersonDedupKey();
+  const pendingAdditionalEmails = await loadPendingAdditionalEmails();
+  const pendingGroups = attachContactEmailsToGroups(
+    await enrichEntityReviewGroupsWithThreadContext(
+      splitGroupsForReview(
+        buildEntityReviewGroups(
+          mentionRows.filter((row) => row.reviewStatus === "pending"),
+        ),
       ),
+      mentionRows.filter((row) => row.reviewStatus === "pending"),
     ),
     mentionRows.filter((row) => row.reviewStatus === "pending"),
+    approvedEmailsByPerson,
   );
-  const approvedGroups = await enrichEntityReviewGroupsWithThreadContext(
-    buildEntityReviewGroups(
+  const approvedGroups = attachContactEmailsToGroups(
+    await enrichEntityReviewGroupsWithThreadContext(
+      buildEntityReviewGroups(
+        mentionRows.filter((row) => row.reviewStatus === "approved"),
+      ),
       mentionRows.filter((row) => row.reviewStatus === "approved"),
     ),
     mentionRows.filter((row) => row.reviewStatus === "approved"),
+    approvedEmailsByPerson,
   );
 
   const approvedVendors = await db
@@ -97,6 +109,10 @@ export default async function InsightsPage() {
     .orderBy(asc(vendors.name));
 
   const approvedOrganizations = buildApprovedOrganizationOptions(
+    mentionRows,
+    approvedVendors,
+  );
+  const approvedOrganizationCards = buildApprovedOrganizationCards(
     mentionRows,
     approvedVendors,
   );
@@ -140,77 +156,20 @@ export default async function InsightsPage() {
   ];
 
   return (
-    <section className="min-h-0 flex-1 space-y-8 overflow-y-auto">
-      <div>
-        <p className="text-xs uppercase tracking-wide text-slate-500">Knowledge base</p>
-        <h1 className="text-2xl font-semibold text-slate-900">Insights</h1>
-      </div>
-
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-slate-900">Equipment & maintenance</h2>
-        <EquipmentTimeline events={events} />
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-slate-900">Budget year-over-year</h2>
-        <BudgetYoYChart series={series} />
-      </section>
-
-      <EntityReviewPanel
-        pendingGroups={pendingGroups}
-        approvedOrganizations={approvedOrganizations}
-        customOrganizationRoles={customOrganizationRoles}
-      />
-
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-slate-900">
-          Approved entities ({approvedGroups.length})
-        </h2>
-        <ApprovedEntitiesList groups={approvedGroups} />
-      </section>
-
-      {approvedOrganizations.length > 0 ? (
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold text-slate-900">
-            Approved organizations ({approvedOrganizations.length})
-          </h2>
-          <div className="grid gap-3 md:grid-cols-2">
-            {approvedOrganizations.map((org) => (
-              <div
-                key={org.name}
-                className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
-              >
-                <h3 className="font-semibold text-slate-900">{org.name}</h3>
-                {org.organizationRole ? (
-                  <p className="mt-1 text-sm text-slate-600">
-                    {organizationRoleLabel(org.organizationRole, customOrganizationRoles)}
-                  </p>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-slate-900">
-          Unified action items ({actionItemRows.length})
-        </h2>
-        <div className="space-y-2">
-          {actionItemRows.map((item) => (
-            <div
-              key={`${item.source}-${item.id}`}
-              className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
-            >
-              <p className="text-sm font-semibold text-slate-900">{item.description}</p>
-              <p className="mt-1 text-sm text-slate-600">
-                {item.assignee} · {item.source} · {item.context}
-                {item.deadline ? ` · due ${item.deadline}` : ""}
-              </p>
-            </div>
-          ))}
-        </div>
-      </section>
-    </section>
+    <InsightsPageClient
+      events={events.map((event) => ({
+        ...event,
+        equipmentName: event.equipmentName ?? "Unknown equipment",
+        eventType: event.eventType ?? "maintenance",
+      }))}
+      budgetSeries={budgetSeries}
+      pendingGroups={pendingGroups}
+      approvedGroups={approvedGroups}
+      approvedOrganizations={approvedOrganizations}
+      approvedOrganizationCards={approvedOrganizationCards}
+      pendingAdditionalEmails={pendingAdditionalEmails}
+      actionItems={actionItemRows}
+      customOrganizationRoles={customOrganizationRoles}
+    />
   );
 }

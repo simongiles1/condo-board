@@ -547,6 +547,24 @@ export const entityMentions = pgTable("entity_mentions", {
   createdAt: text("created_at").notNull(),
 });
 
+/** Email addresses linked to an approved person contact (supports multiple per contact). */
+export const contactEmails = pgTable("contact_emails", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull(),
+  personDedupKey: text("person_dedup_key").notNull(),
+  personName: text("person_name").notNull(),
+  reviewStatus: text("review_status", {
+    enum: ["pending", "approved", "rejected"],
+  })
+    .notNull()
+    .default("pending"),
+  context: text("context"),
+  sourceId: text("source_id").references(() => extractionSources.id, {
+    onDelete: "set null",
+  }),
+  createdAt: text("created_at").notNull(),
+});
+
 /** Board-flagged entities the AI must not extract (e.g. old employer signatures). */
 export const entityExclusions = pgTable("entity_exclusions", {
   id: text("id").primaryKey(),

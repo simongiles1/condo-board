@@ -6,6 +6,25 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Multiple emails per contact** — Approved person contacts can have more than one
+  email address. When email analysis finds a known contact writing from a new
+  address, Insights shows an **Additional emails** review card so the board can
+  confirm linking it to the existing contact.
+
+### Changed
+
+- **Local dev server** — `npm run dev` now binds to port 3010 (was 3000). Added
+  `npm run dev:restart` to free port 3010 and start the dev server again. Update
+  `GOOGLE_REDIRECT_URI`, `NEXT_PUBLIC_APP_URL`, and your Google OAuth client
+  redirect URI if you still use `localhost:3000`.
+
+- **Mobile layout (initial pass)** — Header navigation collapses into a hamburger
+  menu below the `md` breakpoint. Email inbox processed badges show only the
+  message count and processor initials on small screens; date and time stack on
+  separate lines with the time on the second line.
+
 ### Fixed
 
 - **Header user initials** — The avatar badge now shows the first initial of the

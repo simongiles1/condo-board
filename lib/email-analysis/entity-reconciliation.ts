@@ -17,6 +17,10 @@ import {
   findApprovedEntityMatch,
   type EntityMentionRow,
 } from "@/lib/entities/entity-review";
+import {
+  loadApprovedPersonContacts,
+  registerAdditionalEmailFromReconciliation,
+} from "@/lib/entities/contact-emails";
 import { isAuditEntityType } from "@/lib/email/entity-grouping";
 import { generateEmailExtraction } from "@/lib/gemini/client";
 import { unwrapJsonCodeBlock } from "@/lib/gemini/parse-output";
@@ -34,6 +38,7 @@ export type ReconciledContact = {
   phone?: string;
   unit?: string;
   title?: string;
+  email?: string;
   vendor_candidate?: boolean;
   context?: string;
 };
@@ -86,6 +91,7 @@ export function parseEntityReconciliationResult(
     const phone = asString(entry.phone);
     const unit = asString(entry.unit);
     const title = asString(entry.title);
+    const email = asString(entry.email);
     if (!person && !org && !unit) continue;
 
     contacts.push({
@@ -94,6 +100,7 @@ export function parseEntityReconciliationResult(
       phone,
       unit,
       title,
+      email,
       vendor_candidate: asBoolean(entry.vendor_candidate),
       context: asString(entry.context),
     });
@@ -170,6 +177,7 @@ async function loadApprovedEntityRows(): Promise<EntityMentionRow[]> {
       organizationRole: entityMentions.organizationRole,
       vendorCandidate: entityMentions.vendorCandidate,
       dedupKey: entityMentions.dedupKey,
+      contactEmail: entityMentions.contactEmail,
     })
     .from(entityMentions)
     .where(eq(entityMentions.reviewStatus, "approved"));
@@ -309,6 +317,7 @@ export async function reconcileThreadEntities(input: {
   }
 
   const approvedRows = await loadApprovedEntityRows();
+  const approvedPersonContacts = await loadApprovedPersonContacts();
   const exclusions = await loadEntityExclusions();
   const userPrompt = buildEntityReconciliationUserPrompt({
     threadTranscript: buildThreadTranscript(threadMessages),
@@ -323,6 +332,10 @@ export async function reconcileThreadEntities(input: {
       type: row.entityType,
       value: row.entityValue,
       organization_role: row.organizationRole,
+    })),
+    approvedContacts: approvedPersonContacts.map((contact) => ({
+      person: contact.name,
+      known_emails: contact.emails,
     })),
     excludedEntitiesSection: formatEntityExclusionsForPrompt(exclusions),
   });
@@ -373,6 +386,16 @@ export async function reconcileThreadEntities(input: {
       approvedRows,
       now,
     });
+
+    if (contact.email && contact.person) {
+      await registerAdditionalEmailFromReconciliation({
+        personName: contact.person,
+        email: contact.email,
+        context: contact.context,
+        sourceId: input.sourceId,
+        approvedRows,
+      });
+    }
   }
 
   const calls = generation.usageCalls;

@@ -22,6 +22,11 @@ import {
   formatOutputTokensPerSecond,
   formatTokenCount,
 } from "@/lib/gemini/usage";
+import {
+  claimHoverPopover,
+  closeActiveHoverPopover,
+  releaseHoverPopover,
+} from "@/lib/ui/hover-popover-group";
 
 const VIEWPORT_MARGIN = 8;
 const POPOVER_HIDE_DELAY_MS = 500;
@@ -257,6 +262,7 @@ export function ProcessedCostBadge({
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const popoverInstanceId = useRef(Symbol("processed-cost-badge")).current;
   const triggerHoveredRef = useRef(false);
   const popoverHoveredRef = useRef(false);
   const [open, setOpen] = useState(false);
@@ -275,23 +281,35 @@ export function ProcessedCostBadge({
     }
   }
 
+  function forceClose() {
+    cancelHide();
+    triggerHoveredRef.current = false;
+    popoverHoveredRef.current = false;
+    setOpen(false);
+    releaseHoverPopover(popoverInstanceId);
+  }
+
   function scheduleHide() {
     cancelHide();
     hideTimeoutRef.current = setTimeout(() => {
       if (!triggerHoveredRef.current && !popoverHoveredRef.current) {
-        setOpen(false);
+        forceClose();
       }
     }, POPOVER_HIDE_DELAY_MS);
   }
 
   function showPopover() {
+    claimHoverPopover(popoverInstanceId, forceClose);
     cancelHide();
     if (hasPopover) setOpen(true);
   }
 
   useEffect(() => {
-    return () => cancelHide();
-  }, []);
+    return () => {
+      cancelHide();
+      releaseHoverPopover(popoverInstanceId);
+    };
+  }, [popoverInstanceId]);
 
   useLayoutEffect(() => {
     if (!open || !rootRef.current || !popoverRef.current) return;
@@ -373,6 +391,8 @@ export function ProcessedCostBadge({
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
+          closeActiveHoverPopover();
+          forceClose();
           if (onOpenDetails) {
             onOpenDetails();
           }

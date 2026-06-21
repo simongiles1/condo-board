@@ -11,6 +11,8 @@ import { EntityKindBadgeSelect } from "@/components/EntityKindBadgeSelect";
 import { FormDialog } from "@/components/FormDialog";
 import { EntityContextSnippet } from "@/components/EntityContextSnippet";
 import { entityTypeBadgeClass } from "@/lib/email/entity-dedup";
+import { InsightSourceEmailsBadge } from "@/components/InsightSourceEmailsBadge";
+import type { BuildingEmailReference } from "@/lib/building/resolve-source-email";
 import {
   applyEntityKindChange,
   entityKindFromGroup,
@@ -76,10 +78,12 @@ export function EditableApprovedEntitiesList({
   groups,
   approvedOrganizations,
   customOrganizationRoles = [],
+  onOpenSourceEmail,
 }: {
-  groups: EntityReviewGroup[];
+  groups: Array<EntityReviewGroup & { sourceEmails?: BuildingEmailReference[] }>;
   approvedOrganizations: ApprovedOrganizationOption[];
   customOrganizationRoles?: OrganizationRoleOption[];
+  onOpenSourceEmail?: (emailId: string) => void;
 }) {
   const router = useRouter();
   const [editingGroup, setEditingGroup] = useState<EntityReviewGroup | null>(
@@ -256,14 +260,22 @@ export function EditableApprovedEntitiesList({
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  disabled={busyKey === group.key}
-                  onClick={() => openEdit(group)}
-                  className="shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                >
-                  Edit
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  {onOpenSourceEmail && group.sourceEmails?.length ? (
+                    <InsightSourceEmailsBadge
+                      emails={group.sourceEmails}
+                      onOpenEmail={onOpenSourceEmail}
+                    />
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={busyKey === group.key}
+                    onClick={() => openEdit(group)}
+                    className="shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    Edit
+                  </button>
+                </div>
               </div>
 
               {group.linkContext ? (

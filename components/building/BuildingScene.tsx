@@ -10,14 +10,19 @@ import {
   getBuildingOrbitDistanceLimits,
   getBuildingVerticalExtent,
   type EquipmentCategory,
+  type EquipmentItem,
 } from "@/lib/building/fixtures";
 
 type BuildingSceneProps = {
   visibleCategories: Set<EquipmentCategory>;
+  equipment?: EquipmentItem[];
 };
 
-export function BuildingScene({ visibleCategories }: BuildingSceneProps) {
-  const visibleEquipment = EQUIPMENT.filter((item) =>
+export function BuildingScene({
+  visibleCategories,
+  equipment = EQUIPMENT,
+}: BuildingSceneProps) {
+  const visibleEquipment = equipment.filter((item) =>
     visibleCategories.has(item.category),
   );
 

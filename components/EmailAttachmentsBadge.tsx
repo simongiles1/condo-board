@@ -24,6 +24,10 @@ import { filterVisibleAttachments } from "@/lib/email/attachment-visibility";
 import { formatDateTime } from "@/lib/format/datetime";
 import { useAttachmentVisibilitySettings } from "@/lib/settings/attachment-visibility-settings";
 import { renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
+import {
+  claimHoverPopover,
+  releaseHoverPopover,
+} from "@/lib/ui/hover-popover-group";
 
 const VIEWPORT_MARGIN = 8;
 const POPOVER_HIDE_DELAY_MS = 500;
@@ -556,6 +560,7 @@ export function EmailAttachmentsBadge({
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const popoverInstanceId = useRef(Symbol("email-attachments-badge")).current;
   const triggerHoveredRef = useRef(false);
   const popoverHoveredRef = useRef(false);
   const thumbnailHoveredRef = useRef(false);
@@ -575,6 +580,15 @@ export function EmailAttachmentsBadge({
     }
   }
 
+  function forceClose() {
+    cancelHide();
+    triggerHoveredRef.current = false;
+    popoverHoveredRef.current = false;
+    thumbnailHoveredRef.current = false;
+    setOpen(false);
+    releaseHoverPopover(popoverInstanceId);
+  }
+
   function scheduleHide() {
     cancelHide();
     hideTimeoutRef.current = setTimeout(() => {
@@ -583,12 +597,13 @@ export function EmailAttachmentsBadge({
         !popoverHoveredRef.current &&
         !thumbnailHoveredRef.current
       ) {
-        setOpen(false);
+        forceClose();
       }
     }, POPOVER_HIDE_DELAY_MS);
   }
 
   function showPopover() {
+    claimHoverPopover(popoverInstanceId, forceClose);
     cancelHide();
     setOpen(true);
   }
@@ -600,8 +615,11 @@ export function EmailAttachmentsBadge({
   }
 
   useEffect(() => {
-    return () => cancelHide();
-  }, []);
+    return () => {
+      cancelHide();
+      releaseHoverPopover(popoverInstanceId);
+    };
+  }, [popoverInstanceId]);
 
   useLayoutEffect(() => {
     if (!open || !rootRef.current || !popoverRef.current) return;

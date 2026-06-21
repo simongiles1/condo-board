@@ -6,10 +6,17 @@ import { BuildingModelClient } from "./BuildingModelClient";
 import { BuildingTabStrip, type BuildingTabId } from "@/components/building/BuildingTabStrip";
 import { EquipmentTable } from "@/components/building/EquipmentTable";
 import type { BuildingEquipmentData } from "@/lib/building/fetch-equipment";
+import type { RegistryMapItem } from "@/lib/building/equipment-registry";
 
-type BuildingPageClientProps = BuildingEquipmentData;
+type BuildingPageClientProps = BuildingEquipmentData & {
+  registryMapItems: RegistryMapItem[];
+};
 
-export function BuildingPageClient({ events, assets }: BuildingPageClientProps) {
+export function BuildingPageClient({
+  events,
+  assets,
+  registryMapItems,
+}: BuildingPageClientProps) {
   const [activeTab, setActiveTab] = useState<BuildingTabId>("render");
 
   return (
@@ -28,7 +35,7 @@ export function BuildingPageClient({ events, assets }: BuildingPageClientProps) 
       <BuildingTabStrip active={activeTab} onChange={setActiveTab} />
 
       {activeTab === "render" ? (
-        <BuildingModelClient />
+        <BuildingModelClient registryMapItems={registryMapItems} />
       ) : (
         <EquipmentTable events={events} assets={assets} />
       )}

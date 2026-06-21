@@ -45,6 +45,15 @@ const EMPTY_QUEUE_STATE: InboxAnalysisQueueState = {
 const INBOX_ROW_GRID =
   "grid grid-cols-[auto_minmax(0,1fr)_auto_2.25rem_minmax(3.5rem,auto)] items-center gap-x-2 md:grid-cols-[auto_minmax(0,1fr)_12rem_2.75rem_11rem] md:gap-x-3";
 
+function inboxRowClassName(highlighted: boolean) {
+  return [
+    INBOX_ROW_GRID,
+    highlighted
+      ? "bg-teal-50/70 ring-1 ring-inset ring-teal-200/80 hover:bg-teal-50"
+      : "hover:bg-slate-50",
+  ].join(" ");
+}
+
 type BulkProgress = {
   total: number;
   completed: number;
@@ -593,9 +602,11 @@ export function EmailThreadList({
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [queueState, setQueueState] =
     useState<InboxAnalysisQueueState>(initialQueueState);
+  const [threadReanalyzeActive, setThreadReanalyzeActive] = useState(false);
   const [extractionPanel, setExtractionPanel] = useState<{
     target: ExtractionPanelTarget;
     processingEntries: EmailProcessingStats[];
+    threadEmailIds: string[];
   } | null>(null);
 
   const allPageEmailIds = useMemo(() => {
@@ -607,7 +618,8 @@ export function EmailThreadList({
 
   const queuedCount =
     queueState.processingEmailIds.length + queueState.pendingEmailIds.length;
-  const hasQueueActivity = bulkRunning || queuedCount > 0;
+  const hasQueueActivity =
+    bulkRunning || threadReanalyzeActive || queuedCount > 0;
 
   useEffect(() => {
     setQueueState(initialQueueState);
@@ -624,10 +636,18 @@ export function EmailThreadList({
       const next = await fetchInboxQueueState(allPageEmailIds);
       if (cancelled) return;
 
-      setQueueState(next);
+      setQueueState((prev) => {
+        const hasServerActivity =
+          next.processingEmailIds.length > 0 || next.pendingEmailIds.length > 0;
+        if (!hasServerActivity && threadReanalyzeActive) {
+          return prev;
+        }
+        return next;
+      });
 
       const stillActive =
         bulkRunning ||
+        threadReanalyzeActive ||
         next.processingEmailIds.length > 0 ||
         next.pendingEmailIds.length > 0;
 
@@ -643,7 +663,13 @@ export function EmailThreadList({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [hasQueueActivity, allPageEmailIds, bulkRunning, router]);
+  }, [
+    hasQueueActivity,
+    allPageEmailIds,
+    bulkRunning,
+    threadReanalyzeActive,
+    router,
+  ]);
 
   const rowIds = useMemo(
     () =>
@@ -676,6 +702,30 @@ export function EmailThreadList({
   function clearSelection() {
     setSelectedIds(new Set());
     setBulkError(null);
+  }
+
+  function handleReanalyzeStart(emailIds: string[]) {
+    setThreadReanalyzeActive(true);
+    setQueueState((prev) => {
+      const processingSet = new Set(prev.processingEmailIds);
+      const pendingSet = new Set(prev.pendingEmailIds);
+      for (const emailId of emailIds) {
+        if (!processingSet.has(emailId)) {
+          pendingSet.add(emailId);
+        }
+      }
+      return {
+        ...prev,
+        pendingEmailIds: [...pendingSet],
+      };
+    });
+    void fetchInboxQueueState(allPageEmailIds).then(setQueueState);
+  }
+
+  function handleReanalyzeComplete() {
+    setThreadReanalyzeActive(false);
+    void fetchInboxQueueState(allPageEmailIds).then(setQueueState);
+    router.refresh();
   }
 
   function resolveEmailIdsForSelection(): string[] {
@@ -897,8 +947,15 @@ export function EmailThreadList({
                   queueState.processedEmails,
                 );
 
+                const extractionRowHighlighted =
+                  extractionPanel?.target?.kind === "email" &&
+                  extractionPanel.target.emailId === message.id;
+
                 return (
-                <li key={message.id} className={`${INBOX_ROW_GRID} hover:bg-slate-50`}>
+                <li
+                  key={message.id}
+                  className={inboxRowClassName(extractionRowHighlighted)}
+                >
                   <label className="flex cursor-pointer pl-4">
                     <input
                       type="checkbox"
@@ -935,6 +992,7 @@ export function EmailThreadList({
                                   fromAddress: message.fromAddress,
                                 },
                                 processingEntries,
+                                threadEmailIds: [],
                               })
                           : undefined
                       }
@@ -966,8 +1024,15 @@ export function EmailThreadList({
                   queueState.processedEmails,
                 );
 
+                const extractionRowHighlighted =
+                  extractionPanel?.target?.kind === "thread" &&
+                  extractionPanel.target.threadId === thread.id;
+
                 return (
-                  <li key={thread.id} className={`${INBOX_ROW_GRID} hover:bg-slate-50`}>
+                  <li
+                    key={thread.id}
+                    className={inboxRowClassName(extractionRowHighlighted)}
+                  >
                     <label className="flex cursor-pointer pl-4">
                       <input
                         type="checkbox"
@@ -1008,6 +1073,7 @@ export function EmailThreadList({
                                     subject: thread.subject,
                                   },
                                   processingEntries,
+                                  threadEmailIds: threadEmailIds?.[thread.id] ?? [],
                                 })
                             : undefined
                         }
@@ -1073,7 +1139,11 @@ export function EmailThreadList({
     <ExtractionSidePanel
       target={extractionPanel?.target ?? null}
       processingEntries={extractionPanel?.processingEntries ?? []}
+      threadEmailIds={extractionPanel?.threadEmailIds}
       onClose={() => setExtractionPanel(null)}
+      onThreadDataDeleted={() => router.refresh()}
+      onReanalyzeStart={handleReanalyzeStart}
+      onReanalyzeComplete={handleReanalyzeComplete}
     />
     </>
   );

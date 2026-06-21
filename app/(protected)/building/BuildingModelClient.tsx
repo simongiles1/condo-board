@@ -7,7 +7,9 @@ import { EquipmentLegend } from "@/components/building/EquipmentLegend";
 import {
   ALL_EQUIPMENT_CATEGORIES,
   type EquipmentCategory,
+  type EquipmentItem,
 } from "@/lib/building/fixtures";
+import type { RegistryMapItem } from "@/lib/building/equipment-registry";
 
 const BuildingScene = dynamic(
   () =>
@@ -24,7 +26,21 @@ const BuildingScene = dynamic(
   },
 );
 
-export function BuildingModelClient() {
+function registryItemsToEquipment(items: RegistryMapItem[]): EquipmentItem[] {
+  return items.map((item) => ({
+    id: item.id,
+    name: item.name,
+    category: item.category,
+    floor: item.floor,
+    position: item.position,
+  }));
+}
+
+export function BuildingModelClient({
+  registryMapItems = [],
+}: {
+  registryMapItems?: RegistryMapItem[];
+}) {
   const [visibleCategories, setVisibleCategories] = useState<
     Set<EquipmentCategory>
   >(() => new Set(ALL_EQUIPMENT_CATEGORIES));
@@ -43,7 +59,14 @@ export function BuildingModelClient() {
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-200 shadow-sm">
-      <BuildingScene visibleCategories={visibleCategories} />
+      <BuildingScene
+        visibleCategories={visibleCategories}
+        equipment={
+          registryMapItems.length > 0
+            ? registryItemsToEquipment(registryMapItems)
+            : undefined
+        }
+      />
       <EquipmentLegend
         visibleCategories={visibleCategories}
         onToggleCategory={handleToggleCategory}

@@ -18,7 +18,10 @@ import {
   reconcileThreadActionItems,
 } from "@/lib/email-analysis/action-item-reconciliation";
 import { semanticDeduplicateIncomingActionItems } from "@/lib/email-analysis/action-item-dedup";
+import { reconcileThreadEquipment } from "@/lib/email-analysis/equipment-reconciliation";
+import { reconcileThreadCalendar } from "@/lib/email-analysis/calendar-reconciliation";
 import { reconcileThreadEntities } from "@/lib/email-analysis/entity-reconciliation";
+import { compileRegistryPromptSection } from "@/lib/building/equipment-registry";
 import { detectAdditionalContactEmailsForThread } from "@/lib/entities/contact-emails";
 import { loadEntityExclusionsPromptSection } from "@/lib/entities/entity-exclusions";
 import {
@@ -343,9 +346,11 @@ export async function analyzeEmail(input: {
   }
 
   const skill = await compileSkillPromptSection();
+  const registry = await compileRegistryPromptSection();
   const excludedEntitiesSection = await loadEntityExclusionsPromptSection();
   const systemInstruction = buildEmailAnalysisSystemPrompt({
     skillPromptSection: skill.promptSection,
+    registryPromptSection: registry.promptSection,
     excludedEntitiesSection,
   });
 
@@ -605,6 +610,57 @@ export async function analyzeEmail(input: {
     }
 
     try {
+      const equipmentReconciliation = await reconcileThreadEquipment({
+        threadId: email.threadId,
+        sourceId,
+        modelName: settings.analysisModel,
+      });
+      allCalls.push(...equipmentReconciliation.calls);
+      if (equipmentReconciliation.afterCount !== equipmentReconciliation.beforeCount) {
+        counts.equipment_reconciled =
+          (counts.equipment_reconciled ?? 0) +
+          Math.max(
+            0,
+            equipmentReconciliation.beforeCount - equipmentReconciliation.afterCount,
+          );
+      }
+    } catch (error) {
+      console.error("[email-analysis:equipment-reconcile]", {
+        emailId: email.id,
+        threadId: email.threadId,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Equipment reconciliation failed",
+      });
+    }
+
+    try {
+      const calendarReconciliation = await reconcileThreadCalendar({
+        threadId: email.threadId,
+        modelName: settings.analysisModel,
+      });
+      allCalls.push(...calendarReconciliation.calls);
+      if (calendarReconciliation.afterCount !== calendarReconciliation.beforeCount) {
+        counts.calendar_reconciled =
+          (counts.calendar_reconciled ?? 0) +
+          Math.max(
+            0,
+            calendarReconciliation.beforeCount - calendarReconciliation.afterCount,
+          );
+      }
+    } catch (error) {
+      console.error("[email-analysis:calendar-reconcile]", {
+        emailId: email.id,
+        threadId: email.threadId,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Calendar reconciliation failed",
+      });
+    }
+
+    try {
       const additionalEmailsDetected = await detectAdditionalContactEmailsForThread({
         threadId: email.threadId,
         sourceId,
@@ -756,9 +812,11 @@ export async function classifyEmailAttachmentHasValue(input: {
   const db = getDb();
   const settings = await getAnalysisSettings();
   const skill = await compileSkillPromptSection();
+  const registry = await compileRegistryPromptSection();
   const excludedEntitiesSection = await loadEntityExclusionsPromptSection();
   const systemInstruction = buildEmailAnalysisSystemPrompt({
     skillPromptSection: skill.promptSection,
+    registryPromptSection: registry.promptSection,
     excludedEntitiesSection,
   });
 

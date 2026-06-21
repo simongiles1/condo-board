@@ -1,0 +1,19 @@
+---
+description: Hover popover pattern — single active popover with 500ms hide delay
+globs: **/*.{tsx,ts}
+alwaysApply: false
+---
+
+# Hover popovers
+
+When adding a popover that opens on icon/badge hover:
+
+1. **500ms hide delay** — use `POPOVER_HIDE_DELAY_MS = 500` so the pointer can reach the popover.
+2. **Track hover on trigger + popover** — refs for each; `scheduleHide` on leave; close only when both are unhovered after the delay.
+3. **One popover at a time** — import from `@/lib/ui/hover-popover-group`:
+   - `claimHoverPopover(instanceId, forceClose)` when opening (closes any other popover immediately)
+   - `releaseHoverPopover(instanceId)` in `forceClose` and on unmount
+   - `closeActiveHoverPopover()` before click actions that open panels/dialogs
+4. **`forceClose`** must cancel the hide timeout, reset hover refs, `setOpen(false)`, and release the group slot.
+
+Copy the pattern from `ProcessedCostBadge` or `InsightSourceEmailsBadge`. Do not implement standalone hover popovers without the group — multiple triggers on one page will stack.

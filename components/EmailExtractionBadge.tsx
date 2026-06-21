@@ -15,6 +15,10 @@ import {
   type InboxExtractionSummary,
 } from "@/lib/email/extraction-display";
 import { formatDateTime } from "@/lib/format/datetime";
+import {
+  claimHoverPopover,
+  releaseHoverPopover,
+} from "@/lib/ui/hover-popover-group";
 
 const VIEWPORT_MARGIN = 8;
 const POPOVER_HIDE_DELAY_MS = 500;
@@ -488,6 +492,7 @@ export function EmailExtractionBadge({
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const popoverInstanceId = useRef(Symbol("email-extraction-badge")).current;
   const triggerHoveredRef = useRef(false);
   const popoverHoveredRef = useRef(false);
   const subPopoverHoveredRef = useRef(false);
@@ -511,6 +516,15 @@ export function EmailExtractionBadge({
     }
   }
 
+  function forceClose() {
+    cancelHide();
+    triggerHoveredRef.current = false;
+    popoverHoveredRef.current = false;
+    subPopoverHoveredRef.current = false;
+    setOpen(false);
+    releaseHoverPopover(popoverInstanceId);
+  }
+
   function scheduleHide() {
     cancelHide();
     hideTimeoutRef.current = setTimeout(() => {
@@ -519,7 +533,7 @@ export function EmailExtractionBadge({
         !popoverHoveredRef.current &&
         !subPopoverHoveredRef.current
       ) {
-        setOpen(false);
+        forceClose();
       }
     }, POPOVER_HIDE_DELAY_MS);
   }
@@ -534,13 +548,17 @@ export function EmailExtractionBadge({
   }
 
   function showPopover() {
+    claimHoverPopover(popoverInstanceId, forceClose);
     cancelHide();
     setOpen(true);
   }
 
   useEffect(() => {
-    return () => cancelHide();
-  }, []);
+    return () => {
+      cancelHide();
+      releaseHoverPopover(popoverInstanceId);
+    };
+  }, [popoverInstanceId]);
 
   useLayoutEffect(() => {
     if (!open || !rootRef.current || !popoverRef.current) return;

@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm";
-import { boolean, integer, pgTable, text } from "drizzle-orm/pg-core";
+import { boolean, integer, pgTable, text, type AnyPgColumn } from "drizzle-orm/pg-core";
 
 export const meetings = pgTable("meetings", {
   id: text("id").primaryKey(),
@@ -369,6 +369,20 @@ export const discoveredFacts = pgTable("discovered_facts", {
   createdAt: text("created_at").notNull(),
 });
 
+export const buildingEquipmentRegistry = pgTable("building_equipment_registry", {
+  id: text("id").primaryKey(),
+  canonicalName: text("canonical_name").notNull(),
+  manufacturer: text("manufacturer"),
+  model: text("model"),
+  floor: integer("floor"),
+  location: text("location"),
+  drawingReference: text("drawing_reference"),
+  category: text("category"),
+  specsJson: text("specs_json"),
+  positionJson: text("position_json"),
+  createdAt: text("created_at").notNull(),
+});
+
 export const equipmentAssets = pgTable("equipment_assets", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -376,6 +390,18 @@ export const equipmentAssets = pgTable("equipment_assets", {
   category: text("category"),
   installDate: text("install_date"),
   notes: text("notes"),
+  kind: text("kind").notNull().default("equipment"),
+  significance: text("significance").notNull().default("major"),
+  manufacturer: text("manufacturer"),
+  aliasesJson: text("aliases_json"),
+  canonicalId: text("canonical_id").references((): AnyPgColumn => equipmentAssets.id, {
+    onDelete: "set null",
+  }),
+  confidence: text("confidence"),
+  source: text("source").notNull().default("extracted"),
+  registryId: text("registry_id").references(() => buildingEquipmentRegistry.id, {
+    onDelete: "set null",
+  }),
   createdAt: text("created_at").notNull(),
 });
 

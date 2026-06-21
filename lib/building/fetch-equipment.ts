@@ -26,6 +26,10 @@ export type BuildingMaintenanceEventRow = {
   description: string | null;
   equipmentLocation: string | null;
   equipmentCategory: string | null;
+  equipmentKind: string | null;
+  equipmentSignificance: string | null;
+  equipmentManufacturer: string | null;
+  equipmentCanonicalId: string | null;
   email: BuildingEmailReference | null;
 };
 
@@ -36,6 +40,10 @@ export type BuildingEquipmentAssetRow = {
   category: string | null;
   installDate: string | null;
   notes: string | null;
+  kind: string | null;
+  significance: string | null;
+  manufacturer: string | null;
+  canonicalId: string | null;
   eventCount: number;
   lastEventAt: string | null;
   relatedEmails: BuildingEmailReference[];
@@ -62,6 +70,10 @@ export async function fetchBuildingEquipmentData(): Promise<BuildingEquipmentDat
       description: maintenanceEvents.description,
       equipmentLocation: equipmentAssets.location,
       equipmentCategory: equipmentAssets.category,
+      equipmentKind: equipmentAssets.kind,
+      equipmentSignificance: equipmentAssets.significance,
+      equipmentManufacturer: equipmentAssets.manufacturer,
+      equipmentCanonicalId: equipmentAssets.canonicalId,
       sourceId: maintenanceEvents.sourceId,
     })
     .from(maintenanceEvents)
@@ -86,6 +98,10 @@ export async function fetchBuildingEquipmentData(): Promise<BuildingEquipmentDat
     description: row.description,
     equipmentLocation: row.equipmentLocation,
     equipmentCategory: row.equipmentCategory,
+    equipmentKind: row.equipmentKind,
+    equipmentSignificance: row.equipmentSignificance,
+    equipmentManufacturer: row.equipmentManufacturer,
+    equipmentCanonicalId: row.equipmentCanonicalId,
     email: emailBySourceId.get(row.sourceId) ?? null,
   }));
 
@@ -132,6 +148,10 @@ export async function fetchBuildingEquipmentData(): Promise<BuildingEquipmentDat
       category: asset.category,
       installDate: asset.installDate,
       notes: asset.notes,
+      kind: asset.kind,
+      significance: asset.significance,
+      manufacturer: asset.manufacturer,
+      canonicalId: asset.canonicalId,
       eventCount: stats?.count ?? 0,
       lastEventAt: stats?.lastEventAt ?? null,
       relatedEmails: dedupeEmailReferences(stats?.emails ?? []),

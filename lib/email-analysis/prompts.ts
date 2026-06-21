@@ -39,13 +39,44 @@ When in doubt, prefer omitting a fact over fabricating a date or status.
 - entities[]: ALL people and organizations mentioned in the email — correspondents, signatories, property managers, contractors, and any company named in the thread. Emit each distinct contact once per message using the most complete canonical form. When a person is clearly from an organization (same From/Cc line, signature block, or email domain), include both with the same context snippet. For each entity, context MUST be 2–4 sentences or a short paragraph excerpt from the email — include the topic being discussed nearby (project name, bid scope, contract, meeting purpose, etc.), not a lone partial sentence. Do NOT emit dates or amounts here. Do NOT emit the board's own condominium corporation (TSCC 2517, "Toronto Standard Condominium Corporation No. 2517") — it is implicit context, not an external contact.
 - vendors[]: ONLY organizations that perform paid services or contracted work for the building (HVAC, plumbing, engineering consultants, etc.). Property managers and regular correspondents belong in entities[] but NOT vendors[] unless they are also a contracted service provider. Every vendors[] entry MUST also appear as an org in entities[] with the same context.
 
+CRITICAL — equipment extraction (equipment_mentions):
+The downstream system tracks building assets for maintenance history, breakdown patterns, and location. Be selective — quality over quantity.
+
+equipment_mentions[]: physical building systems and assets referenced in the content. Each entry is an object with name, kind, significance, and optional manufacturer/category fields.
+
+kind values:
+- equipment: a physical building system or asset that is installed, maintained, replaced, or is the subject of a quote, tender, or capital project (e.g. booster pump, boiler, generator, elevator, fan coil unit, domestic water booster). A control panel counts as equipment only when it governs a major system (e.g. booster pump control panel).
+- manufacturer: a brand or maker name ONLY (Wilo, Armstrong, Grundfos, TACO, Bell & Gossett). Do NOT list manufacturers as equipment. Instead set the manufacturer field on the related equipment entry. Emit a standalone manufacturer entry only when a brand is mentioned with no identifiable equipment attached.
+- component: sub-parts, consumables, or ancillary items (pressure sensors, isolation valves, cable and conduit, gaskets, fittings). These are NOT tracked as primary building equipment.
+
+significance values:
+- major: the asset the email is actually about — replacement, upgrade, large-cost project, or primary maintenance subject (e.g. a $200k booster pump replacement).
+- minor: incidental mentions, ancillary parts, bid/tender options, or supporting items referenced in passing.
+
+equipment_role values (use for tender, bid, quote-comparison, and replacement threads):
+- installed_system: the ONE primary building system or asset the thread is about — the existing or planned asset being maintained, replaced, or tendered (e.g. "Domestic booster pump duplex system"). Pick the most formal canonical name. Emit at most ONE installed_system per distinct physical system per message.
+- bid_alternative: a specific make/model/skid package proposed as a tender or quote option — NOT the system itself (e.g. "WILO CO2-Helix V110-07/1, 20 HP", "GRUNDFOS 60HYDRO MPC EC 2CR20-10"). Always set parent_system to the installed_system name. Use significance=minor unless the email focuses solely on that one option.
+- component: sub-parts attached to a named system (pressure sensors, isolation valves). Set parent_system when the owning system is identifiable.
+
+parent_system: required when equipment_role is bid_alternative; recommended for components. Use the canonical installed_system name — not a vague label like "booster pump".
+
+Rules:
+- Emit each distinct asset ONCE using the most formal canonical name. Do NOT emit both layman and formal variants (e.g. pick "Domestic booster pump duplex system" OR "Booster pump (duplex set)", not both — prefer the formal installed_system name).
+- Do NOT emit duplicate names.
+- Do NOT emit vague generic labels ("booster pump", "skid-mounted pumping package") when a formal installed_system name is already identified — those are aliases, not separate assets.
+- Tender/bid threads: ONE installed_system (major) + separate bid_alternative rows (minor) for each proposed make/model. Never list bid options at the same hierarchy level as the system being replaced.
+- Do NOT emit service providers, contractors, or vendor company names as equipment — those belong in entities[] and vendors[].
+- When a manufacturer is named alongside equipment, set manufacturer on the equipment entry; do not also emit the manufacturer as a separate equipment row unless it stands alone with no equipment context.
+- Prefer major equipment that a condo board would track for capital planning and maintenance history. Skip trivial footnotes unless they are the explicit subject of the email.
+- When KNOWN BUILDING EQUIPMENT registry entries are provided below, prefer matching mentions to existing registry assets (set is_existing: true and registry_id when matched). Only set is_existing: false for genuinely new equipment not in the registry.
+
 JSON schema (all fields optional except where noted):
 {
   "document_type": string,
   "summary": string,
   "urgency": "low" | "normal" | "high" | "urgent",
   "tags": string[],
-  "equipment_mentions": string[],
+  "equipment_mentions": [{ "name", "kind": "equipment"|"manufacturer"|"component", "significance": "major"|"minor", "equipment_role": "installed_system"|"bid_alternative"|"component", "parent_system", "manufacturer", "category", "source_quote", "confidence": "high"|"medium"|"low", "is_existing": boolean, "registry_id": string }],
   "maintenance_events": [{ "equipment", "action", "date", "time", "vendor", "cost", "work_order", "status", "description", "source_quote", "confidence": "high"|"medium"|"low" }],
   "warranty_mentions": string[],
   "budget_line_items": [{ "period", "fiscal_year", "category", "subcategory", "budgeted_amount", "actual_amount", "variance", "currency", "source_quote", "confidence" }],
@@ -78,8 +109,9 @@ export const EMAIL_ANALYSIS_SYSTEM_PROMPT = EMAIL_ANALYSIS_BASE_SYSTEM_PROMPT;
 export function buildEmailAnalysisSystemPrompt(input: {
   skillPromptSection?: string;
   excludedEntitiesSection?: string;
+  registryPromptSection?: string;
 } = {}): string {
-  return `${EMAIL_ANALYSIS_BASE_SYSTEM_PROMPT}${input.skillPromptSection ?? ""}${input.excludedEntitiesSection ?? ""}`;
+  return `${EMAIL_ANALYSIS_BASE_SYSTEM_PROMPT}${input.skillPromptSection ?? ""}${input.registryPromptSection ?? ""}${input.excludedEntitiesSection ?? ""}`;
 }
 
 export const EMAIL_ANALYSIS_MERGE_PROMPT = `You merge multiple partial JSON extraction results from chunks of the same document into one complete JSON object.
@@ -328,4 +360,138 @@ ${JSON.stringify(input.approvedContacts ?? [], null, 2)}
 ${input.excludedEntitiesSection ?? ""}
 
 Reconcile the raw entities into contact cards ready for board review. Merge duplicates and fix incorrect person/org/phone groupings using evidence from the thread. When an approved contact appears under a new email address, include that email for review. Omit any excluded entities entirely.`;
+}
+
+export const EQUIPMENT_RECONCILIATION_SYSTEM_PROMPT = `You reconcile extracted equipment mentions from an email thread for TSCC 2517, a Toronto condominium corporation board.
+
+You receive:
+1. The chronological email thread (all messages).
+2. Raw equipment rows extracted from per-message analysis (names, kinds, significance, manufacturers).
+3. Optional KNOWN BUILDING EQUIPMENT registry entries (canonical names, locations, manufacturers).
+
+Your job: produce a cleaned set of canonical equipment assets. Merge duplicate and alias names, classify manufacturers and components correctly, establish system-vs-bid hierarchy, and match to registry entries when applicable.
+
+Rules:
+- Return valid JSON only — no markdown fences.
+- Merge obvious duplicates and aliases: layman vs formal names (e.g. "booster pump" + "Domestic booster pump duplex system" + "Booster Pump (Duplex Set)" + "booster pump skid" → ONE installed_system canonical asset).
+- Pick the most formal, descriptive canonical_name for each merged installed_system group.
+- Hierarchy — critical for tender/bid/replacement threads:
+  - installed_system: the physical building asset being discussed (one per distinct system). significance=major. equipment_role=installed_system.
+  - bid_alternative: specific proposed make/model/skid packages from contractor quotes. significance=minor. equipment_role=bid_alternative. Set parent_system to the installed_system canonical_name. NEVER merge a bid_alternative into the installed_system row.
+  - After reconciliation, a typical tender thread should show 1 installed_system + N bid_alternatives — not multiple major rows describing the same system alongside its bid options.
+- kind=manufacturer rows (Wilo, Armstrong, Grundfos, TACO, Bell & Gossett) should NOT remain as standalone equipment — attach as manufacturer on the related equipment entry, or omit if absorbed.
+- kind=component rows (pressure sensor, cable and conduit, isolation valves) should have significance=minor unless they are the explicit subject of the email.
+- significance=major for the primary assets the thread is about (replacement, tender, large-cost project).
+- raw_names: every distinct raw extracted name that maps to this canonical asset (including names being merged away).
+- aliases: variant names that are NOT the canonical_name but refer to the same asset.
+- When a registry entry clearly matches, set registry_id to that entry's id, is_existing=true, and use the registry canonical_name. Fill location from registry when available.
+- Do NOT emit service providers or vendor companies as equipment.
+- Emit at most ONE entry per distinct physical asset in the building.
+
+JSON schema:
+{
+  "equipment": [
+    {
+      "canonical_name": "string",
+      "kind": "equipment" | "manufacturer" | "component",
+      "significance": "major" | "minor",
+      "equipment_role": "installed_system" | "bid_alternative" | "component",
+      "parent_system": "string or null",
+      "manufacturer": "string or null",
+      "category": "string or null",
+      "aliases": ["string"],
+      "raw_names": ["string"],
+      "registry_id": "string or null",
+      "is_existing": false,
+      "location": "string or null"
+    }
+  ]
+}`;
+
+export function buildEquipmentReconciliationUserPrompt(input: {
+  threadTranscript: string;
+  extractedEquipment: Array<{
+    id: string;
+    name: string;
+    kind: string | null;
+    significance: string | null;
+    manufacturer: string | null;
+    category: string | null;
+  }>;
+  registryEntries?: Array<{
+    id: string;
+    canonical_name: string;
+    manufacturer: string | null;
+    location: string | null;
+    floor: number | null;
+    category: string | null;
+  }>;
+}): string {
+  return `EMAIL THREAD (chronological)
+${input.threadTranscript}
+
+RAW EXTRACTED EQUIPMENT (from per-message extraction — may contain duplicates, manufacturers misclassified as equipment, and alias names)
+${JSON.stringify(input.extractedEquipment, null, 2)}
+
+KNOWN BUILDING EQUIPMENT REGISTRY (use these canonical names and ids when a raw mention clearly matches existing building equipment)
+${JSON.stringify(input.registryEntries ?? [], null, 2)}
+
+Reconcile the raw equipment into canonical assets. Merge duplicates and aliases, reclassify manufacturers and minor components, and match to registry entries when applicable.`;
+}
+
+export const CALENDAR_RECONCILIATION_SYSTEM_PROMPT = `You reconcile calendar-worthy events extracted from an email thread for TSCC 2517, a Toronto condominium corporation board.
+
+You receive:
+1. The chronological email thread (all messages).
+2. Persisted calendar event rows from per-message extraction (meetings, hard deadlines, dated maintenance).
+
+Tier-1 exact deduplication has already collapsed rows that share the same date and identical source_quote. Your job is tier-2 semantic reconciliation: merge rows that describe the SAME real-world calendar event when wording or quotes differ.
+
+Rules:
+- Return valid JSON only — no markdown fences.
+- Merge ONLY when the thread clearly shows one real-world event/deadline/meeting — not merely because two rows share a calendar date.
+- Do NOT merge distinct events on the same date (e.g. bid closing deadline vs bid irrevocability end date, or two unrelated inspections).
+- Do NOT merge meetings with deadlines, or maintenance events with deadlines, unless the thread explicitly treats them as the same obligation.
+- Prefer the clearest sentence-case canonical_title. Preserve regulatory meaning in deadline titles.
+- For meetings, canonical_title should read like "Board meeting" (type + " meeting"), not all lowercase or title case every word.
+- merged_event_ids must list every input event id absorbed into the group, including the id you keep first.
+- Every input event id must appear in exactly one output group — no orphans, no double-counting.
+- When two rows are already distinct events, emit separate groups with a single id each.
+- source_quote: best verbatim excerpt from the thread supporting the canonical event. Omit when none is available.
+
+JSON schema:
+{
+  "events": [
+    {
+      "canonical_title": "string",
+      "event_type": "deadline" | "meeting" | "maintenance",
+      "start_at": "YYYY-MM-DD or ISO datetime",
+      "end_at": "ISO datetime or null",
+      "description": "string or null",
+      "source_quote": "string or null",
+      "merged_event_ids": ["id1", "id2"]
+    }
+  ]
+}`;
+
+export function buildCalendarReconciliationUserPrompt(input: {
+  threadTranscript: string;
+  calendarEvents: Array<{
+    id: string;
+    title: string;
+    event_type: string;
+    start_at: string;
+    end_at: string | null;
+    description: string | null;
+    source_quote: string | null;
+    dedup_key: string | null;
+  }>;
+}): string {
+  return `EMAIL THREAD (chronological)
+${input.threadTranscript}
+
+PERSISTED CALENDAR EVENTS (from per-message extraction — tier-1 exact dedup already applied; may still contain semantic duplicates)
+${JSON.stringify(input.calendarEvents, null, 2)}
+
+Reconcile into canonical calendar events. Merge only obvious semantic duplicates. Keep legitimately distinct events separate even when they share a date.`;
 }

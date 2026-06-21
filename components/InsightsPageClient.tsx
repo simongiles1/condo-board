@@ -7,12 +7,23 @@ import { BudgetYoYChart } from "@/components/BudgetYoYChart";
 import { EditableApprovedEntitiesList } from "@/components/EditableApprovedEntitiesList";
 import { EditableApprovedOrganizationsGrid } from "@/components/EditableApprovedOrganizationsGrid";
 import { EntityReviewPanel } from "@/components/EntityReviewPanel";
-import { EquipmentTimeline } from "@/components/EquipmentTimeline";
+import {
+  EquipmentTimeline,
+  EquipmentViewToggle,
+  filterEquipmentEvents,
+  type MaintenanceEvent,
+} from "@/components/EquipmentTimeline";
+import {
+  ExtractionSidePanel,
+  type ExtractionPanelTarget,
+} from "@/components/ExtractionSidePanel";
+import { InsightSourceEmailsBadge } from "@/components/InsightSourceEmailsBadge";
 import {
   InsightsTabStrip,
   type InsightsTabId,
 } from "@/components/InsightsTabStrip";
 import { InsightsSubTabStrip } from "@/components/InsightsSubTabStrip";
+import type { BuildingEmailReference } from "@/lib/building/resolve-source-email";
 import type { PendingAdditionalEmail } from "@/lib/entities/contact-emails";
 import {
   getEntityGroupKind,
@@ -40,22 +51,19 @@ function filterGroupsByKind(
   return groups.filter((group) => getEntityGroupKind(group) === "other");
 }
 
-type MaintenanceEvent = {
-  id: string;
-  equipmentName: string;
-  eventType: string;
-  occurredAt: string | null;
-  occurredTime: string | null;
-  vendorName: string | null;
-  cost: string | null;
-  description: string | null;
-};
-
 type BudgetPoint = {
   fiscalYear: number;
   category: string;
   budgeted: number;
   actual: number;
+};
+
+type EntityReviewGroupWithSources = EntityReviewGroup & {
+  sourceEmails: BuildingEmailReference[];
+};
+
+type ApprovedOrganizationCardWithSources = ApprovedOrganizationCard & {
+  sourceEmails: BuildingEmailReference[];
 };
 
 type ActionItemRow = {
@@ -65,15 +73,16 @@ type ActionItemRow = {
   description: string | null;
   deadline: string | null;
   context: string | null;
+  sourceEmails: BuildingEmailReference[];
 };
 
 type Props = {
   events: MaintenanceEvent[];
   budgetSeries: BudgetPoint[];
-  pendingGroups: EntityReviewGroup[];
-  approvedGroups: EntityReviewGroup[];
+  pendingGroups: EntityReviewGroupWithSources[];
+  approvedGroups: EntityReviewGroupWithSources[];
   approvedOrganizations: ApprovedOrganizationOption[];
-  approvedOrganizationCards: ApprovedOrganizationCard[];
+  approvedOrganizationCards: ApprovedOrganizationCardWithSources[];
   pendingAdditionalEmails: PendingAdditionalEmail[];
   actionItems: ActionItemRow[];
   customOrganizationRoles: OrganizationRoleOption[];
@@ -107,6 +116,23 @@ export function InsightsPageClient({
 
   const [activeTab, setActiveTab] = useState<InsightsTabId>("entities");
   const [entityKindTab, setEntityKindTab] = useState<EntityKindTab>("all");
+  const [showAllEquipment, setShowAllEquipment] = useState(false);
+  const [extractionTarget, setExtractionTarget] =
+    useState<ExtractionPanelTarget | null>(null);
+
+  function openSourceEmail(emailId: string) {
+    setExtractionTarget({ kind: "email", emailId });
+  }
+
+  const visibleEquipmentEvents = useMemo(
+    () => filterEquipmentEvents(events, showAllEquipment),
+    [events, showAllEquipment],
+  );
+
+  const hiddenEquipmentCount = useMemo(
+    () => events.length - filterEquipmentEvents(events, false).length,
+    [events],
+  );
 
   const entityKindCounts = useMemo(() => {
     const otherGroupCount = pendingGroups.filter(
@@ -141,7 +167,7 @@ export function InsightsPageClient({
     () => ({
       entities: pendingEntityCount,
       contacts: approvedContactCount,
-      equipment: events.length,
+      equipment: visibleEquipmentEvents.length,
       budget: budgetSeries.length,
       "approved-organizations": approvedOrganizationCards.length,
       "action-items": actionItems.length,
@@ -149,7 +175,7 @@ export function InsightsPageClient({
     [
       pendingEntityCount,
       approvedContactCount,
-      events.length,
+      visibleEquipmentEvents.length,
       budgetSeries.length,
       approvedOrganizationCards.length,
       actionItems.length,
@@ -176,10 +202,20 @@ export function InsightsPageClient({
       <div className="min-h-0 flex-1 overflow-y-auto">
         {activeTab === "equipment" ? (
           <section className="space-y-3">
-            <h2 className="text-lg font-semibold text-slate-900">
-              Equipment &amp; maintenance
-            </h2>
-            <EquipmentTimeline events={events} />
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-slate-900">
+                Equipment &amp; maintenance
+              </h2>
+              <EquipmentViewToggle
+                showAll={showAllEquipment}
+                onChange={setShowAllEquipment}
+                hiddenCount={hiddenEquipmentCount}
+              />
+            </div>
+            <EquipmentTimeline
+              events={visibleEquipmentEvents}
+              onOpenSourceEmail={openSourceEmail}
+            />
           </section>
         ) : null}
 
@@ -218,6 +254,7 @@ export function InsightsPageClient({
                   pendingGroups={filteredPendingGroups}
                   approvedOrganizations={approvedOrganizations}
                   customOrganizationRoles={customOrganizationRoles}
+                  onOpenSourceEmail={openSourceEmail}
                 />
               ) : null}
               {showAdditionalEmails ? (
@@ -247,6 +284,7 @@ export function InsightsPageClient({
               )}
               approvedOrganizations={approvedOrganizations}
               customOrganizationRoles={customOrganizationRoles}
+              onOpenSourceEmail={openSourceEmail}
             />
           </section>
         ) : null}
@@ -259,6 +297,7 @@ export function InsightsPageClient({
             <EditableApprovedOrganizationsGrid
               organizations={approvedOrganizationCards}
               customOrganizationRoles={customOrganizationRoles}
+              onOpenSourceEmail={openSourceEmail}
             />
           </section>
         ) : null}
@@ -275,9 +314,17 @@ export function InsightsPageClient({
                     key={`${item.source}-${item.id}`}
                     className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
                   >
-                    <p className="text-sm font-semibold text-slate-900">
-                      {item.description}
-                    </p>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <p className="text-sm font-semibold text-slate-900">
+                        {item.description}
+                      </p>
+                      {item.sourceEmails.length > 0 ? (
+                        <InsightSourceEmailsBadge
+                          emails={item.sourceEmails}
+                          onOpenEmail={openSourceEmail}
+                        />
+                      ) : null}
+                    </div>
                     <p className="mt-1 text-sm text-slate-600">
                       {item.assignee} · {item.source} · {item.context}
                       {item.deadline ? ` · due ${item.deadline}` : ""}
@@ -291,6 +338,12 @@ export function InsightsPageClient({
           </section>
         ) : null}
       </div>
+
+      <ExtractionSidePanel
+        target={extractionTarget}
+        processingEntries={[]}
+        onClose={() => setExtractionTarget(null)}
+      />
     </section>
   );
 }

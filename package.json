@@ -12,7 +12,8 @@
     "db:migrate": "node scripts/db-migrate.cjs",
     "db:studio": "drizzle-kit studio",
     "db:migrate-from-sqlite": "npx -p better-sqlite3 -p pg node scripts/migrate-sqlite-to-postgres.mjs",
-    "backfill:attachment-value": "npx tsx scripts/backfill-attachment-value.ts"
+    "backfill:attachment-value": "npx tsx scripts/backfill-attachment-value.ts",
+    "backfill:equipment-mentions": "npx tsx scripts/backfill-equipment-mentions.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

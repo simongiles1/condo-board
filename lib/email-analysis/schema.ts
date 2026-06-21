@@ -1,10 +1,32 @@
 /** Email/attachment extraction schema — all 7 domains in one pass. */
 
+import { dedupeCalendarExtractions } from "@/lib/email-analysis/calendar-dedup";
 import { dedupeEntities } from "@/lib/email/entity-dedup";
 import { filterAuditEntities } from "@/lib/email/entity-grouping";
 
 export type ExtractionConfidence = "high" | "medium" | "low";
 export type ExtractionUrgency = "low" | "normal" | "high" | "urgent";
+export type EquipmentKind = "equipment" | "manufacturer" | "component";
+export type EquipmentSignificance = "major" | "minor";
+export type EquipmentRole = "installed_system" | "bid_alternative" | "component";
+
+export type EquipmentMentionExtraction = {
+  name: string;
+  kind?: EquipmentKind;
+  significance?: EquipmentSignificance;
+  /** Logical role in tender/replacement threads — distinct from kind. */
+  equipment_role?: EquipmentRole;
+  /** Canonical installed system this bid option or component belongs to. */
+  parent_system?: string;
+  manufacturer?: string;
+  category?: string;
+  source_quote?: string;
+  confidence?: ExtractionConfidence;
+  /** Phase 2: true when matched to building equipment registry. */
+  is_existing?: boolean;
+  /** Phase 2: registry row id when matched. */
+  registry_id?: string;
+};
 
 export type MaintenanceEventExtraction = {
   equipment: string;
@@ -173,7 +195,7 @@ export type EmailExtractionDocument = {
   /** Attachment-only: e.g. logo, tracking_pixel, document, invoice. */
   attachment_role?: string;
   tags?: string[];
-  equipment_mentions?: string[];
+  equipment_mentions?: EquipmentMentionExtraction[];
   maintenance_events?: MaintenanceEventExtraction[];
   warranty_mentions?: string[];
   budget_line_items?: BudgetLineItemExtraction[];
@@ -282,6 +304,72 @@ function parseSuggestedFields(
     .filter((item) => item.name);
 }
 
+function parseEquipmentKind(value: unknown): EquipmentKind | undefined {
+  const kind = asString(value);
+  if (kind === "equipment" || kind === "manufacturer" || kind === "component") {
+    return kind;
+  }
+  return undefined;
+}
+
+function parseEquipmentSignificance(value: unknown): EquipmentSignificance | undefined {
+  const significance = asString(value);
+  if (significance === "major" || significance === "minor") {
+    return significance;
+  }
+  return undefined;
+}
+
+function parseEquipmentRole(value: unknown): EquipmentRole | undefined {
+  const role = asString(value);
+  if (
+    role === "installed_system" ||
+    role === "bid_alternative" ||
+    role === "component"
+  ) {
+    return role;
+  }
+  return undefined;
+}
+
+function parseEquipmentMentions(value: unknown): EquipmentMentionExtraction[] {
+  if (!Array.isArray(value)) return [];
+
+  const mentions: EquipmentMentionExtraction[] = [];
+
+  for (const item of value) {
+    if (typeof item === "string" && item.trim()) {
+      mentions.push({
+        name: item.trim(),
+        kind: "equipment",
+        significance: "major",
+      });
+      continue;
+    }
+
+    if (!isObject(item)) continue;
+
+    const name = asString(item.name);
+    if (!name) continue;
+
+    mentions.push({
+      name,
+      kind: parseEquipmentKind(item.kind) ?? "equipment",
+      significance: parseEquipmentSignificance(item.significance) ?? "major",
+      equipment_role: parseEquipmentRole(item.equipment_role),
+      parent_system: asString(item.parent_system),
+      manufacturer: asString(item.manufacturer),
+      category: asString(item.category),
+      source_quote: asString(item.source_quote),
+      confidence: asString(item.confidence) as ExtractionConfidence | undefined,
+      is_existing: asBool(item.is_existing),
+      registry_id: asString(item.registry_id),
+    });
+  }
+
+  return mentions;
+}
+
 function parseMaintenanceEvents(value: unknown): MaintenanceEventExtraction[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -372,7 +460,7 @@ export function validateEmailExtraction(
     has_value: asBool(raw.has_value),
     attachment_role: asString(raw.attachment_role),
     tags: asStringArray(raw.tags),
-    equipment_mentions: asStringArray(raw.equipment_mentions),
+    equipment_mentions: parseEquipmentMentions(raw.equipment_mentions),
     maintenance_events: parseMaintenanceEvents(raw.maintenance_events),
     warranty_mentions: asStringArray(raw.warranty_mentions),
     budget_line_items: parseBudgetLineItems(raw.budget_line_items),
@@ -554,5 +642,5 @@ export function mergeExtractionDocuments(
     }));
   }
 
-  return merged;
+  return dedupeCalendarExtractions(merged);
 }

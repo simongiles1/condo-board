@@ -8,12 +8,37 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Tiered calendar deduplication** — Calendar extractions now use two dedup tiers
+  before and after persist. Tier 1 collapses exact duplicates (same date plus
+  identical source quote, or same calendar day for meetings) during document
+  merge and when writing calendar_events. Tier 2 runs AI thread reconciliation
+  after each email analysis to merge semantic duplicates with different wording
+  while keeping legitimately distinct events on the same date. The extraction
+  panel thread view shows reconciled calendar rows from the database, matching
+  the equipment pattern.
+
+- **Equipment extraction redesign (Phase 1)** — Structured `equipment_mentions` with
+  `kind` (equipment / manufacturer / component) and `significance` (major / minor).
+  Thread-level equipment reconciliation merges duplicate and alias names into canonical
+  assets. Insights and Building default to major equipment only, with a toggle to show
+  minor items, components, and manufacturers.
+
+- **Building equipment registry (Phase 2 foundation)** — `building_equipment_registry`
+  table and import stub for future drawings/specs. Registry entries inject into the
+  extraction prompt and drive the 3D Building render when populated.
+
 - **Multiple emails per contact** — Approved person contacts can have more than one
   email address. When email analysis finds a known contact writing from a new
   address, Insights shows an **Additional emails** review card so the board can
   confirm linking it to the existing contact.
 
 ### Changed
+
+- **Extraction panel delete dialog** — Thread delete now lists the same extraction
+  categories shown in the side panel (Vendors & contracts, Capital projects,
+  Calendar, Named entities, and so on) instead of Insights tabs. Selecting all
+  categories fully resets the thread for re-analysis; partial deletes remove
+  saved rows and archive fields for the chosen categories only.
 
 - **Local dev server** — `npm run dev` now binds to port 3010 (was 3000). Added
   `npm run dev:restart` to free port 3010 and start the dev server again. Update
@@ -26,6 +51,18 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   separate lines with the time on the second line.
 
 ### Fixed
+
+- **Extraction panel delete kept maintenance & equipment** — Deleting thread equipment
+  data removed maintenance events but left reconciled equipment visible in the side
+  panel. Purge now removes orphaned `equipment_assets`, strips equipment fields from
+  the extraction archive without re-validating the document, and the thread panel
+  always prefers reconciled equipment over raw archive rows.
+
+- **Insights Equipment tab empty for extracted equipment** — Email analysis extracted
+  `equipment_mentions` (e.g. booster pump, vendor pump brands) into the side panel
+  but only persisted dated `maintenance_events`. Equipment-only threads now save
+  each mention to `equipment_assets` and a `mentioned` maintenance event so they
+  appear on Insights → Equipment.
 
 - **Header user initials** — The avatar badge now shows the first initial of the
   user's first and last name instead of the first two characters of their email.

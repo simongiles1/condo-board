@@ -6,6 +6,8 @@ import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from
 import { EntityContextSnippet } from "@/components/EntityContextSnippet";
 import { EntityEditFields, type EntityEditDraft } from "@/components/EntityEditFields";
 import { EntityKindBadgeSelect } from "@/components/EntityKindBadgeSelect";
+import { InsightSourceEmailsBadge } from "@/components/InsightSourceEmailsBadge";
+import type { BuildingEmailReference } from "@/lib/building/resolve-source-email";
 import {
   applyEntityKindChange,
   entityKindFromGroup,
@@ -142,10 +144,12 @@ export function EntityReviewPanel({
   pendingGroups,
   approvedOrganizations,
   customOrganizationRoles = [],
+  onOpenSourceEmail,
 }: {
-  pendingGroups: EntityReviewGroup[];
+  pendingGroups: Array<EntityReviewGroup & { sourceEmails?: BuildingEmailReference[] }>;
   approvedOrganizations: ApprovedOrganizationOption[];
   customOrganizationRoles?: OrganizationRoleOption[];
+  onOpenSourceEmail?: (emailId: string) => void;
 }) {
   const router = useRouter();
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -220,7 +224,7 @@ export function EntityReviewPanel({
 
   const visibleGroups = sortEntityReviewGroupsForApproval(
     pendingGroups.filter((group) => !removedGroupKeys.has(group.key)),
-  );
+  ) as Array<EntityReviewGroup & { sourceEmails?: BuildingEmailReference[] }>;
 
   if (visibleGroups.length === 0) return null;
 
@@ -383,13 +387,21 @@ export function EntityReviewPanel({
                   ) : null}
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                  {onOpenSourceEmail && group.sourceEmails?.length ? (
+                    <InsightSourceEmailsBadge
+                      emails={group.sourceEmails}
+                      onOpenEmail={onOpenSourceEmail}
+                    />
+                  ) : null}
                   <button
                     type="button"
                     disabled={busyKey === group.key}
                     onClick={() => deleteGroup(group)}
-                    className={actionButtonClassName("danger")}
+                    aria-label={`Delete entity: ${displayTitle}`}
+                    title="Delete"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-red-200 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {busyKey === group.key ? "Saving…" : "Delete"}
+                    <TrashIcon />
                   </button>
                   <button
                     type="button"
@@ -405,11 +417,7 @@ export function EntityReviewPanel({
                     onClick={() => submitGroup(group, "approve")}
                     className={actionButtonClassName("primary")}
                   >
-                    {busyKey === group.key
-                      ? "Saving…"
-                      : draft.entityKind === "contact"
-                        ? "Approve contact"
-                        : "Approve organization"}
+                    {busyKey === group.key ? "Saving…" : "Approve"}
                   </button>
                 </div>
               </div>
@@ -459,5 +467,24 @@ export function EntityReviewPanel({
         })}
       </div>
     </section>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      aria-hidden
+      className="h-4 w-4"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.75}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+      />
+    </svg>
   );
 }

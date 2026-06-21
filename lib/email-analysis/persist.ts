@@ -18,6 +18,10 @@ import {
   residentIssues,
   vendors,
 } from "@/lib/db/schema";
+import {
+  calendarDeadlineDedupKey,
+  calendarMeetingDedupKey,
+} from "@/lib/email-analysis/calendar-dedup";
 import { persistDiscoveredFacts } from "@/lib/email-analysis/extraction-skill";
 import {
   dedupeEntities,
@@ -35,7 +39,22 @@ import {
   loadEntityExclusions,
 } from "@/lib/entities/entity-exclusions";
 
-import type { EmailExtractionDocument } from "./schema";
+import type {
+  EmailExtractionDocument,
+  EquipmentMentionExtraction,
+} from "./schema";
+
+type EquipmentUpsertInput = {
+  name: string;
+  kind?: string;
+  significance?: string;
+  manufacturer?: string;
+  category?: string;
+  confidence?: string;
+  location?: string;
+  registryId?: string;
+  source?: string;
+};
 
 function dedupKey(...parts: (string | number | undefined | null)[]): string {
   return parts
@@ -59,21 +78,151 @@ async function upsertBudgetCategory(name: string): Promise<string> {
   return id;
 }
 
-async function upsertEquipment(name: string): Promise<string> {
+async function upsertEquipment(input: EquipmentUpsertInput): Promise<string> {
   const db = getDb();
-  const normalized = name.trim();
+  const normalized = input.name.trim();
   const [existing] = await db
     .select()
     .from(equipmentAssets)
     .where(eq(equipmentAssets.name, normalized));
 
-  if (existing) return existing.id;
+  const classification = {
+    kind: input.kind ?? "equipment",
+    significance: input.significance ?? "major",
+    manufacturer: input.manufacturer ?? null,
+    category: input.category ?? null,
+    confidence: input.confidence ?? null,
+    location: input.location ?? null,
+    registryId: input.registryId ?? null,
+    source: input.source ?? "extracted",
+  };
+
+  if (existing) {
+    await db
+      .update(equipmentAssets)
+      .set({
+        kind: classification.kind,
+        significance: classification.significance,
+        manufacturer: classification.manufacturer ?? existing.manufacturer,
+        category: classification.category ?? existing.category,
+        confidence: classification.confidence ?? existing.confidence,
+        location: classification.location ?? existing.location,
+        registryId: classification.registryId ?? existing.registryId,
+      })
+      .where(eq(equipmentAssets.id, existing.id));
+    return existing.id;
+  }
 
   const id = randomUUID();
-  await db
-    .insert(equipmentAssets)
-    .values({ id, name: normalized, createdAt: new Date().toISOString() });
+  await db.insert(equipmentAssets).values({
+    id,
+    name: normalized,
+    kind: classification.kind,
+    significance: classification.significance,
+    manufacturer: classification.manufacturer,
+    category: classification.category,
+    confidence: classification.confidence,
+    location: classification.location,
+    registryId: classification.registryId,
+    source: classification.source,
+    createdAt: new Date().toISOString(),
+  });
   return id;
+}
+
+function buildMentionLookup(
+  mentions: EquipmentMentionExtraction[] | undefined,
+): Map<string, EquipmentMentionExtraction> {
+  const lookup = new Map<string, EquipmentMentionExtraction>();
+  for (const mention of mentions ?? []) {
+    lookup.set(mention.name.trim().toLowerCase(), mention);
+  }
+  return lookup;
+}
+
+function mentionFieldsForName(
+  lookup: Map<string, EquipmentMentionExtraction>,
+  name: string,
+): EquipmentUpsertInput {
+  const mention = lookup.get(name.trim().toLowerCase());
+  return {
+    name,
+    kind: mention?.kind,
+    significance: mention?.significance,
+    manufacturer: mention?.manufacturer,
+    category: mention?.category,
+    confidence: mention?.confidence,
+    registryId: mention?.registry_id,
+    source: mention?.is_existing ? "registry_match" : "extracted",
+  };
+}
+
+async function persistEquipmentMentions(input: {
+  sourceId: string;
+  document: EmailExtractionDocument;
+  now: string;
+  counts: Record<string, number>;
+  skipEquipmentNames?: Set<string>;
+}): Promise<void> {
+  const db = getDb();
+  const seenMentions = new Set<string>();
+
+  for (const mention of input.document.equipment_mentions ?? []) {
+    const normalized = mention.name.trim();
+    if (!normalized) continue;
+
+    const mentionKey = normalized.toLowerCase();
+    if (seenMentions.has(mentionKey)) continue;
+    seenMentions.add(mentionKey);
+
+    if (input.skipEquipmentNames?.has(mentionKey)) continue;
+
+    const equipmentId = await upsertEquipment({
+      name: normalized,
+      kind: mention.kind,
+      significance: mention.significance,
+      manufacturer: mention.manufacturer,
+      category: mention.category,
+      confidence: mention.confidence,
+      registryId: mention.registry_id,
+      source: mention.is_existing ? "registry_match" : "extracted",
+    });
+    const key = dedupKey("equipment_mention", normalized, input.sourceId);
+
+    const existing = key
+      ? await db
+          .select()
+          .from(maintenanceEvents)
+          .where(eq(maintenanceEvents.dedupKey, key))
+          .limit(1)
+      : [];
+
+    if (existing.length) continue;
+
+    await db.insert(maintenanceEvents).values({
+      id: randomUUID(),
+      equipmentId,
+      equipmentName: normalized,
+      eventType: "mentioned",
+      occurredAt: null,
+      occurredTime: null,
+      vendorId: null,
+      vendorName: null,
+      cost: null,
+      workOrder: null,
+      status: null,
+      description: mention.source_quote
+        ? `Mentioned in email analysis — ${mention.source_quote}`
+        : "Mentioned in email analysis",
+      sourceQuote: mention.source_quote ?? null,
+      confidence: mention.confidence ?? null,
+      sourceId: input.sourceId,
+      dedupKey: key || null,
+      createdAt: input.now,
+    });
+    input.counts.maintenance_events = (input.counts.maintenance_events ?? 0) + 1;
+    input.counts.equipment_mentions = (input.counts.equipment_mentions ?? 0) + 1;
+  }
 }
 
 async function upsertVendor(name: string, contactJson?: string): Promise<string> {
@@ -157,8 +306,12 @@ export async function persistExtractionDocument(input: {
     await db.delete(calendarEvents).where(eq(calendarEvents.dedupKey, key));
   }
 
+  const mentionLookup = buildMentionLookup(input.document.equipment_mentions);
+
   for (const event of input.document.maintenance_events ?? []) {
-    const equipmentId = await upsertEquipment(event.equipment);
+    const equipmentId = await upsertEquipment(
+      mentionFieldsForName(mentionLookup, event.equipment),
+    );
     let vendorId: string | undefined;
     if (event.vendor) {
       vendorId = await upsertVendor(event.vendor);
@@ -228,6 +381,20 @@ export async function persistExtractionDocument(input: {
       }
     }
   }
+
+  const maintenanceEquipmentNames = new Set(
+    (input.document.maintenance_events ?? [])
+      .map((event) => event.equipment?.trim().toLowerCase())
+      .filter((name): name is string => Boolean(name)),
+  );
+
+  await persistEquipmentMentions({
+    sourceId: input.sourceId,
+    document: input.document,
+    now,
+    counts,
+    skipEquipmentNames: maintenanceEquipmentNames,
+  });
 
   for (const item of input.document.budget_line_items ?? []) {
     const categoryId = await upsertBudgetCategory(item.category);
@@ -443,7 +610,7 @@ export async function persistExtractionDocument(input: {
      * vs "Board Meeting") and often omits `time` in one email while another
      * includes it, which would fragment one real meeting into two events.
      */
-    const calKey = dedupKey("meeting", meeting.date);
+    const calKey = calendarMeetingDedupKey(meeting);
     if (!calKey) continue;
     if (cancelledMeetingKeys.has(calKey)) continue;
     const timedCancelKey = meeting.time
@@ -483,7 +650,8 @@ export async function persistExtractionDocument(input: {
 
   for (const deadline of input.document.deadlines ?? []) {
     if (deadline.date) {
-      const calKey = dedupKey("deadline", deadline.description, deadline.date);
+      const calKey = calendarDeadlineDedupKey(deadline);
+      if (!calKey) continue;
       const calExisting = await db
         .select()
         .from(calendarEvents)
@@ -590,6 +758,30 @@ export async function persistExtractionDocument(input: {
   }
 
   return { counts };
+}
+
+/** Backfill equipment mentions for one extraction source without re-persisting other fields. */
+export async function backfillEquipmentMentionsForSource(input: {
+  sourceId: string;
+  document: EmailExtractionDocument;
+}): Promise<number> {
+  const now = new Date().toISOString();
+  const counts: Record<string, number> = {};
+  const maintenanceEquipmentNames = new Set(
+    (input.document.maintenance_events ?? [])
+      .map((event) => event.equipment?.trim().toLowerCase())
+      .filter((name): name is string => Boolean(name)),
+  );
+
+  await persistEquipmentMentions({
+    sourceId: input.sourceId,
+    document: input.document,
+    now,
+    counts,
+    skipEquipmentNames: maintenanceEquipmentNames,
+  });
+
+  return counts.equipment_mentions ?? 0;
 }
 
 export async function deleteExtractionEntities(sourceId: string): Promise<void> {

@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { resolveExtractionSourceEmails } from "@/lib/building/resolve-source-email";
 import { getDb } from "@/lib/db";
@@ -14,6 +14,7 @@ import {
   entityMentions,
   extractedActionItems,
   extractionSources,
+  equipmentAssets,
   invoices,
   maintenanceEvents,
   residentIssues,
@@ -30,6 +31,11 @@ import {
   countExtractionFields,
   formatExtractionFieldItem,
 } from "@/lib/email/extraction-display";
+import type { EquipmentAuditMeta } from "@/lib/email/extraction-audit-display";
+import {
+  normalizeEquipmentKind,
+  normalizeEquipmentSignificance,
+} from "@/lib/equipment/classification";
 import {
   EXTRACTION_DESTINATIONS,
   formatExtractionFieldKeyLabel,
@@ -40,7 +46,11 @@ import {
 import {
   validateEmailExtraction,
   type EmailExtractionDocument,
+  type EquipmentRole,
 } from "@/lib/email-analysis/schema";
+import { buildThreadReconciledCalendarAuditItems } from "@/lib/email-analysis/calendar-reconciliation";
+
+export type { EquipmentAuditMeta } from "@/lib/email/extraction-audit-display";
 
 export type ExtractionAuditItem = {
   fieldKey: string;
@@ -48,6 +58,7 @@ export type ExtractionAuditItem = {
   summary: string;
   sourceQuote?: string;
   persisted: boolean;
+  equipmentMeta?: EquipmentAuditMeta;
   entity?: DedupedEntity & { vendorCandidate?: boolean };
   sourceEmailId?: string | null;
   sourceEmailFrom?: string | null;
@@ -190,12 +201,55 @@ function entityItems(
   }));
 }
 
+function equipmentMentionItems(
+  fieldKey: string,
+  document: EmailExtractionDocument,
+): ExtractionAuditItem[] {
+  const mentions = document.equipment_mentions ?? [];
+  if (mentions.length === 0) return [];
+
+  const items: ExtractionAuditItem[] = [];
+
+  for (const mention of mentions) {
+    const name = mention.name.trim();
+    if (!name) continue;
+
+    const kind = normalizeEquipmentKind(mention.kind);
+    if (kind === "manufacturer") continue;
+
+    const significance = normalizeEquipmentSignificance(mention.significance);
+
+    items.push({
+      fieldKey,
+      fieldLabel: formatExtractionFieldKeyLabel(fieldKey),
+      summary: name,
+      sourceQuote: mention.source_quote,
+      persisted: isExtractionFieldPersisted(fieldKey),
+      equipmentMeta: {
+        name,
+        kind,
+        significance,
+        equipmentRole: mention.equipment_role,
+        parentSystem: mention.parent_system?.trim() || undefined,
+        manufacturer: mention.manufacturer?.trim() || undefined,
+        category: mention.category?.trim() || undefined,
+      },
+    });
+  }
+
+  return items;
+}
+
 function arrayItems(
   fieldKey: string,
   document: EmailExtractionDocument,
 ): ExtractionAuditItem[] {
   if (fieldKey === "entities") {
     return entityItems(fieldKey, document);
+  }
+
+  if (fieldKey === "equipment_mentions") {
+    return equipmentMentionItems(fieldKey, document);
   }
 
   const value = document[fieldKey as keyof EmailExtractionDocument];
@@ -222,6 +276,120 @@ function arrayItems(
   }
 
   return items;
+}
+
+const RELATED_SYSTEM_NOTES_PREFIX = /^Related system:\s*(.+)$/i;
+
+function parseRelatedSystemFromNotes(notes: string | null | undefined): string | undefined {
+  if (!notes?.trim()) return undefined;
+  const match = notes.trim().match(RELATED_SYSTEM_NOTES_PREFIX);
+  return match?.[1]?.trim() || undefined;
+}
+
+function resolveEquipmentRoleFromAsset(input: {
+  kind: string | null;
+  significance: string | null;
+  category: string | null;
+}): EquipmentRole | undefined {
+  if (input.category?.trim().toLowerCase() === "bid alternative") {
+    return "bid_alternative";
+  }
+  if (normalizeEquipmentKind(input.kind) === "component") {
+    return "component";
+  }
+  if (
+    normalizeEquipmentKind(input.kind) === "equipment" &&
+    normalizeEquipmentSignificance(input.significance) === "major"
+  ) {
+    return "installed_system";
+  }
+  return undefined;
+}
+
+/** Canonical thread equipment from DB after reconciliation — used instead of raw per-message rows. */
+async function buildThreadReconciledEquipmentAuditItems(
+  threadId: string,
+): Promise<ExtractionAuditItem[]> {
+  const db = getDb();
+
+  const sourceRows = await db
+    .select({ id: extractionSources.id })
+    .from(extractionSources)
+    .where(eq(extractionSources.emailThreadId, threadId));
+
+  const sourceIds = sourceRows.map((row) => row.id);
+  if (!sourceIds.length) return [];
+
+  const eventRows = await db
+    .select({
+      equipmentId: maintenanceEvents.equipmentId,
+      sourceQuote: maintenanceEvents.sourceQuote,
+      description: maintenanceEvents.description,
+    })
+    .from(maintenanceEvents)
+    .where(inArray(maintenanceEvents.sourceId, sourceIds));
+
+  const equipmentIds = [
+    ...new Set(
+      eventRows
+        .map((row) => row.equipmentId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (!equipmentIds.length) return [];
+
+  const quoteByEquipmentId = new Map<string, string>();
+  for (const event of eventRows) {
+    if (!event.equipmentId || quoteByEquipmentId.has(event.equipmentId)) continue;
+    const quote = event.sourceQuote?.trim() || event.description?.trim();
+    if (quote) quoteByEquipmentId.set(event.equipmentId, quote);
+  }
+
+  const assets = await db
+    .select({
+      id: equipmentAssets.id,
+      name: equipmentAssets.name,
+      kind: equipmentAssets.kind,
+      significance: equipmentAssets.significance,
+      manufacturer: equipmentAssets.manufacturer,
+      category: equipmentAssets.category,
+      notes: equipmentAssets.notes,
+    })
+    .from(equipmentAssets)
+    .where(
+      and(
+        inArray(equipmentAssets.id, equipmentIds),
+        isNull(equipmentAssets.canonicalId),
+      ),
+    )
+    .orderBy(asc(equipmentAssets.name));
+
+  return assets.map((asset) => {
+    const kind = normalizeEquipmentKind(asset.kind);
+    const significance = normalizeEquipmentSignificance(asset.significance);
+    const equipmentRole = resolveEquipmentRoleFromAsset(asset);
+    const parentSystem = parseRelatedSystemFromNotes(asset.notes);
+
+    return {
+      fieldKey: "equipment_mentions",
+      fieldLabel: formatExtractionFieldKeyLabel("equipment_mentions"),
+      summary: asset.name,
+      sourceQuote: quoteByEquipmentId.get(asset.id),
+      persisted: true,
+      equipmentMeta: {
+        name: asset.name,
+        kind,
+        significance,
+        equipmentRole,
+        parentSystem,
+        manufacturer: asset.manufacturer?.trim() || undefined,
+        category:
+          asset.category?.trim().toLowerCase() === "bid alternative"
+            ? undefined
+            : asset.category?.trim() || undefined,
+      },
+    };
+  });
 }
 
 function buildDestinationGroups(
@@ -708,6 +876,8 @@ export async function fetchExtractionAuditForThread(threadId: string): Promise<{
   records: ExtractionAuditRecord[];
   emailSubject: string | null;
   threadEntityGroups: ThreadEntityReviewGroup[];
+  reconciledMaintenanceItems: ExtractionAuditItem[];
+  reconciledCalendarItems: ExtractionAuditItem[];
 }> {
   const db = getDb();
 
@@ -726,10 +896,17 @@ export async function fetchExtractionAuditForThread(threadId: string): Promise<{
 
   const records = await loadAuditRecordsForSources(sources);
   const threadEntityGroups = await buildThreadEntityReviewGroups(threadId);
+  const reconciledMaintenanceItems =
+    await buildThreadReconciledEquipmentAuditItems(threadId);
+  const reconciledCalendarItems = await buildThreadReconciledCalendarAuditItems(
+    threadId,
+  );
 
   return {
     records,
     emailSubject: thread?.subject ?? null,
     threadEntityGroups,
+    reconciledMaintenanceItems,
+    reconciledCalendarItems,
   };
 }

@@ -74,6 +74,10 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     dbTables: ["calendar_events"],
     fields: ["meetings", "deadlines", "meeting_cancellations"],
     fieldNotes: {
+      meetings:
+        "Tier-1 exact dedup (same date + identical source_quote, or same calendar day) runs at merge and persist. Tier-2 AI thread reconciliation merges semantic duplicates with different wording.",
+      deadlines:
+        "Tier-1 exact dedup (same date + identical source_quote) runs at merge and persist. Tier-2 AI thread reconciliation merges semantic duplicates when quotes differ but the thread shows one real deadline.",
       meeting_cancellations:
         "Does not insert rows — removes matching meeting events from calendar_events.",
     },
@@ -105,7 +109,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
       maintenance_events:
         "Saved to maintenance_events. Also creates a calendar_events row when a date is present.",
       equipment_mentions:
-        "Not saved on its own — equipment names are upserted when maintenance_events are persisted.",
+        "Saved to equipment_assets and as a mentioned maintenance event on Insights when no dated maintenance_events exist for the same equipment.",
     },
   },
   {
@@ -200,6 +204,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
 ];
 
 const PERSISTED_FIELDS = new Set<string>([
+  "equipment_mentions",
   "maintenance_events",
   "budget_line_items",
   "invoices",
@@ -214,16 +219,12 @@ const PERSISTED_FIELDS = new Set<string>([
   "meeting_cancellations",
 ]);
 
-/** maintenance_events and equipment_mentions partially persist via maintenance_events path. */
-const PARTIALLY_PERSISTED_FIELDS = new Set<string>(["equipment_mentions"]);
-
 export function formatExtractionFieldKeyLabel(key: string): string {
   return ROUTE_LABELS[key] ?? key.replace(/_/g, " ");
 }
 
 export function isExtractionFieldPersisted(key: string): boolean {
   if (PERSISTED_FIELDS.has(key)) return true;
-  if (PARTIALLY_PERSISTED_FIELDS.has(key)) return false;
   if (key === "proposed_new_concepts") return true;
   return false;
 }
@@ -251,6 +252,7 @@ export function getExtractionFieldMeta(key: string): ExtractionFieldMeta {
 /** Maps persist.ts count keys and DB tables to destination ids for saved-row summaries. */
 export const PERSISTED_TABLE_LABELS: Record<string, string> = {
   maintenance_events: "Maintenance events",
+  equipment_mentions: "Equipment mentions",
   budget_line_items: "Budget line items",
   invoices: "Invoices",
   vendors: "Vendor upserts",

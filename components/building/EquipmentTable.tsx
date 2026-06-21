@@ -1,13 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { EmailSidePanel } from "@/components/EmailSidePanel";
+import { EquipmentViewToggle } from "@/components/EquipmentTimeline";
 import { AssetEmailInfoPopover } from "@/components/building/AssetEmailInfoPopover";
 import {
   EquipmentTableTabStrip,
   type EquipmentTableTabId,
 } from "@/components/building/EquipmentTableTabStrip";
+import {
+  equipmentClassificationLabel,
+  filterClassifiedEquipment,
+} from "@/lib/equipment/classification";
 import type {
   BuildingEquipmentAssetRow,
   BuildingMaintenanceEventRow,
@@ -45,6 +50,59 @@ export function EquipmentTable({ events, assets }: EquipmentTableProps) {
     defaultTableTab(assets, events),
   );
   const [panelEmailId, setPanelEmailId] = useState<string | null>(null);
+  const [showAllEquipment, setShowAllEquipment] = useState(false);
+
+  const visibleAssets = useMemo(
+    () =>
+      filterClassifiedEquipment(
+        assets.map((asset) => ({
+          ...asset,
+          kind: asset.kind,
+          significance: asset.significance,
+          canonicalId: asset.canonicalId,
+        })),
+        showAllEquipment,
+      ),
+    [assets, showAllEquipment],
+  );
+
+  const visibleEvents = useMemo(
+    () =>
+      filterClassifiedEquipment(
+        events.map((event) => ({
+          ...event,
+          kind: event.equipmentKind,
+          significance: event.equipmentSignificance,
+          canonicalId: event.equipmentCanonicalId,
+        })),
+        showAllEquipment,
+      ),
+    [events, showAllEquipment],
+  );
+
+  const hiddenCount = useMemo(() => {
+    const hiddenAssets =
+      assets.length -
+      filterClassifiedEquipment(
+        assets.map((asset) => ({
+          kind: asset.kind,
+          significance: asset.significance,
+          canonicalId: asset.canonicalId,
+        })),
+        false,
+      ).length;
+    const hiddenEvents =
+      events.length -
+      filterClassifiedEquipment(
+        events.map((event) => ({
+          kind: event.equipmentKind,
+          significance: event.equipmentSignificance,
+          canonicalId: event.equipmentCanonicalId,
+        })),
+        false,
+      ).length;
+    return Math.max(hiddenAssets, hiddenEvents);
+  }, [assets, events]);
 
   if (!events.length && !assets.length) {
     return (
@@ -58,14 +116,24 @@ export function EquipmentTable({ events, assets }: EquipmentTableProps) {
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
-        <EquipmentTableTabStrip
-          active={activeTab}
-          onChange={setActiveTab}
-          counts={{ assets: assets.length, events: events.length }}
-        />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <EquipmentTableTabStrip
+            active={activeTab}
+            onChange={setActiveTab}
+            counts={{
+              assets: visibleAssets.length,
+              events: visibleEvents.length,
+            }}
+          />
+          <EquipmentViewToggle
+            showAll={showAllEquipment}
+            onChange={setShowAllEquipment}
+            hiddenCount={hiddenCount}
+          />
+        </div>
 
         {activeTab === "assets" ? (
-          assets.length > 0 ? (
+          visibleAssets.length > 0 ? (
             <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50">
@@ -109,7 +177,7 @@ export function EquipmentTable({ events, assets }: EquipmentTableProps) {
                 </tr>
               </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {assets.map((asset) => (
+                  {visibleAssets.map((asset) => (
                     <tr key={asset.id} className="hover:bg-slate-50/80">
                       <td className="px-3 py-2">
                         <AssetEmailInfoPopover
@@ -118,13 +186,22 @@ export function EquipmentTable({ events, assets }: EquipmentTableProps) {
                         />
                       </td>
                       <td className="px-3 py-2 font-medium text-slate-900">
-                        {asset.name}
+                        <div className="space-y-1">
+                          <div>{asset.name}</div>
+                          <div className="text-xs font-normal text-slate-500">
+                            {equipmentClassificationLabel({
+                              kind: asset.kind,
+                              significance: asset.significance,
+                              canonicalId: asset.canonicalId,
+                            })}
+                          </div>
+                        </div>
                       </td>
                     <td className="px-3 py-2 text-slate-600">
                       {asset.location ?? "—"}
                     </td>
                     <td className="px-3 py-2 capitalize text-slate-600">
-                      {asset.category ?? "—"}
+                      {asset.manufacturer ?? asset.category ?? "—"}
                     </td>
                     <td className="px-3 py-2 tabular-nums text-slate-600">
                       {asset.eventCount}
@@ -142,7 +219,7 @@ export function EquipmentTable({ events, assets }: EquipmentTableProps) {
             No equipment assets yet.
           </p>
         )
-      ) : events.length > 0 ? (
+      ) : visibleEvents.length > 0 ? (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50">
@@ -204,7 +281,7 @@ export function EquipmentTable({ events, assets }: EquipmentTableProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {events.map((event) => (
+              {visibleEvents.map((event) => (
                 <tr key={event.id} className="hover:bg-slate-50/80">
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums text-slate-600">
                     {formatDate(event.occurredAt, event.occurredTime)}

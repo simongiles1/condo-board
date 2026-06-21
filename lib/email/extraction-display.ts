@@ -235,6 +235,15 @@ export function formatExtractionFieldItem(key: string, item: unknown): string | 
       const context = fieldString(record.context) ? ` — ${fieldString(record.context)}` : "";
       return `${entityType}: ${value}${context}`;
     }
+    case "equipment_mentions": {
+      const name = fieldString(record.name) ?? "Equipment";
+      const kind = fieldString(record.kind) ?? "equipment";
+      const significance = fieldString(record.significance) ?? "major";
+      const manufacturer = fieldString(record.manufacturer);
+      const tags = [`${kind}/${significance}`];
+      if (manufacturer) tags.push(manufacturer);
+      return `${name} (${tags.join(", ")})`;
+    }
     case "discovered_facts":
       return fieldString(record.concept_name) ?? null;
     case "proposed_new_concepts":

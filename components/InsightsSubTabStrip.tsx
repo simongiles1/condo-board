@@ -11,6 +11,7 @@ type Props<T extends string> = {
   onChange: (tab: T) => void;
   counts?: Partial<Record<T, number>>;
   ariaLabel: string;
+  wrap?: boolean;
 };
 
 export function InsightsSubTabStrip<T extends string>({
@@ -19,10 +20,13 @@ export function InsightsSubTabStrip<T extends string>({
   onChange,
   counts,
   ariaLabel,
+  wrap = false,
 }: Props<T>) {
   return (
     <div
-      className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5"
+      className={`rounded-lg border border-slate-200 bg-white p-0.5 ${
+        wrap ? "flex w-full flex-wrap gap-0.5" : "inline-flex"
+      }`}
       role="tablist"
       aria-label={ariaLabel}
     >

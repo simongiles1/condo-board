@@ -9,6 +9,8 @@ import {
 } from "@/components/EntityEditFields";
 import { EntityKindBadgeSelect } from "@/components/EntityKindBadgeSelect";
 import { FormDialog } from "@/components/FormDialog";
+import { InsightSourceEmailsBadge } from "@/components/InsightSourceEmailsBadge";
+import type { BuildingEmailReference } from "@/lib/building/resolve-source-email";
 import type { ApprovedOrganizationCard } from "@/lib/entities/entity-review";
 import {
   applyEntityKindChange,
@@ -37,9 +39,13 @@ function buildDraft(org: ApprovedOrganizationCard): EntityEditDraft {
 export function EditableApprovedOrganizationsGrid({
   organizations,
   customOrganizationRoles = [],
+  onOpenSourceEmail,
 }: {
-  organizations: ApprovedOrganizationCard[];
+  organizations: Array<
+    ApprovedOrganizationCard & { sourceEmails?: BuildingEmailReference[] }
+  >;
   customOrganizationRoles?: OrganizationRoleOption[];
+  onOpenSourceEmail?: (emailId: string) => void;
 }) {
   const router = useRouter();
   const [editingOrg, setEditingOrg] = useState<ApprovedOrganizationCard | null>(
@@ -184,14 +190,22 @@ export function EditableApprovedOrganizationsGrid({
                 ) : null}
               </div>
 
-              <button
-                type="button"
-                disabled={busyName === org.name}
-                onClick={() => openEdit(org)}
-                className="shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              >
-                Edit
-              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                {onOpenSourceEmail && org.sourceEmails?.length ? (
+                  <InsightSourceEmailsBadge
+                    emails={org.sourceEmails}
+                    onOpenEmail={onOpenSourceEmail}
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  disabled={busyName === org.name}
+                  onClick={() => openEdit(org)}
+                  className="shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  Edit
+                </button>
+              </div>
             </div>
           </div>
         ))}

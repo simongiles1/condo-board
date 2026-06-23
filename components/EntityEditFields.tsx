@@ -1,7 +1,7 @@
 "use client";
 
 import { OrganizationRoleSelect } from "@/components/OrganizationRoleSelect";
-import type { ApprovedOrganizationOption } from "@/lib/entities/entity-review";
+import type { ApprovedOrganizationOption, EditableEntityKind } from "@/lib/entities/entity-review";
 import {
   isCondoCorporation,
   type OrganizationRoleOption,

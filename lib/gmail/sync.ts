@@ -77,6 +77,9 @@ async function syncMessageIds(
         options?.allowlistEmails &&
         !parsedMessageMatchesAllowlist(parsed, options.allowlistEmails)
       ) {
+        console.log(
+          `[gmail:sync] allowlist skip msgId=${messageId} from=${parsed.fromAddress} to=${parsed.toAddresses.join(",")} cc=${parsed.ccAddresses.join(",")}`,
+        );
         skipped += 1;
         continue;
       }
@@ -87,8 +90,13 @@ async function syncMessageIds(
         syncRunId,
       });
 
-      if (result === "added") added += 1;
-      else skipped += 1;
+      if (result === "added") {
+        console.log(`[gmail:sync] added msgId=${messageId} from=${parsed.fromAddress}`);
+        added += 1;
+      } else {
+        console.log(`[gmail:sync] duplicate skip msgId=${messageId}`);
+        skipped += 1;
+      }
     } catch (error) {
       errors.push(
         `Message ${messageId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -153,6 +161,11 @@ async function syncViaHistory(
 
     pageToken = response.data.nextPageToken ?? undefined;
   } while (pageToken);
+
+  console.log(
+    `[gmail:sync:history] startHistoryId=${startHistoryId} latestHistoryId=${latestHistoryId} messageIds=${messageIds.size}`,
+    [...messageIds],
+  );
 
   const result = await syncMessageIds(
     gmail,

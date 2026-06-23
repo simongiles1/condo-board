@@ -229,6 +229,11 @@ export async function syncPersonalAccount(
     if (!connection.lastHistoryId) {
       const existingPersonalMail = await countEmailsBySource("personal_backfill");
 
+      // Snapshot historyId before the bulk fetch so that any emails arriving
+      // during the (potentially long) initial import are covered by the next
+      // history sync rather than falling into a silent gap.
+      const profile = await gmail.users.getProfile({ userId: "me" });
+
       if (existingPersonalMail === 0) {
         const messageIds = await listAllMessageIds(
           gmail,
@@ -245,7 +250,6 @@ export async function syncPersonalAccount(
         errors.push(...initialResult.errors);
       }
 
-      const profile = await gmail.users.getProfile({ userId: "me" });
       if (profile.data.historyId) {
         await saveHistoryId("personal_backfill", profile.data.historyId);
       }

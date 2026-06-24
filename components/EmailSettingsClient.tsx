@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
+  SyncRunResultBadge,
+  type SyncRunResultKind,
+} from "@/components/SyncRunResultBadge";
+import {
   DEFAULT_SYNC_SCHEDULE,
   describeSyncSchedule,
   describeSyncCron,
@@ -90,36 +94,36 @@ function formatSyncTrigger(trigger: SyncHistoryRun["trigger"]): string {
 }
 
 function formatSyncRunResult(run: SyncHistoryRun): {
+  kind: SyncRunResultKind;
   label: string;
-  className: string;
 } {
   if (run.trigger === "clear_all") {
     const emails = `${run.messagesAdded.toLocaleString()} email${run.messagesAdded === 1 ? "" : "s"}`;
     const threads = `${run.messagesSkipped.toLocaleString()} thread${run.messagesSkipped === 1 ? "" : "s"}`;
     return {
+      kind: "clear_all",
       label: `Deleted ${emails}, ${threads}`,
-      className: "text-red-800",
     };
   }
   if (run.errors) {
     const interrupted = run.errors.toLowerCase().includes("interrupted");
     if (interrupted) {
-      return { label: "Interrupted", className: "text-amber-800" };
+      return { kind: "interrupted", label: "Interrupted" };
     }
     // If the run completed and processed some messages, show the count with a
     // warning rather than "Failed" — individual 404s don't mean the whole sync failed.
     const didProcess = run.messagesAdded > 0 || run.messagesSkipped > 0;
     if (didProcess && run.finishedAt) {
       const count = `${run.messagesAdded.toLocaleString()} email${run.messagesAdded === 1 ? "" : "s"}`;
-      return { label: `${count} (with errors)`, className: "text-amber-800" };
+      return { kind: "partial", label: `${count} (with errors)` };
     }
-    return { label: "Failed", className: "text-red-800" };
+    return { kind: "failed", label: "Failed" };
   }
   if (!run.finishedAt) {
-    return { label: "Running…", className: "text-slate-600" };
+    return { kind: "running", label: "Running…" };
   }
   const count = `${run.messagesAdded.toLocaleString()} email${run.messagesAdded === 1 ? "" : "s"}`;
-  return { label: count, className: "text-slate-600" };
+  return { kind: "success", label: count };
 }
 
 type EmailSettingsTab = "connections" | "sync" | "allowlist";
@@ -1035,12 +1039,11 @@ export function EmailSettingsClient(props: {
                               {(() => {
                                 const result = formatSyncRunResult(run);
                                 return (
-                                  <span
-                                    className={result.className}
-                                    title={run.errors ?? undefined}
-                                  >
-                                    {result.label}
-                                  </span>
+                                  <SyncRunResultBadge
+                                    kind={result.kind}
+                                    label={result.label}
+                                    errors={run.errors}
+                                  />
                                 );
                               })()}
                             </td>

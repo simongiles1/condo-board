@@ -6,7 +6,18 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gmail sync cursor** — `lastHistoryId` now advances only after a clean history
+  import (zero per-message errors). Failed or partial syncs leave the cursor in
+  place so the next run retries the same range instead of skipping mail. Expired
+  history cursors reset only after a successful safety-window catch-up.
+
 ### Added
+
+- **Sync history error popover** — Failed, interrupted, and partial sync rows show
+  a badge; hover to see categorized error details (message failures, history
+  cursor, general).
 
 - **Tiered calendar deduplication** — Calendar extractions now use two dedup tiers
   before and after persist. Tier 1 collapses exact duplicates (same date plus

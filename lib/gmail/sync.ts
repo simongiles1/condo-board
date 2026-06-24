@@ -212,6 +212,15 @@ async function saveHistoryId(
     .where(eq(gmailConnections.accountType, accountType));
 }
 
+/** Only persist a new Gmail history cursor when the sync phase completed cleanly. */
+async function commitHistoryIdIfReady(
+  accountType: typeof gmailConnections.$inferSelect.accountType,
+  historyId: string | null,
+) {
+  if (!historyId) return;
+  await saveHistoryId(accountType, historyId);
+}
+
 function isExpiredHistoryError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("404") || message.toLowerCase().includes("history");
@@ -267,6 +276,7 @@ export async function syncPersonalAccount(
       // during the (potentially long) initial import are covered by the next
       // history sync rather than falling into a silent gap.
       const profile = await gmail.users.getProfile({ userId: "me" });
+      let pendingHistoryId: string | null = null;
 
       if (existingPersonalMail === 0) {
         const messageIds = await listAllMessageIds(
@@ -282,12 +292,22 @@ export async function syncPersonalAccount(
         messagesAdded += initialResult.added;
         messagesSkipped += initialResult.skipped;
         errors.push(...initialResult.errors);
+
+        if (
+          initialResult.errors.length === 0 &&
+          profile.data.historyId
+        ) {
+          pendingHistoryId = profile.data.historyId;
+        }
+      } else if (profile.data.historyId) {
+        pendingHistoryId = profile.data.historyId;
       }
 
-      if (profile.data.historyId) {
-        await saveHistoryId("personal_backfill", profile.data.historyId);
-      }
+      await commitHistoryIdIfReady("personal_backfill", pendingHistoryId);
     } else {
+      let pendingHistoryId: string | null = null;
+      let historyExpired = false;
+
       try {
         const historyResult = await syncViaHistory(
           gmail,
@@ -300,18 +320,25 @@ export async function syncPersonalAccount(
         messagesSkipped += historyResult.skipped;
         errors.push(...historyResult.errors);
 
-        if (historyResult.historyId) {
-          await saveHistoryId("personal_backfill", historyResult.historyId);
+        if (
+          historyResult.errors.length === 0 &&
+          historyResult.historyId
+        ) {
+          pendingHistoryId = historyResult.historyId;
+        } else if (historyResult.errors.length > 0) {
+          errors.push(
+            "Gmail history cursor was not advanced because one or more messages in the history batch failed to import.",
+          );
         }
       } catch (historyError) {
         if (!isExpiredHistoryError(historyError)) {
           throw historyError;
         }
 
-        const profile = await gmail.users.getProfile({ userId: "me" });
-        if (profile.data.historyId) {
-          await saveHistoryId("personal_backfill", profile.data.historyId);
-        }
+        historyExpired = true;
+        errors.push(
+          `Gmail history cursor expired (${historyError instanceof Error ? historyError.message : String(historyError)}). Cursor was not advanced; running safety-window catch-up instead.`,
+        );
       }
 
       // Safety net: catches anything the history API missed due to eventual
@@ -324,6 +351,19 @@ export async function syncPersonalAccount(
       );
       messagesAdded += safetyResult.added;
       errors.push(...safetyResult.errors);
+
+      // Expired history cannot be replayed incrementally. After a clean
+      // safety-window pass, reset the cursor so future syncs use history again.
+      if (
+        historyExpired &&
+        pendingHistoryId === null &&
+        safetyResult.errors.length === 0
+      ) {
+        const profile = await gmail.users.getProfile({ userId: "me" });
+        pendingHistoryId = profile.data.historyId ?? null;
+      }
+
+      await commitHistoryIdIfReady("personal_backfill", pendingHistoryId);
     }
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
@@ -406,10 +446,14 @@ export async function syncDedicatedAccount(
       messagesSkipped += initialResult.skipped;
       errors.push(...initialResult.errors);
 
-      if (profile.data.historyId) {
-        await saveHistoryId("dedicated", profile.data.historyId);
-      }
+      const pendingHistoryId =
+        initialResult.errors.length === 0 && profile.data.historyId
+          ? profile.data.historyId
+          : null;
+      await commitHistoryIdIfReady("dedicated", pendingHistoryId);
     } else if (connection.lastHistoryId) {
+      let pendingHistoryId: string | null = null;
+
       try {
         const historyResult = await syncViaHistory(
           gmail,
@@ -421,24 +465,33 @@ export async function syncDedicatedAccount(
         messagesSkipped += historyResult.skipped;
         errors.push(...historyResult.errors);
 
-        if (historyResult.historyId) {
-          await saveHistoryId("dedicated", historyResult.historyId);
+        if (
+          historyResult.errors.length === 0 &&
+          historyResult.historyId
+        ) {
+          pendingHistoryId = historyResult.historyId;
+        } else if (historyResult.errors.length > 0) {
+          errors.push(
+            "Gmail history cursor was not advanced because one or more messages in the history batch failed to import.",
+          );
         }
       } catch (historyError) {
         if (!isExpiredHistoryError(historyError)) {
           throw historyError;
         }
 
-        const profile = await gmail.users.getProfile({ userId: "me" });
-        if (profile.data.historyId) {
-          await saveHistoryId("dedicated", profile.data.historyId);
-        }
+        errors.push(
+          `Gmail history cursor expired (${historyError instanceof Error ? historyError.message : String(historyError)}). Cursor was not advanced; run a backfill to recover older mail.`,
+        );
       }
+
+      await commitHistoryIdIfReady("dedicated", pendingHistoryId);
     } else {
       const profile = await gmail.users.getProfile({ userId: "me" });
-      if (profile.data.historyId) {
-        await saveHistoryId("dedicated", profile.data.historyId);
-      }
+      await commitHistoryIdIfReady(
+        "dedicated",
+        profile.data.historyId ?? null,
+      );
     }
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));

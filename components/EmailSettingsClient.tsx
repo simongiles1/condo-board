@@ -1013,7 +1013,9 @@ export function EmailSettingsClient(props: {
                       <tr className="border-b border-slate-200">
                         <th className="px-3 py-2 text-left">Started</th>
                         <th className="w-28 px-3 py-2 text-left">Trigger</th>
-                        <th className="w-36 px-3 py-2 text-right">Result</th>
+                        <th className="w-72 px-3 py-2 text-right whitespace-nowrap">
+                          Result
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -1035,7 +1037,7 @@ export function EmailSettingsClient(props: {
                             <td className="px-3 py-2 text-slate-600">
                               {formatSyncTrigger(run.trigger)}
                             </td>
-                            <td className="px-3 py-2 text-right text-slate-600">
+                            <td className="whitespace-nowrap px-3 py-2 text-right text-slate-600">
                               {(() => {
                                 const result = formatSyncRunResult(run);
                                 return (

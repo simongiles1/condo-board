@@ -8,6 +8,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Docker production build OOM** — Raised the Node.js heap limit during `next build`
+  and skip ESLint in that step so type-checking no longer exhausts memory on Coolify.
+
 - **Gmail sync cursor** — `lastHistoryId` now advances only after a clean history
   import (zero per-message errors). Failed or partial syncs leave the cursor in
   place so the next run retries the same range instead of skipping mail. Expired

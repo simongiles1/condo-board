@@ -176,7 +176,16 @@ export function SyncRunResultBadge({ kind, label, errors }: Props) {
     });
   }, [open, errorLines.length]);
 
-  useEffect(() => () => forceClose(), []);
+  useEffect(() => {
+    const instanceId = popoverInstanceId;
+    return () => {
+      if (hideTimeoutRef.current) {
+        clearTimeout(hideTimeoutRef.current);
+        hideTimeoutRef.current = null;
+      }
+      releaseHoverPopover(instanceId);
+    };
+  }, [popoverInstanceId]);
 
   if (kind === "success" || kind === "clear_all") {
     return (

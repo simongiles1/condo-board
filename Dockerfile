@@ -14,7 +14,9 @@ ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN mkdir -p public
-ENV NODE_OPTIONS="--max-old-space-size=1536"
+# Type-checking after compile can exceed 1.5 GB on this codebase; Coolify build
+# containers need headroom or `next build` aborts during "checking validity of types".
+ENV NODE_OPTIONS="--max-old-space-size=3072"
 RUN npm run build
 
 FROM base AS runner

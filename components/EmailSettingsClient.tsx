@@ -103,10 +103,17 @@ function formatSyncRunResult(run: SyncHistoryRun): {
   }
   if (run.errors) {
     const interrupted = run.errors.toLowerCase().includes("interrupted");
-    return {
-      label: interrupted ? "Interrupted" : "Failed",
-      className: interrupted ? "text-amber-800" : "text-red-800",
-    };
+    if (interrupted) {
+      return { label: "Interrupted", className: "text-amber-800" };
+    }
+    // If the run completed and processed some messages, show the count with a
+    // warning rather than "Failed" — individual 404s don't mean the whole sync failed.
+    const didProcess = run.messagesAdded > 0 || run.messagesSkipped > 0;
+    if (didProcess && run.finishedAt) {
+      const count = `${run.messagesAdded.toLocaleString()} email${run.messagesAdded === 1 ? "" : "s"}`;
+      return { label: `${count} (with errors)`, className: "text-amber-800" };
+    }
+    return { label: "Failed", className: "text-red-800" };
   }
   if (!run.finishedAt) {
     return { label: "Running…", className: "text-slate-600" };

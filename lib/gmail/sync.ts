@@ -77,9 +77,6 @@ async function syncMessageIds(
         options?.allowlistEmails &&
         !parsedMessageMatchesAllowlist(parsed, options.allowlistEmails)
       ) {
-        console.log(
-          `[gmail:sync] allowlist skip msgId=${messageId} from=${parsed.fromAddress} to=${parsed.toAddresses.join(",")} cc=${parsed.ccAddresses.join(",")}`,
-        );
         skipped += 1;
         continue;
       }
@@ -90,13 +87,8 @@ async function syncMessageIds(
         syncRunId,
       });
 
-      if (result === "added") {
-        console.log(`[gmail:sync] added msgId=${messageId} from=${parsed.fromAddress}`);
-        added += 1;
-      } else {
-        console.log(`[gmail:sync] duplicate skip msgId=${messageId}`);
-        skipped += 1;
-      }
+      if (result === "added") added += 1;
+      else skipped += 1;
     } catch (error) {
       errors.push(
         `Message ${messageId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -175,6 +167,35 @@ async function syncViaHistory(
     options,
   );
   return { ...result, historyId: latestHistoryId };
+}
+
+/**
+ * Direct Gmail search for messages received within the last 48 hours that
+ * match the allowlist. Run after every history sync as a safety net for Gmail
+ * History API eventual-consistency gaps — where a message is delivered but its
+ * messageAdded record doesn't appear until after the cursor has already advanced.
+ * The duplicate check in storeParsedMessage silently ignores already-synced
+ * messages, so this is safe to run on every sync with minimal overhead.
+ */
+async function runSafetyWindowSearch(
+  gmail: gmail_v1.Gmail,
+  allowlistEmails: string[],
+  syncRunId: string,
+): Promise<{ added: number; errors: string[] }> {
+  const safetyQuery = `${buildAllowlistQuery(allowlistEmails)} newer_than:2d`;
+  const messageIds = await listAllMessageIds(gmail, safetyQuery);
+  if (messageIds.length === 0) return { added: 0, errors: [] };
+
+  const result = await syncMessageIds(
+    gmail,
+    messageIds,
+    syncRunId,
+    "personal_backfill",
+    { allowlistEmails },
+  );
+  // Only surface newly added messages — skipped are expected duplicates from
+  // the overlap window and would inflate the reported number meaninglessly.
+  return { added: result.added, errors: result.errors };
 }
 
 async function saveHistoryId(
@@ -292,6 +313,17 @@ export async function syncPersonalAccount(
           await saveHistoryId("personal_backfill", profile.data.historyId);
         }
       }
+
+      // Safety net: catches anything the history API missed due to eventual
+      // consistency delays. Runs regardless of whether history succeeded or
+      // expired. Already-synced messages are silently deduplicated.
+      const safetyResult = await runSafetyWindowSearch(
+        gmail,
+        allowlistEmails,
+        syncRunId,
+      );
+      messagesAdded += safetyResult.added;
+      errors.push(...safetyResult.errors);
     }
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));

@@ -1,5 +1,7 @@
 /** Semantic meeting minutes schema (v2) for extraction + PDF rendering. */
 
+import { consolidateActionItemsByAssignee } from "@/lib/minutes/consolidate-action-items";
+
 export const AGENDA_ITEM_STATUS_VALUES = [
   "Motion carried.",
   "Motion defeated.",
@@ -154,6 +156,11 @@ export function filterAgendaItems(items: AgendaItemV2[]): AgendaItemV2[] {
     .filter((item) => !isAgendaItemEmpty(item))
     .map((item) => ({
       ...item,
+      // Collapse to one action item per assignee. The omissions-merge path was
+      // fixed separately, but the model can also emit duplicate per-assignee
+      // entries on the initial generation; consolidate here so every sanitized
+      // document is deduped regardless of source.
+      actionItems: consolidateActionItemsByAssignee(item.actionItems),
       subItems: filterAgendaItems(item.subItems),
     }));
 }
@@ -914,6 +921,20 @@ export function shouldRetryForRestrictedAddendum(
   return false;
 }
 
+const DOLLAR_FIGURE_PATTERN = /\$\s?\d|\d[\d,]*\.\d{2}\b/;
+
+/**
+ * True when an agenda item carries a dollar amount anywhere a cost could live:
+ * the structured `costMentioned` field, the summary/topic prose, or the motion
+ * resolution text. Used to flag expense/ratification items that dropped a figure
+ * present in the board package.
+ */
+function agendaItemHasDollarFigure(item: AgendaItemV2): boolean {
+  if (typeof item.costMentioned === "number") return true;
+  const haystack = `${item.topic} ${item.summary} ${item.motion?.resolutionText ?? ""}`;
+  return DOLLAR_FIGURE_PATTERN.test(haystack);
+}
+
 /** Heuristic checks after structural validation. */
 export function detectMinutesV2Issues(doc: MinutesDocumentV2): string[] {
   const w: string[] = [];
@@ -943,6 +964,27 @@ export function detectMinutesV2Issues(doc: MinutesDocumentV2): string[] {
 
   if (motionCount === 0) {
     w.push("No motions detected in structured minutes.");
+  }
+
+  // Cost-figure guardrail: section 4.1 ratifications are email-approved vendor
+  // expenses, so each line item should carry a dollar amount from the board
+  // package. An item (and all its sub-items) with no figure usually means the
+  // amount was dropped during extraction — surface it for a quick package check.
+  function subtreeHasDollarFigure(item: AgendaItemV2): boolean {
+    return (
+      agendaItemHasDollarFigure(item) ||
+      item.subItems.some(subtreeHasDollarFigure)
+    );
+  }
+
+  const ratificationsMissingCost = doc.managementReport.itemsForRatification
+    .filter((item) => !subtreeHasDollarFigure(item))
+    .map((item) => item.topic.trim() || "(untitled ratification)");
+
+  if (ratificationsMissingCost.length > 0) {
+    w.push(
+      `Ratification item(s) without a dollar amount — verify the figure from the board package was not dropped: ${ratificationsMissingCost.join("; ")}.`,
+    );
   }
 
   const publicBlob = publicMinutesBlob(doc);

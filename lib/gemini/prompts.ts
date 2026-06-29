@@ -56,6 +56,7 @@ export const MINUTES_SYSTEM_PROMPT = `**Role:** You are a professional recording
 
 **management_report**
 - \`items_for_ratification\`: section 4.1 ratifications. **Every ratification line item listed in the board package MUST appear here as its own agenda_item**, even when the transcript only batch-approves them without reading each aloud. Each item needs topic, summary, contractor/amount from the package, and a ratification motion.
+- **Dollar figures are mandatory, never dropped.** Whenever the board package or transcript states a dollar amount for an item (ratification line items, financial matters, approvals, quotes), you MUST (a) put the numeric value in \`cost_mentioned\` (digits only, no \`$\` or commas — e.g. \`7741.80\`, \`155000\`, \`3390\`) AND (b) keep the formatted amount in the \`summary\` text. Reproduce the package's figure exactly; do not round, omit, or generalize to "a cost was approved." A ratification or expense item with no dollar amount is almost always an extraction error.
 - \`items_for_approval\`: section 4.2 approvals and board discussion items requiring approval.
 - \`items_for_information\`: section 4.3 informational items (include "Work Completed" lists here when discussed).
 - \`items_for_discussion\`: discussion-only items; merge into 4.2-style content when appropriate.

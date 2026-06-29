@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -145,6 +145,26 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
     } catch {
       // Ignore malformed warning payloads.
     }
+  }, [meeting.id]);
+
+  const autoCheckTriggeredRef = useRef<string | null>(null);
+
+  // Auto-run the omissions / decision check once for a freshly generated meeting
+  // (flagged by GenerateMeetingDialog), so coverage gaps surface without a click.
+  // The sessionStorage flag scopes this to post-generate only; reopening an
+  // already-analyzed or finalized meeting never triggers an extra run.
+  useEffect(() => {
+    const key = `meeting-autocheck:${meeting.id}`;
+    if (!sessionStorage.getItem(key)) return;
+    sessionStorage.removeItem(key);
+
+    if (finalized || omissionsAnalysis) return;
+    if (autoCheckTriggeredRef.current === meeting.id) return;
+
+    autoCheckTriggeredRef.current = meeting.id;
+    setOmissionsDialogOpen(true);
+    void runOmissionsAnalysis();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per meeting load; flag removal + ref guard prevent re-runs.
   }, [meeting.id]);
 
   const finalized = presentationStatus === "finalized";

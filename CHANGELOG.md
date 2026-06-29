@@ -8,6 +8,23 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Cost-figure guardrail for ratifications** — Section 4.1 ratification line
+  items are email-approved vendor expenses, so each should carry the dollar
+  amount from the board package. Generation now (a) instructs the model to put
+  every stated amount in the structured `cost_mentioned` field and the summary
+  text verbatim — never rounding, omitting, or generalizing to "a cost was
+  approved" — and (b) runs a deterministic post-extraction check that flags any
+  ratification item (and its sub-items) with no dollar figure, surfacing it as a
+  post-generation warning so a reviewer can confirm the amount was not dropped
+  (e.g. pool $7,741.80, marble $155k, riser $3,390).
+
+- **Auto-run coverage check after generation** — A freshly generated meeting now
+  runs the omissions and decision check automatically on first open and surfaces
+  the results in the analysis dialog, so coverage gaps (e.g. an agenda item the
+  AI dropped entirely) no longer depend on the user remembering to click "Check
+  omissions." The auto-run is scoped to post-generation only: reopening an
+  already-analyzed or finalized meeting never triggers an extra (billable) run.
+
 - **Decision verification (omissions check)** — The transcript analysis pass now
   cross-checks every recorded motion and decision against the transcript and
   flags any that are contradicted, unsupported, or uncertain (e.g. minutes that
@@ -22,6 +39,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   export) directly.
 
 ### Fixed
+
+- **Duplicated action items on initial generation** — Document sanitization now
+  collapses action items to one entry per assignee (joining multiple duties with
+  "and") for every agenda item and sub-item, so a model that emits duplicate
+  per-assignee entries during the first extraction no longer produces run-on
+  "Action:" lines. Previously only the omissions-merge path deduped; the initial
+  generation relied on the model getting it right. Consolidation is idempotent,
+  so the already-deduped merge paths are unaffected.
 
 - **Duplicated minutes action items after omissions merge** — Applying an
   "augment existing" omission finding no longer doubles the agenda item's

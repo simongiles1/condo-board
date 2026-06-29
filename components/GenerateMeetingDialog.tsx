@@ -156,6 +156,10 @@ export function GenerateMeetingDialog({ open, onClose }: Props) {
         );
       }
 
+      // Signal the editor to auto-run the omissions/decision check once on first
+      // load, so coverage gaps (e.g. missing agenda items) surface without a click.
+      sessionStorage.setItem(`meeting-autocheck:${payload.id}`, "1");
+
       resetForm();
       onClose();
       router.push(`/meetings/${payload.id}`);

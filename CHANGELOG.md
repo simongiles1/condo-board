@@ -6,7 +6,30 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Decision verification (omissions check)** — The transcript analysis pass now
+  cross-checks every recorded motion and decision against the transcript and
+  flags any that are contradicted, unsupported, or uncertain (e.g. minutes that
+  record a motion as "carried" when the board actually deferred or asked to
+  inspect first). Section 4.1 email-ratifications and previous-minutes approvals
+  are intentionally excluded. Findings appear in a read-only "Decision checks"
+  tab in the omissions dialog with the recorded claim, what the transcript shows,
+  a supporting quote, and a suggested correction. Catches fabricated or
+  mis-recorded approvals that look legitimate on a proofread. Each flag offers
+  one-click corrections — "Set motion → Deferred" or "Remove motion" — that
+  locate the exact agenda item and update the structured minutes (and PDF
+  export) directly.
+
 ### Fixed
+
+- **Duplicated minutes action items after omissions merge** — Applying an
+  "augment existing" omission finding no longer doubles the agenda item's
+  action line. The omissions analyzer returns action items that are already
+  consolidated per assignee (existing duty plus newly found duty joined with
+  "and"), so they now replace the matching assignee's entry instead of being
+  concatenated with it. Concatenation previously re-joined the near-identical
+  text into a run-on "Action:" sentence that repeated itself.
 
 - **Docker production build OOM** — Raised the Node.js heap limit during `next build`
   and skip ESLint in that step so type-checking no longer exhausts memory on Coolify.

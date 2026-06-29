@@ -18,6 +18,10 @@ import {
   validateGlobalTodosMergeResult,
   type GlobalTodosMergeResult,
 } from "@/lib/todos/merge-global-schema";
+import {
+  validateVerificationAnalysis,
+  type DecisionFlag,
+} from "@/lib/minutes/verification-schema";
 
 export type ParsedModelOutput = {
   markdown: string;
@@ -328,6 +332,52 @@ export function parseTodoOmissionsResponse(raw: string): ParsedTodoOmissionsResu
     omissions: validated.value.todosOmissions,
     noSignificantTodosOmissions: validated.value.noSignificantTodosOmissions,
     analyzedAt: validated.value.analyzedAt,
+    warnings: allWarnings,
+    errors: [],
+  };
+}
+
+export type ParsedVerificationResult = {
+  flags: DecisionFlag[];
+  noIssues: boolean;
+  analyzedAt?: string;
+  warnings: string[];
+  errors: string[];
+};
+
+/** Parse native JSON decision-verification response. */
+export function parseVerificationResponse(raw: string): ParsedVerificationResult {
+  const { jsonText, warnings: unwrapWarnings } = extractBestEffortJson(raw);
+  const warnings: string[] = [...unwrapWarnings];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText) as unknown;
+  } catch {
+    return {
+      flags: [],
+      noIssues: false,
+      warnings,
+      errors: [jsonParseFailureDetail(jsonText)],
+    };
+  }
+
+  const validated = validateVerificationAnalysis(parsed);
+  const allWarnings = [...warnings, ...validated.warnings];
+
+  if (validated.errors.length > 0) {
+    return {
+      flags: [],
+      noIssues: false,
+      analyzedAt: validated.analyzedAt || undefined,
+      warnings: allWarnings,
+      errors: validated.errors,
+    };
+  }
+
+  return {
+    flags: validated.flags,
+    noIssues: validated.noIssues,
+    analyzedAt: validated.analyzedAt || undefined,
     warnings: allWarnings,
     errors: [],
   };

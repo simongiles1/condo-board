@@ -10,8 +10,17 @@ import {
   type OmissionsAnalysisResult,
   type TodoOmissionFinding,
 } from "@/lib/minutes/omissions-schema";
+import {
+  verdictLabel,
+  type DecisionFlag,
+  type DecisionVerdict,
+} from "@/lib/minutes/verification-schema";
+import {
+  canApplyDecisionCorrection,
+  type DecisionCorrection,
+} from "@/lib/minutes/apply-decision-flags";
 
-type OmissionsTab = "minutes" | "todos";
+type OmissionsTab = "minutes" | "todos" | "decisions";
 
 type Props = {
   open: boolean;
@@ -28,6 +37,11 @@ type Props = {
   onReRun: () => void;
   onApplyMinutes: (selected: OmissionFinding[]) => void;
   onApplyTodos: (selected: TodoOmissionFinding[]) => void;
+  applyingDecisions: boolean;
+  onApplyDecisionCorrection: (
+    flag: DecisionFlag,
+    correction: DecisionCorrection,
+  ) => void;
 };
 
 function formatAnalyzedAt(iso: string): string {
@@ -46,15 +60,18 @@ function OmissionsTabStrip({
   onChange,
   minutesCount,
   todosCount,
+  decisionsCount,
 }: {
   active: OmissionsTab;
   onChange: (tab: OmissionsTab) => void;
   minutesCount: number;
   todosCount: number;
+  decisionsCount: number;
 }) {
   const tabs: { id: OmissionsTab; label: string; count: number }[] = [
     { id: "minutes", label: "Meeting minutes", count: minutesCount },
     { id: "todos", label: "To-do list", count: todosCount },
+    { id: "decisions", label: "Decision checks", count: decisionsCount },
   ];
 
   return (
@@ -266,6 +283,105 @@ function TodosOmissionsList({
   );
 }
 
+const VERDICT_STYLES: Record<DecisionVerdict, string> = {
+  contradicted: "bg-red-100 text-red-900",
+  unsupported: "bg-red-100 text-red-900",
+  uncertain: "bg-amber-100 text-amber-900",
+  supported: "bg-emerald-100 text-emerald-900",
+};
+
+function DecisionFlagsList({
+  flags,
+  finalized,
+  applying,
+  onApplyCorrection,
+}: {
+  flags: DecisionFlag[];
+  finalized: boolean;
+  applying: boolean;
+  onApplyCorrection: (flag: DecisionFlag, correction: DecisionCorrection) => void;
+}) {
+  return (
+    <ul className="space-y-4">
+      {flags.map((flag) => (
+        <li
+          key={flag.id}
+          className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+        >
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-slate-900">{flag.topic}</span>
+              <span className="inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                {flag.section}
+              </span>
+              <span
+                className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
+                  VERDICT_STYLES[flag.verdict]
+                }`}
+              >
+                {verdictLabel(flag.verdict)}
+              </span>
+            </div>
+            {flag.claimedDecision ? (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Recorded as
+                </p>
+                <p className="mt-0.5 text-sm text-slate-800">
+                  {flag.claimedDecision}
+                </p>
+              </div>
+            ) : null}
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                What the transcript shows
+              </p>
+              <p className="mt-0.5 text-sm text-slate-800">
+                {flag.explanation}
+              </p>
+            </div>
+            {flag.transcriptEvidence ? (
+              <blockquote className="border-l-2 border-slate-300 pl-3 text-sm italic text-slate-600">
+                “{flag.transcriptEvidence}”
+              </blockquote>
+            ) : null}
+            {flag.suggestedFix ? (
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Suggested fix
+                </p>
+                <p className="mt-1 text-sm text-slate-700">
+                  {flag.suggestedFix}
+                </p>
+              </div>
+            ) : null}
+            {!finalized && canApplyDecisionCorrection(flag) ? (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => onApplyCorrection(flag, "set_motion_deferred")}
+                  disabled={applying}
+                  className="rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:border-amber-300 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {applying ? "Applying…" : "Set motion → Deferred"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onApplyCorrection(flag, "remove_motion")}
+                  disabled={applying}
+                  className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-900 hover:border-red-300 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {applying ? "Applying…" : "Remove motion"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function OmissionsAnalysisDialog({
   open,
   analysis,
@@ -281,6 +397,8 @@ export function OmissionsAnalysisDialog({
   onReRun,
   onApplyMinutes,
   onApplyTodos,
+  applyingDecisions,
+  onApplyDecisionCorrection,
 }: Props) {
   const [activeTab, setActiveTab] = useState<OmissionsTab>("minutes");
   const [selectedMinutesIds, setSelectedMinutesIds] = useState<Set<string>>(
@@ -292,8 +410,9 @@ export function OmissionsAnalysisDialog({
 
   const minutesOmissions = analysis?.omissions ?? [];
   const todosOmissions = analysis?.todosOmissions ?? [];
+  const decisionFlags = analysis?.decisionFlags ?? [];
   const hasResults = analysis !== null && !loading;
-  const applying = applyingMinutes || applyingTodos;
+  const applying = applyingMinutes || applyingTodos || applyingDecisions;
 
   useEffect(() => {
     if (open && minutesOmissions.length) {
@@ -468,6 +587,7 @@ export function OmissionsAnalysisDialog({
                 onChange={setActiveTab}
                 minutesCount={minutesOmissions.length}
                 todosCount={todosOmissions.length}
+                decisionsCount={decisionFlags.length}
               />
 
               {activeTab === "minutes" ? (
@@ -492,7 +612,7 @@ export function OmissionsAnalysisDialog({
                     />
                   )}
                 </div>
-              ) : (
+              ) : activeTab === "todos" ? (
                 <div role="tabpanel">
                   {!hasTodosOmissions ? (
                     <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-950">
@@ -512,6 +632,34 @@ export function OmissionsAnalysisDialog({
                       applying={applyingTodos}
                       onToggle={toggleTodosId}
                     />
+                  )}
+                </div>
+              ) : (
+                <div role="tabpanel">
+                  {decisionFlags.length === 0 ? (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-950">
+                      <p className="font-semibold">
+                        No unsupported decisions found
+                      </p>
+                      <p className="mt-1">
+                        Every recorded motion and decision (excluding section
+                        4.1 ratifications) appears supported by the transcript.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="mb-3 text-sm text-slate-600">
+                        These recorded decisions may not match the transcript.
+                        Review each against the meeting and correct the minutes
+                        manually where needed.
+                      </p>
+                      <DecisionFlagsList
+                        flags={decisionFlags}
+                        finalized={finalized}
+                        applying={applyingDecisions}
+                        onApplyCorrection={onApplyDecisionCorrection}
+                      />
+                    </>
                   )}
                 </div>
               )}

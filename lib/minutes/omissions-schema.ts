@@ -1,5 +1,10 @@
 import type { AgendaItemV2 } from "@/lib/minutes/schema-v2";
 import { parseAgendaItemV2 } from "@/lib/minutes/schema-v2";
+import {
+  parseDecisionFlagsArray,
+  serializeDecisionFlags,
+  type DecisionFlag,
+} from "@/lib/minutes/verification-schema";
 
 function newOmissionId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -64,6 +69,8 @@ export type OmissionsAnalysisResult = {
   analyzedAt: string;
   omissions: OmissionFinding[];
   todosOmissions: TodoOmissionFinding[];
+  /** Recorded decisions the transcript does not clearly support (verifier pass). */
+  decisionFlags?: DecisionFlag[];
   noSignificantOmissions?: boolean;
   noSignificantTodosOmissions?: boolean;
 };
@@ -440,6 +447,10 @@ export function validateOmissionsAnalysis(
     data.no_significant_todos_omissions === true ||
     data.noSignificantTodosOmissions === true;
 
+  const decisionFlags = parseDecisionFlagsArray(
+    data.decision_flags ?? data.decisionFlags,
+  );
+
   if (errors.length > 0) {
     return { value: null, warnings, errors };
   }
@@ -450,6 +461,7 @@ export function validateOmissionsAnalysis(
       analyzedAt: analyzedAt || new Date().toISOString(),
       omissions,
       todosOmissions,
+      ...(decisionFlags.length ? { decisionFlags } : {}),
       ...(noSignificantOmissions ? { noSignificantOmissions: true } : {}),
       ...(noSignificantTodosOmissions
         ? { noSignificantTodosOmissions: true }
@@ -534,6 +546,9 @@ export function serializeOmissionsAnalysis(
         ? { deadline: o.deadline }
         : {}),
     })),
+    ...(analysis.decisionFlags && analysis.decisionFlags.length
+      ? { decision_flags: serializeDecisionFlags(analysis.decisionFlags) }
+      : {}),
     ...(analysis.noSignificantOmissions
       ? { no_significant_omissions: true }
       : {}),

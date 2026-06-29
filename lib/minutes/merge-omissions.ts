@@ -3,7 +3,10 @@ import type {
   OmissionFinding,
 } from "@/lib/minutes/omissions-schema";
 import type { AgendaItemV2, MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
-import { consolidateActionItemsByAssignee } from "@/lib/minutes/consolidate-action-items";
+import {
+  consolidateActionItemsByAssignee,
+  replaceActionItemsByAssignee,
+} from "@/lib/minutes/consolidate-action-items";
 import {
   parseMinutesJsonEnvelope,
   sanitizeMinutesDocumentV2,
@@ -15,7 +18,7 @@ type SectionRef = {
   apply: (items: AgendaItemV2[]) => MinutesDocumentV2;
 };
 
-function getSectionRef(
+export function getSectionRef(
   doc: MinutesDocumentV2,
   targetSection: MinutesSectionPath,
   postTerminationTitle?: string,
@@ -145,10 +148,10 @@ function mergeAgendaItems(
   existing: AgendaItemV2,
   incoming: AgendaItemV2,
 ): AgendaItemV2 {
-  const actionItems = consolidateActionItemsByAssignee([
-    ...existing.actionItems,
-    ...incoming.actionItems,
-  ]);
+  const actionItems = replaceActionItemsByAssignee(
+    existing.actionItems,
+    incoming.actionItems,
+  );
 
   return {
     ...existing,

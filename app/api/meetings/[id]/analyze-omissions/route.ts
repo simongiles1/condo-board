@@ -13,8 +13,10 @@ import { generateOmissionsAnalysis } from "@/lib/gemini/client";
 import {
   parseOmissionsResponse,
   parseTodoOmissionsResponse,
+  parseVerificationResponse,
 } from "@/lib/gemini/parse-output";
 import {
+  DECISION_VERIFICATION_SYSTEM_PROMPT,
   OMISSIONS_SYSTEM_PROMPT,
   TODO_OMISSIONS_SYSTEM_PROMPT,
 } from "@/lib/gemini/prompts";
@@ -304,22 +306,33 @@ export async function POST(
       transcriptInput.text,
     );
 
-    const [minutesResult, todosGeneration] = await Promise.all([
-      runMinutesOmissionsAnalysis({
-        systemInstruction: OMISSIONS_SYSTEM_PROMPT,
-        userText: minutesUserText,
-        modelName: modelMinutes,
-      }),
-      generateOmissionsAnalysis({
-        systemInstruction: TODO_OMISSIONS_SYSTEM_PROMPT,
-        userText: todosUserText,
-        modelName: modelTodos,
-      }),
-    ]);
+    const [minutesResult, todosGeneration, verificationGeneration] =
+      await Promise.all([
+        runMinutesOmissionsAnalysis({
+          systemInstruction: OMISSIONS_SYSTEM_PROMPT,
+          userText: minutesUserText,
+          modelName: modelMinutes,
+        }),
+        generateOmissionsAnalysis({
+          systemInstruction: TODO_OMISSIONS_SYSTEM_PROMPT,
+          userText: todosUserText,
+          modelName: modelTodos,
+        }),
+        // Decision verifier reuses the minutes prompt inputs (minutes JSON +
+        // board package + transcript) with a different system instruction.
+        generateOmissionsAnalysis({
+          systemInstruction: DECISION_VERIFICATION_SYSTEM_PROMPT,
+          userText: minutesUserText,
+          modelName: modelMinutes,
+        }),
+      ]);
 
     const minutesGeneration = minutesResult.generation;
     const parsedMinutes = minutesResult.parsed;
     const parsedTodos = parseTodoOmissionsResponse(todosGeneration.text);
+    const parsedVerification = parseVerificationResponse(
+      verificationGeneration.text,
+    );
 
     if (!parsedMinutes.analysis) {
       return NextResponse.json(
@@ -354,6 +367,9 @@ export async function POST(
       ...parsedMinutes.analysis,
       analyzedAt: parsedMinutes.analysis.analyzedAt || analyzedAt,
       todosOmissions: parsedTodos.omissions,
+      ...(parsedVerification.flags.length
+        ? { decisionFlags: parsedVerification.flags }
+        : {}),
       ...(parsedTodos.noSignificantTodosOmissions
         ? { noSignificantTodosOmissions: true }
         : {}),
@@ -362,12 +378,17 @@ export async function POST(
     const serialized = serializeOmissionsAnalysis(analysisWithTimestamp);
     const combinedUsage = {
       inputTokens:
-        minutesGeneration.usage.inputTokens + todosGeneration.usage.inputTokens,
+        minutesGeneration.usage.inputTokens +
+        todosGeneration.usage.inputTokens +
+        verificationGeneration.usage.inputTokens,
       outputTokens:
         minutesGeneration.usage.outputTokens +
-        todosGeneration.usage.outputTokens,
+        todosGeneration.usage.outputTokens +
+        verificationGeneration.usage.outputTokens,
       totalTokens:
-        minutesGeneration.usage.totalTokens + todosGeneration.usage.totalTokens,
+        minutesGeneration.usage.totalTokens +
+        todosGeneration.usage.totalTokens +
+        verificationGeneration.usage.totalTokens,
     };
     const omissionsUsageRun = buildOmissionsAnalysisRun({
       id: randomUUID(),
@@ -386,10 +407,20 @@ export async function POST(
     const warnings = [
       ...parsedMinutes.warnings,
       ...parsedTodos.warnings,
+      ...parsedVerification.warnings,
       ...boardPackageWarnings,
       ...promptInputWarnings,
     ];
-    if (minutesGeneration.truncated || todosGeneration.truncated) {
+    if (parsedVerification.errors.length > 0) {
+      warnings.push(
+        "Decision verification could not be parsed; recorded decisions were not cross-checked this run.",
+      );
+    }
+    if (
+      minutesGeneration.truncated ||
+      todosGeneration.truncated ||
+      verificationGeneration.truncated
+    ) {
       warnings.push(
         "Analysis output may be truncated. Re-run if results look incomplete.",
       );

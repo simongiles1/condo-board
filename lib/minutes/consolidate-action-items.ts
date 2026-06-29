@@ -29,6 +29,35 @@ export function combineTaskDescriptions(a: string, b: string): string {
   return `${ta} and ${tb}`;
 }
 
+/**
+ * Merge an existing action-item list with an incoming list where the incoming
+ * entries are authoritative for any assignee they cover.
+ *
+ * The omissions analyzer is instructed to return action items that are ALREADY
+ * consolidated (one entry per assignee, with the existing duty and the newly
+ * discovered duty already joined with "and"). Those entries are therefore a
+ * replacement for that assignee, not an addition. Concatenating them with the
+ * existing entries re-joins near-identical text and produces a duplicated,
+ * run-on "Action:" line. Incoming wins per assignee; existing entries for
+ * assignees absent from the incoming list are preserved.
+ */
+export function replaceActionItemsByAssignee(
+  existing: ActionItemV2[],
+  incoming: ActionItemV2[],
+): ActionItemV2[] {
+  const incomingConsolidated = consolidateActionItemsByAssignee(incoming);
+  const incomingKeys = new Set(
+    incomingConsolidated.map((item) => item.assignee.trim().toLowerCase()),
+  );
+  const retainedExisting = existing.filter(
+    (item) => !incomingKeys.has(item.assignee.trim().toLowerCase()),
+  );
+  return consolidateActionItemsByAssignee([
+    ...retainedExisting,
+    ...incomingConsolidated,
+  ]);
+}
+
 /** One action item per assignee — multiple duties combined with "and". */
 export function consolidateActionItemsByAssignee(
   items: ActionItemV2[],

@@ -38,6 +38,11 @@ import {
 } from "@/lib/minutes/attendance-edit";
 import { applyOmissionsToMinutesJson } from "@/lib/minutes/merge-omissions";
 import {
+  applyDecisionCorrection,
+  type DecisionCorrection,
+} from "@/lib/minutes/apply-decision-flags";
+import type { DecisionFlag } from "@/lib/minutes/verification-schema";
+import {
   parseStoredOmissionsAnalysis,
   type OmissionFinding,
   type OmissionsAnalysisResult,
@@ -114,6 +119,8 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
   const [omissionsApplyingMinutes, setOmissionsApplyingMinutes] =
     useState(false);
   const [omissionsApplyingTodos, setOmissionsApplyingTodos] = useState(false);
+  const [omissionsApplyingDecisions, setOmissionsApplyingDecisions] =
+    useState(false);
   const [omissionsError, setOmissionsError] = useState<string | null>(null);
   const [omissionsWarnings, setOmissionsWarnings] = useState<string[]>([]);
   const [globalTodosMergedAt, setGlobalTodosMergedAt] = useState(
@@ -415,6 +422,81 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
     }
   }
 
+  async function applyDecisionFlag(
+    flag: DecisionFlag,
+    correction: DecisionCorrection,
+  ) {
+    if (!minutesJson?.trim() || finalized) return;
+
+    setError(null);
+    setInfo(null);
+
+    const updatedJson = applyDecisionCorrection(minutesJson, flag, correction);
+    if (!updatedJson) {
+      setOmissionsError(
+        "Could not locate the flagged motion in the structured minutes.",
+      );
+      return;
+    }
+
+    const derived = derivedMinutesMarkdown(updatedJson);
+    if (!derived) {
+      setOmissionsError("Corrected minutes could not be converted to markdown.");
+      return;
+    }
+
+    try {
+      setOmissionsApplyingDecisions(true);
+
+      const res = await fetch(`/api/meetings/${meeting.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          minutesContent: derived,
+          todosContent: todos,
+          minutesJson: updatedJson,
+          status: "draft",
+        }),
+      });
+
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || "Could not save corrected minutes");
+      }
+
+      const payload = (await res.json()) as Meeting;
+
+      setMinutesJson(payload.minutesJson);
+      setMinutesDoc(parseMinutesDoc(payload.minutesJson));
+      setMinutes(payload.minutesContent);
+      setBaselineMinutes(minutesEditorSeedMarkdown(payload));
+      setMinutesReloadVersion((version) => version + 1);
+
+      setOmissionsAnalysis((current) =>
+        current
+          ? {
+              ...current,
+              decisionFlags: (current.decisionFlags ?? []).filter(
+                (f) => f.id !== flag.id,
+              ),
+            }
+          : current,
+      );
+
+      router.refresh();
+
+      setInfo(
+        correction === "remove_motion"
+          ? "Removed the unsupported motion from the structured minutes."
+          : "Marked the motion as Deferred in the structured minutes.",
+      );
+    } catch (e) {
+      setOmissionsError(e instanceof Error ? e.message : "Unexpected error");
+    } finally {
+      setOmissionsApplyingDecisions(false);
+    }
+  }
+
   async function applyTodosOmissions(selected: TodoOmissionFinding[]) {
     if (!selected.length || finalized) return;
 
@@ -477,7 +559,9 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
   }
 
   const omissionsApplying =
-    omissionsApplyingMinutes || omissionsApplyingTodos;
+    omissionsApplyingMinutes ||
+    omissionsApplyingTodos ||
+    omissionsApplyingDecisions;
   const workspaceBusy = busy !== null || omissionsLoading || omissionsApplying;
   const canCheckOmissions =
     Boolean(minutesJson?.trim()) && Boolean(todos.trim());
@@ -793,6 +877,10 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
         onReRun={() => void runOmissionsAnalysis()}
         onApplyMinutes={(selected) => void applyMinutesOmissions(selected)}
         onApplyTodos={(selected) => void applyTodosOmissions(selected)}
+        applyingDecisions={omissionsApplyingDecisions}
+        onApplyDecisionCorrection={(flag, correction) =>
+          void applyDecisionFlag(flag, correction)
+        }
       />
     </div>
   );

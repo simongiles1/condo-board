@@ -53,6 +53,8 @@ type PatchBody = {
   todosContent?: string;
   /** When omitted, existing structured JSON is preserved. */
   minutesJson?: string | null;
+  /** When omitted, existing omissions analysis is preserved. */
+  omissionsAnalysisJson?: string | null;
   status?: "draft" | "finalized";
 };
 
@@ -124,6 +126,7 @@ export async function PATCH(
         todosContent: string;
         status: "draft";
         minutesJson?: string | null;
+        omissionsAnalysisJson?: string | null;
       } = {
         minutesContent,
         todosContent,
@@ -131,6 +134,9 @@ export async function PATCH(
       };
       if (body.minutesJson !== undefined) {
         draftUpdate.minutesJson = body.minutesJson;
+      }
+      if (body.omissionsAnalysisJson !== undefined) {
+        draftUpdate.omissionsAnalysisJson = body.omissionsAnalysisJson;
       }
 
       const [saved] = await db

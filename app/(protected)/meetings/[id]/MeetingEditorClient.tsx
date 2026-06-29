@@ -44,6 +44,7 @@ import {
 import type { DecisionFlag } from "@/lib/minutes/verification-schema";
 import {
   parseStoredOmissionsAnalysis,
+  serializeOmissionsAnalysis,
   type OmissionFinding,
   type OmissionsAnalysisResult,
   type TodoOmissionFinding,
@@ -393,6 +394,16 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
       return;
     }
 
+    const appliedIds = new Set(selected.map((o) => o.id));
+    const nextAnalysis = omissionsAnalysis
+      ? {
+          ...omissionsAnalysis,
+          omissions: omissionsAnalysis.omissions.filter(
+            (o) => !appliedIds.has(o.id),
+          ),
+        }
+      : null;
+
     try {
       setOmissionsApplyingMinutes(true);
 
@@ -403,6 +414,12 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
           minutesContent: derived,
           todosContent: todos,
           minutesJson: updatedJson,
+          ...(nextAnalysis
+            ? {
+                omissionsAnalysisJson:
+                  serializeOmissionsAnalysis(nextAnalysis),
+              }
+            : {}),
           status: "draft",
         }),
       });
@@ -419,15 +436,9 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
       setMinutes(payload.minutesContent);
       setBaselineMinutes(minutesEditorSeedMarkdown(payload));
       setMinutesReloadVersion((version) => version + 1);
-
-      const appliedIds = new Set(selected.map((o) => o.id));
-      setOmissionsAnalysis((current) =>
-        current
-          ? {
-              ...current,
-              omissions: current.omissions.filter((o) => !appliedIds.has(o.id)),
-            }
-          : current,
+      setOmissionsAnalysis(
+        parseStoredOmissionsAnalysis(payload.omissionsAnalysisJson) ??
+          nextAnalysis,
       );
 
       router.refresh();
@@ -465,6 +476,15 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
       return;
     }
 
+    const nextAnalysis = omissionsAnalysis
+      ? {
+          ...omissionsAnalysis,
+          decisionFlags: (omissionsAnalysis.decisionFlags ?? []).filter(
+            (f) => f.id !== flag.id,
+          ),
+        }
+      : null;
+
     try {
       setOmissionsApplyingDecisions(true);
 
@@ -475,6 +495,12 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
           minutesContent: derived,
           todosContent: todos,
           minutesJson: updatedJson,
+          ...(nextAnalysis
+            ? {
+                omissionsAnalysisJson:
+                  serializeOmissionsAnalysis(nextAnalysis),
+              }
+            : {}),
           status: "draft",
         }),
       });
@@ -491,16 +517,9 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
       setMinutes(payload.minutesContent);
       setBaselineMinutes(minutesEditorSeedMarkdown(payload));
       setMinutesReloadVersion((version) => version + 1);
-
-      setOmissionsAnalysis((current) =>
-        current
-          ? {
-              ...current,
-              decisionFlags: (current.decisionFlags ?? []).filter(
-                (f) => f.id !== flag.id,
-              ),
-            }
-          : current,
+      setOmissionsAnalysis(
+        parseStoredOmissionsAnalysis(payload.omissionsAnalysisJson) ??
+          nextAnalysis,
       );
 
       router.refresh();
@@ -529,6 +548,16 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
       return;
     }
 
+    const appliedIds = new Set(selected.map((o) => o.id));
+    const nextAnalysis = omissionsAnalysis
+      ? {
+          ...omissionsAnalysis,
+          todosOmissions: omissionsAnalysis.todosOmissions.filter(
+            (o) => !appliedIds.has(o.id),
+          ),
+        }
+      : null;
+
     try {
       setOmissionsApplyingTodos(true);
 
@@ -539,6 +568,12 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
           minutesContent: minutes,
           todosContent: updatedTodos,
           minutesJson,
+          ...(nextAnalysis
+            ? {
+                omissionsAnalysisJson:
+                  serializeOmissionsAnalysis(nextAnalysis),
+              }
+            : {}),
           status: "draft",
         }),
       });
@@ -553,17 +588,9 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
       setTodos(payload.todosContent);
       setBaselineTodos(payload.todosContent);
       setTodosReloadVersion((version) => version + 1);
-
-      const appliedIds = new Set(selected.map((o) => o.id));
-      setOmissionsAnalysis((current) =>
-        current
-          ? {
-              ...current,
-              todosOmissions: current.todosOmissions.filter(
-                (o) => !appliedIds.has(o.id),
-              ),
-            }
-          : current,
+      setOmissionsAnalysis(
+        parseStoredOmissionsAnalysis(payload.omissionsAnalysisJson) ??
+          nextAnalysis,
       );
 
       router.refresh();

@@ -40,6 +40,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Omissions apply loop after generation** — Applying minutes, to-do, or decision
+  corrections from the omissions dialog no longer restores the full pre-apply
+  findings list after save. Applied items are now persisted in
+  `omissionsAnalysisJson` alongside the merged minutes, so a refresh no longer
+  re-shows already-applied omissions or duplicates agenda items when "Apply all"
+  is clicked again.
+
 - **Duplicated action items on initial generation** — Document sanitization now
   collapses action items to one entry per assignee (joining multiple duties with
   "and") for every agenda item and sub-item, so a model that emits duplicate

@@ -1,10 +1,21 @@
 import Link from "next/link";
 
 import { DeleteMeetingButton } from "@/components/DeleteMeetingButton";
+import { GoldStandardValidationBadge } from "@/components/GoldStandardValidationBadge";
 import type { Meeting } from "@/lib/db/types";
 import { formatMeetingDate } from "@/lib/format-meeting-date";
 
-export function MeetingCard({ meeting }: { meeting: Meeting }) {
+type Props = {
+  meeting: Meeting;
+  validationScore?: number | null;
+  onValidationBadgeClick?: () => void;
+};
+
+export function MeetingCard({
+  meeting,
+  validationScore = null,
+  onValidationBadgeClick,
+}: Props) {
   const isFinal = meeting.status === "finalized";
   const badgeCls = isFinal
     ? "bg-emerald-100 text-emerald-900 ring-emerald-200"
@@ -28,7 +39,13 @@ export function MeetingCard({ meeting }: { meeting: Meeting }) {
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {onValidationBadgeClick ? (
+              <GoldStandardValidationBadge
+                validationScore={validationScore}
+                onClick={onValidationBadgeClick}
+              />
+            ) : null}
             <span
               className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ring-1 ${badgeCls}`}
             >

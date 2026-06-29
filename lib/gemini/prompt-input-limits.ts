@@ -5,6 +5,7 @@ export const PROMPT_INPUT_LIMITS = {
   transcript: 600_000,
   minutesJson: 120_000,
   todosMarkdown: 80_000,
+  goldStandardPdf: 150_000,
 } as const;
 
 export type PromptInputSliceResult = {

@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { desc } from "drizzle-orm";
 
-import { MeetingCard } from "@/components/MeetingCard";
+import { MeetingsGrid } from "@/components/MeetingsGrid";
 import { MeetingsPageHeader } from "@/components/MeetingsPageHeader";
 import { getDb } from "@/lib/db";
 import { meetings } from "@/lib/db/schema";
@@ -25,11 +25,7 @@ export default async function MeetingsPage() {
           generate the first workbook.
         </div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">
-          {meetingRows.map((meeting) => (
-            <MeetingCard key={meeting.id} meeting={meeting} />
-          ))}
-        </div>
+        <MeetingsGrid meetings={meetingRows} />
       )}
     </div>
   );

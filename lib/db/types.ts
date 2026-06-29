@@ -17,6 +17,10 @@ export type Meeting = {
   vttFilePath: string;
   pdfFilePath: string;
   boardPackageFilePath: string | null;
+  /** Relative path to uploaded gold-standard PDF; null until first comparison. */
+  goldStandardFilePath: string | null;
+  /** Cached gold-standard validation JSON; null until first comparison. */
+  goldStandardValidationJson: string | null;
   createdAt: string;
   finalizedAt: string | null;
 };

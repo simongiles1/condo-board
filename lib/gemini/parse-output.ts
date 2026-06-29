@@ -22,6 +22,10 @@ import {
   validateVerificationAnalysis,
   type DecisionFlag,
 } from "@/lib/minutes/verification-schema";
+import {
+  validateGoldStandardValidation,
+  type GoldStandardValidationResult,
+} from "@/lib/minutes/gold-standard-schema";
 
 export type ParsedModelOutput = {
   markdown: string;
@@ -416,6 +420,46 @@ export function parseGlobalTodosMergeResponse(raw: string): ParsedGlobalTodosMer
   return {
     result: validated.result,
     warnings,
+    errors: [],
+  };
+}
+
+export type ParsedGoldStandardValidationResult = {
+  validation: GoldStandardValidationResult | null;
+  warnings: string[];
+  errors: string[];
+};
+
+export function parseGoldStandardValidationResponse(
+  raw: string,
+): ParsedGoldStandardValidationResult {
+  const { jsonText, warnings: unwrapWarnings } = extractBestEffortJson(raw);
+  const warnings: string[] = [...unwrapWarnings];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText) as unknown;
+  } catch {
+    return {
+      validation: null,
+      warnings,
+      errors: [jsonParseFailureDetail(jsonText)],
+    };
+  }
+
+  const validated = validateGoldStandardValidation(parsed);
+  const allWarnings = [...warnings, ...validated.warnings];
+
+  if (!validated.value) {
+    return {
+      validation: null,
+      warnings: allWarnings,
+      errors: validated.errors,
+    };
+  }
+
+  return {
+    validation: validated.value,
+    warnings: allWarnings,
     errors: [],
   };
 }

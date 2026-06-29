@@ -14,6 +14,7 @@ export type GeminiUsageCall = TokenUsage & {
 export type AiUsageRunKind =
   | "initial_processing"
   | "omissions_analysis"
+  | "gold_standard_validation"
   | "email_analysis";
 
 export type AiUsageRun = {
@@ -312,6 +313,44 @@ export function buildOmissionsAnalysisRun(options: {
     totalTokens: options.usage.totalTokens,
     costUsd: estimateCostUsd(options.modelName, options.usage),
   };
+}
+
+export function buildGoldStandardValidationRun(options: {
+  id: string;
+  ranAt: string;
+  modelName: string;
+  usage: TokenUsage;
+  existingJson: string | null | undefined;
+}): AiUsageRun {
+  const existing = parseStoredAiUsage(options.existingJson);
+  const priorRuns =
+    existing?.runs.filter((run) => run.kind === "gold_standard_validation")
+      .length ?? 0;
+  const runNumber = priorRuns + 1;
+
+  return {
+    id: options.id,
+    kind: "gold_standard_validation",
+    label:
+      runNumber === 1
+        ? "Gold standard validation"
+        : `Gold standard validation #${runNumber}`,
+    ranAt: options.ranAt,
+    modelName: options.modelName,
+    inputTokens: options.usage.inputTokens,
+    outputTokens: options.usage.outputTokens,
+    totalTokens: options.usage.totalTokens,
+    costUsd: estimateCostUsd(options.modelName, options.usage),
+  };
+}
+
+export function getLatestGoldStandardValidationRun(
+  log: AiUsageLog | null | undefined,
+): AiUsageRun | null {
+  if (!log?.runs.length) return null;
+  const runs = log.runs.filter((run) => run.kind === "gold_standard_validation");
+  if (!runs.length) return null;
+  return runs[runs.length - 1] ?? null;
 }
 
 export function sumAiUsageRuns(runs: AiUsageRun[]): {

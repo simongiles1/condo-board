@@ -20,6 +20,10 @@ export const meetings = pgTable("meetings", {
   pdfFilePath: text("pdf_file_path").notNull(),
   /** Board package / management report PDF used as factual source at generation. */
   boardPackageFilePath: text("board_package_file_path"),
+  /** Uploaded gold-standard minutes PDF for validation comparison. */
+  goldStandardFilePath: text("gold_standard_file_path"),
+  /** Cached AI-generated vs gold-standard validation JSON. */
+  goldStandardValidationJson: text("gold_standard_validation_json"),
   createdAt: text("created_at").notNull(),
   finalizedAt: text("finalized_at"),
 });

@@ -38,9 +38,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Coolify build OOM during trace collection** — `next build` compiled but
   died on "Collecting build traces". Docker builds now cap Next workers to
-  one CPU, enable webpack memory optimizations, skip source maps, exclude
-  dev-only paths from file tracing, and use a 3 GB heap so the process stays
-  under the Services host limit.
+  one CPU, enable webpack memory optimizations, skip source maps, and use a
+  3 GB heap so the process stays under the Services host limit.
+
+- **Production crash after trace excludes** — Over-broad
+  `outputFileTracingExcludes` stripped runtime files from the standalone
+  image and the app crash-looped ("no available server"). Excludes removed;
+  pdfjs worker is explicitly included instead.
 
 - **Hosted Drizzle journal after dump restore** — Startup migrate no longer
   dies on `0002_worthless_talon` when `password_reset_tokens` already exists.

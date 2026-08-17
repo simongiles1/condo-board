@@ -26,16 +26,9 @@ const nextConfig: NextConfig = {
     serverSourceMaps: false,
     enablePrerenderSourceMaps: false,
   },
-  outputFileTracingExcludes: {
-    "*": [
-      "./node_modules/@swc/**",
-      "./node_modules/webpack/**",
-      "./node_modules/typescript/**",
-      "./node_modules/eslint/**",
-      "./scripts/**",
-      "./drizzle/**",
-      "./supabase/**",
-    ],
+  // pdfjs-dist is serverExternalPackages; standalone must ship the worker file.
+  outputFileTracingIncludes: {
+    "/*": ["./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"],
   },
 };
 

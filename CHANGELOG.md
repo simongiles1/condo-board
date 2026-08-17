@@ -12,6 +12,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   skips in the Docker image (`SKIP_TYPECHECK=1`) and the Node heap is 4 GB,
   so the larger extraction codebase can deploy on the Services host.
 
+- **Server pdfjs DOM polyfill** — Instrumentation now stubs `DOMMatrix` /
+  `ImageData` / `Path2D` before importing Gmail/pdf workers so production
+  Node startup does not abort the scheduler.
+
 ### Added
 
 - **Telegram digest after harvest** — After ingest + harvest-missing (cron

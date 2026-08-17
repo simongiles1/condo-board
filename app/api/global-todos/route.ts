@@ -67,6 +67,8 @@ export async function POST(request: Request) {
       completed: false,
       completedAt: null,
       sourceMeetingId: null,
+      sourceKind: "manual",
+      sourceExtractedActionItemId: null,
       createdAt: now,
       updatedAt: now,
     })

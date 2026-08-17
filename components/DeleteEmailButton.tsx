@@ -18,7 +18,7 @@ export function DeleteEmailButton({
   emailId,
   subject,
   source,
-  redirectOnThreadDeleted = "/emails",
+  redirectOnThreadDeleted = "/knowledge/emails",
   onDeleted,
 }: Props) {
   const router = useRouter();

@@ -1,8 +1,5 @@
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+import { redirect } from "next/navigation";
 
-import { AnalysisLabClient } from "@/components/AnalysisLabClient";
-
-export default function AnalysisPage() {
-  return <AnalysisLabClient />;
+export default function AnalysisRedirect() {
+  redirect("/admin/analysis");
 }

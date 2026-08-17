@@ -15,8 +15,8 @@ import {
   getAllowlistEmails,
   isMessageOnOrBeforeCutoff,
 } from "./queries";
+import { storeParsedMessage, type EmailSource } from "./store";
 import { listMatchingThreadIds } from "./thread-search";
-import { storeParsedMessage } from "./store";
 
 export type BackfillTrigger = "manual" | "backfill";
 
@@ -27,12 +27,23 @@ export type BackfillResult = {
   errors: string[];
 };
 
-async function importThread(
+export type ImportThreadResult = {
+  added: number;
+  skipped: number;
+  errors: string[];
+};
+
+/**
+ * Import every message in a Gmail thread. No per-message allowlist filter —
+ * callers decide whether the thread qualifies (any allowlisted participant).
+ */
+export async function importGmailThread(
   gmail: gmail_v1.Gmail,
   threadId: string,
   syncRunId: string,
-  cutoffAt?: string,
-): Promise<{ added: number; skipped: number; errors: string[] }> {
+  source: EmailSource,
+  options?: { cutoffAt?: string },
+): Promise<ImportThreadResult> {
   let added = 0;
   let skipped = 0;
   const errors: string[] = [];
@@ -53,8 +64,8 @@ async function importThread(
         }
 
         if (
-          cutoffAt &&
-          !isMessageOnOrBeforeCutoff(parsed.receivedAt, cutoffAt)
+          options?.cutoffAt &&
+          !isMessageOnOrBeforeCutoff(parsed.receivedAt, options.cutoffAt)
         ) {
           skipped += 1;
           continue;
@@ -62,7 +73,7 @@ async function importThread(
 
         const result = await storeParsedMessage({
           parsed,
-          source: "personal_backfill",
+          source,
           syncRunId,
         });
 
@@ -78,6 +89,36 @@ async function importThread(
     errors.push(
       `Thread ${threadId}: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+
+  return { added, skipped, errors };
+}
+
+/** Find allowlist-matching threads, then import every message in each thread. */
+export async function importThreadsMatchingQuery(
+  gmail: gmail_v1.Gmail,
+  query: string,
+  syncRunId: string,
+  source: EmailSource,
+  options?: { cutoffAt?: string },
+): Promise<ImportThreadResult> {
+  let added = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  const threadIds = await listMatchingThreadIds(gmail, query);
+
+  for (const threadId of threadIds) {
+    const result = await importGmailThread(
+      gmail,
+      threadId,
+      syncRunId,
+      source,
+      options,
+    );
+    added += result.added;
+    skipped += result.skipped;
+    errors.push(...result.errors);
   }
 
   return { added, skipped, errors };
@@ -115,19 +156,16 @@ export async function backfillPersonalAccount(options?: {
     }
 
     const { gmail } = await getGmailClient("personal_backfill");
-    const threadIds = await listMatchingThreadIds(gmail, query);
-
-    for (const threadId of threadIds) {
-      const result = await importThread(
-        gmail,
-        threadId,
-        syncRunId,
-        options?.cutoffAt,
-      );
-      messagesAdded += result.added;
-      messagesSkipped += result.skipped;
-      errors.push(...result.errors);
-    }
+    const result = await importThreadsMatchingQuery(
+      gmail,
+      query,
+      syncRunId,
+      "personal_backfill",
+      { cutoffAt: options?.cutoffAt },
+    );
+    messagesAdded = result.added;
+    messagesSkipped = result.skipped;
+    errors.push(...result.errors);
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
   }

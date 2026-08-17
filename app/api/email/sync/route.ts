@@ -2,11 +2,11 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 
-import { syncPersonalAccount } from "@/lib/gmail/sync";
+import { runIngestThenHarvest } from "@/lib/email/ingest-harvest";
 
 export async function POST() {
   try {
-    const result = await syncPersonalAccount("manual");
+    const result = await runIngestThenHarvest("manual");
     return NextResponse.json(result);
   } catch (error) {
     console.error("[email:sync]", error);

@@ -4,7 +4,8 @@ import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
-import { actionItems, extractedActionItems, meetings } from "@/lib/db/schema";
+import { actionItems, meetings } from "@/lib/db/schema";
+import { loadWorkingEmailActionItems } from "@/lib/email-analysis/todo-working-list";
 
 export async function GET() {
   const db = getDb();
@@ -23,10 +24,7 @@ export async function GET() {
     .innerJoin(meetings, eq(actionItems.meetingId, meetings.id))
     .where(eq(actionItems.completed, false));
 
-  const emailItems = await db
-    .select()
-    .from(extractedActionItems)
-    .where(eq(extractedActionItems.completed, false));
+  const emailItems = await loadWorkingEmailActionItems();
 
   return NextResponse.json({
     items: [
@@ -46,9 +44,9 @@ export async function GET() {
         assignee: item.assignee,
         description: item.description,
         deadline: item.deadline,
-        completed: item.completed,
+        completed: false,
         context: "Email extraction",
-        contextDate: item.createdAt,
+        contextDate: item.receivedAt,
       })),
     ],
   });

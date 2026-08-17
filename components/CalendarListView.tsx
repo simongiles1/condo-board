@@ -2,10 +2,14 @@
 
 import { useMemo } from "react";
 
-import type { CalendarEventSummary } from "@/lib/calendar/event-types";
-import { groupEventsByDay } from "@/lib/calendar/event-types";
+import {
+  calendarEventAppearance,
+  calendarEventTypeLabel,
+  groupEventsByDay,
+  type CalendarEventSummary,
+} from "@/lib/calendar/event-types";
 import { getTodayKey } from "@/lib/calendar/grid";
-import { DISPLAY_TIME_ZONE } from "@/lib/format/datetime";
+import { DISPLAY_TIME_ZONE, formatEventClockTime } from "@/lib/format/datetime";
 
 type Props = {
   events: CalendarEventSummary[];
@@ -21,19 +25,6 @@ function formatDayHeading(dayKey: string): string {
     day: "numeric",
     timeZone: DISPLAY_TIME_ZONE,
   }).format(new Date(y, m - 1, d));
-}
-
-function formatEventTime(startAt: string): string | null {
-  if (!startAt.includes("T")) return null;
-  return new Intl.DateTimeFormat("en-CA", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: DISPLAY_TIME_ZONE,
-  }).format(new Date(startAt));
-}
-
-function eventTypeLabel(eventType: string): string {
-  return eventType.charAt(0).toUpperCase() + eventType.slice(1);
 }
 
 export function CalendarListView({ events, onSelectEvent }: Props) {
@@ -76,14 +67,15 @@ export function CalendarListView({ events, onSelectEvent }: Props) {
               </header>
               <ul className="divide-y divide-slate-100">
                 {dayEvents.map((event) => {
-                  const timeLabel = formatEventTime(event.startAt);
+                  const timeLabel = formatEventClockTime(event.startAt);
+                  const appearance = calendarEventAppearance(event.eventType);
 
                   return (
                     <li key={event.id}>
                       <button
                         type="button"
                         onClick={() => onSelectEvent?.(event.id)}
-                        className="flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-teal-50/50"
+                        className="flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-slate-50"
                       >
                         {timeLabel ? (
                           <span className="w-20 shrink-0 pt-0.5 text-xs font-medium tabular-nums text-slate-500">
@@ -96,8 +88,10 @@ export function CalendarListView({ events, onSelectEvent }: Props) {
                           <span className="block truncate text-sm font-medium text-slate-900">
                             {event.title}
                           </span>
-                          <span className="mt-0.5 block text-xs text-slate-500">
-                            {eventTypeLabel(event.eventType)}
+                          <span
+                            className={`mt-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ${appearance.badge}`}
+                          >
+                            {calendarEventTypeLabel(event.eventType)}
                           </span>
                           {event.description ? (
                             <span className="mt-1 block line-clamp-2 text-xs text-slate-600">

@@ -162,7 +162,7 @@ export function GenerateMeetingDialog({ open, onClose }: Props) {
 
       resetForm();
       onClose();
-      router.push(`/meetings/${payload.id}`);
+      router.push(`/operations/meetings/${payload.id}`);
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unexpected server error.");

@@ -4,7 +4,8 @@ import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
-import { globalTodos } from "@/lib/db/schema";
+import { extractedActionItems, globalTodos } from "@/lib/db/schema";
+import { completedFieldsForLifecycle } from "@/lib/email-analysis/todo-lifecycle";
 
 type Payload = {
   completed?: boolean;
@@ -29,12 +30,13 @@ export async function PATCH(
       });
     }
 
+    const now = new Date().toISOString();
     const [updated] = await db
       .update(globalTodos)
       .set({
         completed,
-        completedAt: completed ? new Date().toISOString() : null,
-        updatedAt: new Date().toISOString(),
+        completedAt: completed ? now : null,
+        updatedAt: now,
       })
       .where(eq(globalTodos.id, id))
       .returning();
@@ -43,6 +45,22 @@ export async function PATCH(
       return NextResponse.json({ error: "Global todo not found" }, {
         status: 404,
       });
+    }
+
+    if (updated.sourceExtractedActionItemId) {
+      const lifecycleStatus = completed ? "completed" : "open";
+      const completedFields = completedFieldsForLifecycle(
+        lifecycleStatus,
+        now,
+      );
+      await db
+        .update(extractedActionItems)
+        .set({
+          completed: completedFields.completed,
+          completedAt: completedFields.completedAt,
+          lifecycleStatus,
+        })
+        .where(eq(extractedActionItems.id, updated.sourceExtractedActionItemId));
     }
 
     return NextResponse.json(updated);

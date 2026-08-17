@@ -4,7 +4,12 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 
-import type { CalendarEventSummary } from "@/lib/calendar/event-types";
+import {
+  CALENDAR_EVENT_TYPES,
+  CALENDAR_EVENT_TYPE_LABELS,
+  calendarEventAppearance,
+  type CalendarEventSummary,
+} from "@/lib/calendar/event-types";
 
 import { CalendarDisplayToggle } from "@/components/CalendarDisplayToggle";
 import { CalendarEventDetailDialog } from "@/components/CalendarEventDetailDialog";
@@ -79,7 +84,10 @@ export function CalendarPageClient({
             ) : null}
           </div>
 
-          <CalendarViewToggle />
+          <div className="flex flex-wrap items-center gap-3">
+            <CalendarEventLegend />
+            <CalendarViewToggle />
+          </div>
         </div>
       ) : null}
 
@@ -105,5 +113,27 @@ export function CalendarPageClient({
         onClose={() => setSelectedEventId(null)}
       />
     </div>
+  );
+}
+
+function CalendarEventLegend() {
+  return (
+    <ul
+      className="flex flex-wrap items-center gap-x-3 gap-y-1"
+      aria-label="Event type colors"
+    >
+      {CALENDAR_EVENT_TYPES.map((type) => (
+        <li
+          key={type}
+          className="flex items-center gap-1.5 text-[11px] font-medium text-slate-600"
+        >
+          <span
+            className={`h-2 w-2 shrink-0 rounded-sm ${calendarEventAppearance(type).swatch}`}
+            aria-hidden="true"
+          />
+          {CALENDAR_EVENT_TYPE_LABELS[type]}
+        </li>
+      ))}
+    </ul>
   );
 }

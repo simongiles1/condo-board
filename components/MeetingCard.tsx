@@ -57,7 +57,7 @@ export function MeetingCard({
             />
           </div>
           <Link
-            href={`/meetings/${meeting.id}`}
+            href={`/operations/meetings/${meeting.id}`}
             className="text-sm font-medium text-teal-700 hover:text-teal-900"
           >
             Open workspace →

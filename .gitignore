@@ -4,3 +4,8 @@ data/
 uploads/
 .env*.local
 .DS_Store
+.venv-docling/
+tmp/
+__pycache__/
+*.pyc
+tsconfig.tsbuildinfo

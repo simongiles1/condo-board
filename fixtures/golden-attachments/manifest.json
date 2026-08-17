@@ -1,0 +1,1125 @@
+{
+  "version": 1,
+  "description": "Golden set for calibrating PAGE_ROUTE_THRESHOLDS. Label via /analysis/golden-attachments. Rule: would text-layer extraction miss a board-useful fact on this page? Logos/decorative signatures = text. Unselectable/scan content = vision.",
+  "thresholdsFile": "lib/pdf/page-profile.ts",
+  "labelGuide": {
+    "text": "Board-useful facts are in the selectable text layer (ignore logos and decorative signatures).",
+    "vision": "Needed facts only exist as scan/drawing/handwriting/stamp, or there is no usable text layer.",
+    "ambiguous": "Unsure whether needed facts are recoverable from text alone."
+  },
+  "documents": [
+    {
+      "id": "g01",
+      "bucket": "blueprint",
+      "contentHash": "0e13b4cd3d5f7c16fb9298ff9e0005545004deb412f19f6f48311e760eb5b18e",
+      "filename": "SW-TSCC 2573 - Enwave Mechanical Room.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "quote overview and line items"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "terms and conditions and signature line"
+        }
+      ]
+    },
+    {
+      "id": "g02",
+      "bucket": "blueprint",
+      "contentHash": "2b88fb124dabcd571019b2ea6e4b79e88713682f28f149984135e0202d970457",
+      "filename": "26-1002156 - 199 Richmond St. W. - PH Mechanical Room MUA Leak Repair.pdf",
+      "pageCount": 3,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "quote overview and scope of work"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "notes and signature line"
+        },
+        {
+          "pageNo": 3,
+          "expectedRoute": "text",
+          "notes": "terms and conditions"
+        }
+      ]
+    },
+    {
+      "id": "g03",
+      "bucket": "blueprint",
+      "contentHash": "9cc37e3e5ed0cd7a5abd34db80f0473c66fed8d47e825480b70b1146384c565f",
+      "filename": "ME21641.DES.NJ - 199 Richmond W - Pressurization Fan Replacement -  Xtra Mechanical - SUBMITTAL.pdf",
+      "pageCount": 4,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "Bid price and bidder info"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "Bid price breakdown and milestone dates"
+        },
+        {
+          "pageNo": 3,
+          "expectedRoute": "text",
+          "notes": "Proposed equipment and delivery dates and list of subtrades"
+        },
+        {
+          "pageNo": 4,
+          "expectedRoute": "text",
+          "notes": "Declarations, Acknowledgements, and Agreements, and Signature Line"
+        }
+      ]
+    },
+    {
+      "id": "g04",
+      "bucket": "blueprint",
+      "contentHash": "f085095fc8acefb057bdad5f9567947f6f1fc2e801bdd69e3003324fb321ad60",
+      "filename": "00B. Thermo Cool Mechanical Contract.pdf",
+      "pageCount": 6,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "vision",
+          "notes": "bidder info"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "vision",
+          "notes": "Bid price"
+        },
+        {
+          "pageNo": 3,
+          "expectedRoute": "vision",
+          "notes": "bid price for shared component"
+        },
+        {
+          "pageNo": 4,
+          "expectedRoute": "vision",
+          "notes": "Bid price breakdown"
+        },
+        {
+          "pageNo": 5,
+          "expectedRoute": "vision",
+          "notes": "Time and material rates"
+        },
+        {
+          "pageNo": 6,
+          "expectedRoute": "vision",
+          "notes": "Declarations, Acknowledgements, and Agreements, and Signature Line"
+        }
+      ]
+    },
+    {
+      "id": "g05",
+      "bucket": "scan_stamp",
+      "contentHash": "bbbfd550567c0d5c27eb5436358f4873825791a3699af5d5c648ffa85ebea809",
+      "filename": "InvoiceImages - 2025-07-20T144845.592.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "vision",
+          "notes": "invoice amount details"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "vision",
+          "notes": "Work completed details and invoice breakdown"
+        }
+      ]
+    },
+    {
+      "id": "g06",
+      "bucket": "scan_stamp",
+      "contentHash": "27f78c199a34cbef6473defef6cf4c2dafcddd0384b7de1a2b29c7bf87b69c1c",
+      "filename": "InvoiceImages - 2025-07-20T121241.915.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "vision",
+          "notes": "Invoice breakdown"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "vision",
+          "notes": "Invoice total and payment instructions"
+        }
+      ],
+      "note": "Labeled 2 page(s) via UI"
+    },
+    {
+      "id": "g07",
+      "bucket": "scan_stamp",
+      "contentHash": "3be9232aff2e6251dc7a6443e146e53188f2566b19802bfd263aedf027305d8c",
+      "filename": "PayScan Introductory Letter.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "Product overview"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "product cost and product ordering instructions"
+        }
+      ],
+      "note": "Labeled 2 page(s) via UI"
+    },
+    {
+      "id": "g08",
+      "bucket": "scan_stamp",
+      "contentHash": "b42dffdf403c9c82757a2e1d329e8add24d76e1e8ab538717645e8b0d558e3f9",
+      "filename": "Sept 2020 invoice.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "Invoice details breakdown"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "Invoice totals information"
+        }
+      ],
+      "note": "Labeled 2 page(s) via UI"
+    },
+    {
+      "id": "g09",
+      "bucket": "table_financial",
+      "contentHash": "9d62a83fbfb6a1120cddf337e663ac1dbc25832231ebfb21df95e9fa646ffa9d",
+      "filename": "Quote# 25-1000339  - 199 Richmond St West - P1 Heating Pump Repairs - 1.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "quote amount and scope of work"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "Signature line"
+        }
+      ],
+      "note": "Labeled 2 page(s) via UI"
+    },
+    {
+      "id": "g10",
+      "bucket": "table_financial",
+      "contentHash": "a70f578479f2865d36b05aacd1feeb1ad619e39b2851ec00eef2077adb529e56",
+      "filename": "TSCC 2517 - Financial Statement Report - October 2021.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "balance sheet details"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "balance sheet details continued"
+        }
+      ],
+      "note": "Labeled 2 page(s) via UI"
+    },
+    {
+      "id": "g11",
+      "bucket": "table_financial",
+      "contentHash": "5fa2aaf426fb05dac62f437768f023f6e168b1e36a87a8b1f704c0877e616e06",
+      "filename": "Dryer lint cleaning - Merrit quote.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "scope of work details"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "vision",
+          "notes": "Lint trap details and quote breakdown"
+        }
+      ],
+      "note": "Labeled 2 page(s) via UI"
+    },
+    {
+      "id": "g12",
+      "bucket": "table_financial",
+      "contentHash": "e3e331cae9fcccd99f07c6ab27eadc9249068be93e156a84b1c2ff1d8fd70934",
+      "filename": "Budget Letter 2024 - 2517 - Draft.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "Budget Approval Notice."
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "Budget Approval Notice continued"
+        }
+      ],
+      "note": "Labeled 2 page(s) via UI"
+    },
+    {
+      "id": "g13",
+      "bucket": "contract_text",
+      "contentHash": "a98068cf66e22385dc23b8e27650a4cdaf98c0ffaee8b9359072641fa7716e1f",
+      "filename": "EWRB Reporting Contract (3).pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "Contract proposal details"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "Signature page"
+        }
+      ],
+      "note": "Labeled 2 page(s) via UI"
+    },
+    {
+      "id": "g14",
+      "bucket": "contract_text",
+      "contentHash": "0528829d02ce4323c64c1ae479a1bf8e978956acf13c3bbb3170fcbf47f0f211",
+      "filename": "EWRB Reporting Contract Proposal_AS Electrical_2019-08-14.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "Contract proposal details"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "signature page"
+        }
+      ],
+      "note": "Labeled 2 page(s) via UI"
+    },
+    {
+      "id": "g15",
+      "bucket": "contract_text",
+      "contentHash": "b247c63bf40d5dc848836f3e366fb007d7c204531d399c410a59c82127524f72",
+      "filename": "Minutes of Meeting of Board_2022.05.04 - unapproved.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "board meeting minutes"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "board meeting minutes continued"
+        }
+      ],
+      "note": "Labeled 2 page(s) via UI"
+    },
+    {
+      "id": "g16",
+      "bucket": "contract_text",
+      "contentHash": "e9c4a1f3b6b3d02426c4e2e96d0b59c32da50099ec0aa84308541afc7e502cbd",
+      "filename": "TSCC 2517 - expense and cheque signing policy - 2021.01.18.pdf",
+      "pageCount": 2,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "Spending Authorization and Cheque Signing Policy"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "Spending Authorization and Cheque Signing Policy continued"
+        }
+      ],
+      "note": "Labeled 2 page(s) via UI"
+    },
+    {
+      "id": "g17",
+      "bucket": "mixed_package",
+      "contentHash": "53ca1be2d115f722cbf77d798845c20397cb22b203e76d174d5940bbcd06ac0e",
+      "filename": "LLFPTSCC2517TSCC2573ResidentFSPDistributionPackage2.pdf",
+      "pageCount": 21,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "fire safety plan"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "fire safety plan continued"
+        },
+        {
+          "pageNo": 3,
+          "expectedRoute": "text",
+          "notes": "staff responsibility requirements (owner responsibility)"
+        },
+        {
+          "pageNo": 4,
+          "expectedRoute": "text",
+          "notes": "staff responsibility requirements (emergency coordinator responsibility)"
+        },
+        {
+          "pageNo": 5,
+          "expectedRoute": "text",
+          "notes": "staff responsibility requirements (emergency responsibility) continued"
+        },
+        {
+          "pageNo": 6,
+          "expectedRoute": "text",
+          "notes": "staff responsibility requirements (cleaning and trades responsibility)"
+        },
+        {
+          "pageNo": 7,
+          "expectedRoute": "text",
+          "notes": "staff responsibility requirements (Owners, Tenants, & Employers Operating Commercial / Retail Suites responsibility)"
+        },
+        {
+          "pageNo": 8,
+          "expectedRoute": "text",
+          "notes": "Emergency procedures"
+        },
+        {
+          "pageNo": 9,
+          "expectedRoute": "text",
+          "notes": "In the event of a fire alarm"
+        },
+        {
+          "pageNo": 10,
+          "expectedRoute": "text",
+          "notes": "5.2Emergency Procedure Signage"
+        },
+        {
+          "pageNo": 11,
+          "expectedRoute": "text",
+          "notes": "Persons Requiring Assistance"
+        },
+        {
+          "pageNo": 12,
+          "expectedRoute": "text",
+          "notes": "Persons Requiring Assistance continued"
+        },
+        {
+          "pageNo": 13,
+          "expectedRoute": "text",
+          "notes": "Fire in your residential building procedure"
+        },
+        {
+          "pageNo": 14,
+          "expectedRoute": "text",
+          "notes": "Fire in your residential building procedure continued"
+        },
+        {
+          "pageNo": 15,
+          "expectedRoute": "text",
+          "notes": "Fire in your residential building procedure continued"
+        },
+        {
+          "pageNo": 16,
+          "expectedRoute": "text",
+          "notes": "Fire in your residential building procedure continue"
+        },
+        {
+          "pageNo": 17,
+          "expectedRoute": "text",
+          "notes": "SPECIFIC INSTRUCTIONS FOR SUPERVISORY STAFF IN THE EVENT \nOFAFIRE ALARM."
+        },
+        {
+          "pageNo": 18,
+          "expectedRoute": "text",
+          "notes": "Emergency Procedures for the Emergency Coordinator"
+        },
+        {
+          "pageNo": 19,
+          "expectedRoute": "text",
+          "notes": "Emergency Procedures for Cleaning & Trades (Includes Superintendent) Personnel"
+        },
+        {
+          "pageNo": 20,
+          "expectedRoute": "text",
+          "notes": "Emergency Procedures for Owners, Tenants, & Employers Operating Commercial / Retail Suites"
+        },
+        {
+          "pageNo": 21,
+          "expectedRoute": "text",
+          "notes": "Emergency Procedures for Owners, Tenants, & Employers Operating Commercial / Retail Suites continued"
+        }
+      ],
+      "note": "Labeled 21 page(s) via UI"
+    },
+    {
+      "id": "g18",
+      "bucket": "mixed_package",
+      "contentHash": "1b839a6a379f664de8f3d6e8194c3b4f57c9a5994bdb3e1f103a2e5d74cfc21a",
+      "filename": "Board meeting package for board meeting on Jan. 10, 2024 (TSCC 2517).pdf",
+      "pageCount": 38,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "Cover page"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "Agenda"
+        },
+        {
+          "pageNo": 3,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 4,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 5,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 6,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 7,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 8,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 9,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 10,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 11,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 12,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 13,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 14,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 15,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 16,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 17,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 18,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 19,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 20,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 21,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 22,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 23,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 24,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 25,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 26,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 27,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 28,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 29,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 30,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 31,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 32,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 33,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 34,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 35,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 36,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 37,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 38,
+          "expectedRoute": "text"
+        }
+      ],
+      "note": "Labeled 38 page(s) via UI"
+    },
+    {
+      "id": "g19",
+      "bucket": "mixed_package",
+      "contentHash": "cc97413b97d3ea7ac64b54aa80d59110b2ca4a55552c78f705730b4f4aac7d33",
+      "filename": "Board meeting package for board meeting on Jan. 10, 2024 (TSCC 2517).pdf",
+      "pageCount": 40,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "Cover page"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "Agenda"
+        },
+        {
+          "pageNo": 3,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 4,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 5,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 6,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 7,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 8,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 9,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 10,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 11,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 12,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 13,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 14,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 15,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 16,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 17,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 18,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 19,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 20,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 21,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 22,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 23,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 24,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 25,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 26,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 27,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 28,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 29,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 30,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 31,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 32,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 33,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 34,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 35,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 36,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 37,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 38,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 39,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 40,
+          "expectedRoute": "text"
+        }
+      ],
+      "note": "Labeled 40 page(s) via UI"
+    },
+    {
+      "id": "g20",
+      "bucket": "mixed_package",
+      "contentHash": "72972cd3b206b97b75dca49e3dfe674c87f00c6130efbeb8f76aae46c457aafe",
+      "filename": "Board meeting package TSCC 2517 (April. 18, 2024).pdf",
+      "pageCount": 75,
+      "pages": [
+        {
+          "pageNo": 1,
+          "expectedRoute": "text",
+          "notes": "Cover page"
+        },
+        {
+          "pageNo": 2,
+          "expectedRoute": "text",
+          "notes": "Agenda"
+        },
+        {
+          "pageNo": 3,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 4,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 5,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 6,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 7,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 8,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 9,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 10,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 11,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 12,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 13,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 14,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 15,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 16,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 17,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 18,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 19,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 20,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 21,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 22,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 23,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 24,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 25,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 26,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 27,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 28,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 29,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 30,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 31,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 32,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 33,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 34,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 35,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 36,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 37,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 38,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 39,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 40,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 41,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 42,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 43,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 44,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 45,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 46,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 47,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 48,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 49,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 50,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 51,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 52,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 53,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 54,
+          "expectedRoute": "vision"
+        },
+        {
+          "pageNo": 55,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 56,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 57,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 58,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 59,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 60,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 61,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 62,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 63,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 64,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 65,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 66,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 67,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 68,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 69,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 70,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 71,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 72,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 73,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 74,
+          "expectedRoute": "text"
+        },
+        {
+          "pageNo": 75,
+          "expectedRoute": "text"
+        }
+      ],
+      "note": "Labeled 75 page(s) via UI"
+    }
+  ]
+}

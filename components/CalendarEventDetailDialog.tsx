@@ -4,6 +4,10 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import type { CalendarEventSourceDetail } from "@/lib/calendar/event-source";
+import {
+  calendarEventAppearance,
+  calendarEventTypeLabel,
+} from "@/lib/calendar/event-types";
 import { attachmentKind } from "@/lib/email/attachment-display";
 import { filterVisibleAttachments } from "@/lib/email/attachment-visibility";
 import { emailMessageDetailHref } from "@/lib/email/thread-filter-params";
@@ -14,10 +18,6 @@ type Props = {
   eventId: string | null;
   onClose: () => void;
 };
-
-function eventTypeLabel(eventType: string): string {
-  return eventType.charAt(0).toUpperCase() + eventType.slice(1);
-}
 
 function formatEventWhen(startAt: string): string {
   if (startAt.includes("T")) {
@@ -114,8 +114,16 @@ export function CalendarEventDetailDialog({ eventId, onClose }: Props) {
         <div className="border-b border-slate-100 px-6 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">
-                {detail ? eventTypeLabel(detail.event.eventType) : "Event"}
+              <p
+                className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ${
+                  detail
+                    ? calendarEventAppearance(detail.event.eventType).badge
+                    : "bg-slate-100 text-slate-600 ring-slate-200"
+                }`}
+              >
+                {detail
+                  ? calendarEventTypeLabel(detail.event.eventType)
+                  : "Event"}
               </p>
               <h2
                 id="calendar-event-dialog-title"
@@ -226,7 +234,7 @@ export function CalendarEventDetailDialog({ eventId, onClose }: Props) {
                   </h3>
                   <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
                     <Link
-                      href={`/meetings/${detail.source.meetingId}`}
+                      href={`/operations/meetings/${detail.source.meetingId}`}
                       className="font-medium text-teal-800 hover:text-teal-950 hover:underline"
                     >
                       {detail.source.title}

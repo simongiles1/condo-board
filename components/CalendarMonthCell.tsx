@@ -4,7 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { CalendarDay } from "@/lib/calendar/grid";
-import type { CalendarEventSummary } from "@/lib/calendar/event-types";
+import {
+  calendarEventAppearance,
+  type CalendarEventSummary,
+} from "@/lib/calendar/event-types";
 
 const EVENT_ROW_HEIGHT = 18;
 const EVENT_GAP = 4;
@@ -105,7 +108,7 @@ export function CalendarMonthCell({ day, events, onSelectEvent }: Props) {
             key={event.id}
             type="button"
             onClick={() => onSelectEvent?.(event.id)}
-            className="block w-full truncate rounded bg-teal-50 px-1.5 py-0.5 text-left text-[10px] font-medium text-teal-900 transition hover:bg-teal-100"
+            className={`block w-full truncate rounded-r border-l-2 px-1.5 py-0.5 text-left text-[10px] font-medium transition ${calendarEventAppearance(event.eventType).chip}`}
             title={event.title}
           >
             {event.title}
@@ -136,7 +139,7 @@ export function CalendarMonthCell({ day, events, onSelectEvent }: Props) {
                         key={event.id}
                         type="button"
                         onClick={() => onSelectEvent?.(event.id)}
-                        className="block w-full truncate rounded px-1.5 py-1 text-left text-[11px] font-medium text-slate-800 transition hover:bg-teal-50"
+                        className={`block w-full truncate rounded-r border-l-2 px-1.5 py-1 text-left text-[11px] font-medium transition ${calendarEventAppearance(event.eventType).chip}`}
                         title={event.title}
                       >
                         {event.title}

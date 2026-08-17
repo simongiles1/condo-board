@@ -5,6 +5,11 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { actionItems, extractedActionItems } from "@/lib/db/schema";
+import { completedFieldsForLifecycle } from "@/lib/email-analysis/todo-lifecycle";
+import {
+  markEmailGlobalTodosCompleted,
+  reopenEmailGlobalTodos,
+} from "@/lib/todos/sync-email-global-todos";
 
 type Payload = {
   completed?: boolean;
@@ -46,9 +51,18 @@ export async function PATCH(
     const completedAt = completed ? new Date().toISOString() : null;
 
     if (source === "email") {
+      const lifecycleStatus = completed ? "completed" : "open";
+      const completedFields = completedFieldsForLifecycle(
+        lifecycleStatus,
+        completedAt ?? new Date().toISOString(),
+      );
       const [updated] = await db
         .update(extractedActionItems)
-        .set({ completed, completedAt })
+        .set({
+          completed: completedFields.completed,
+          completedAt: completedFields.completedAt,
+          lifecycleStatus,
+        })
         .where(eq(extractedActionItems.id, id))
         .returning();
 
@@ -56,6 +70,15 @@ export async function PATCH(
         return NextResponse.json({ error: "Action item not found" }, {
           status: 404,
         });
+      }
+
+      if (completed) {
+        await markEmailGlobalTodosCompleted(
+          [id],
+          completedFields.completedAt ?? new Date().toISOString(),
+        );
+      } else {
+        await reopenEmailGlobalTodos([id]);
       }
 
       return NextResponse.json(updated);

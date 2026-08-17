@@ -18,6 +18,7 @@ import {
   reconcileThreadActionItems,
 } from "@/lib/email-analysis/action-item-reconciliation";
 import { semanticDeduplicateIncomingActionItems } from "@/lib/email-analysis/action-item-dedup";
+import { isTodoInWorkingWindow } from "@/lib/email-analysis/todo-lifecycle";
 import { reconcileThreadEquipment } from "@/lib/email-analysis/equipment-reconciliation";
 import { reconcileThreadCalendar } from "@/lib/email-analysis/calendar-reconciliation";
 import { reconcileThreadEntities } from "@/lib/email-analysis/entity-reconciliation";
@@ -53,6 +54,7 @@ import {
   downloadEmailAttachment,
   readCachedAttachment,
 } from "@/lib/gmail/attachments";
+import { readAttachmentMarkdown } from "@/lib/email/attachment-markdown";
 import {
   generateEmailExtraction,
 } from "@/lib/gemini/client";
@@ -171,6 +173,7 @@ async function extractAttachmentDocument(input: {
   subject?: string;
   from?: string;
   attachmentId: string;
+  contentHash?: string;
   modelName: string;
   maxOutputTokens: number;
   systemInstruction: string;
@@ -183,17 +186,38 @@ async function extractAttachmentDocument(input: {
   });
   const step = `attachment_${input.attachmentId}`;
 
-  const extractFromText = async (text: string, textStep: string) =>
+  const extractFromText = async (
+    text: string,
+    textStep: string,
+    label = "EXTRACTED PDF TEXT",
+  ) =>
     extractWithGemini({
       systemInstruction: input.systemInstruction,
       userText: `${attachmentPrompt}
 
---- EXTRACTED PDF TEXT ---
+--- ${label} ---
 ${text}`,
       modelName: input.modelName,
       maxOutputTokens: input.maxOutputTokens,
       step: textStep,
     });
+
+  const clipText = (text: string) =>
+    text.length > MAX_EXTRACTED_PDF_TEXT_CHARS
+      ? `${text.slice(0, MAX_EXTRACTED_PDF_TEXT_CHARS)}\n\n[Text truncated — attachment exceeded ${MAX_EXTRACTED_PDF_TEXT_CHARS} characters.]`
+      : text;
+
+  // Prefer content-addressed Markdown substrate when already converted.
+  if (input.contentHash) {
+    const markdown = await readAttachmentMarkdown(input.contentHash);
+    if (markdown) {
+      return extractFromText(
+        clipText(markdown),
+        `${step}_markdown`,
+        "ATTACHMENT MARKDOWN",
+      );
+    }
+  }
 
   const extractFromPdfText = async () => {
     const text = await extractPdfText(input.bytes);
@@ -203,12 +227,10 @@ ${text}`,
       );
     }
 
-    const clipped =
-      text.length > MAX_EXTRACTED_PDF_TEXT_CHARS
-        ? `${text.slice(0, MAX_EXTRACTED_PDF_TEXT_CHARS)}\n\n[Text truncated — attachment exceeded ${MAX_EXTRACTED_PDF_TEXT_CHARS} characters.]`
-        : text;
-
-    const { document, calls } = await extractFromText(clipped, `${step}_text`);
+    const { document, calls } = await extractFromText(
+      clipText(text),
+      `${step}_text`,
+    );
     return { document, calls };
   };
 
@@ -233,13 +255,10 @@ ${text}`,
   }
 
   if (isTextAttachment(input.mimeType, input.filename)) {
-    const text = input.bytes.toString("utf8");
-    const clipped =
-      text.length > MAX_EXTRACTED_PDF_TEXT_CHARS
-        ? `${text.slice(0, MAX_EXTRACTED_PDF_TEXT_CHARS)}\n\n[Text truncated — attachment exceeded ${MAX_EXTRACTED_PDF_TEXT_CHARS} characters.]`
-        : text;
-
-    return extractFromText(clipped, `${step}_text`);
+    return extractFromText(
+      clipText(input.bytes.toString("utf8")),
+      `${step}_text`,
+    );
   }
 
   if (!input.mimeType.toLowerCase().startsWith("image/")) {
@@ -472,6 +491,7 @@ export async function analyzeEmail(input: {
       subject: email.subject,
       from: email.fromAddress,
       attachmentId: attachment.id,
+      contentHash,
       modelName: settings.analysisModel,
       maxOutputTokens: settings.maxOutputTokens,
       systemInstruction,
@@ -502,7 +522,8 @@ export async function analyzeEmail(input: {
   const processingDurationMs = Date.now() - analysisStartedAt;
 
   let actionItemsDeduped = 0;
-  if (email.threadId && merged.action_items?.length) {
+  const inTodoWorkingWindow = isTodoInWorkingWindow(email.receivedAt);
+  if (inTodoWorkingWindow && email.threadId && merged.action_items?.length) {
     try {
       const dedup = await semanticDeduplicateIncomingActionItems({
         threadId: email.threadId,
@@ -544,49 +565,52 @@ export async function analyzeEmail(input: {
     sourceId,
     emailThreadId: email.threadId,
     document: merged,
+    emailReceivedAt: email.receivedAt,
   });
   if (actionItemsDeduped) {
     counts.action_items_deduped = actionItemsDeduped;
   }
 
   if (email.threadId) {
-    try {
-      const reconciliation = await reconcileThreadActionItems({
-        threadId: email.threadId,
-        analyzedEmailId: email.id,
-        modelName: settings.analysisModel,
-      });
-      allCalls.push(...reconciliation.calls);
-      if (reconciliation.completed || reconciliation.superseded) {
-        counts.action_items_reconciled =
-          (counts.action_items_reconciled ?? 0) +
-          reconciliation.completed +
-          reconciliation.superseded;
+    if (inTodoWorkingWindow) {
+      try {
+        const reconciliation = await reconcileThreadActionItems({
+          threadId: email.threadId,
+          analyzedEmailId: email.id,
+          modelName: settings.analysisModel,
+        });
+        allCalls.push(...reconciliation.calls);
+        if (reconciliation.completed || reconciliation.superseded) {
+          counts.action_items_reconciled =
+            (counts.action_items_reconciled ?? 0) +
+            reconciliation.completed +
+            reconciliation.superseded;
+        }
+      } catch (error) {
+        console.error("[email-analysis:action-item-reconcile]", {
+          emailId: email.id,
+          threadId: email.threadId,
+          error: error instanceof Error ? error.message : "Reconciliation failed",
+        });
       }
-    } catch (error) {
-      console.error("[email-analysis:action-item-reconcile]", {
-        emailId: email.id,
-        threadId: email.threadId,
-        error: error instanceof Error ? error.message : "Reconciliation failed",
-      });
-    }
 
-    try {
-      const crossThreadClosed = await closeCrossThreadCalendarInviteItems({
-        emailId: email.id,
-      });
-      if (crossThreadClosed) {
-        counts.action_items_cross_thread_closed =
-          (counts.action_items_cross_thread_closed ?? 0) + crossThreadClosed;
+      try {
+        const crossThreadClosed = await closeCrossThreadCalendarInviteItems({
+          emailId: email.id,
+        });
+        if (crossThreadClosed) {
+          counts.action_items_cross_thread_closed =
+            (counts.action_items_cross_thread_closed ?? 0) + crossThreadClosed;
+        }
+      } catch (error) {
+        console.error("[email-analysis:action-item-cross-thread]", {
+          emailId: email.id,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Cross-thread calendar invite closure failed",
+        });
       }
-    } catch (error) {
-      console.error("[email-analysis:action-item-cross-thread]", {
-        emailId: email.id,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Cross-thread calendar invite closure failed",
-      });
     }
 
     try {
@@ -890,6 +914,7 @@ export async function classifyEmailAttachmentHasValue(input: {
     subject: email.subject,
     from: email.fromAddress,
     attachmentId: attachment.id,
+    contentHash,
     modelName: settings.analysisModel,
     maxOutputTokens: settings.maxOutputTokens,
     systemInstruction,

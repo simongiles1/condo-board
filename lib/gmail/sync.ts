@@ -4,9 +4,18 @@ import { count, eq } from "drizzle-orm";
 import type { gmail_v1 } from "googleapis";
 
 import { getDb } from "@/lib/db";
-import { emails, gmailConnections, syncRuns } from "@/lib/db/schema";
+import {
+  emails,
+  emailThreads,
+  gmailConnections,
+  syncRuns,
+} from "@/lib/db/schema";
 import { reconcileStaleSyncRuns } from "@/lib/email/sync-run-reconcile";
 
+import {
+  importGmailThread,
+  importThreadsMatchingQuery,
+} from "./backfill";
 import { getGmailClient } from "./client";
 import { parseGmailMessage } from "./messages";
 import {
@@ -42,6 +51,14 @@ async function countEmailsBySource(source: EmailSource): Promise<number> {
   return row?.count ?? 0;
 }
 
+async function loadKnownGmailThreadIds(): Promise<Set<string>> {
+  const db = getDb();
+  const rows = await db
+    .select({ gmailThreadId: emailThreads.gmailThreadId })
+    .from(emailThreads);
+  return new Set(rows.map((row) => row.gmailThreadId));
+}
+
 async function fetchFullMessage(
   gmail: gmail_v1.Gmail,
   messageId: string,
@@ -54,12 +71,12 @@ async function fetchFullMessage(
   return parseGmailMessage(response.data);
 }
 
+/** Dedicated mailbox: import listed message IDs one-by-one (no allowlist). */
 async function syncMessageIds(
   gmail: gmail_v1.Gmail,
   messageIds: string[],
   syncRunId: string,
   source: EmailSource,
-  options?: { allowlistEmails?: string[] },
 ): Promise<{ added: number; skipped: number; errors: string[] }> {
   let added = 0;
   let skipped = 0;
@@ -69,14 +86,6 @@ async function syncMessageIds(
     try {
       const parsed = await fetchFullMessage(gmail, messageId);
       if (!parsed) {
-        skipped += 1;
-        continue;
-      }
-
-      if (
-        options?.allowlistEmails &&
-        !parsedMessageMatchesAllowlist(parsed, options.allowlistEmails)
-      ) {
         skipped += 1;
         continue;
       }
@@ -124,13 +133,22 @@ async function listAllMessageIds(
   return ids;
 }
 
-async function syncViaHistory(
+/**
+ * Personal sync: history message IDs → qualifying threads → full thread import.
+ * A thread qualifies when the triggering message matches the allowlist, or the
+ * thread is already in the DB (so non-allowlist replies in condo threads are kept).
+ */
+async function syncPersonalHistoryThreads(
   gmail: gmail_v1.Gmail,
   startHistoryId: string,
   syncRunId: string,
-  source: EmailSource,
-  options?: { allowlistEmails?: string[] },
-): Promise<{ added: number; skipped: number; errors: string[]; historyId: string | null }> {
+  allowlistEmails: string[],
+): Promise<{
+  added: number;
+  skipped: number;
+  errors: string[];
+  historyId: string | null;
+}> {
   const messageIds = new Set<string>();
   let latestHistoryId: string | null = null;
   let pageToken: string | undefined;
@@ -159,23 +177,95 @@ async function syncViaHistory(
     [...messageIds],
   );
 
+  if (messageIds.size === 0) {
+    return { added: 0, skipped: 0, errors: [], historyId: latestHistoryId };
+  }
+
+  const knownThreads = await loadKnownGmailThreadIds();
+  const threadsToImport = new Set<string>();
+  const errors: string[] = [];
+
+  for (const messageId of messageIds) {
+    try {
+      const parsed = await fetchFullMessage(gmail, messageId);
+      if (!parsed) continue;
+
+      if (
+        parsedMessageMatchesAllowlist(parsed, allowlistEmails) ||
+        knownThreads.has(parsed.gmailThreadId)
+      ) {
+        threadsToImport.add(parsed.gmailThreadId);
+      }
+    } catch (error) {
+      errors.push(
+        `Message ${messageId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  let added = 0;
+  let skipped = 0;
+
+  for (const threadId of threadsToImport) {
+    const result = await importGmailThread(
+      gmail,
+      threadId,
+      syncRunId,
+      "personal_backfill",
+    );
+    added += result.added;
+    skipped += result.skipped;
+    errors.push(...result.errors);
+  }
+
+  return { added, skipped, errors, historyId: latestHistoryId };
+}
+
+async function syncDedicatedViaHistory(
+  gmail: gmail_v1.Gmail,
+  startHistoryId: string,
+  syncRunId: string,
+): Promise<{
+  added: number;
+  skipped: number;
+  errors: string[];
+  historyId: string | null;
+}> {
+  const messageIds = new Set<string>();
+  let latestHistoryId: string | null = null;
+  let pageToken: string | undefined;
+
+  do {
+    const response = await gmail.users.history.list({
+      userId: "me",
+      startHistoryId,
+      historyTypes: ["messageAdded"],
+      pageToken,
+    });
+
+    latestHistoryId = response.data.historyId ?? latestHistoryId;
+
+    for (const record of response.data.history ?? []) {
+      for (const added of record.messagesAdded ?? []) {
+        if (added.message?.id) messageIds.add(added.message.id);
+      }
+    }
+
+    pageToken = response.data.nextPageToken ?? undefined;
+  } while (pageToken);
+
   const result = await syncMessageIds(
     gmail,
     [...messageIds],
     syncRunId,
-    source,
-    options,
+    "dedicated",
   );
   return { ...result, historyId: latestHistoryId };
 }
 
 /**
- * Direct Gmail search for messages received within the last 48 hours that
- * match the allowlist. Run after every history sync as a safety net for Gmail
- * History API eventual-consistency gaps — where a message is delivered but its
- * messageAdded record doesn't appear until after the cursor has already advanced.
- * The duplicate check in storeParsedMessage silently ignores already-synced
- * messages, so this is safe to run on every sync with minimal overhead.
+ * Direct Gmail search for threads with allowlist mail in the last 48 hours.
+ * Expands each hit to the full thread so non-allowlist replies are included.
  */
 async function runSafetyWindowSearch(
   gmail: gmail_v1.Gmail,
@@ -183,18 +273,12 @@ async function runSafetyWindowSearch(
   syncRunId: string,
 ): Promise<{ added: number; errors: string[] }> {
   const safetyQuery = `${buildAllowlistQuery(allowlistEmails)} newer_than:2d`;
-  const messageIds = await listAllMessageIds(gmail, safetyQuery);
-  if (messageIds.length === 0) return { added: 0, errors: [] };
-
-  const result = await syncMessageIds(
+  const result = await importThreadsMatchingQuery(
     gmail,
-    messageIds,
+    safetyQuery,
     syncRunId,
     "personal_backfill",
-    { allowlistEmails },
   );
-  // Only surface newly added messages — skipped are expected duplicates from
-  // the overlap window and would inflate the reported number meaninglessly.
   return { added: result.added, errors: result.errors };
 }
 
@@ -279,13 +363,9 @@ export async function syncPersonalAccount(
       let pendingHistoryId: string | null = null;
 
       if (existingPersonalMail === 0) {
-        const messageIds = await listAllMessageIds(
+        const initialResult = await importThreadsMatchingQuery(
           gmail,
           buildAllowlistQuery(allowlistEmails),
-        );
-        const initialResult = await syncMessageIds(
-          gmail,
-          messageIds,
           syncRunId,
           "personal_backfill",
         );
@@ -309,12 +389,11 @@ export async function syncPersonalAccount(
       let historyExpired = false;
 
       try {
-        const historyResult = await syncViaHistory(
+        const historyResult = await syncPersonalHistoryThreads(
           gmail,
           connection.lastHistoryId,
           syncRunId,
-          "personal_backfill",
-          { allowlistEmails },
+          allowlistEmails,
         );
         messagesAdded += historyResult.added;
         messagesSkipped += historyResult.skipped;
@@ -455,11 +534,10 @@ export async function syncDedicatedAccount(
       let pendingHistoryId: string | null = null;
 
       try {
-        const historyResult = await syncViaHistory(
+        const historyResult = await syncDedicatedViaHistory(
           gmail,
           connection.lastHistoryId,
           syncRunId,
-          "dedicated",
         );
         messagesAdded += historyResult.added;
         messagesSkipped += historyResult.skipped;

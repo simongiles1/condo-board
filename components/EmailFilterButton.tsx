@@ -117,7 +117,7 @@ export function EmailFilterButton() {
     });
 
     const qs = params.toString();
-    router.push(qs ? `/emails?${qs}` : "/emails");
+    router.push(qs ? `/knowledge/emails?${qs}` : "/knowledge/emails");
     setMenuOpen(false);
   }
 
@@ -131,7 +131,7 @@ export function EmailFilterButton() {
     setSubject("");
     const params = buildEmailThreadSearchParams({ field: "both", view: activeFilters.view });
     const qs = params.toString();
-    router.push(qs ? `/emails?${qs}` : "/emails");
+    router.push(qs ? `/knowledge/emails?${qs}` : "/knowledge/emails");
     setMenuOpen(false);
   }
 

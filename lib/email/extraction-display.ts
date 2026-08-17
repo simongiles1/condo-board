@@ -20,6 +20,7 @@ const COUNTABLE_ARRAY_KEYS = [
   "contracts",
   "meetings",
   "meeting_cancellations",
+  "meeting_reschedules",
   "motions",
   "board_changes",
   "deadlines",
@@ -178,6 +179,15 @@ export function formatExtractionFieldItem(key: string, item: unknown): string | 
         .join(" ");
       const reason = fieldString(record.reason) ? ` — ${fieldString(record.reason)}` : "";
       return when ? `Cancelled ${when}${reason}` : `Cancelled meeting${reason}`;
+    }
+    case "meeting_reschedules": {
+      const from = [fieldString(record.original_date), fieldString(record.original_time)]
+        .filter(Boolean)
+        .join(" ");
+      const to = [fieldString(record.new_date), fieldString(record.new_time)]
+        .filter(Boolean)
+        .join(" ");
+      return from && to ? `Moved ${from} → ${to}` : "Rescheduled meeting";
     }
     case "motions": {
       const text = fieldString(record.text) ?? "Motion";

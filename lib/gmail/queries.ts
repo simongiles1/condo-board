@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { emails, emailSyncExclusions, senderAllowlist } from "@/lib/db/schema";
+import { extractMailboxEmail } from "@/lib/email/address-display";
 
 import type { ParsedEmailMessage } from "./messages";
 
@@ -32,7 +33,7 @@ export function buildSenderBackfillQuery(email: string): string {
 }
 
 function normalizeMailbox(email: string): string {
-  return email.trim().toLowerCase();
+  return (extractMailboxEmail(email) ?? email).trim().toLowerCase();
 }
 
 export function parsedMessageMatchesAllowlist(

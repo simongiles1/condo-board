@@ -18,9 +18,10 @@ export function hasMinRole(userRole: UserRole, required: UserRole): boolean {
 
 /** Routes only super admins may access. */
 export const SUPER_ADMIN_ONLY_PREFIXES = [
+  "/admin/system",
   "/users",
-  "/api/users",
   "/settings",
+  "/api/users",
   "/api/email/clear-all",
   "/api/email/settings",
   "/api/email/allowlist",
@@ -35,6 +36,9 @@ export const SUPER_ADMIN_ONLY_PREFIXES = [
  * Covers bulk analysis, concept editing, and internal dev notes.
  */
 export const ADMIN_ONLY_PREFIXES = [
+  "/admin/concepts",
+  "/admin/analysis",
+  "/admin/notes",
   "/analysis",
   "/skill",
   "/notes",
@@ -54,6 +58,13 @@ export function pathRequiresSuperAdmin(pathname: string): boolean {
 
 export function pathRequiresAdmin(pathname: string): boolean {
   if (pathRequiresSuperAdmin(pathname)) return false;
+  // Entire /admin tree except /admin/system (super-admin) requires admin.
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) {
+    if (pathname === "/admin/system" || pathname.startsWith("/admin/system/")) {
+      return false;
+    }
+    return true;
+  }
   return ADMIN_ONLY_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );

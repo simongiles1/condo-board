@@ -1,37 +1,13 @@
 import { redirect } from "next/navigation";
 
-import { EmailSettingsClient } from "@/components/EmailSettingsClient";
-import { getSessionUser, isAuthEnabled } from "@/lib/auth/session";
-
-export default async function SettingsPage({
+export default async function SettingsRedirect({
   searchParams,
 }: {
   searchParams: Promise<{ error?: string; connected?: string }>;
 }) {
-  if (!isAuthEnabled()) {
-    redirect("/");
-  }
-
-  const user = await getSessionUser();
-  if (!user || user.role !== "super_admin") {
-    redirect("/");
-  }
-
   const params = await searchParams;
-
-  return (
-    <section className="min-h-0 flex-1 space-y-4 overflow-y-auto">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Settings</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Connect personal Gmail, manage the sender allowlist, and configure sync.
-        </p>
-      </div>
-
-      <EmailSettingsClient
-        initialError={params.error ?? null}
-        initialConnected={params.connected ?? null}
-      />
-    </section>
-  );
+  const url = new URL("/admin/system/settings", "http://localhost");
+  if (params.error) url.searchParams.set("error", params.error);
+  if (params.connected) url.searchParams.set("connected", params.connected);
+  redirect(`${url.pathname}${url.search}`);
 }

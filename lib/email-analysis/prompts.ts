@@ -15,7 +15,7 @@ Rules:
 - proposed_new_concepts: genuinely new reusable concepts not covered by the fixed schema or dynamic skill. Only propose concepts that would plausibly need querying later across multiple emails.
 
 CRITICAL — what belongs on the calendar (meetings / deadlines / maintenance_events / inspections):
-The downstream system promotes these arrays into a board calendar. Be strict:
+The downstream system promotes these arrays into a board calendar, Google Calendar style. Be strict:
 
 CRITICAL — calendar label capitalization (shown verbatim on the board calendar):
 Use sentence case — capitalize the first word and proper nouns/acronyms only; do NOT emit all-lowercase strings and do NOT use Title Case on every word.
@@ -26,10 +26,11 @@ Use sentence case — capitalize the first word and proper nouns/acronyms only; 
 - meetings: type is a short label (e.g. "Board", "AGM"); the calendar shows "Board meeting" — not "board meeting" or "Board Meeting".
 - deadlines: description in sentence case (e.g. "Insurance renewal filing due").
 Keep common words (of, the, for, and, to, in, on) lowercase unless they start the phrase. Preserve acronyms and proper nouns from the source (TSCC, AGM, HVAC, vendor names).
-- meetings[]: ONLY confirmed scheduled gatherings with a firm date. Do NOT include a meeting here if the email is a cancellation, postponement, reschedule proposal, or merely discusses possible dates. .ics attachments with METHOD:CANCEL or STATUS:CANCELLED are cancellations, not meetings — record them under meeting_cancellations instead. If multiple candidate dates are floated and no single one is confirmed, omit the meeting and record the discussion as an action_item instead.
-- meeting_cancellations[]: a previously-scheduled meeting that is being cancelled or postponed (subject lines like "Canceled:", "Cancelled:", "Postponed:", body text like "the board meeting on X has been cancelled", or .ics METHOD:CANCEL). date and time MUST be the original meeting's date/time so the system can find the existing entry. Include type when known (e.g. "Board", "AGM").
+- meetings[]: ONLY a newly confirmed scheduled gathering with a firm date (e.g. a Microsoft Teams "meeting has been added to your calendar" invite). Do NOT include cancellations, postponements, reschedule proposals, or floated candidate dates. If multiple dates are discussed and none is confirmed, omit the meeting and record an action_item instead.
+- meeting_cancellations[]: the meeting is cancelled with NO replacement date in THIS email (subject "Canceled:"/"Cancelled:"/"Postponed:", body "the board meeting on X has been cancelled", or .ics METHOD:CANCEL / STATUS:CANCELLED). date and time MUST be the original meeting's date/time so the system can pull that event OFF the calendar. Do NOT emit a calendar row for the cancellation itself. Include type when known (e.g. "Board", "AGM"). If a later email sends a new invite, that later email uses meetings[] — it is a new event, not this cancellation.
+- meeting_reschedules[]: ONE email that moves an already-confirmed meeting from an old date/time to a new confirmed date/time (e.g. "the board meeting is moved from July 30 to August 2"). original_date is the slot currently on the calendar; new_date is where it should appear. The system MOVES the same calendar event. Do NOT also emit meeting_cancellations or meetings for the same move.
 - deadlines[]: only HARD external deadlines tied to a specific calendar date — regulatory filings, insurance renewal, tax/audit due dates, permit expiry, statutory notice periods, contractually fixed dates. Mark regulatory: true when applicable. Do NOT use deadlines[] for internal asks like "please respond by X" or "share thoughts by X" — those are action_items.
-- maintenance_events[]: only when a specific date is stated for the work (scheduled, completed, or planned). Skip if no date.
+- maintenance_events[]: only when a specific date is stated for the work (scheduled, completed, or planned). Skip if no date. Use the equipment name as free text — do not invent make/model/assets.
 - inspections[]: only when a specific date is stated.
 
 - action_items[]: internal asks, requests, or to-dos. Use this for anything that is not a calendar-worthy event/deadline. Set deadline ONLY if the email explicitly states a firm hard date by which the action must be completed (e.g. "must be filed by 2026-08-01"). Do NOT set deadline to the date the email was sent or the date of a related meeting if no actual due date is stated. Phrases like "share any thoughts", "please review", "let me know", "respond when you can", or "before the next meeting" are NOT firm deadlines — omit the deadline field for those. Emit ONLY asks still unresolved as of the content you are analyzing — if quoted thread history shows an ask was already answered, confirmed, scheduled, or otherwise dealt with later in the thread, do NOT emit it. Emit at most ONE action item per distinct unresolved obligation — consolidate near-duplicate phrasings even when assignee names differ (e.g. "Management" vs a named contact) if the underlying board/corporation duty is the same (same police request, same footage release, same filing). Prefer assignee "Management" or "Board" for corporation-wide duties. Join consolidated duties with "and" in one task description.
@@ -89,6 +90,7 @@ JSON schema (all fields optional except where noted):
   "contracts": [{ "vendor", "type", "value", "term", "start_date", "end_date", "source_quote" }],
   "meetings": [{ "type", "date", "time", "location", "agenda_items", "source_quote" }],
   "meeting_cancellations": [{ "date" /* original meeting date, REQUIRED */, "time", "type", "reason", "source_quote" }],
+  "meeting_reschedules": [{ "original_date", "original_time", "new_date", "new_time", "type", "location", "source_quote" }],
   "motions": [{ "text", "moved_by", "seconded_by", "outcome", "meeting_date", "source_quote" }],
   "board_changes": [{ "name", "role", "change_type", "date", "source_quote" }],
   "deadlines": [{ "description", "date", "assignee", "regulatory", "source_quote" }],
@@ -135,7 +137,7 @@ From: ${input.from}
 Subject: ${input.subject}
 Received: ${input.receivedAt}
 ${input.threadSubject ? `Thread subject: ${input.threadSubject}\n` : ""}
---- BODY (unique content only) ---
+--- BODY (authored content; reply quotes and duplicate forwards omitted) ---
 ${input.bodyTextUnique}`;
 }
 
@@ -196,8 +198,14 @@ For each cluster of 2+ semantically equivalent open items:
 Other rules:
 - Treat name variants as the same person when obvious (e.g. "Paul" and "Paul Gartenburg").
 - Multiple board members asked to do the same thing (e.g. confirm availability) → mark all completed when the thread shows it was resolved.
+- A later message that provides the requested update, answers the question, or gives written approval/availability COMPLETES the earlier ask — even if the underlying building issue remains. Example: a status report answering "what steps have been taken?" completes that ask; vibration may still exist.
+- Written confirmation to proceed ("I am satisfied to move forward", "approved", "Thursday works for me") completes approval and availability items.
+- If a later email reports that work was already approved or already completed, mark the corresponding open item completed.
+- Future work described as planned ("will need to", "can be created", "once we receive X we will update") stays OPEN. Only mark completed when the thread shows the action already happened.
+- Follow-up pings do not create a second open item; they keep the original obligation open unless a later reply actually answers it.
 - Base completion decisions ONLY on explicit evidence in the thread. Do not guess.
-- Include a brief reason and resolved_by_quote (verbatim excerpt) when marking completed or superseded.
+- Include a brief reason and resolved_by_quote (verbatim excerpt, max ~200 characters) when marking completed or superseded.
+- Return ONLY the updates JSON. Do not restate the thread. Keep quotes short so the JSON stays small.
 
 JSON schema:
 {
@@ -225,7 +233,9 @@ Rules:
 - Consolidate near-duplicates within the new batch (same police footage request, same filing, same corporation duty) into one richest task description.
 - Same underlying board/corporation duty with different assignees (Management vs named contact) = SAME obligation — consolidate.
 - If an existing open item already covers the obligation, omit matching new items from insert_items and supersede the weaker duplicate open items if needed.
+- A follow-up that restates the same unanswered ask is the same obligation — return insert_items: [] for that ask (do not insert a second tracker).
 - When a new item adds a firm deadline to an obligation already tracked vaguely in open items, include the consolidated item in insert_items and supersede the vaguer open duplicate(s).
+- insert_items: [] is a valid answer when every new item is a duplicate. Do not restate the incoming batch in that case.
 - Prefer assignee "Management" or "Board" for corporation-wide duties not tied to one individual.
 - supersede_open_ids must only contain ids from the EXISTING OPEN list.
 
@@ -452,6 +462,8 @@ Rules:
 - Merge ONLY when the thread clearly shows one real-world event/deadline/meeting — not merely because two rows share a calendar date.
 - Do NOT merge distinct events on the same date (e.g. bid closing deadline vs bid irrevocability end date, or two unrelated inspections).
 - Do NOT merge meetings with deadlines, or maintenance events with deadlines, unless the thread explicitly treats them as the same obligation.
+- Cancellations are already applied before you run: cancelled meetings are not in this list. A Teams cancel of July 30 plus a later invite for August 2 are two different events (the July 30 row is gone; August 2 is new). A same-email reschedule has already moved the row to the new date — keep that one id.
+- event_type may be deadline, meeting, maintenance, or inspection.
 - Prefer the clearest sentence-case canonical_title. Preserve regulatory meaning in deadline titles.
 - For meetings, canonical_title should read like "Board meeting" (type + " meeting"), not all lowercase or title case every word.
 - merged_event_ids must list every input event id absorbed into the group, including the id you keep first.
@@ -464,7 +476,7 @@ JSON schema:
   "events": [
     {
       "canonical_title": "string",
-      "event_type": "deadline" | "meeting" | "maintenance",
+      "event_type": "deadline" | "meeting" | "maintenance" | "inspection",
       "start_at": "YYYY-MM-DD or ISO datetime",
       "end_at": "ISO datetime or null",
       "description": "string or null",

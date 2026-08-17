@@ -9,6 +9,7 @@ import { emailAttachments, emails } from "@/lib/db/schema";
 
 import { getGmailClient } from "./client";
 import type { GmailAccountType } from "./oauth";
+import { countAttachmentPages } from "@/lib/email/attachment-page-count";
 
 const ATTACHMENT_CACHE_DIR = path.join(
   process.cwd(),
@@ -22,6 +23,8 @@ function extensionFromFilename(filename: string, mimeType: string): string {
   if (mimeType.includes("pdf")) return ".pdf";
   if (mimeType.includes("png")) return ".png";
   if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return ".jpg";
+  if (mimeType.includes("gif")) return ".gif";
+  if (mimeType.includes("webp")) return ".webp";
   if (mimeType.includes("spreadsheet") || mimeType.includes("excel"))
     return ".xlsx";
   if (mimeType.includes("word")) return ".docx";
@@ -154,13 +157,44 @@ export async function downloadEmailAttachment(input: {
     await writeFile(cachedPath, bytes);
   }
 
+  const pageCount = await countAttachmentPages(bytes, attachment.mimeType);
+
   await db
     .update(emailAttachments)
     .set({
       contentHash,
       cachedFilePath: cachedPath,
+      ...(pageCount != null ? { pageCount } : {}),
     })
     .where(eq(emailAttachments.id, input.attachmentId));
+
+  // Queue Markdown conversion for convertible docs; enroll images for vision.
+  try {
+    const { upsertAttachmentDocumentPending, extensionFromCachedPath } =
+      await import("@/lib/email/attachment-markdown");
+    const { enrollImageAttachmentForVision } = await import(
+      "@/lib/email/attachment-vision-image"
+    );
+    const ext = extensionFromCachedPath(cachedPath);
+    await upsertAttachmentDocumentPending({
+      contentHash,
+      mimeType: attachment.mimeType,
+      ext,
+      pageCount,
+      hasValue: attachment.hasValue,
+    });
+    await enrollImageAttachmentForVision({
+      contentHash,
+      mimeType: attachment.mimeType,
+      ext,
+      hasValue: attachment.hasValue,
+    });
+  } catch (error) {
+    console.warn(
+      "[gmail:attachments] Could not enqueue Markdown/vision:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 
   return {
     bytes,

@@ -1,0 +1,221 @@
+export const runtime = "nodejs";
+
+import { NextResponse } from "next/server";
+
+import { isErrorResponse, requireSession } from "@/lib/auth/authorize";
+import {
+  getRegistryStats,
+  loadContactDuplicateGroups,
+  loadContactEmailIndex,
+  loadContactMergeActivity,
+  loadContactRegistryPersons,
+} from "@/lib/contacts/registry-load";
+import {
+  processPendingRegistryIngests,
+  sweepSharedMailboxConflicts,
+} from "@/lib/contacts/registry-queue";
+import {
+  coalesceWeakEmailDuplicatePersons,
+  manualMergeManyPersons,
+} from "@/lib/contacts/registry-apply";
+import { cleanupSharedMailboxRegistry } from "@/lib/contacts/registry-cleanup";
+import { proposeDuplicateMerges } from "@/lib/contacts/duplicate-merge-propose";
+import { severContactPersonField } from "@/lib/contacts/sever-person-field";
+import {
+  parseContactPersonListSort,
+  personDisplayName,
+} from "@/lib/contacts/registry-shared";
+
+export async function GET(request: Request) {
+  const auth = await requireSession();
+  if (isErrorResponse(auth)) return auth;
+
+  const url = new URL(request.url);
+  const view = url.searchParams.get("view") ?? "persons";
+  const limit = Math.min(
+    2000,
+    Math.max(1, Number(url.searchParams.get("limit") ?? 200) || 200),
+  );
+  const offset = Math.max(0, Number(url.searchParams.get("offset") ?? 0) || 0);
+  const sort = parseContactPersonListSort(url.searchParams.get("sort"));
+  const skipVerifiedMentions =
+    url.searchParams.get("skipVerifiedMentions") === "1" ||
+    url.searchParams.get("skipVerifiedMentions") === "true";
+
+  if (view === "emails") {
+    const emails = await loadContactEmailIndex(limit);
+    const stats = await getRegistryStats();
+    return NextResponse.json({ view: "emails", emails, stats });
+  }
+
+  if (view === "activity") {
+    const activity = await loadContactMergeActivity(limit);
+    const stats = await getRegistryStats();
+    return NextResponse.json({ view: "activity", activity, stats });
+  }
+
+  if (view === "stats") {
+    const stats = await getRegistryStats();
+    return NextResponse.json({ view: "stats", stats });
+  }
+
+  if (view === "duplicates") {
+    const [groups, stats] = await Promise.all([
+      loadContactDuplicateGroups(),
+      getRegistryStats(),
+    ]);
+    return NextResponse.json({
+      view: "duplicates",
+      groups,
+      stats,
+      groupCount: groups.length,
+    });
+  }
+
+  const [persons, stats] = await Promise.all([
+    loadContactRegistryPersons({
+      limit,
+      offset,
+      sort,
+      skipVerifiedMentions,
+    }),
+    getRegistryStats(),
+  ]);
+  const total = stats.personCount;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(totalPages, Math.floor(offset / limit) + 1);
+  return NextResponse.json({
+    view: "persons",
+    stats,
+    persons: persons.map((p) => ({
+      ...p,
+      displayName: personDisplayName(p),
+    })),
+    pagination: {
+      offset,
+      limit,
+      page,
+      pageSize: limit,
+      total,
+      totalPages,
+    },
+  });
+}
+
+export async function POST(request: Request) {
+  const auth = await requireSession();
+  if (isErrorResponse(auth)) return auth;
+
+  let body: {
+    action?: string;
+    limit?: number;
+    modelId?: string;
+    email?: string;
+    sourcePersonId?: string;
+    sourcePersonIds?: string[];
+    targetPersonId?: string;
+    personId?: string;
+    memberIds?: string[];
+    field?: string;
+    value?: string;
+  } = {};
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    body = {};
+  }
+
+  if (body.action === "propose_duplicate_merges") {
+    const memberIds = Array.isArray(body.memberIds) ? body.memberIds : [];
+    try {
+      const outcome = await proposeDuplicateMerges({
+        memberIds,
+        modelId: body.modelId ?? null,
+      });
+      if (!outcome.ok) {
+        return NextResponse.json({ error: outcome.error }, { status: 400 });
+      }
+      return NextResponse.json({ ok: true, ...outcome.result });
+    } catch (error) {
+      console.error("[contacts:propose_duplicate_merges]", error);
+      return NextResponse.json(
+        { error: "Could not propose duplicate merges." },
+        { status: 500 },
+      );
+    }
+  }
+
+  if (body.action === "sweep") {
+    const result = await sweepSharedMailboxConflicts({
+      modelId: body.modelId ?? null,
+      limit: body.limit ?? 20,
+    });
+    return NextResponse.json({ ok: true, ...result });
+  }
+
+  if (body.action === "coalesce") {
+    const result = await coalesceWeakEmailDuplicatePersons();
+    return NextResponse.json({ ok: true, ...result });
+  }
+
+  if (body.action === "cleanup_shared") {
+    const result = await cleanupSharedMailboxRegistry({
+      dryRun: false,
+      emailFilter:
+        typeof body.email === "string" && body.email.trim()
+          ? body.email.trim()
+          : null,
+    });
+    return NextResponse.json({ ok: true, ...result });
+  }
+
+  if (body.action === "merge") {
+    const sourcePersonIds = Array.isArray(body.sourcePersonIds)
+      ? body.sourcePersonIds
+      : body.sourcePersonId
+        ? [body.sourcePersonId]
+        : [];
+    const result = await manualMergeManyPersons({
+      sourcePersonIds,
+      targetPersonId: body.targetPersonId ?? "",
+    });
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    return NextResponse.json({
+      ok: true,
+      survivorId: result.survivorId,
+      merged: result.merged,
+    });
+  }
+
+  if (body.action === "deny_field") {
+    const field = body.field ?? "";
+    if (
+      field !== "email" &&
+      field !== "phone" &&
+      field !== "title" &&
+      field !== "name_alias"
+    ) {
+      return NextResponse.json(
+        { error: "Unsupported field for deny_field." },
+        { status: 400 },
+      );
+    }
+    const result = await severContactPersonField({
+      personId: body.personId ?? "",
+      field,
+      value: body.value ?? "",
+    });
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  // Default: process pending fingerprint merges into registry (mention-ordered).
+  const result = await processPendingRegistryIngests({
+    limit: body.limit ?? 25,
+  });
+  return NextResponse.json({ ok: true, ...result });
+}

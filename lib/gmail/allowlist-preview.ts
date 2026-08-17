@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { emailThreads, emails } from "@/lib/db/schema";
+import { extractMailboxEmail } from "@/lib/email/address-display";
 
 import { buildAllowlistQuery } from "./queries";
 import { getGmailClient } from "./client";
@@ -15,7 +16,7 @@ export type AllowlistImportPreview = {
 };
 
 function normalizeMailbox(email: string): string {
-  return email.trim().toLowerCase();
+  return (extractMailboxEmail(email) ?? email).trim().toLowerCase();
 }
 
 function parseAddressList(raw: string): string[] {

@@ -94,7 +94,8 @@ export function prepareCalendarAuditItems<T extends CalendarAuditDisplayItem>(
     if (
       item.fieldKey !== "deadlines" &&
       item.fieldKey !== "meetings" &&
-      item.fieldKey !== "meeting_cancellations"
+      item.fieldKey !== "meeting_cancellations" &&
+      item.fieldKey !== "meeting_reschedules"
     ) {
       result.push(item);
       continue;

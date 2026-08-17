@@ -14,6 +14,8 @@ import { useAttachmentVisibilitySettings } from "@/lib/settings/attachment-visib
 type Props = {
   emailId: string | null;
   onClose: () => void;
+  threadId?: string | null;
+  highlightQuote?: string | null;
 };
 
 type EmailResponse = {
@@ -21,14 +23,31 @@ type EmailResponse = {
   error?: string;
 };
 
-export function EmailSidePanel({ emailId, onClose }: Props) {
+type ThreadResponse = {
+  thread?: { subject: string };
+  messages?: Array<{ id: string }>;
+  error?: string;
+};
+
+export function EmailSidePanel({
+  emailId,
+  onClose,
+  threadId = null,
+  highlightQuote = null,
+}: Props) {
   const visibilitySettings = useAttachmentVisibilitySettings();
   const [message, setMessage] = useState<ThreadMessage | null>(null);
+  const [threadMessages, setThreadMessages] = useState<ThreadMessage[] | null>(
+    null,
+  );
+  const [threadSubject, setThreadSubject] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const open = Boolean(emailId || threadId);
+
   useEffect(() => {
-    if (!emailId) return;
+    if (!open) return;
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") onClose();
@@ -36,11 +55,13 @@ export function EmailSidePanel({ emailId, onClose }: Props) {
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [emailId, onClose]);
+  }, [open, onClose]);
 
   useEffect(() => {
-    if (!emailId) {
+    if (!open) {
       setMessage(null);
+      setThreadMessages(null);
+      setThreadSubject(null);
       setError(null);
       return;
     }
@@ -49,18 +70,49 @@ export function EmailSidePanel({ emailId, onClose }: Props) {
     setLoading(true);
     setError(null);
     setMessage(null);
+    setThreadMessages(null);
+    setThreadSubject(null);
 
-    fetch(`/api/email/messages/${emailId}`)
-      .then(async (response) => {
-        const data = (await response.json()) as EmailResponse;
+    async function loadMessage(id: string): Promise<ThreadMessage> {
+      const response = await fetch(`/api/email/messages/${id}`);
+      const data = (await response.json()) as EmailResponse;
+      if (!response.ok) {
+        throw new Error(data.error ?? "Could not load email.");
+      }
+      return data.message;
+    }
+
+    async function load() {
+      if (threadId) {
+        const response = await fetch(`/api/email/threads/${threadId}`);
+        const data = (await response.json()) as ThreadResponse;
         if (!response.ok) {
-          throw new Error(data.error ?? "Could not load email.");
+          throw new Error(data.error ?? "Could not load email thread.");
         }
-        return data.message;
-      })
-      .then((loadedMessage) => {
-        if (!cancelled) setMessage(loadedMessage);
-      })
+        const headers = data.messages ?? [];
+        const loaded = await Promise.all(
+          headers.map((header) => loadMessage(header.id)),
+        );
+        const byId = new Map(loaded.map((item) => [item.id, item]));
+        const ordered = headers
+          .map((header) => byId.get(header.id))
+          .filter((item): item is ThreadMessage => Boolean(item));
+        if (!cancelled) {
+          setThreadSubject(data.thread?.subject ?? ordered[0]?.subject ?? null);
+          setThreadMessages(ordered);
+          if (emailId) {
+            setMessage(ordered.find((item) => item.id === emailId) ?? null);
+          }
+        }
+        return;
+      }
+
+      if (!emailId) return;
+      const loadedMessage = await loadMessage(emailId);
+      if (!cancelled) setMessage(loadedMessage);
+    }
+
+    load()
       .catch((fetchError: unknown) => {
         if (!cancelled) {
           setError(
@@ -77,9 +129,16 @@ export function EmailSidePanel({ emailId, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [emailId]);
+  }, [emailId, threadId, open]);
 
-  if (!emailId) return null;
+  if (!open) return null;
+
+  const threadMode = Boolean(threadId);
+  const headerMessage =
+    message ??
+    threadMessages?.find((item) => item.id === emailId) ??
+    threadMessages?.[0] ??
+    null;
 
   return (
     <>
@@ -98,18 +157,21 @@ export function EmailSidePanel({ emailId, onClose }: Props) {
         <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Source email
+              {threadMode ? "Source thread" : "Source email"}
             </p>
             <h2
               id="email-side-panel-title"
               className="mt-1 text-lg font-semibold text-slate-900"
             >
-              {message?.subject ?? "Loading…"}
+              {threadSubject ?? headerMessage?.subject ?? "Loading…"}
             </h2>
-            {message ? (
+            {headerMessage ? (
               <p className="mt-1 text-sm text-slate-600">
-                From {message.fromAddress} · Received{" "}
-                {formatDateTime(message.receivedAt)}
+                {threadMode
+                  ? `${threadMessages?.length ?? 0} email${
+                      (threadMessages?.length ?? 0) === 1 ? "" : "s"
+                    } · source message expanded`
+                  : `From ${headerMessage.fromAddress} · Received ${formatDateTime(headerMessage.receivedAt)}`}
               </p>
             ) : null}
           </div>
@@ -137,7 +199,16 @@ export function EmailSidePanel({ emailId, onClose }: Props) {
             </p>
           ) : null}
 
-          {message && !loading && !error ? (
+          {!loading && !error && threadMode && threadMessages ? (
+            <EmailThreadMessages
+              messages={threadMessages}
+              hideAttachments
+              focusEmailId={emailId}
+              highlightQuote={highlightQuote}
+            />
+          ) : null}
+
+          {!loading && !error && !threadMode && message ? (
             <>
               <EmailAttachmentPreviewRow
                 attachments={filterVisibleAttachments(
@@ -146,7 +217,11 @@ export function EmailSidePanel({ emailId, onClose }: Props) {
                   visibilitySettings,
                 )}
               />
-              <EmailThreadMessages messages={[message]} hideAttachments />
+              <EmailThreadMessages
+                messages={[message]}
+                hideAttachments
+                highlightQuote={highlightQuote}
+              />
             </>
           ) : null}
         </div>

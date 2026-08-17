@@ -22,7 +22,11 @@ export {
 } from "./thread-filter-params";
 export type { EmailDetailScope } from "./thread-filter-params";
 
-import type { EmailAddressField, EmailThreadFilters } from "./thread-filter-params";
+import type {
+  EmailAddressField,
+  EmailInboxView,
+  EmailThreadFilters,
+} from "./thread-filter-params";
 
 function buildAddressMatchCondition(
   address: string,
@@ -78,7 +82,19 @@ function buildThreadStarterCondition(
   )`;
 }
 
-export function buildThreadFilterWhere(filters: EmailThreadFilters): SQL | undefined {
+function buildThreadSubjectCondition(subject: string): SQL {
+  const term = `%${subject.toLowerCase()}%`;
+  return sql`${emails.threadId} IN (
+    SELECT DISTINCT thread_id
+    FROM emails
+    WHERE LOWER(subject) LIKE ${term}
+  )`;
+}
+
+export function buildThreadFilterWhere(
+  filters: EmailThreadFilters,
+  view: EmailInboxView = filters.view,
+): SQL | undefined {
   const conditions: SQL[] = [];
 
   if (filters.fromAddresses?.length) {
@@ -107,8 +123,12 @@ export function buildThreadFilterWhere(filters: EmailThreadFilters): SQL | undef
   }
 
   if (filters.subject) {
-    const term = `%${filters.subject.toLowerCase()}%`;
-    conditions.push(sql`LOWER(${emails.subject}) LIKE ${term}`);
+    if (view === "threads") {
+      conditions.push(buildThreadSubjectCondition(filters.subject));
+    } else {
+      const term = `%${filters.subject.toLowerCase()}%`;
+      conditions.push(sql`LOWER(${emails.subject}) LIKE ${term}`);
+    }
   }
 
   if (filters.processedOnly) {

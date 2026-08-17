@@ -1,29 +1,10 @@
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-import { eq } from "drizzle-orm";
-import { notFound } from "next/navigation";
-
-import MeetingEditorClient from "./MeetingEditorClient";
-import { getDb } from "@/lib/db";
-import { meetings } from "@/lib/db/schema";
+import { redirect } from "next/navigation";
 
 type PageProps = {
   params: Promise<{ id: string }>;
 };
 
-export default async function MeetingDetailPage(props: PageProps) {
+export default async function MeetingDetailRedirect(props: PageProps) {
   const { id } = await props.params;
-  const db = getDb();
-
-  const [record] = await db
-    .select()
-    .from(meetings)
-    .where(eq(meetings.id, id));
-
-  if (!record) {
-    notFound();
-  }
-
-  return <MeetingEditorClient meeting={record} />;
+  redirect(`/operations/meetings/${id}`);
 }

@@ -7,6 +7,8 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { emailAttachments, emails } from "@/lib/db/schema";
 import { deleteEmailMessage } from "@/lib/email/delete-message";
+import { formatEmailBodyForDisplay } from "@/lib/email/format-body-display";
+import { computeThreadUniqueBodies } from "@/lib/email/thread-unique-content";
 
 export async function GET(
   _req: Request,
@@ -16,7 +18,24 @@ export async function GET(
 
   try {
     const db = getDb();
-    const [message] = await db.select().from(emails).where(eq(emails.id, id));
+    const [message] = await db
+      .select({
+        id: emails.id,
+        threadId: emails.threadId,
+        subject: emails.subject,
+        fromAddress: emails.fromAddress,
+        toAddresses: emails.toAddresses,
+        ccAddresses: emails.ccAddresses,
+        receivedAt: emails.receivedAt,
+        source: emails.source,
+        bodyText: emails.bodyText,
+        bodyHtml: emails.bodyHtml,
+        bodyTextUnique: emails.bodyTextUnique,
+        bodyTextStrictUnique: emails.bodyTextStrictUnique,
+        processedAt: emails.processedAt,
+      })
+      .from(emails)
+      .where(eq(emails.id, id));
 
     if (!message) {
       return NextResponse.json({ error: "Email not found." }, { status: 404 });
@@ -33,15 +52,51 @@ export async function GET(
       .from(emailAttachments)
       .where(eq(emailAttachments.emailId, message.id));
 
+    const bodyTextUnique =
+      message.bodyTextStrictUnique?.trim() ||
+      message.bodyTextUnique?.trim() ||
+      null;
+
+    let resolvedUnique = bodyTextUnique;
+    if (!resolvedUnique && message.threadId) {
+      const threadMessages = await db
+        .select({
+          id: emails.id,
+          bodyText: emails.bodyText,
+          bodyHtml: emails.bodyHtml,
+          bodyTextStrictUnique: emails.bodyTextStrictUnique,
+          receivedAt: emails.receivedAt,
+        })
+        .from(emails)
+        .where(eq(emails.threadId, message.threadId));
+      const uniqueMap = computeThreadUniqueBodies(
+        threadMessages.map((row) => ({
+          id: row.id,
+          bodyText: row.bodyText,
+          bodyHtml: row.bodyHtml,
+          receivedAt: row.receivedAt,
+        })),
+      );
+      resolvedUnique = uniqueMap.get(message.id) ?? message.bodyText;
+    } else if (!resolvedUnique) {
+      resolvedUnique = message.bodyText;
+    }
+
     return NextResponse.json({
       message: {
         id: message.id,
         subject: message.subject,
         fromAddress: message.fromAddress,
         toAddresses: JSON.parse(message.toAddresses) as string[],
+        ccAddresses: JSON.parse(message.ccAddresses || "[]") as string[],
         receivedAt: message.receivedAt,
         source: message.source,
         bodyText: message.bodyText,
+        bodyTextUnique: resolvedUnique,
+        bodyDisplay: formatEmailBodyForDisplay(message.bodyText, message.bodyHtml),
+        bodyDisplayUnique: resolvedUnique
+          ? formatEmailBodyForDisplay(resolvedUnique, null)
+          : null,
         processedAt: message.processedAt,
         attachments,
       },
@@ -92,9 +147,9 @@ export async function DELETE(
       deleteFromGmail,
     });
 
-    revalidatePath("/emails");
+    revalidatePath("/knowledge/emails");
     if (result.threadId) {
-      revalidatePath(`/emails/${result.threadId}`);
+      revalidatePath(`/knowledge/emails/${result.threadId}`);
     }
 
     const status = result.errors.length > 0 ? 207 : 200;

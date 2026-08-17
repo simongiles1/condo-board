@@ -25,7 +25,7 @@ const RECONCILIATION_MAX_OUTPUT_TOKENS = 8192;
 
 export type ReconciledCalendarEvent = {
   canonical_title: string;
-  event_type: "deadline" | "meeting" | "maintenance";
+  event_type: "deadline" | "meeting" | "maintenance" | "inspection";
   start_at: string;
   end_at?: string;
   description?: string;
@@ -72,7 +72,9 @@ function asStringArray(value: unknown): string[] {
 
 function parseEventType(value: unknown): ReconciledCalendarEvent["event_type"] {
   const type = asString(value);
-  if (type === "meeting" || type === "maintenance") return type;
+  if (type === "meeting" || type === "maintenance" || type === "inspection") {
+    return type;
+  }
   return "deadline";
 }
 
@@ -201,15 +203,23 @@ async function loadThreadCalendarRows(threadId: string): Promise<ThreadCalendarR
       startAt: calendarEvents.startAt,
       endAt: calendarEvents.endAt,
       description: calendarEvents.description,
+      sourceQuote: calendarEvents.sourceQuote,
       dedupKey: calendarEvents.dedupKey,
     })
     .from(calendarEvents)
-    .where(inArray(calendarEvents.sourceId, sourceIds))
+    .where(
+      and(
+        inArray(calendarEvents.sourceId, sourceIds),
+        eq(calendarEvents.status, "scheduled"),
+      ),
+    )
     .orderBy(asc(calendarEvents.startAt), asc(calendarEvents.title));
 
   return rows.map((row) => ({
     ...row,
-    sourceQuote: row.dedupKey ? quoteByDedupKey.get(row.dedupKey) : undefined,
+    sourceQuote:
+      row.sourceQuote ??
+      (row.dedupKey ? quoteByDedupKey.get(row.dedupKey) : undefined),
   }));
 }
 
@@ -248,6 +258,7 @@ async function applyCalendarReconciliation(input: {
         startAt: item.start_at,
         endAt: item.end_at ?? null,
         description: item.description ?? null,
+        sourceQuote: item.source_quote ?? null,
         dedupKey,
       })
       .where(eq(calendarEvents.id, keepId));

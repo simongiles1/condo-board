@@ -92,6 +92,7 @@ async function resolveEmailSource(input: {
   emailId: string;
   extractionJson: string;
   event: CalendarEventSourceDetail["event"];
+  storedQuote?: string | null;
 }): Promise<CalendarEventEmailSource | null> {
   const db = getDb();
   const [email] = await db
@@ -112,12 +113,14 @@ async function resolveEmailSource(input: {
     .from(emailAttachments)
     .where(eq(emailAttachments.emailId, email.id));
 
-  let sourceQuote: string | null = null;
+  let sourceQuote: string | null = input.storedQuote ?? null;
   try {
-    const document = JSON.parse(input.extractionJson) as EmailExtractionDocument;
-    sourceQuote = findSourceQuote(document, input.event);
+    if (!sourceQuote) {
+      const document = JSON.parse(input.extractionJson) as EmailExtractionDocument;
+      sourceQuote = findSourceQuote(document, input.event);
+    }
   } catch {
-    sourceQuote = null;
+    sourceQuote = sourceQuote ?? null;
   }
 
   return {
@@ -165,6 +168,7 @@ export async function loadCalendarEventSource(
       emailId: source.sourceId,
       extractionJson: source.rawExtractionJson,
       event: eventSummary,
+      storedQuote: event.sourceQuote,
     });
     return { event: eventSummary, source: emailSource };
   }
@@ -183,6 +187,7 @@ export async function loadCalendarEventSource(
       emailId: attachment.emailId,
       extractionJson: source.rawExtractionJson,
       event: eventSummary,
+      storedQuote: event.sourceQuote,
     });
     return { event: eventSummary, source: emailSource };
   }
@@ -204,7 +209,7 @@ export async function loadCalendarEventSource(
         meetingId: meeting.id,
         title: meeting.title,
         meetingDate: meeting.meetingDate,
-        sourceQuote: null,
+        sourceQuote: event.sourceQuote ?? null,
       },
     };
   }

@@ -23,6 +23,7 @@ const PUBLIC_PATHS = [
   "/api/email/oauth/start",
   "/api/email/oauth/callback",
   "/api/email/oauth/config",
+  "/api/telegram/webhook",
 ];
 
 function isPublicPath(pathname: string) {

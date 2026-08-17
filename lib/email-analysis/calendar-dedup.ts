@@ -7,8 +7,10 @@
 import type {
   DeadlineExtraction,
   EmailExtractionDocument,
+  InspectionExtraction,
   MeetingCancellationExtraction,
   MeetingExtraction,
+  MeetingRescheduleExtraction,
 } from "@/lib/email-analysis/schema";
 
 export function normalizeExactAnchor(value: string | undefined | null): string | undefined {
@@ -49,6 +51,24 @@ export function meetingCancellationExactAnchorKey(
   if (time) return `meeting_cancel|${date}|${time}`;
 
   return `meeting_cancel|${date}`;
+}
+
+export function meetingRescheduleExactAnchorKey(
+  reschedule: MeetingRescheduleExtraction,
+): string | null {
+  const originalDate = reschedule.original_date?.trim();
+  const newDate = reschedule.new_date?.trim();
+  if (!originalDate || !newDate) return null;
+  return `meeting_reschedule|${originalDate}|${newDate}`;
+}
+
+export function inspectionExactAnchorKey(
+  inspection: InspectionExtraction,
+): string | null {
+  const date = inspection.date?.trim();
+  if (!date) return null;
+  const type = inspection.type?.trim().toLowerCase() || "inspection";
+  return `inspection|${date}|${type}`;
 }
 
 /** Persist-layer dedup key for deadline calendar rows — aligned with exact anchors. */
@@ -114,6 +134,36 @@ function pickPreferredCancellation(
   };
 }
 
+function pickPreferredReschedule(
+  existing: MeetingRescheduleExtraction,
+  incoming: MeetingRescheduleExtraction,
+): MeetingRescheduleExtraction {
+  return {
+    ...existing,
+    original_date: existing.original_date ?? incoming.original_date,
+    original_time: existing.original_time ?? incoming.original_time,
+    new_date: existing.new_date ?? incoming.new_date,
+    new_time: existing.new_time ?? incoming.new_time,
+    type: existing.type ?? incoming.type,
+    location: existing.location ?? incoming.location,
+    source_quote: existing.source_quote ?? incoming.source_quote,
+  };
+}
+
+function pickPreferredInspection(
+  existing: InspectionExtraction,
+  incoming: InspectionExtraction,
+): InspectionExtraction {
+  return {
+    ...existing,
+    type: existing.type ?? incoming.type,
+    date: existing.date ?? incoming.date,
+    result: existing.result ?? incoming.result,
+    next_due: existing.next_due ?? incoming.next_due,
+    source_quote: existing.source_quote ?? incoming.source_quote,
+  };
+}
+
 function dedupeByExactAnchor<T>(
   items: T[],
   anchorKey: (item: T) => string | null,
@@ -162,6 +212,16 @@ export function dedupeCalendarExtractions(
       document.meeting_cancellations ?? [],
       meetingCancellationExactAnchorKey,
       pickPreferredCancellation,
+    ),
+    meeting_reschedules: dedupeByExactAnchor(
+      document.meeting_reschedules ?? [],
+      meetingRescheduleExactAnchorKey,
+      pickPreferredReschedule,
+    ),
+    inspections: dedupeByExactAnchor(
+      document.inspections ?? [],
+      inspectionExactAnchorKey,
+      pickPreferredInspection,
     ),
   };
 }

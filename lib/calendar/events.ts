@@ -1,4 +1,4 @@
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { calendarEvents } from "@/lib/db/schema";
@@ -19,5 +19,6 @@ export async function loadCalendarEvents(): Promise<CalendarEventSummary[]> {
       description: calendarEvents.description,
     })
     .from(calendarEvents)
+    .where(eq(calendarEvents.status, "scheduled"))
     .orderBy(asc(calendarEvents.startAt));
 }

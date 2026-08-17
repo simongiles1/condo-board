@@ -1,0 +1,17 @@
+ALTER TABLE "contact_highlight_extractions" ADD COLUMN IF NOT EXISTS "second_pass_extraction_json" text;
+--> statement-breakpoint
+ALTER TABLE "contact_highlight_extractions" ADD COLUMN IF NOT EXISTS "second_pass_skipped" boolean DEFAULT false NOT NULL;
+--> statement-breakpoint
+ALTER TABLE "contact_highlight_extractions" ADD COLUMN IF NOT EXISTS "second_pass_error" text;
+--> statement-breakpoint
+ALTER TABLE "contact_highlight_extractions" ADD COLUMN IF NOT EXISTS "second_pass_input_tokens" integer;
+--> statement-breakpoint
+ALTER TABLE "contact_highlight_extractions" ADD COLUMN IF NOT EXISTS "second_pass_output_tokens" integer;
+--> statement-breakpoint
+ALTER TABLE "contact_highlight_extractions" ADD COLUMN IF NOT EXISTS "second_pass_total_tokens" integer;
+--> statement-breakpoint
+ALTER TABLE "contact_highlight_extractions" ADD COLUMN IF NOT EXISTS "second_pass_cost_usd" text;
+--> statement-breakpoint
+ALTER TABLE "contact_highlight_extractions" ADD COLUMN IF NOT EXISTS "second_pass_api_model_name" text;
+--> statement-breakpoint
+ALTER TABLE "contact_highlight_extractions" ADD COLUMN IF NOT EXISTS "second_pass_updated_at" text;

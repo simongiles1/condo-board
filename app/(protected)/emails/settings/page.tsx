@@ -6,7 +6,7 @@ export default async function EmailSettingsRedirectPage({
   searchParams: Promise<{ error?: string; connected?: string }>;
 }) {
   const params = await searchParams;
-  const url = new URL("/settings", "http://localhost");
+  const url = new URL("/admin/system/settings", "http://localhost");
 
   if (params.error) {
     url.searchParams.set("error", params.error);
@@ -15,6 +15,5 @@ export default async function EmailSettingsRedirectPage({
     url.searchParams.set("connected", params.connected);
   }
 
-  const target = `${url.pathname}${url.search}`;
-  redirect(target);
+  redirect(`${url.pathname}${url.search}`);
 }

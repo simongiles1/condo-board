@@ -61,13 +61,25 @@ type ConnectionInfo = {
 type SyncSettings = {
   syncCron: string;
   schedulerEnabled: boolean;
+  harvestAfterSyncEnabled: boolean;
   updatedAt: string;
+};
+
+type HarvestAfterSyncResult = {
+  status: "disabled" | "skipped_busy" | "ran";
+  kinds: Array<{
+    kind: string;
+    status: string;
+    totalEmails: number;
+    completedEmails: number;
+  }>;
 };
 
 type SyncResult = {
   messagesAdded: number;
   messagesSkipped: number;
   errors: string[];
+  harvest?: HarvestAfterSyncResult;
 };
 
 type SyncHistoryRun = {
@@ -86,6 +98,37 @@ type AllowlistImportPreview = {
   importedThreadCount: number;
   importedEmailCount: number;
 };
+
+type PurgeImportedPreview = {
+  email: string;
+  onAllowlist: boolean;
+  exclusiveThreadCount: number;
+  exclusiveEmailCount: number;
+  mixedThreadCount: number;
+};
+
+function formatClientHarvestNote(
+  harvest: HarvestAfterSyncResult | undefined,
+): string {
+  if (!harvest || harvest.status === "disabled") return "";
+  if (harvest.status === "skipped_busy") {
+    return " Harvest skipped: a bulk extract is already running.";
+  }
+  const ran = harvest.kinds.filter(
+    (row) => row.status === "completed" && row.totalEmails > 0,
+  );
+  const failed = harvest.kinds.filter((row) => row.status === "failed");
+  if (failed.length > 0) {
+    return ` Harvest finished with errors (${failed.map((row) => row.kind).join(", ")}).`;
+  }
+  if (ran.length === 0) {
+    return " No missing harvests.";
+  }
+  const parts = ran.map(
+    (row) => `${row.kind} ${row.completedEmails}/${row.totalEmails}`,
+  );
+  return ` Harvested missing ${parts.join("; ")}.`;
+}
 
 function formatSyncTrigger(trigger: SyncHistoryRun["trigger"]): string {
   if (trigger === "cron") return "Cron job";
@@ -165,8 +208,16 @@ export function EmailSettingsClient(props: {
   );
   const [customCron, setCustomCron] = useState<string | null>(null);
   const [schedulerEnabled, setSchedulerEnabled] = useState(true);
+  const [harvestAfterSyncEnabled, setHarvestAfterSyncEnabled] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [purgeTarget, setPurgeTarget] = useState<AllowlistCandidate | null>(
+    null,
+  );
+  const [purgePreview, setPurgePreview] = useState<PurgeImportedPreview | null>(
+    null,
+  );
+  const [purgeError, setPurgeError] = useState<string | null>(null);
   const [addSenderOpen, setAddSenderOpen] = useState(false);
   const [addSenderError, setAddSenderError] = useState<string | null>(null);
   const [clearError, setClearError] = useState<string | null>(null);
@@ -302,6 +353,7 @@ export function EmailSettingsClient(props: {
         setCustomCron(parsed.cron);
       }
       setSchedulerEnabled(settingsData.schedulerEnabled);
+      setHarvestAfterSyncEnabled(settingsData.harvestAfterSyncEnabled);
       setSyncHistory(syncHistoryData.runs);
     } catch (error) {
       setErrorMessage(
@@ -586,6 +638,85 @@ export function EmailSettingsClient(props: {
     }
   }
 
+  async function openPurgeImported(candidate: AllowlistCandidate) {
+    setPurgeError(null);
+    setPurgePreview(null);
+    setPurgeTarget(candidate);
+    setBusyAction(`purge-preview-${candidate.email}`);
+    try {
+      const response = await fetch(
+        `/api/email/allowlist/purge-imported?email=${encodeURIComponent(candidate.email)}`,
+      );
+      const result = (await response.json()) as PurgeImportedPreview & {
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(result.error ?? "Could not preview imported mail.");
+      }
+      setPurgePreview(result);
+    } catch (error) {
+      setPurgeError(
+        error instanceof Error
+          ? error.message
+          : "Could not preview imported mail.",
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function confirmPurgeImported() {
+    if (!purgeTarget) return;
+    setBusyAction(`purge-${purgeTarget.email}`);
+    setPurgeError(null);
+
+    try {
+      const response = await fetch("/api/email/allowlist/purge-imported", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: purgeTarget.email,
+          confirm: true,
+          removeFromAllowlist: purgeTarget.saved,
+        }),
+      });
+      const result = (await response.json()) as {
+        ok?: boolean;
+        deletedEmails?: number;
+        deletedThreads?: number;
+        mixedThreadCount?: number;
+        removedFromAllowlist?: boolean;
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(result.error ?? "Could not delete imported mail.");
+      }
+
+      const mixedNote =
+        (result.mixedThreadCount ?? 0) > 0
+          ? ` Kept ${result.mixedThreadCount} thread${result.mixedThreadCount === 1 ? "" : "s"} that also include someone still on the allowlist.`
+          : "";
+      const unsavedNote = result.removedFromAllowlist
+        ? ` Removed ${purgeTarget.email} from the allowlist.`
+        : "";
+      setPurgeTarget(null);
+      setPurgePreview(null);
+      setStatusMessage(
+        `Deleted ${result.deletedEmails ?? 0} imported email${result.deletedEmails === 1 ? "" : "s"} (${result.deletedThreads ?? 0} thread${result.deletedThreads === 1 ? "" : "s"}) and their extractions.${unsavedNote}${mixedNote}`,
+      );
+      await loadData({ silent: true });
+      setPreviewRefreshNonce((current) => current + 1);
+    } catch (error) {
+      setPurgeError(
+        error instanceof Error
+          ? error.message
+          : "Could not delete imported mail.",
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function saveSettings(event: React.FormEvent) {
     event.preventDefault();
     setBusyAction("save-settings");
@@ -599,6 +730,7 @@ export function EmailSettingsClient(props: {
         body: JSON.stringify({
           syncCron,
           schedulerEnabled,
+          harvestAfterSyncEnabled,
         }),
       });
 
@@ -623,7 +755,8 @@ export function EmailSettingsClient(props: {
 
     try {
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 120_000);
+      const timeoutMs = harvestAfterSyncEnabled ? 600_000 : 120_000;
+      const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
       const response = await fetch("/api/email/sync", {
         method: "POST",
         signal: controller.signal,
@@ -631,10 +764,11 @@ export function EmailSettingsClient(props: {
       window.clearTimeout(timeout);
       const result = (await response.json()) as SyncResult & { error?: string };
       if (!response.ok) throw new Error(result.error ?? "Sync failed.");
+      const harvestNote = formatClientHarvestNote(result.harvest);
       setStatusMessage(
         result.messagesAdded > 0
-          ? `Personal Gmail sync complete: ${result.messagesAdded} added, ${result.messagesSkipped} skipped. View them on the Emails page.`
-          : `Personal Gmail sync complete: no new allowlist messages (${result.messagesSkipped} skipped). Open Emails to view your inbox.`,
+          ? `Personal Gmail sync complete: ${result.messagesAdded} added, ${result.messagesSkipped} skipped.${harvestNote}`
+          : `Personal Gmail sync complete: no new allowlist messages (${result.messagesSkipped} skipped).${harvestNote || " Open Emails to view your inbox."}`,
       );
       if (result.errors?.length) {
         setErrorMessage(result.errors.join("\n"));
@@ -858,11 +992,13 @@ export function EmailSettingsClient(props: {
                 </button>
               </div>
               <p className="mt-1 text-sm text-slate-600">
-                Sync now pulls new allowlist mail from personal Gmail. The first
-                run imports matching messages; later runs only fetch mail since
-                the last sync. Use <strong>Import thread</strong> on a sender row
-                in the Sender allowlist tab to import full conversation history
-                for one sender.
+                Sync now pulls new allowlist mail from personal Gmail. When any
+                message in a thread involves an allowlisted sender, the{" "}
+                <strong>entire thread</strong> is imported (including replies from
+                people not on the allowlist). The first run imports matching
+                threads; later runs only fetch mail since the last sync. Use{" "}
+                <strong>Backfill all allowlist</strong> to fill gaps in older
+                incomplete imports.
               </p>
 
               <form
@@ -899,6 +1035,26 @@ export function EmailSettingsClient(props: {
                     Enable automatic sync
                   </label>
                 </div>
+
+                <label className="mt-4 flex items-start gap-2 text-sm font-medium text-slate-800">
+                  <input
+                    type="checkbox"
+                    checked={harvestAfterSyncEnabled}
+                    onChange={(event) =>
+                      setHarvestAfterSyncEnabled(event.target.checked)
+                    }
+                    className="mt-0.5 rounded border-slate-300"
+                  />
+                  <span>
+                    Harvest after sync
+                    <span className="mt-1 block font-normal text-slate-600">
+                      After ingest (cron or Sync now), extract contacts, organizations,
+                      events, and to-dos on emails that do not already have that
+                      concept. Leave off until the historical to-do bulk is done.
+                      Safe when no new mail arrives — it retries leftover gaps.
+                    </span>
+                  </span>
+                </label>
 
                 {schedulerEnabled ? (
                   <div className="mt-4 flex flex-wrap items-end gap-4">
@@ -1089,9 +1245,11 @@ export function EmailSettingsClient(props: {
               <p className="mt-1 text-sm text-slate-600">
                 Unique From addresses seen in imported mail. Counts show emails
                 with thread totals in parentheses for the app and personal Gmail
-                (From only). Save unsaved senders, then use <strong>Import thread</strong> on a row to pull
-                full conversations for that sender, including replies Sync now
-                does not fetch on its own.
+                (From only). Save unsaved senders, then use{" "}
+                <strong>Import thread</strong> or{" "}
+                <strong>Backfill all allowlist</strong> to (re)import full
+                conversations — every message in a thread that has any allowlisted
+                participant.
               </p>
 
               <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
@@ -1151,8 +1309,8 @@ export function EmailSettingsClient(props: {
                           : importPreviewLoading
                             ? "Calculating remaining import…"
                             : backfillRemainingPreview
-                              ? `Sync now only fetches new mail since your last sync. This searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"} and imports historical threads not yet in the app. Already-imported messages are skipped. Approximately `
-                              : `Searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"} and imports historical threads not yet in the app.`}
+                              ? `Re-runs are safe: already-imported messages are skipped, and incomplete threads (e.g. missing non-allowlist replies) get filled in. Searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"}. Approximately `
+                              : `Searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"} and imports full threads (every message when any allowlisted participant is present). Already-imported messages are skipped.`}
                       {backfillRemainingPreview &&
                       !importPreviewLoading &&
                       !importPreviewUnavailable ? (
@@ -1276,7 +1434,7 @@ export function EmailSettingsClient(props: {
                       <th className="px-4 py-2 text-left">Sender</th>
                       <th className="w-32 px-4 py-2 text-right">In app</th>
                       <th className="w-32 px-4 py-2 text-right">Personal</th>
-                      <th className="w-64 px-4 py-2 text-right">Actions</th>
+                      <th className="w-80 px-4 py-2 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1380,6 +1538,19 @@ export function EmailSettingsClient(props: {
                                   <SaveIcon />
                                 )}
                               </button>
+                              {candidate.messageCount > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void openPurgeImported(candidate)}
+                                  disabled={busyAction !== null}
+                                  title={`Delete imported mail from ${candidate.email}`}
+                                  className="rounded-md border border-red-200 px-2.5 py-1.5 text-sm text-red-800 hover:bg-red-50 disabled:opacity-50"
+                                >
+                                  {busyAction === `purge-preview-${candidate.email}`
+                                    ? "Checking…"
+                                    : "Delete imported"}
+                                </button>
+                              ) : null}
                               {candidate.saved && candidate.id ? (
                                 <>
                                   <button
@@ -1419,6 +1590,76 @@ export function EmailSettingsClient(props: {
           ) : null}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={purgeTarget != null}
+        title={
+          purgeTarget
+            ? `Delete imported mail from ${purgeTarget.email}?`
+            : "Delete imported mail?"
+        }
+        description={
+          <>
+            <p>
+              This removes imported emails from this sender, the threads that
+              exist only because of them, and extractions harvested from those
+              messages. Gmail is not changed. People already in Contacts stay.
+            </p>
+            {purgePreview ? (
+              <p className="mt-2">
+                {purgePreview.exclusiveEmailCount.toLocaleString()} email
+                {purgePreview.exclusiveEmailCount === 1 ? "" : "s"} in{" "}
+                {purgePreview.exclusiveThreadCount.toLocaleString()} thread
+                {purgePreview.exclusiveThreadCount === 1 ? "" : "s"} will be
+                deleted
+                {purgeTarget?.saved
+                  ? ", and this address will be removed from the allowlist"
+                  : ""}
+                .
+                {purgePreview.mixedThreadCount > 0
+                  ? ` ${purgePreview.mixedThreadCount.toLocaleString()} thread${purgePreview.mixedThreadCount === 1 ? "" : "s"} also include someone still on the allowlist and will be kept.`
+                  : ""}
+              </p>
+            ) : purgeError ? null : (
+              <p className="mt-2">Counting imported mail…</p>
+            )}
+            {purgeError ? (
+              <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-900">
+                {purgeError}
+              </p>
+            ) : null}
+          </>
+        }
+        confirmLabel="Delete imported mail"
+        busy={
+          Boolean(
+            purgeTarget &&
+              (busyAction === `purge-${purgeTarget.email}` ||
+                busyAction === `purge-preview-${purgeTarget.email}`),
+          )
+        }
+        busyLabel={
+          purgeTarget && busyAction === `purge-preview-${purgeTarget.email}`
+            ? "Checking…"
+            : "Deleting…"
+        }
+        onConfirm={() => {
+          if (!purgePreview) return;
+          void confirmPurgeImported();
+        }}
+        onCancel={() => {
+          if (
+            purgeTarget &&
+            (busyAction === `purge-${purgeTarget.email}` ||
+              busyAction === `purge-preview-${purgeTarget.email}`)
+          ) {
+            return;
+          }
+          setPurgeTarget(null);
+          setPurgePreview(null);
+          setPurgeError(null);
+        }}
+      />
 
       <ConfirmDialog
         open={confirmClearOpen}

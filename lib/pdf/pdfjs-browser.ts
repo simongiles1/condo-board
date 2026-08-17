@@ -11,10 +11,10 @@ export async function getPdfjs(): Promise<PdfJsModule> {
 
   if (!pdfjsPromise) {
     pdfjsPromise = import("pdfjs-dist").then((pdfjs) => {
-      pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-        "pdfjs-dist/build/pdf.worker.min.mjs",
-        import.meta.url,
-      ).toString();
+      // Avoid `new URL("pdfjs-dist/...", import.meta.url)` — Next/Webpack treats
+      // that as an ESM package resolution and fails (import-esm-externals).
+      // Pin the worker to the same package version via CDN instead.
+      pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
       return pdfjs;
     });
   }

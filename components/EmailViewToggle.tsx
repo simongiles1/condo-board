@@ -19,7 +19,7 @@ function viewHref(view: EmailInboxView, searchParams: URLSearchParams): string {
   const filters = parseEmailThreadFilters(searchParamsToFilterRecord(searchParams));
   const params = buildEmailThreadSearchParams({ ...filters, view, page: 1 });
   const qs = params.toString();
-  return qs ? `/emails?${qs}` : "/emails";
+  return qs ? `/knowledge/emails?${qs}` : "/knowledge/emails";
 }
 
 export function EmailViewToggle() {

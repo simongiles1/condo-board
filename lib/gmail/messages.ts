@@ -1,11 +1,14 @@
 import type { gmail_v1 } from "googleapis";
 
+import { formatMailboxAddress } from "@/lib/email/address-display";
+
 export type ParsedEmailMessage = {
   gmailMessageId: string;
   gmailThreadId: string;
   messageIdHeader: string | null;
   inReplyTo: string | null;
   referencesHeader: string | null;
+  /** May be `Name <email>` when the header included a display name. */
   fromAddress: string;
   toAddresses: string[];
   ccAddresses: string[];
@@ -36,24 +39,42 @@ function getHeader(
   return match?.value ?? null;
 }
 
-function firstMailboxEmail(raw: string | null): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  const angleMatch = trimmed.match(/<([^>]+)>/);
-  if (angleMatch) return angleMatch[1].trim();
+/**
+ * Preserve display name when present so contact fingerprinting can use header
+ * evidence (e.g. `Michael Lethbridge <m.lethbridge@…>`).
+ */
+function formatAddressPart(part: string): string | null {
+  const trimmed = part.trim();
+  if (!trimmed) return null;
+
+  const angleMatch = trimmed.match(/^(.*?)\s*<([^>]+)>\s*$/);
+  if (angleMatch) {
+    const name = angleMatch[1].trim().replace(/^"|"$/g, "").trim();
+    const email = angleMatch[2].trim();
+    if (!email.includes("@")) return null;
+    return formatMailboxAddress(name || null, email);
+  }
+
   if (trimmed.includes("@")) return trimmed;
-  return trimmed;
+  return null;
+}
+
+function firstMailboxAddress(raw: string | null): string | null {
+  if (!raw) return null;
+  // From is usually a single mailbox; still take the first parsable segment.
+  for (const part of raw.split(",")) {
+    const formatted = formatAddressPart(part);
+    if (formatted) return formatted;
+  }
+  return null;
 }
 
 function extractAddresses(raw: string | null): string[] {
   if (!raw) return [];
   return raw
     .split(",")
-    .map((part) => {
-      const angle = part.match(/<([^>]+)>/);
-      return (angle?.[1] ?? part).trim();
-    })
-    .filter(Boolean);
+    .map((part) => formatAddressPart(part))
+    .filter((value): value is string => Boolean(value));
 }
 
 function walkParts(
@@ -91,7 +112,7 @@ export function parseGmailMessage(
 
   const headers = message.payload?.headers;
   const fromHeader = getHeader(headers, "From");
-  const fromAddress = firstMailboxEmail(fromHeader) ?? "unknown@unknown";
+  const fromAddress = firstMailboxAddress(fromHeader) ?? "unknown@unknown";
   const toAddresses = extractAddresses(getHeader(headers, "To"));
   const ccAddresses = extractAddresses(getHeader(headers, "Cc"));
   const subject = getHeader(headers, "Subject") ?? "(no subject)";
@@ -117,7 +138,10 @@ export function parseGmailMessage(
     toAddresses,
     ccAddresses,
     subject,
-    bodyText: bodyAcc.text.trim() || bodyAcc.html?.replace(/<[^>]+>/g, " ").trim() || "",
+    bodyText:
+      bodyAcc.text.trim() ||
+      bodyAcc.html?.replace(/<[^>]+>/g, " ").trim() ||
+      "",
     bodyHtml: bodyAcc.html,
     receivedAt,
     attachments,

@@ -31,6 +31,15 @@ function collectErrorText(error: unknown): string {
   return parts.join(" | ");
 }
 
+export function isDbConnectionError(error: unknown): boolean {
+  const message = collectErrorText(error);
+  return (
+    message.includes("ECONNREFUSED") ||
+    message.includes("ENOTFOUND") ||
+    message.includes("getaddrinfo")
+  );
+}
+
 export function formatAuthDbError(
   error: unknown,
   action:
@@ -54,6 +63,17 @@ export function formatAuthDbError(
     message.includes("ENOTFOUND") ||
     message.includes("getaddrinfo")
   ) {
+    const dbUrl =
+      process.env.COND_BOARD_POSTGRES_URL?.trim() ||
+      process.env.DATABASE_URL?.trim() ||
+      "";
+    const isLocalDev =
+      process.env.NODE_ENV === "development" ||
+      dbUrl.includes("localhost") ||
+      dbUrl.includes("127.0.0.1");
+    if (isLocalDev) {
+      return "Database connection failed. Start Postgres with `docker compose up db -d`, then run `npm run db:migrate`.";
+    }
     return "Database connection failed. Remove DATABASE_URL from Coolify env vars and redeploy.";
   }
 

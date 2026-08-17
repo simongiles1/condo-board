@@ -1,6 +1,6 @@
 import cron, { type ScheduledTask } from "node-cron";
 
-import { syncPersonalAccount } from "@/lib/gmail/sync";
+import { runIngestThenHarvest } from "@/lib/email/ingest-harvest";
 
 import { getEmailSyncSettings } from "./settings";
 
@@ -9,12 +9,15 @@ let currentExpression: string | null = null;
 
 export async function runScheduledSync() {
   console.info("[email-scheduler] Running personal Gmail sync");
-  const result = await syncPersonalAccount("cron");
+  const result = await runIngestThenHarvest("cron");
   console.info(
     `[email-scheduler] Added ${result.messagesAdded}, skipped ${result.messagesSkipped}`,
   );
   if (result.errors.length > 0) {
     console.error("[email-scheduler] Errors:", result.errors.join("; "));
+  }
+  if (result.harvest.status !== "disabled") {
+    console.info("[email-scheduler] Harvest after sync", result.harvest);
   }
   return result;
 }

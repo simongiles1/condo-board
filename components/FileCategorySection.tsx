@@ -35,7 +35,7 @@ function ExternalLinkIcon() {
 function FileRow({ file }: { file: CategorizedFile }) {
   const kind = attachmentKind(file.mimeType);
   const sizeLabel = formatAttachmentSize(file.sizeBytes);
-  const emailHref = file.threadId ? `/emails/${file.threadId}` : null;
+  const emailHref = file.threadId ? `/knowledge/emails/${file.threadId}` : null;
 
   return (
     <li className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-b-0">

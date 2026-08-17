@@ -109,7 +109,7 @@ export async function PATCH(request: Request) {
         .where(eq(extractionSkillEntries.id, entry.id));
 
       await bumpSkillVersion(`merged_skill_entry:${entry.conceptName}`);
-      revalidatePath("/skill");
+      revalidatePath("/admin/concepts");
       return NextResponse.json({ ok: true });
     }
 
@@ -181,7 +181,7 @@ export async function PATCH(request: Request) {
     if (!isRoutingOnly) {
       await bumpSkillVersion(`updated_skill_entry:${entry.conceptName}`);
     }
-    revalidatePath("/skill");
+    revalidatePath("/admin/concepts");
 
     return NextResponse.json({ ok: true });
   } catch (error) {

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { formatCostUsd, formatTokenCount } from "@/lib/gemini/usage";
@@ -112,6 +113,34 @@ export function AnalysisLabClient() {
         <h1 className="text-2xl font-semibold text-slate-900">Analysis lab</h1>
         <p className="mt-1 text-sm text-slate-600">
           Start with one email, compare models, then scale up when cost and quality look right.
+        </p>
+        <p className="mt-2 text-sm">
+          <Link
+            href="/admin/analysis/golden-attachments"
+            className="font-medium text-teal-800 underline hover:text-teal-950"
+          >
+            Golden attachment labeling
+          </Link>{" "}
+          — calibrate page text/vision routes on the 20-doc fixture set.
+        </p>
+        <p className="mt-1 text-sm">
+          <Link
+            href="/admin/analysis/extraction"
+            className="font-medium text-teal-800 underline hover:text-teal-950"
+          >
+            Extraction lab
+          </Link>{" "}
+          — unique files to parsed Markdown; select N and process (text +
+          vision costs).
+        </p>
+        <p className="mt-1 text-sm">
+          <Link
+            href="/admin/analysis/page-vision"
+            className="font-medium text-teal-800 underline hover:text-teal-950"
+          >
+            Page vision lab
+          </Link>{" "}
+          — run Gemini on pending vision pages and inspect markdown output.
         </p>
       </div>
 

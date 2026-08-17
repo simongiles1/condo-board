@@ -1,20 +1,27 @@
-import { and, asc, eq, isNotNull, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, or } from "drizzle-orm";
 
 import {
   ACTION_ITEM_RECONCILIATION_SYSTEM_PROMPT,
   buildActionItemReconciliationUserPrompt,
 } from "@/lib/email-analysis/prompts";
+import { generateDeepSeekJson } from "@/lib/deepseek/client";
 import { getDb } from "@/lib/db";
-import { emails, extractedActionItems } from "@/lib/db/schema";
+import { emails, extractedActionItems, extractionSources } from "@/lib/db/schema";
 import { generateEmailExtraction } from "@/lib/gemini/client";
 import { unwrapJsonCodeBlock } from "@/lib/gemini/parse-output";
 import {
   estimateCostUsdForCalls,
   type GeminiUsageCall,
 } from "@/lib/gemini/usage";
+import {
+  completedFieldsForLifecycle,
+  UNRESOLVED_TODO_LIFECYCLE_STATUSES,
+} from "@/lib/email-analysis/todo-lifecycle";
+import { markEmailGlobalTodosCompleted } from "@/lib/todos/sync-email-global-todos";
 
 const MAX_THREAD_CHARS = 120_000;
-const RECONCILIATION_MAX_OUTPUT_TOKENS = 8192;
+const MAX_MESSAGE_CHARS = 3_000;
+const RECONCILIATION_MAX_OUTPUT_TOKENS = 8_192;
 
 export type ActionItemReconciliationStatus = "completed" | "open" | "superseded";
 
@@ -132,7 +139,11 @@ function buildThreadTranscript(
   }>,
 ): string {
   const blocks = messages.map((message, index) => {
-    const body = (message.bodyTextUnique ?? message.bodyText).trim();
+    const raw = (message.bodyTextUnique ?? message.bodyText).trim();
+    const body =
+      raw.length > MAX_MESSAGE_CHARS
+        ? `${raw.slice(0, MAX_MESSAGE_CHARS)}\n[Message truncated]`
+        : raw;
     return [
       `--- Message ${index + 1} ---`,
       `From: ${message.fromAddress}`,
@@ -151,7 +162,8 @@ function buildThreadTranscript(
   return transcript;
 }
 
-async function loadOpenThreadActionItems(
+/** Incomplete working-list and archive items in a thread (open + stale). */
+export async function loadUnresolvedThreadActionItems(
   threadId: string,
 ): Promise<OpenActionItem[]> {
   const db = getDb();
@@ -169,8 +181,80 @@ async function loadOpenThreadActionItems(
       and(
         eq(extractedActionItems.emailThreadId, threadId),
         eq(extractedActionItems.completed, false),
+        inArray(
+          extractedActionItems.lifecycleStatus,
+          [...UNRESOLVED_TODO_LIFECYCLE_STATUSES],
+        ),
       ),
     );
+}
+
+export function isDeepSeekModelName(modelName: string): boolean {
+  return /deepseek/i.test(modelName);
+}
+
+/**
+ * Dedup/close-out JSON. Harvest uses DeepSeek; full analysis uses Gemini.
+ * Passing a DeepSeek model into the Gemini client 404s and skips close-out.
+ */
+export async function generateActionItemJson(options: {
+  systemInstruction: string;
+  userText: string;
+  modelName: string;
+  maxOutputTokens: number;
+  step: string;
+}): Promise<{ text: string; usageCalls: GeminiUsageCall[] }> {
+  if (isDeepSeekModelName(options.modelName)) {
+    const result = await generateDeepSeekJson({
+      systemInstruction: options.systemInstruction,
+      userText: options.userText,
+      modelName: options.modelName,
+      maxOutputTokens: options.maxOutputTokens,
+      thinking: false,
+    });
+    return {
+      text: result.text,
+      usageCalls: [
+        {
+          step: options.step,
+          modelName: result.modelName,
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          totalTokens: result.usage.totalTokens,
+        },
+      ],
+    };
+  }
+
+  const generation = await generateEmailExtraction({
+    systemInstruction: options.systemInstruction,
+    userText: options.userText,
+    modelName: options.modelName,
+    maxOutputTokens: options.maxOutputTokens,
+    step: options.step,
+  });
+  return { text: generation.text, usageCalls: generation.usageCalls };
+}
+
+/**
+ * Emails the close-out model is allowed to see.
+ *
+ * Full analysis sets `emails.processedAt`. To-do harvest does not — it writes
+ * `extraction_sources` instead. Without that source, harvest close-out saw an
+ * empty transcript and skipped every thread.
+ */
+export function isEmailInTodoReconciliationScope(input: {
+  emailId: string;
+  processedAt: string | null;
+  hasExtractionSource: boolean;
+  analyzedEmailId?: string;
+}): boolean {
+  if (input.processedAt) return true;
+  if (input.hasExtractionSource) return true;
+  if (input.analyzedEmailId && input.emailId === input.analyzedEmailId) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -182,9 +266,23 @@ async function loadAnalyzedThreadMessages(
   analyzedEmailId?: string,
 ) {
   const db = getDb();
-  const scopeFilter = analyzedEmailId
-    ? or(isNotNull(emails.processedAt), eq(emails.id, analyzedEmailId))
-    : isNotNull(emails.processedAt);
+  const sourced = await db
+    .select({ emailId: extractionSources.sourceId })
+    .from(extractionSources)
+    .where(
+      and(
+        eq(extractionSources.emailThreadId, threadId),
+        eq(extractionSources.sourceType, "email_message"),
+      ),
+    );
+  const sourcedIds = [
+    ...new Set(sourced.map((row) => row.emailId).filter(Boolean)),
+  ];
+  const scopeFilter = or(
+    isNotNull(emails.processedAt),
+    sourcedIds.length ? inArray(emails.id, sourcedIds) : undefined,
+    analyzedEmailId ? eq(emails.id, analyzedEmailId) : undefined,
+  );
 
   return db
     .select({
@@ -200,22 +298,25 @@ async function loadAnalyzedThreadMessages(
     .orderBy(asc(emails.receivedAt));
 }
 
-export async function closeCrossThreadCalendarInviteItems(input: {
-  emailId: string;
-}): Promise<number> {
+export async function closeCrossThreadCalendarInvitesForEmails(
+  emailIds: string[],
+): Promise<number> {
+  const ids = [...new Set(emailIds.map((id) => id.trim()).filter(Boolean))];
+  if (!ids.length) return 0;
+
   const db = getDb();
-  const [email] = await db
+  const emailRows = await db
     .select({
+      id: emails.id,
       subject: emails.subject,
       bodyText: emails.bodyText,
       bodyTextUnique: emails.bodyTextUnique,
     })
     .from(emails)
-    .where(eq(emails.id, input.emailId));
+    .where(inArray(emails.id, ids));
 
-  if (!email || !isMeetingInviteEmail(email)) {
-    return 0;
-  }
+  const inviteEmails = emailRows.filter(isMeetingInviteEmail);
+  if (!inviteEmails.length) return 0;
 
   const openItems = await db
     .select({
@@ -230,10 +331,15 @@ export async function closeCrossThreadCalendarInviteItems(input: {
   if (!toClose.length) return 0;
 
   const now = new Date().toISOString();
+  const completedFields = completedFieldsForLifecycle("completed", now);
   for (const item of toClose) {
     await db
       .update(extractedActionItems)
-      .set({ completed: true, completedAt: now })
+      .set({
+        completed: completedFields.completed,
+        completedAt: completedFields.completedAt,
+        lifecycleStatus: "completed",
+      })
       .where(
         and(
           eq(extractedActionItems.id, item.id),
@@ -242,12 +348,23 @@ export async function closeCrossThreadCalendarInviteItems(input: {
       );
   }
 
+  await markEmailGlobalTodosCompleted(
+    toClose.map((item) => item.id),
+    now,
+  );
+
   console.info("[email-analysis:action-item-cross-thread]", {
-    meetingInviteEmailId: input.emailId,
+    meetingInviteEmailIds: inviteEmails.map((email) => email.id),
     closed: toClose.length,
   });
 
   return toClose.length;
+}
+
+export async function closeCrossThreadCalendarInviteItems(input: {
+  emailId: string;
+}): Promise<number> {
+  return closeCrossThreadCalendarInvitesForEmails([input.emailId]);
 }
 
 export async function reconcileThreadActionItems(input: {
@@ -256,7 +373,7 @@ export async function reconcileThreadActionItems(input: {
   /** Email just analyzed — scopes reconciliation to processed messages + this one. */
   analyzedEmailId?: string;
 }): Promise<ReconcileThreadActionItemsResult> {
-  const openItems = await loadOpenThreadActionItems(input.threadId);
+  const openItems = await loadUnresolvedThreadActionItems(input.threadId);
   const threadReconcilableItems = openItems.filter(
     (item) => !requiresCrossThreadCalendarEvidence(item),
   );
@@ -285,7 +402,7 @@ export async function reconcileThreadActionItems(input: {
     })),
   });
 
-  const generation = await generateEmailExtraction({
+  const generation = await generateActionItemJson({
     systemInstruction: ACTION_ITEM_RECONCILIATION_SYSTEM_PROMPT,
     userText: userPrompt,
     modelName: input.modelName,
@@ -302,15 +419,20 @@ export async function reconcileThreadActionItems(input: {
   const now = new Date().toISOString();
   let completed = 0;
   let superseded = 0;
+  const closedIds: string[] = [];
 
   for (const update of parsed.updates) {
     if (!openById.has(update.id)) continue;
 
+    const lifecycleStatus =
+      update.status === "superseded" ? "superseded" : "completed";
+    const completedFields = completedFieldsForLifecycle(lifecycleStatus, now);
     await db
       .update(extractedActionItems)
       .set({
-        completed: true,
-        completedAt: now,
+        completed: completedFields.completed,
+        completedAt: completedFields.completedAt,
+        lifecycleStatus,
       })
       .where(
         and(
@@ -320,8 +442,13 @@ export async function reconcileThreadActionItems(input: {
         ),
       );
 
+    closedIds.push(update.id);
     if (update.status === "completed") completed += 1;
     if (update.status === "superseded") superseded += 1;
+  }
+
+  if (closedIds.length) {
+    await markEmailGlobalTodosCompleted(closedIds, now);
   }
 
   const calls = generation.usageCalls;

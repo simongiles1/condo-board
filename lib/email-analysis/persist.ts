@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, like, or } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import {
@@ -19,10 +19,17 @@ import {
   vendors,
 } from "@/lib/db/schema";
 import {
-  calendarDeadlineDedupKey,
-  calendarMeetingDedupKey,
-} from "@/lib/email-analysis/calendar-dedup";
+  completedFieldsForLifecycle,
+  lifecycleStatusForReceivedAt,
+} from "@/lib/email-analysis/todo-lifecycle";
+import {
+  collapseDuplicateScheduledMeetings,
+  planCalendarLifecycle,
+  type ExistingCalendarEvent,
+  type PlannedCalendarWrite,
+} from "@/lib/email-analysis/calendar-lifecycle";
 import { persistDiscoveredFacts } from "@/lib/email-analysis/extraction-skill";
+import { upsertEmailGlobalTodos } from "@/lib/todos/sync-email-global-todos";
 import {
   dedupeEntities,
   entitiesMatch,
@@ -39,10 +46,181 @@ import {
   loadEntityExclusions,
 } from "@/lib/entities/entity-exclusions";
 
-import type {
-  EmailExtractionDocument,
-  EquipmentMentionExtraction,
-} from "./schema";
+import type { EmailExtractionDocument } from "./schema";
+
+function collectCalendarDates(document: EmailExtractionDocument): string[] {
+  const dates = new Set<string>();
+  for (const cancel of document.meeting_cancellations ?? []) {
+    if (cancel.date) dates.add(cancel.date);
+  }
+  for (const reschedule of document.meeting_reschedules ?? []) {
+    if (reschedule.original_date) dates.add(reschedule.original_date);
+    if (reschedule.new_date) dates.add(reschedule.new_date);
+  }
+  for (const meeting of document.meetings ?? []) {
+    if (meeting.date) dates.add(meeting.date);
+  }
+  for (const deadline of document.deadlines ?? []) {
+    if (deadline.date) dates.add(deadline.date);
+  }
+  for (const inspection of document.inspections ?? []) {
+    if (inspection.date) dates.add(inspection.date);
+  }
+  for (const event of document.maintenance_events ?? []) {
+    if (event.date) dates.add(event.date);
+  }
+  return [...dates];
+}
+
+async function loadCalendarEventsOnDates(
+  dates: string[],
+): Promise<ExistingCalendarEvent[]> {
+  if (!dates.length) return [];
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: calendarEvents.id,
+      eventType: calendarEvents.eventType,
+      startAt: calendarEvents.startAt,
+      status: calendarEvents.status,
+      title: calendarEvents.title,
+      description: calendarEvents.description,
+      dedupKey: calendarEvents.dedupKey,
+    })
+    .from(calendarEvents)
+    .where(or(...dates.map((date) => like(calendarEvents.startAt, `${date}%`))));
+
+  return rows.map((row) => ({
+    id: row.id,
+    eventType: row.eventType,
+    startAt: row.startAt,
+    status: row.status === "cancelled" ? "cancelled" : "scheduled",
+    title: row.title,
+    description: row.description,
+    dedupKey: row.dedupKey,
+  }));
+}
+
+async function executeCalendarWrites(
+  sourceId: string,
+  writes: PlannedCalendarWrite[],
+  now: string,
+): Promise<number> {
+  const db = getDb();
+  let insertedOrMoved = 0;
+
+  for (const write of writes) {
+    if (write.op === "cancel") {
+      await db
+        .update(calendarEvents)
+        .set({ status: "cancelled" })
+        .where(eq(calendarEvents.id, write.eventId));
+      continue;
+    }
+    if (write.op === "move") {
+      await db
+        .update(calendarEvents)
+        .set({
+          startAt: write.startAt,
+          title: write.title,
+          description: write.description,
+          sourceQuote: write.sourceQuote,
+          dedupKey: write.dedupKey,
+          sourceId,
+        })
+        .where(eq(calendarEvents.id, write.eventId));
+      insertedOrMoved += 1;
+      continue;
+    }
+    await db.insert(calendarEvents).values({
+      id: randomUUID(),
+      title: write.title,
+      eventType: write.eventType,
+      startAt: write.startAt,
+      description: write.description,
+      sourceQuote: write.sourceQuote,
+      sourceId,
+      dedupKey: write.dedupKey,
+      status: "scheduled",
+      createdAt: now,
+    });
+    insertedOrMoved += 1;
+  }
+
+  return insertedOrMoved;
+}
+
+/**
+ * Cancel/reschedule only — used to replay unmatched mutations after harvests
+ * were persisted out of email order (cross-thread Teams cancel, reverse batches).
+ */
+export async function applyHarvestCalendarMutations(input: {
+  sourceId: string;
+  cancellations?: EmailExtractionDocument["meeting_cancellations"];
+  reschedules?: EmailExtractionDocument["meeting_reschedules"];
+}): Promise<void> {
+  const document: EmailExtractionDocument = {
+    meeting_cancellations: input.cancellations,
+    meeting_reschedules: input.reschedules,
+  };
+  const dates = collectCalendarDates(document);
+  if (!dates.length) return;
+
+  const writes = planCalendarLifecycle({
+    existing: await loadCalendarEventsOnDates(dates),
+    cancellations: input.cancellations,
+    reschedules: input.reschedules,
+  });
+  if (writes.length === 0) return;
+
+  await executeCalendarWrites(
+    input.sourceId,
+    writes,
+    new Date().toISOString(),
+  );
+}
+
+/** Hide extra same-day, same-title scheduled meetings left by reschedule-first persist. */
+export async function collapseDuplicateScheduledCalendarMeetings(): Promise<number> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: calendarEvents.id,
+      title: calendarEvents.title,
+      eventType: calendarEvents.eventType,
+      startAt: calendarEvents.startAt,
+      status: calendarEvents.status,
+      description: calendarEvents.description,
+      dedupKey: calendarEvents.dedupKey,
+      createdAt: calendarEvents.createdAt,
+    })
+    .from(calendarEvents)
+    .where(eq(calendarEvents.status, "scheduled"));
+
+  const writes = collapseDuplicateScheduledMeetings(
+    rows.map((row) => ({
+      id: row.id,
+      eventType: row.eventType,
+      startAt: row.startAt,
+      status: row.status === "cancelled" ? "cancelled" : "scheduled",
+      title: row.title,
+      description: row.description,
+      dedupKey: row.dedupKey,
+      createdAt: row.createdAt,
+    })),
+  );
+
+  let collapsed = 0;
+  for (const write of writes) {
+    if (write.op !== "cancel") continue;
+    await db
+      .update(calendarEvents)
+      .set({ status: "cancelled" })
+      .where(eq(calendarEvents.id, write.eventId));
+    collapsed += 1;
+  }
+  return collapsed;
+}
 
 type EquipmentUpsertInput = {
   name: string;
@@ -128,33 +306,6 @@ async function upsertEquipment(input: EquipmentUpsertInput): Promise<string> {
     createdAt: new Date().toISOString(),
   });
   return id;
-}
-
-function buildMentionLookup(
-  mentions: EquipmentMentionExtraction[] | undefined,
-): Map<string, EquipmentMentionExtraction> {
-  const lookup = new Map<string, EquipmentMentionExtraction>();
-  for (const mention of mentions ?? []) {
-    lookup.set(mention.name.trim().toLowerCase(), mention);
-  }
-  return lookup;
-}
-
-function mentionFieldsForName(
-  lookup: Map<string, EquipmentMentionExtraction>,
-  name: string,
-): EquipmentUpsertInput {
-  const mention = lookup.get(name.trim().toLowerCase());
-  return {
-    name,
-    kind: mention?.kind,
-    significance: mention?.significance,
-    manufacturer: mention?.manufacturer,
-    category: mention?.category,
-    confidence: mention?.confidence,
-    registryId: mention?.registry_id,
-    source: mention?.is_existing ? "registry_match" : "extracted",
-  };
 }
 
 async function persistEquipmentMentions(input: {
@@ -260,60 +411,59 @@ export async function persistExtractionDocument(input: {
   sourceId: string;
   emailThreadId?: string | null;
   document: EmailExtractionDocument;
+  /**
+   * Event harvest: calendar + dated maintenance only. Skips equipment
+   * assets, to-dos, entities, and other registry writes (Stage 4/5).
+   */
+  calendarOnly?: boolean;
+  /** Source email receivedAt — used to stale historical action items. */
+  emailReceivedAt?: string | null;
 }): Promise<{ counts: Record<string, number> }> {
   const db = getDb();
   const now = new Date().toISOString();
   const counts: Record<string, number> = {};
 
   /**
-   * Pre-process meeting cancellations FIRST so we (a) know which (date,time)
-   * slots to suppress when creating events from the same document's meetings[]
-   * array (cancellation emails often still describe the original invite, esp.
-   * via .ics attachments), and (b) actively remove any previously-persisted
-   * calendar event for the cancelled slot.
-   *
-   * Cancellations without a time match any same-day meeting, since the
-   * cancellation notice rarely repeats the original start time verbatim.
+   * Calendar occurrences follow Google Calendar semantics: cancellations hide
+   * the existing row, same-email reschedules move it, a later new invite
+   * inserts a new row. Dated maintenance titles stay free text — do not
+   * create equipment assets here (Stage 5).
    */
-  const cancelledMeetingKeys = new Set<string>();
+  const calendarWrites = planCalendarLifecycle({
+    existing: await loadCalendarEventsOnDates(
+      collectCalendarDates(input.document),
+    ),
+    cancellations: input.document.meeting_cancellations,
+    reschedules: input.document.meeting_reschedules,
+    meetings: input.document.meetings,
+    deadlines: input.document.deadlines,
+    inspections: input.document.inspections,
+    maintenanceEvents: input.document.maintenance_events,
+  });
+
   for (const cancel of input.document.meeting_cancellations ?? []) {
-    if (!cancel.date) continue;
-    counts.meeting_cancellations = (counts.meeting_cancellations ?? 0) + 1;
-
-    const exactKey = dedupKey("meeting", cancel.date, cancel.time);
-    if (exactKey) cancelledMeetingKeys.add(exactKey);
-
-    cancelledMeetingKeys.add(dedupKey("meeting", cancel.date));
-
-    if (!cancel.time) {
-      const dayPrefix = dedupKey("meeting", cancel.date);
-      const dayMatches = await db
-        .select({ dedupKey: calendarEvents.dedupKey })
-        .from(calendarEvents)
-        .where(
-          and(
-            eq(calendarEvents.eventType, "meeting"),
-            like(calendarEvents.dedupKey, `${dayPrefix}%`),
-          ),
-        );
-      for (const row of dayMatches) {
-        if (row.dedupKey) cancelledMeetingKeys.add(row.dedupKey);
-      }
+    if (cancel.date) {
+      counts.meeting_cancellations = (counts.meeting_cancellations ?? 0) + 1;
+    }
+  }
+  for (const reschedule of input.document.meeting_reschedules ?? []) {
+    if (reschedule.original_date && reschedule.new_date) {
+      counts.meeting_reschedules = (counts.meeting_reschedules ?? 0) + 1;
     }
   }
 
-  for (const key of cancelledMeetingKeys) {
-    await db.delete(calendarEvents).where(eq(calendarEvents.dedupKey, key));
+  const calendarCount = await executeCalendarWrites(
+    input.sourceId,
+    calendarWrites,
+    now,
+  );
+  if (calendarCount > 0) {
+    counts.calendar_events = (counts.calendar_events ?? 0) + calendarCount;
   }
 
-  const mentionLookup = buildMentionLookup(input.document.equipment_mentions);
-
   for (const event of input.document.maintenance_events ?? []) {
-    const equipmentId = await upsertEquipment(
-      mentionFieldsForName(mentionLookup, event.equipment),
-    );
     let vendorId: string | undefined;
-    if (event.vendor) {
+    if (event.vendor && !input.calendarOnly) {
       vendorId = await upsertVendor(event.vendor);
     }
 
@@ -336,7 +486,7 @@ export async function persistExtractionDocument(input: {
     if (!inserted.length) {
       await db.insert(maintenanceEvents).values({
         id: randomUUID(),
-        equipmentId,
+        equipmentId: null,
         equipmentName: event.equipment,
         eventType: event.action,
         occurredAt: event.date ?? null,
@@ -354,32 +504,11 @@ export async function persistExtractionDocument(input: {
         createdAt: now,
       });
       counts.maintenance_events = (counts.maintenance_events ?? 0) + 1;
-
-      if (event.date) {
-        const calKey = dedupKey("maintenance", event.equipment, event.date, event.time);
-        const calExisting = calKey
-          ? await db
-              .select()
-              .from(calendarEvents)
-              .where(eq(calendarEvents.dedupKey, calKey))
-              .limit(1)
-          : [];
-
-        if (!calExisting.length) {
-          await db.insert(calendarEvents).values({
-            id: randomUUID(),
-            title: `${event.action}: ${event.equipment}`,
-            eventType: "maintenance",
-            startAt: event.time ? `${event.date}T${event.time}:00` : event.date,
-            description: event.description ?? null,
-            sourceId: input.sourceId,
-            dedupKey: calKey || null,
-            createdAt: now,
-          });
-          counts.calendar_events = (counts.calendar_events ?? 0) + 1;
-        }
-      }
     }
+  }
+
+  if (input.calendarOnly) {
+    return { counts };
   }
 
   const maintenanceEquipmentNames = new Set(
@@ -581,96 +710,47 @@ export async function persistExtractionDocument(input: {
           .limit(1)
       : [];
     if (!existing.length) {
+      const lifecycleStatus = lifecycleStatusForReceivedAt(
+        input.emailReceivedAt,
+      );
+      const completedFields = completedFieldsForLifecycle(
+        lifecycleStatus,
+        now,
+      );
+      const itemId = randomUUID();
       await db.insert(extractedActionItems).values({
-        id: randomUUID(),
+        id: itemId,
         assignee: item.assignee,
         description: item.task,
         deadline: item.deadline ?? null,
+        completed: completedFields.completed,
+        completedAt: completedFields.completedAt,
         emailThreadId: input.emailThreadId ?? null,
         sourceQuote: item.source_quote ?? null,
         sourceId: input.sourceId,
         dedupKey: key || null,
+        lifecycleStatus,
         createdAt: now,
       });
       counts.action_items = (counts.action_items ?? 0) + 1;
+      if (lifecycleStatus === "open") {
+        await upsertEmailGlobalTodos([
+          {
+            extractedActionItemId: itemId,
+            assignee: item.assignee,
+            description: item.task,
+            deadline: item.deadline ?? null,
+          },
+        ]);
+      }
     }
     /*
      * Intentionally do NOT promote action_items to calendar_events. The LLM
      * frequently assigns a "deadline" to soft asks ("share thoughts before
      * the meeting"), which polluted the calendar with non-events. Hard
      * deadlines belong in the deadlines[] array — they get their own
-     * calendar entry below.
+     * calendar entry via planCalendarLifecycle above.
      */
-  }
-
-  for (const meeting of input.document.meetings ?? []) {
-    if (!meeting.date) continue;
-    /**
-     * Dedup on calendar day — the LLM is inconsistent about `type` ("Board"
-     * vs "Board Meeting") and often omits `time` in one email while another
-     * includes it, which would fragment one real meeting into two events.
-     */
-    const calKey = calendarMeetingDedupKey(meeting);
-    if (!calKey) continue;
-    if (cancelledMeetingKeys.has(calKey)) continue;
-    const timedCancelKey = meeting.time
-      ? dedupKey("meeting", meeting.date, meeting.time)
-      : null;
-    if (timedCancelKey && cancelledMeetingKeys.has(timedCancelKey)) continue;
-
-    const calExisting = await db
-      .select({ id: calendarEvents.id })
-      .from(calendarEvents)
-      .where(
-        and(
-          eq(calendarEvents.eventType, "meeting"),
-          like(calendarEvents.dedupKey, `${calKey}%`),
-        ),
-      )
-      .limit(1);
-    if (calExisting.length) continue;
-
-    const normalizedType = meeting.type?.replace(/\s*meeting\s*$/i, "").trim();
-    const title = normalizedType ? `${normalizedType} meeting` : "Meeting";
-
-    await db.insert(calendarEvents).values({
-      id: randomUUID(),
-      title,
-      eventType: "meeting",
-      startAt: meeting.time
-        ? `${meeting.date}T${meeting.time}:00`
-        : meeting.date,
-      description: meeting.location ?? null,
-      sourceId: input.sourceId,
-      dedupKey: calKey,
-      createdAt: now,
-    });
-    counts.calendar_events = (counts.calendar_events ?? 0) + 1;
-  }
-
-  for (const deadline of input.document.deadlines ?? []) {
-    if (deadline.date) {
-      const calKey = calendarDeadlineDedupKey(deadline);
-      if (!calKey) continue;
-      const calExisting = await db
-        .select()
-        .from(calendarEvents)
-        .where(eq(calendarEvents.dedupKey, calKey))
-        .limit(1);
-      if (!calExisting.length) {
-        await db.insert(calendarEvents).values({
-          id: randomUUID(),
-          title: deadline.description,
-          eventType: "deadline",
-          startAt: deadline.date,
-          description: deadline.assignee ?? null,
-          sourceId: input.sourceId,
-          dedupKey: calKey,
-          createdAt: now,
-        });
-        counts.calendar_events = (counts.calendar_events ?? 0) + 1;
-      }
-    }
   }
 
   const namedSources = collectNamedEntitySources(input.document);

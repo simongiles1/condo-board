@@ -9,6 +9,7 @@ export const DEFAULT_SETTINGS_ID = "default";
 export type EmailSyncSettings = {
   syncCron: string;
   schedulerEnabled: boolean;
+  harvestAfterSyncEnabled: boolean;
   updatedAt: string;
 };
 
@@ -25,6 +26,7 @@ export async function getEmailSyncSettings(): Promise<EmailSyncSettings> {
       id: DEFAULT_SETTINGS_ID,
       syncCron: DEFAULT_SYNC_CRON,
       schedulerEnabled: true,
+      harvestAfterSyncEnabled: false,
       backfillCutoffDate: null,
       updatedAt: now,
     };
@@ -32,6 +34,7 @@ export async function getEmailSyncSettings(): Promise<EmailSyncSettings> {
     return {
       syncCron: defaults.syncCron,
       schedulerEnabled: defaults.schedulerEnabled,
+      harvestAfterSyncEnabled: defaults.harvestAfterSyncEnabled,
       updatedAt: defaults.updatedAt,
     };
   }
@@ -39,18 +42,26 @@ export async function getEmailSyncSettings(): Promise<EmailSyncSettings> {
   return {
     syncCron: row.syncCron,
     schedulerEnabled: row.schedulerEnabled,
+    harvestAfterSyncEnabled: row.harvestAfterSyncEnabled,
     updatedAt: row.updatedAt,
   };
 }
 
 export async function updateEmailSyncSettings(
-  input: Partial<Pick<EmailSyncSettings, "syncCron" | "schedulerEnabled">>,
+  input: Partial<
+    Pick<
+      EmailSyncSettings,
+      "syncCron" | "schedulerEnabled" | "harvestAfterSyncEnabled"
+    >
+  >,
 ): Promise<EmailSyncSettings> {
   const current = await getEmailSyncSettings();
   const db = getDb();
   const updated = {
     syncCron: input.syncCron ?? current.syncCron,
     schedulerEnabled: input.schedulerEnabled ?? current.schedulerEnabled,
+    harvestAfterSyncEnabled:
+      input.harvestAfterSyncEnabled ?? current.harvestAfterSyncEnabled,
     updatedAt: new Date().toISOString(),
   };
 

@@ -11,7 +11,7 @@ export type CalendarDay = {
   isToday: boolean;
 };
 
-const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
 function parseYmd(key: string): { y: number; m: number; d: number } {
   const [y, m, d] = key.split("-").map(Number);
@@ -29,10 +29,6 @@ function addDays(y: number, m: number, d: number, days: number) {
     m: date.getMonth() + 1,
     d: date.getDate(),
   };
-}
-
-function mondayOffset(dow: number): number {
-  return dow === 0 ? 6 : dow - 1;
 }
 
 export function getTodayKey(): string {
@@ -66,7 +62,7 @@ export function parseCalendarDisplayMode(
 export function buildMonthGrid(anchorKey: string): CalendarDay[] {
   const { y, m } = parseYmd(anchorKey);
   const firstDow = new Date(y, m - 1, 1).getDay();
-  const start = addDays(y, m, 1, -mondayOffset(firstDow));
+  const start = addDays(y, m, 1, -firstDow);
   const todayKey = getTodayKey();
   const days: CalendarDay[] = [];
 
@@ -87,7 +83,7 @@ export function buildMonthGrid(anchorKey: string): CalendarDay[] {
 export function buildWeekDays(anchorKey: string): CalendarDay[] {
   const { y, m, d } = parseYmd(anchorKey);
   const dow = new Date(y, m - 1, d).getDay();
-  const start = addDays(y, m, d, -mondayOffset(dow));
+  const start = addDays(y, m, d, -dow);
   const todayKey = getTodayKey();
   const days: CalendarDay[] = [];
 
@@ -157,7 +153,7 @@ export function calendarHref(
   if (display === "list") {
     params.set("display", "list");
   }
-  return `/calendar?${params.toString()}`;
+  return `/operations/calendar?${params.toString()}`;
 }
 
 /** Pixel height of one hour row in the week view time grid. */

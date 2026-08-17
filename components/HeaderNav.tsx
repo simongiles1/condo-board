@@ -5,98 +5,57 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { hasMinRole, type UserRole } from "@/lib/auth/roles";
+import {
+  ADMIN_NAV,
+  PRIMARY_NAV,
+  isNavLinkActive,
+  type NavLink,
+} from "@/lib/nav/structure";
 
-const links = [
-  { href: "/", label: "Dashboard", minRole: "user" as UserRole },
-  { href: "/meetings", label: "Meetings", minRole: "user" as UserRole },
-  { href: "/todos", label: "Todos", minRole: "user" as UserRole },
-  { href: "/calendar", label: "Calendar", minRole: "user" as UserRole },
-  { href: "/emails", label: "Emails", minRole: "user" as UserRole },
-  { href: "/files", label: "Files", minRole: "user" as UserRole },
-  { href: "/building", label: "Building", minRole: "user" as UserRole },
-  { href: "/insights", label: "Insights", minRole: "user" as UserRole },
-  { href: "/skill", label: "Concepts", minRole: "admin" as UserRole },
-  { href: "/analysis", label: "Analysis", minRole: "admin" as UserRole },
-  { href: "/notes", label: "Notes", minRole: "admin" as UserRole },
-  { href: "/users", label: "Users", minRole: "super_admin" as UserRole },
-] as const;
-
-function isActive(pathname: string, href: string) {
-  if (href === "/meetings") {
-    return pathname === "/meetings" || pathname.startsWith("/meetings/");
-  }
-  if (href === "/todos") {
-    return pathname === "/todos" || pathname.startsWith("/todos/");
-  }
-  if (href === "/calendar") {
-    return pathname === "/calendar" || pathname.startsWith("/calendar/");
-  }
-  if (href === "/emails") {
-    return pathname === "/emails" || pathname.startsWith("/emails/");
-  }
-  if (href === "/files") {
-    return pathname === "/files" || pathname.startsWith("/files/");
-  }
-  if (href === "/building") {
-    return pathname === "/building" || pathname.startsWith("/building/");
-  }
-  if (href === "/insights") {
-    return pathname === "/insights" || pathname.startsWith("/insights/");
-  }
-  if (href === "/skill") {
-    return pathname === "/skill" || pathname.startsWith("/skill/");
-  }
-  if (href === "/analysis") {
-    return pathname === "/analysis" || pathname.startsWith("/analysis/");
-  }
-  if (href === "/notes") {
-    return pathname === "/notes" || pathname.startsWith("/notes/");
-  }
-  if (href === "/users") {
-    return pathname === "/users" || pathname.startsWith("/users/");
-  }
-  return pathname === href;
-}
-
-function NavLink({
-  href,
-  label,
+function NavLinkItem({
+  link,
   active,
   onNavigate,
   mobile = false,
+  muted = false,
 }: {
-  href: string;
-  label: string;
+  link: NavLink;
   active: boolean;
   onNavigate?: () => void;
   mobile?: boolean;
+  muted?: boolean;
 }) {
+  const baseMobile = muted
+    ? "block rounded-md px-3 py-2 text-amber-900/80 hover:bg-amber-50"
+    : "block rounded-md px-3 py-2 text-slate-700 hover:bg-slate-50 hover:text-teal-700";
+  const activeMobile = muted
+    ? "block rounded-md bg-amber-100 px-3 py-2 font-bold text-amber-950"
+    : "block rounded-md bg-slate-100 px-3 py-2 font-bold text-slate-900";
+  const baseDesktop = muted
+    ? "text-amber-800/80 hover:text-amber-950"
+    : "text-slate-700 hover:text-teal-700";
+  const activeDesktop = muted
+    ? "cursor-default font-bold text-amber-950"
+    : "cursor-default font-bold text-slate-900";
+
   if (active) {
     return (
       <span
         aria-current="page"
-        className={
-          mobile
-            ? "block rounded-md bg-slate-100 px-3 py-2 font-bold text-slate-900"
-            : "cursor-default font-bold text-slate-900"
-        }
+        className={mobile ? activeMobile : activeDesktop}
       >
-        {label}
+        {link.label}
       </span>
     );
   }
 
   return (
     <Link
-      href={href}
+      href={link.href}
       onClick={onNavigate}
-      className={
-        mobile
-          ? "block rounded-md px-3 py-2 text-slate-700 hover:bg-slate-50 hover:text-teal-700"
-          : "text-slate-700 hover:text-teal-700"
-      }
+      className={mobile ? baseMobile : baseDesktop}
     >
-      {label}
+      {link.label}
     </Link>
   );
 }
@@ -104,7 +63,11 @@ function NavLink({
 export function HeaderNav({ role }: { role: UserRole | null }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
-  const visibleLinks = links.filter(
+
+  const primaryLinks = PRIMARY_NAV.filter(
+    (link) => role && hasMinRole(role, link.minRole),
+  );
+  const adminLinks = ADMIN_NAV.filter(
     (link) => role && hasMinRole(role, link.minRole),
   );
 
@@ -131,15 +94,30 @@ export function HeaderNav({ role }: { role: UserRole | null }) {
 
   return (
     <>
-      <nav className="hidden gap-4 text-sm font-medium md:flex">
-        {visibleLinks.map(({ href, label }) => (
-          <NavLink
-            key={href}
-            href={href}
-            label={label}
-            active={isActive(pathname, href)}
+      <nav className="hidden items-center gap-4 text-sm font-medium md:flex">
+        {primaryLinks.map((link) => (
+          <NavLinkItem
+            key={link.href}
+            link={link}
+            active={isNavLinkActive(pathname, link)}
           />
         ))}
+        {adminLinks.length > 0 ? (
+          <>
+            <span
+              aria-hidden
+              className="mx-1 h-4 w-px shrink-0 bg-slate-200"
+            />
+            {adminLinks.map((link) => (
+              <NavLinkItem
+                key={link.href}
+                link={link}
+                active={isNavLinkActive(pathname, link)}
+                muted
+              />
+            ))}
+          </>
+        ) : null}
       </nav>
 
       <div className="relative md:hidden">
@@ -183,16 +161,32 @@ export function HeaderNav({ role }: { role: UserRole | null }) {
               id="mobile-nav-menu"
               className="absolute right-0 top-full z-50 mt-2 max-h-[min(70vh,24rem)] w-56 overflow-y-auto rounded-lg border border-slate-200 bg-white py-2 text-sm font-medium shadow-lg"
             >
-              {visibleLinks.map(({ href, label }) => (
-                <NavLink
-                  key={href}
-                  href={href}
-                  label={label}
-                  active={isActive(pathname, href)}
+              {primaryLinks.map((link) => (
+                <NavLinkItem
+                  key={link.href}
+                  link={link}
+                  active={isNavLinkActive(pathname, link)}
                   onNavigate={closeMenu}
                   mobile
                 />
               ))}
+              {adminLinks.length > 0 ? (
+                <>
+                  <div className="my-2 border-t border-slate-100 px-3 pt-2 text-[10px] font-semibold uppercase tracking-wide text-amber-800/70">
+                    Admin
+                  </div>
+                  {adminLinks.map((link) => (
+                    <NavLinkItem
+                      key={link.href}
+                      link={link}
+                      active={isNavLinkActive(pathname, link)}
+                      onNavigate={closeMenu}
+                      mobile
+                      muted
+                    />
+                  ))}
+                </>
+              ) : null}
             </nav>
           </>
         ) : null}

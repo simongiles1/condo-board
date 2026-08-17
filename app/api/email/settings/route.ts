@@ -34,6 +34,7 @@ export async function PATCH(req: Request) {
   let body: {
     syncCron?: string;
     schedulerEnabled?: boolean;
+    harvestAfterSyncEnabled?: boolean;
   };
 
   try {
@@ -58,6 +59,10 @@ export async function PATCH(req: Request) {
       schedulerEnabled:
         typeof body.schedulerEnabled === "boolean"
           ? body.schedulerEnabled
+          : undefined,
+      harvestAfterSyncEnabled:
+        typeof body.harvestAfterSyncEnabled === "boolean"
+          ? body.harvestAfterSyncEnabled
           : undefined,
     });
 

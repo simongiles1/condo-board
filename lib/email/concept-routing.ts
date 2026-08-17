@@ -132,7 +132,7 @@ export function getRoutableConceptDestinations(): RoutableConceptDestination[] {
     title: "Skill only",
     description:
       "Facts are stored for audit and future extraction prompts. They are not promoted elsewhere.",
-    appPages: [{ href: "/skill", label: "Concepts" }],
+    appPages: [{ href: "/admin/concepts", label: "Concepts" }],
     previewSupported: true,
     executionSupported: true,
   };

@@ -23,7 +23,7 @@ export async function GET(req: Request) {
     oauthError,
   });
 
-  const settingsUrl = new URL("/settings", getAppBaseUrl());
+  const settingsUrl = new URL("/admin/system/settings", getAppBaseUrl());
 
   if (oauthError) {
     settingsUrl.searchParams.set("error", oauthError);

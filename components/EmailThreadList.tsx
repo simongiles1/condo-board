@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 import { DateTimeDisplay } from "@/components/DateTimeDisplay";
+import { ContactExtractCostBadge } from "@/components/ContactExtractCostBadge";
 import { EmailAttachmentsBadge } from "@/components/EmailAttachmentsBadge";
 import {
   ExtractionSidePanel,
@@ -14,7 +16,56 @@ import {
   ProcessorInitials,
   ProcessorInitialsGroup,
 } from "@/components/ExtractionPanelContent";
+import { EventExtractCostBadge } from "@/components/EventExtractCostBadge";
+import { TodoExtractCostBadge } from "@/components/TodoExtractCostBadge";
+import { OrgExtractCostBadge } from "@/components/OrgExtractCostBadge";
 import { ProcessedCostBadge } from "@/components/ProcessedCostBadge";
+import {
+  ThreadHarvestSidePanel,
+  type ThreadHarvestPanelTarget,
+} from "@/components/ThreadHarvestSidePanel";
+import {
+  CONTACT_HIGHLIGHT_MODELS,
+  formatContactHighlightModelOptionLabel,
+  getContactHighlightModelMeta,
+  type ContactHighlightModelId,
+  type ContactHighlightPass,
+} from "@/lib/email-analysis/contact-highlight-models";
+import {
+  contactExtractSummaryFromApiRuns,
+  type ContactExtractSummary,
+} from "@/lib/email-analysis/contact-highlight-run-display";
+import {
+  eventExtractSummaryFromApiRuns,
+  type EventExtractSummary,
+} from "@/lib/email-analysis/event-highlight-run-display";
+import {
+  TODO_HIGHLIGHT_MODELS,
+  formatTodoHighlightModelOptionLabel,
+  getTodoHighlightModelMeta,
+  type TodoHighlightModelId,
+} from "@/lib/email-analysis/todo-highlight-models";
+import {
+  todoExtractSummaryFromApiRuns,
+  type TodoExtractSummary,
+} from "@/lib/email-analysis/todo-highlight-run-display";
+import {
+  EVENT_HIGHLIGHT_MODELS,
+  formatEventHighlightModelOptionLabel,
+  getEventHighlightModelMeta,
+  type EventHighlightModelId,
+} from "@/lib/email-analysis/event-highlight-models";
+import {
+  ORG_HIGHLIGHT_MODELS,
+  formatOrgHighlightModelOptionLabel,
+  getOrgHighlightModelMeta,
+  type OrgHighlightModelId,
+  type OrgHighlightPass,
+} from "@/lib/email-analysis/org-highlight-models";
+import {
+  orgExtractSummaryFromApiRuns,
+  type OrgExtractSummary,
+} from "@/lib/email-analysis/org-highlight-run-display";
 import { formatCostUsd } from "@/lib/gemini/usage";
 import type {
   EmailAttachmentSummary,
@@ -43,7 +94,7 @@ const EMPTY_QUEUE_STATE: InboxAnalysisQueueState = {
 
 /** Fixed columns: checkbox | subject | status | attachments | date */
 const INBOX_ROW_GRID =
-  "grid grid-cols-[auto_minmax(0,1fr)_auto_2.25rem_minmax(3.5rem,auto)] items-center gap-x-2 md:grid-cols-[auto_minmax(0,1fr)_12rem_2.75rem_11rem] md:gap-x-3";
+  "grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_2.25rem_minmax(3.5rem,auto)] items-center gap-x-2 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,12rem)_2.75rem_minmax(0,11rem)] md:gap-x-3";
 
 function inboxRowClassName(highlighted: boolean) {
   return [
@@ -58,6 +109,41 @@ type BulkProgress = {
   total: number;
   completed: number;
   failed: number;
+};
+
+type ExtractKind = "contacts" | "organizations" | "events" | "todos";
+
+function isSinglePassKind(kind: ExtractKind): boolean {
+  return kind === "events" || kind === "todos";
+}
+
+type ExtractProgress = {
+  pass: ContactHighlightPass | OrgHighlightPass;
+  current: number;
+  total: number;
+  status: "preparing" | "running" | "failed";
+  error?: string;
+};
+
+type ExtractTarget = {
+  /** Row key for progress badges (thread id or message id). */
+  progressKey: string;
+  /** All row keys that should show this target’s progress (message groups). */
+  badgeKeys: string[];
+  prepareQuery: string;
+  /** Email ids used to reload persisted summary after a run. */
+  emailIds: string[];
+};
+
+type PreparedExtractItem = {
+  emailId: string;
+  highlightedText: string;
+  subject: string;
+  fromAddress: string;
+  toAddresses: string[];
+  ccAddresses: string[];
+  bodyText: string;
+  label: string;
 };
 
 type ThreadQueueStatus = {
@@ -99,7 +185,7 @@ type Pagination = {
 
 function pageHref(page: number, filters?: EmailThreadFilters) {
   if (!filters) {
-    return page <= 1 ? "/emails" : `/emails?page=${page}`;
+    return page <= 1 ? "/knowledge/emails" : `/knowledge/emails?page=${page}`;
   }
   return emailThreadsPageHref(filters, page);
 }
@@ -183,30 +269,181 @@ function FailedBadge({
   );
 }
 
+function ExtractProgressBadge({
+  progress,
+  kind,
+}: {
+  progress: ExtractProgress;
+  kind: ExtractKind;
+}) {
+  const isOrg = kind === "organizations";
+  const isEvents = kind === "events";
+  const isTodos = kind === "todos";
+  const tone = isOrg
+    ? {
+        wrap: "bg-fuchsia-50 text-fuchsia-900 ring-fuchsia-200",
+        pulse: "bg-fuchsia-500",
+        fail: "bg-red-50 text-red-800 ring-red-200",
+      }
+    : isEvents
+      ? {
+          wrap: "bg-sky-50 text-sky-900 ring-sky-200",
+          pulse: "bg-sky-500",
+          fail: "bg-red-50 text-red-800 ring-red-200",
+        }
+      : isTodos
+        ? {
+            wrap: "bg-lime-50 text-lime-900 ring-lime-200",
+            pulse: "bg-lime-500",
+            fail: "bg-red-50 text-red-800 ring-red-200",
+          }
+        : {
+            wrap: "bg-violet-50 text-violet-900 ring-violet-200",
+            pulse: "bg-violet-500",
+            fail: "bg-red-50 text-red-800 ring-red-200",
+          };
+  const noun = isOrg
+    ? "organization"
+    : isEvents
+      ? "event"
+      : isTodos
+        ? "to-do"
+        : "contact";
+
+  if (progress.status === "preparing") {
+    return (
+      <span
+        title={`Preparing emails for ${noun} extraction`}
+        className={`inline-flex max-w-full items-center gap-1 truncate rounded-full px-2 py-0.5 text-xs font-medium tabular-nums ring-1 ${tone.wrap}`}
+      >
+        <span
+          className={`size-1.5 shrink-0 animate-pulse rounded-full ${tone.pulse}`}
+          aria-hidden
+        />
+        Preparing…
+      </span>
+    );
+  }
+
+  const phaseLabel = isEvents
+    ? "Extracting events"
+    : isTodos
+      ? "Extracting to-dos"
+      : progress.pass === 4
+      ? "Phase 4 · merging"
+      : progress.pass === 3
+        ? "Phase 3 · fingerprints"
+        : progress.pass === 2
+          ? "Phase 2 · second pass"
+          : "Phase 1 · extracting";
+  const countLabel =
+    progress.pass === 4 || progress.total <= 0
+      ? null
+      : `${progress.current} of ${progress.total}`;
+  const title =
+    progress.status === "failed"
+      ? progress.error ??
+        `${isOrg ? "Organization" : isEvents ? "Event" : isTodos ? "To-do" : "Contact"} extraction failed on phase ${progress.pass}`
+      : countLabel
+        ? `${phaseLabel}: ${countLabel}`
+        : phaseLabel;
+
+  return (
+    <span
+      title={title}
+      className={[
+        "inline-flex max-w-full items-center gap-1 truncate rounded-full px-2 py-0.5 text-xs font-medium tabular-nums ring-1",
+        progress.status === "failed" ? tone.fail : tone.wrap,
+      ].join(" ")}
+    >
+      {progress.status === "running" ? (
+        <span
+          className={`size-1.5 shrink-0 animate-pulse rounded-full ${tone.pulse}`}
+          aria-hidden
+        />
+      ) : null}
+      <span className="truncate">
+        <span className="hidden md:inline">{phaseLabel}</span>
+        <span className="md:hidden">P{progress.pass}</span>
+        {countLabel ? (
+          <>
+            {" "}
+            <span className="hidden md:inline">{countLabel}</span>
+            <span className="md:hidden">
+              {progress.current}/{progress.total}
+            </span>
+          </>
+        ) : null}
+      </span>
+    </span>
+  );
+}
+
 function InboxAnalysisStatusBar({
   bulkRunning,
   bulkProgress,
+  bulkExtractKind,
   queueState,
 }: {
   bulkRunning: boolean;
   bulkProgress: BulkProgress | null;
+  bulkExtractKind: ExtractKind | null;
   queueState: InboxAnalysisQueueState;
 }) {
   const processingCount = queueState.processingEmailIds.length;
   const pendingCount = queueState.pendingEmailIds.length;
   const failedCount = queueState.failedEmails.length;
   const queuedCount = processingCount + pendingCount;
+  const bulkExtractRunning = bulkExtractKind != null;
 
-  if (!bulkRunning && queuedCount === 0 && failedCount === 0) {
+  if (
+    !bulkRunning &&
+    !bulkExtractRunning &&
+    queuedCount === 0 &&
+    failedCount === 0
+  ) {
     return null;
   }
 
   let headline = "";
-  if (bulkRunning && bulkProgress) {
+  let detail =
+    "Analysis may still be running in the background if you refreshed. Badges show Processing, Waiting, or Failed per thread.";
+  let barClass =
+    "flex shrink-0 items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950";
+  let pulseClass = "mt-1.5 size-2 shrink-0 animate-pulse rounded-full bg-amber-500";
+  let detailClass = "text-xs text-amber-800/90";
+
+  if (bulkExtractKind === "organizations") {
+    headline = "Running organization extraction on selected threads";
+    detail =
+      "All 4 passes run in series per thread. Row badges show the current phase and email index.";
+    barClass =
+      "flex shrink-0 items-start gap-3 rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-4 py-3 text-sm text-fuchsia-950";
+    pulseClass = "mt-1.5 size-2 shrink-0 animate-pulse rounded-full bg-fuchsia-500";
+    detailClass = "text-xs text-fuchsia-800/90";
+  } else if (bulkExtractKind === "events") {
+    headline = "Running event harvest on selected threads";
+    detail =
+      "One calendar-focused pass per email, then calendar persist. Row badges show the current email index.";
+    barClass =
+      "flex shrink-0 items-start gap-3 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950";
+    pulseClass = "mt-1.5 size-2 shrink-0 animate-pulse rounded-full bg-sky-500";
+    detailClass = "text-xs text-sky-800/90";
+  } else if (bulkExtractKind === "contacts") {
+    headline = "Running contact extraction on selected threads";
+    detail =
+      "All 4 passes run in series per thread. Row badges show the current phase and email index.";
+    barClass =
+      "flex shrink-0 items-start gap-3 rounded-lg border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-950";
+    pulseClass = "mt-1.5 size-2 shrink-0 animate-pulse rounded-full bg-violet-500";
+    detailClass = "text-xs text-violet-800/90";
+  } else if (bulkRunning && bulkProgress) {
     headline = `Analyzing ${bulkProgress.completed} of ${bulkProgress.total} emails`;
     if (bulkProgress.failed > 0) {
       headline += ` · ${bulkProgress.failed} failed`;
     }
+    detail =
+      "Large threads with many attachments can take several minutes per email. This page updates automatically.";
   } else if (processingCount > 0) {
     headline = `Processing ${processingCount} email${processingCount === 1 ? "" : "s"}`;
     if (pendingCount > 0) {
@@ -219,24 +456,13 @@ function InboxAnalysisStatusBar({
   }
 
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="flex shrink-0 items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950"
-    >
-      {bulkRunning || processingCount > 0 ? (
-        <span
-          className="mt-1.5 size-2 shrink-0 animate-pulse rounded-full bg-amber-500"
-          aria-hidden
-        />
+    <div role="status" aria-live="polite" className={barClass}>
+      {bulkRunning || bulkExtractRunning || processingCount > 0 ? (
+        <span className={pulseClass} aria-hidden />
       ) : null}
       <div className="min-w-0 space-y-0.5">
         <p className="font-medium">{headline}</p>
-        <p className="text-xs text-amber-800/90">
-          {bulkRunning
-            ? "Large threads with many attachments can take several minutes per email. This page updates automatically."
-            : "Analysis may still be running in the background if you refreshed. Badges show Processing, Waiting, or Failed per thread."}
-        </p>
+        <p className={detailClass}>{detail}</p>
       </div>
     </div>
   );
@@ -432,6 +658,97 @@ function ThreadStatusBadge({
   );
 }
 
+function ThreadExtractMetaRow({
+  contactProgress,
+  orgProgress,
+  eventProgress,
+  todoProgress,
+  contactSummary,
+  orgSummary,
+  eventSummary,
+  todoSummary,
+  onOpenHarvest,
+}: {
+  contactProgress?: ExtractProgress | null;
+  orgProgress?: ExtractProgress | null;
+  eventProgress?: ExtractProgress | null;
+  todoProgress?: ExtractProgress | null;
+  contactSummary?: ContactExtractSummary | null;
+  orgSummary?: OrgExtractSummary | null;
+  eventSummary?: EventExtractSummary | null;
+  todoSummary?: TodoExtractSummary | null;
+  onOpenHarvest?: (args?: {
+    focusEmailId?: string | null;
+    focusQuote?: string | null;
+  }) => void;
+}) {
+  const showContactBadge = !contactProgress && contactSummary;
+  const showOrgBadge = !orgProgress && orgSummary;
+  const showEventBadge = !eventProgress && eventSummary;
+  const showTodoBadge = !todoProgress && todoSummary;
+
+  if (
+    !contactProgress &&
+    !orgProgress &&
+    !eventProgress &&
+    !todoProgress &&
+    !showContactBadge &&
+    !showOrgBadge &&
+    !showEventBadge &&
+    !showTodoBadge
+  ) {
+    return (
+      <p className="mt-1 text-xs uppercase tracking-wide text-slate-500">
+        Thread
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
+      <span className="shrink-0 text-xs uppercase tracking-wide text-slate-500">
+        Thread
+      </span>
+      {contactProgress ? (
+        <ExtractProgressBadge progress={contactProgress} kind="contacts" />
+      ) : null}
+      {orgProgress ? (
+        <ExtractProgressBadge progress={orgProgress} kind="organizations" />
+      ) : null}
+      {eventProgress ? (
+        <ExtractProgressBadge progress={eventProgress} kind="events" />
+      ) : null}
+      {todoProgress ? (
+        <ExtractProgressBadge progress={todoProgress} kind="todos" />
+      ) : null}
+      {showContactBadge ? (
+        <ContactExtractCostBadge
+          summary={contactSummary}
+          onOpenHarvest={onOpenHarvest}
+        />
+      ) : null}
+      {showOrgBadge ? (
+        <OrgExtractCostBadge
+          summary={orgSummary}
+          onOpenHarvest={onOpenHarvest}
+        />
+      ) : null}
+      {showEventBadge ? (
+        <EventExtractCostBadge
+          summary={eventSummary}
+          onOpenHarvest={onOpenHarvest}
+        />
+      ) : null}
+      {showTodoBadge ? (
+        <TodoExtractCostBadge
+          summary={todoSummary}
+          onOpenHarvest={onOpenHarvest}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function getLiveMessageProcessedSnapshot(
   messageId: string,
   queueState: InboxAnalysisQueueState,
@@ -578,6 +895,10 @@ export function EmailThreadList({
   threadAttachmentGroups,
   threadEmailIds,
   threadProcessingDetails,
+  contactExtractSummaries: contactExtractSummariesProp = {},
+  orgExtractSummaries: orgExtractSummariesProp = {},
+  eventExtractSummaries: eventExtractSummariesProp = {},
+  todoExtractSummaries: todoExtractSummariesProp = {},
   initialQueueState = EMPTY_QUEUE_STATE,
   pagination,
   filters,
@@ -590,16 +911,54 @@ export function EmailThreadList({
   threadAttachmentGroups?: Record<string, ThreadAttachmentGroup[]>;
   threadEmailIds?: Record<string, string[]>;
   threadProcessingDetails?: Record<string, EmailProcessingStats[]>;
+  contactExtractSummaries?: Record<string, ContactExtractSummary>;
+  orgExtractSummaries?: Record<string, OrgExtractSummary>;
+  eventExtractSummaries?: Record<string, EventExtractSummary>;
+  todoExtractSummaries?: Record<string, TodoExtractSummary>;
   initialQueueState?: InboxAnalysisQueueState;
   pagination?: Pagination;
   filters?: EmailThreadFilters;
   canManageEmailSettings?: boolean;
 }) {
   const router = useRouter();
+  const contactExtractMenuRef = useRef<HTMLDivElement>(null);
+  const orgExtractMenuRef = useRef<HTMLDivElement>(null);
+  const eventExtractMenuRef = useRef<HTMLDivElement>(null);
+  const todoExtractMenuRef = useRef<HTMLDivElement>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [contactExtractMenuOpen, setContactExtractMenuOpen] = useState(false);
+  const [orgExtractMenuOpen, setOrgExtractMenuOpen] = useState(false);
+  const [eventExtractMenuOpen, setEventExtractMenuOpen] = useState(false);
+  const [todoExtractMenuOpen, setTodoExtractMenuOpen] = useState(false);
+  const [bulkExtractKind, setBulkExtractKind] = useState<ExtractKind | null>(
+    null,
+  );
+  const [contactExtractProgressByKey, setContactExtractProgressByKey] =
+    useState<Record<string, ExtractProgress>>({});
+  const [orgExtractProgressByKey, setOrgExtractProgressByKey] = useState<
+    Record<string, ExtractProgress>
+  >({});
+  const [eventExtractProgressByKey, setEventExtractProgressByKey] = useState<
+    Record<string, ExtractProgress>
+  >({});
+  const [todoExtractProgressByKey, setTodoExtractProgressByKey] = useState<
+    Record<string, ExtractProgress>
+  >({});
+  const [contactExtractSummaries, setContactExtractSummaries] = useState(
+    contactExtractSummariesProp,
+  );
+  const [orgExtractSummaries, setOrgExtractSummaries] = useState(
+    orgExtractSummariesProp,
+  );
+  const [eventExtractSummaries, setEventExtractSummaries] = useState(
+    eventExtractSummariesProp,
+  );
+  const [todoExtractSummaries, setTodoExtractSummaries] = useState(
+    todoExtractSummariesProp,
+  );
   const [queueState, setQueueState] =
     useState<InboxAnalysisQueueState>(initialQueueState);
   const [threadReanalyzeActive, setThreadReanalyzeActive] = useState(false);
@@ -608,6 +967,8 @@ export function EmailThreadList({
     processingEntries: EmailProcessingStats[];
     threadEmailIds: string[];
   } | null>(null);
+  const [harvestPanel, setHarvestPanel] =
+    useState<ThreadHarvestPanelTarget | null>(null);
 
   const allPageEmailIds = useMemo(() => {
     if (view === "messages") {
@@ -616,14 +977,77 @@ export function EmailThreadList({
     return Object.values(threadEmailIds ?? {}).flat();
   }, [view, messages, threadEmailIds]);
 
+  useEffect(() => {
+    setContactExtractSummaries(contactExtractSummariesProp);
+  }, [contactExtractSummariesProp]);
+
+  useEffect(() => {
+    setOrgExtractSummaries(orgExtractSummariesProp);
+  }, [orgExtractSummariesProp]);
+
+  useEffect(() => {
+    setEventExtractSummaries(eventExtractSummariesProp);
+  }, [eventExtractSummariesProp]);
+
+  useEffect(() => {
+    setTodoExtractSummaries(todoExtractSummariesProp);
+  }, [todoExtractSummariesProp]);
+
   const queuedCount =
     queueState.processingEmailIds.length + queueState.pendingEmailIds.length;
   const hasQueueActivity =
     bulkRunning || threadReanalyzeActive || queuedCount > 0;
+  const busyBulk = bulkRunning || bulkExtractKind != null;
 
   useEffect(() => {
     setQueueState(initialQueueState);
   }, [initialQueueState]);
+
+  useEffect(() => {
+    if (
+      !contactExtractMenuOpen &&
+      !orgExtractMenuOpen &&
+      !eventExtractMenuOpen &&
+      !todoExtractMenuOpen
+    )
+      return;
+
+    function handlePointerDown(event: MouseEvent) {
+      const contactRoot = contactExtractMenuRef.current;
+      const orgRoot = orgExtractMenuRef.current;
+      const eventRoot = eventExtractMenuRef.current;
+      const todoRoot = todoExtractMenuRef.current;
+      if (!(event.target instanceof Node)) return;
+      if (contactRoot && !contactRoot.contains(event.target)) {
+        setContactExtractMenuOpen(false);
+      }
+      if (orgRoot && !orgRoot.contains(event.target)) {
+        setOrgExtractMenuOpen(false);
+      }
+      if (eventRoot && !eventRoot.contains(event.target)) {
+        setEventExtractMenuOpen(false);
+      }
+      if (todoRoot && !todoRoot.contains(event.target)) {
+        setTodoExtractMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setContactExtractMenuOpen(false);
+        setOrgExtractMenuOpen(false);
+        setEventExtractMenuOpen(false);
+        setTodoExtractMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [contactExtractMenuOpen, orgExtractMenuOpen, eventExtractMenuOpen, todoExtractMenuOpen]);
 
   useEffect(() => {
     if (!hasQueueActivity || allPageEmailIds.length === 0) {
@@ -808,6 +1232,396 @@ export function EmailThreadList({
     }
   }
 
+  function resolveExtractTargets(): ExtractTarget[] {
+    if (view === "threads") {
+      return [...selectedIds].map((threadId) => {
+        const emailIds = threadEmailIds?.[threadId] ?? [];
+        return {
+          progressKey: threadId,
+          badgeKeys: [threadId],
+          prepareQuery: `threadId=${encodeURIComponent(threadId)}`,
+          emailIds,
+        };
+      });
+    }
+
+    const messagesById = new Map(
+      (messages ?? []).map((message) => [message.id, message]),
+    );
+    const groups = new Map<string, string[]>();
+
+    for (const messageId of selectedIds) {
+      const message = messagesById.get(messageId);
+      const groupKey = message?.threadId ?? messageId;
+      const list = groups.get(groupKey) ?? [];
+      list.push(messageId);
+      groups.set(groupKey, list);
+    }
+
+    return [...groups.entries()].map(([groupKey, emailIds]) => ({
+      progressKey: groupKey,
+      badgeKeys: emailIds,
+      prepareQuery: `emailIds=${encodeURIComponent(emailIds.join(","))}`,
+      emailIds,
+    }));
+  }
+
+  function setExtractProgressForTarget(
+    kind: ExtractKind,
+    target: ExtractTarget,
+    progress: ExtractProgress | null,
+  ) {
+    const setProgress =
+      kind === "organizations"
+        ? setOrgExtractProgressByKey
+        : kind === "events"
+          ? setEventExtractProgressByKey
+          : kind === "todos"
+            ? setTodoExtractProgressByKey
+            : setContactExtractProgressByKey;
+    // Force a paint before the next long API await so phase badges are visible.
+    flushSync(() => {
+      setProgress((prev) => {
+        const next = { ...prev };
+        for (const key of target.badgeKeys) {
+          if (progress) {
+            next[key] = progress;
+          } else {
+            delete next[key];
+          }
+        }
+        return next;
+      });
+    });
+  }
+
+  async function prepareExtractItems(
+    kind: ExtractKind,
+    target: ExtractTarget,
+  ): Promise<PreparedExtractItem[]> {
+    const base =
+      kind === "organizations"
+        ? "/api/analysis/extract-organizations/prepare"
+        : kind === "events"
+          ? "/api/analysis/extract-events/prepare"
+          : kind === "todos"
+            ? "/api/analysis/extract-todos/prepare"
+            : "/api/analysis/extract-contacts/prepare";
+    const response = await fetch(`${base}?${target.prepareQuery}`);
+    const data = (await response.json()) as {
+      items?: PreparedExtractItem[];
+      error?: string;
+    };
+    if (!response.ok) {
+      throw new Error(data.error ?? "Could not prepare emails for extraction.");
+    }
+    return data.items ?? [];
+  }
+
+  async function runExtractPass(params: {
+    kind: ExtractKind;
+    items: PreparedExtractItem[];
+    model: string;
+    pass: ContactHighlightPass | OrgHighlightPass;
+  }) {
+    const endpoint =
+      params.kind === "organizations"
+        ? "/api/analysis/extract-organizations"
+        : params.kind === "events"
+          ? "/api/analysis/extract-events"
+          : params.kind === "todos"
+            ? "/api/analysis/extract-todos"
+            : "/api/analysis/extract-contacts";
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: params.items,
+        model: params.model,
+        pass: params.pass,
+      }),
+    });
+    const data = (await response.json()) as { error?: string };
+    if (!response.ok) {
+      const label =
+        params.kind === "organizations"
+          ? "Organization"
+          : params.kind === "events"
+            ? "Event"
+            : params.kind === "todos"
+              ? "To-do"
+              : "Contact";
+      throw new Error(
+        data.error ?? `${label} extraction pass ${params.pass} failed.`,
+      );
+    }
+  }
+
+  async function runExtractionForTarget(
+    kind: ExtractKind,
+    target: ExtractTarget,
+    modelId: string,
+  ) {
+    setExtractProgressForTarget(kind, target, {
+      pass: 1,
+      current: 0,
+      total: 0,
+      status: "preparing",
+    });
+
+    const items = await prepareExtractItems(kind, target);
+    if (items.length === 0) {
+      throw new Error("No emails found for extraction.");
+    }
+
+    const summaryEmailIds =
+      target.emailIds.length > 0
+        ? target.emailIds
+        : items.map((item) => item.emailId);
+
+    const passes = isSinglePassKind(kind) ? ([1] as const) : ([1, 2, 3] as const);
+
+    for (const pass of passes) {
+      for (let index = 0; index < items.length; index += 1) {
+        setExtractProgressForTarget(kind, target, {
+          pass,
+          current: index + 1,
+          total: items.length,
+          status: "running",
+        });
+        await runExtractPass({
+          kind,
+          items: [items[index]!],
+          model: modelId,
+          pass,
+        });
+      }
+    }
+
+    if (!isSinglePassKind(kind)) {
+      setExtractProgressForTarget(kind, target, {
+        pass: 4,
+        current: 1,
+        total: 1,
+        status: "running",
+      });
+      await runExtractPass({
+        kind,
+        items,
+        model: modelId,
+        pass: 4,
+      });
+    }
+
+    const summaryEndpoint =
+      kind === "organizations"
+        ? "/api/analysis/extract-organizations"
+        : kind === "events"
+          ? "/api/analysis/extract-events"
+          : kind === "todos"
+            ? "/api/analysis/extract-todos"
+            : "/api/analysis/extract-contacts";
+    const summaryResponse = await fetch(
+      `${summaryEndpoint}?emailIds=${encodeURIComponent(summaryEmailIds.join(","))}`,
+    );
+    const summaryData = (await summaryResponse.json()) as {
+      runs?: Record<string, unknown>;
+      error?: string;
+    };
+    if (summaryResponse.ok && summaryData.runs) {
+      if (kind === "organizations") {
+        const summary = orgExtractSummaryFromApiRuns(
+          summaryData.runs as Parameters<typeof orgExtractSummaryFromApiRuns>[0],
+        );
+        if (summary) {
+          flushSync(() => {
+            setOrgExtractSummaries((prev) => {
+              const next = { ...prev };
+              for (const key of target.badgeKeys) {
+                next[key] = summary;
+              }
+              next[target.progressKey] = summary;
+              return next;
+            });
+          });
+        }
+      } else if (kind === "events") {
+        const summary = eventExtractSummaryFromApiRuns(
+          summaryData.runs as Parameters<
+            typeof eventExtractSummaryFromApiRuns
+          >[0],
+        );
+        if (summary) {
+          flushSync(() => {
+            setEventExtractSummaries((prev) => {
+              const next = { ...prev };
+              for (const key of target.badgeKeys) {
+                next[key] = summary;
+              }
+              next[target.progressKey] = summary;
+              return next;
+            });
+          });
+        }
+      } else if (kind === "todos") {
+        const summary = todoExtractSummaryFromApiRuns(
+          summaryData.runs as Parameters<
+            typeof todoExtractSummaryFromApiRuns
+          >[0],
+        );
+        if (summary) {
+          flushSync(() => {
+            setTodoExtractSummaries((prev) => {
+              const next = { ...prev };
+              for (const key of target.badgeKeys) {
+                next[key] = summary;
+              }
+              next[target.progressKey] = summary;
+              return next;
+            });
+          });
+        }
+      } else {
+        const summary = contactExtractSummaryFromApiRuns(
+          summaryData.runs as Parameters<
+            typeof contactExtractSummaryFromApiRuns
+          >[0],
+        );
+        if (summary) {
+          flushSync(() => {
+            setContactExtractSummaries((prev) => {
+              const next = { ...prev };
+              for (const key of target.badgeKeys) {
+                next[key] = summary;
+              }
+              next[target.progressKey] = summary;
+              return next;
+            });
+          });
+        }
+      }
+    }
+
+    setExtractProgressForTarget(kind, target, null);
+  }
+
+  async function runExtractionSelected(
+    kind: ExtractKind,
+    modelId:
+      | ContactHighlightModelId
+      | OrgHighlightModelId
+      | EventHighlightModelId
+      | TodoHighlightModelId,
+  ) {
+    if (kind === "contacts") {
+      setContactExtractMenuOpen(false);
+    } else if (kind === "organizations") {
+      setOrgExtractMenuOpen(false);
+    } else if (kind === "todos") {
+      setTodoExtractMenuOpen(false);
+    } else {
+      setEventExtractMenuOpen(false);
+    }
+
+    const targets = resolveExtractTargets();
+    if (targets.length === 0) {
+      setBulkError("No threads or emails selected for extraction.");
+      return;
+    }
+
+    const emailCount = resolveEmailIdsForSelection().length;
+    const modelLabel =
+      kind === "organizations"
+        ? getOrgHighlightModelMeta(modelId as OrgHighlightModelId).label
+        : kind === "events"
+          ? getEventHighlightModelMeta(modelId as EventHighlightModelId).label
+          : kind === "todos"
+            ? getTodoHighlightModelMeta(modelId as TodoHighlightModelId).label
+            : getContactHighlightModelMeta(modelId as ContactHighlightModelId)
+                .label;
+    const unitLabel =
+      view === "threads"
+        ? `${targets.length} thread${targets.length === 1 ? "" : "s"}`
+        : `${targets.length} group${targets.length === 1 ? "" : "s"}`;
+    const kindLabel =
+      kind === "organizations"
+        ? "organization extraction"
+        : kind === "events"
+          ? "event harvest"
+          : kind === "todos"
+            ? "to-do harvest"
+            : "contact extraction";
+    const passNote = isSinglePassKind(kind)
+      ? kind === "todos"
+        ? "This runs one to-do harvest pass per email and uses the AI API. Asks older than 120 days are archived, not added to the open list."
+        : "This runs one calendar-focused pass per email and uses the AI API."
+      : "This runs all 4 passes per thread in series and uses the AI API.";
+    const confirmed = window.confirm(
+      `Run ${kindLabel} (${modelLabel}) on ${unitLabel} (${emailCount} email${emailCount === 1 ? "" : "s"})?\n\n${passNote}`,
+    );
+    if (!confirmed) return;
+
+    setBulkExtractKind(kind);
+    setBulkError(null);
+
+    const setProgress =
+      kind === "organizations"
+        ? setOrgExtractProgressByKey
+        : kind === "events"
+          ? setEventExtractProgressByKey
+          : kind === "todos"
+            ? setTodoExtractProgressByKey
+            : setContactExtractProgressByKey;
+
+    flushSync(() => {
+      setProgress((prev) => {
+        const next = { ...prev };
+        for (const target of targets) {
+          for (const key of target.badgeKeys) {
+            delete next[key];
+          }
+        }
+        return next;
+      });
+    });
+
+    try {
+      for (const target of targets) {
+        try {
+          await runExtractionForTarget(kind, target, modelId);
+        } catch (err) {
+          const message =
+            err instanceof Error
+              ? err.message
+              : `${kind === "organizations" ? "Organization" : kind === "events" ? "Event" : kind === "todos" ? "To-do" : "Contact"} extraction failed.`;
+          flushSync(() => {
+            setProgress((prev) => {
+              const current = prev[target.badgeKeys[0] ?? target.progressKey];
+              const next = { ...prev };
+              const failed: ExtractProgress = {
+                pass: current?.pass ?? 1,
+                current: current?.current ?? 0,
+                total: current?.total ?? 0,
+                status: "failed",
+                error: message,
+              };
+              for (const key of target.badgeKeys) {
+                next[key] = failed;
+              }
+              return next;
+            });
+          });
+          setBulkError(message);
+        }
+      }
+
+      clearSelection();
+      router.refresh();
+    } finally {
+      setBulkExtractKind(null);
+    }
+  }
+
   const isEmpty =
     view === "messages" ? (messages?.length ?? 0) === 0 : (threads?.length ?? 0) === 0;
 
@@ -832,7 +1646,7 @@ export function EmailThreadList({
                       receivedBefore: undefined,
                       receivedAfter: undefined,
                     })
-                  : "/emails"
+                  : "/knowledge/emails"
               }
               className="text-teal-700 hover:underline"
             >
@@ -842,7 +1656,7 @@ export function EmailThreadList({
         ) : canManageEmailSettings ? (
           <>
             No emails ingested yet. Connect Gmail in{" "}
-            <Link href="/settings" className="text-teal-700 hover:underline">
+            <Link href="/admin/system/settings" className="text-teal-700 hover:underline">
               Settings
             </Link>{" "}
             and run a sync or backfill.
@@ -866,6 +1680,7 @@ export function EmailThreadList({
       <InboxAnalysisStatusBar
         bulkRunning={bulkRunning}
         bulkProgress={bulkProgress}
+        bulkExtractKind={bulkExtractKind}
         queueState={queueState}
       />
 
@@ -874,7 +1689,7 @@ export function EmailThreadList({
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="flex h-10 shrink-0 items-center gap-3 border-b border-slate-100 bg-slate-50 px-4">
+        <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50 px-4 py-1.5">
           <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
@@ -902,15 +1717,183 @@ export function EmailThreadList({
               </span>
               <button
                 type="button"
-                disabled={bulkRunning}
+                disabled={busyBulk}
                 onClick={() => void analyzeSelected()}
                 className="shrink-0 rounded bg-teal-700 px-2 py-0.5 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50"
               >
                 {bulkRunning ? "Analyzing…" : "Analyze selected"}
               </button>
+              <div ref={contactExtractMenuRef} className="relative shrink-0">
+                <button
+                  type="button"
+                  disabled={busyBulk}
+                  aria-expanded={contactExtractMenuOpen}
+                  aria-haspopup="menu"
+                  onClick={() => {
+                    setOrgExtractMenuOpen(false);
+                    setEventExtractMenuOpen(false);
+                    setTodoExtractMenuOpen(false);
+                    setContactExtractMenuOpen((open) => !open);
+                  }}
+                  className="rounded border border-violet-300 bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-900 hover:bg-violet-100 disabled:opacity-50"
+                >
+                  {bulkExtractKind === "contacts"
+                    ? "Extracting…"
+                    : "Extract Contacts"}
+                </button>
+                {contactExtractMenuOpen ? (
+                  <div
+                    role="menu"
+                    className="absolute left-0 z-30 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-1 shadow-lg"
+                  >
+                    <p className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                      Contact extraction model
+                    </p>
+                    {CONTACT_HIGHLIGHT_MODELS.map((modelId) => (
+                      <button
+                        key={modelId}
+                        type="button"
+                        role="menuitem"
+                        className="block w-full rounded-md px-2 py-1.5 text-left text-xs text-slate-800 hover:bg-violet-50"
+                        onClick={() =>
+                          void runExtractionSelected("contacts", modelId)
+                        }
+                      >
+                        {formatContactHighlightModelOptionLabel(modelId)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div ref={orgExtractMenuRef} className="relative shrink-0">
+                <button
+                  type="button"
+                  disabled={busyBulk}
+                  aria-expanded={orgExtractMenuOpen}
+                  aria-haspopup="menu"
+                  onClick={() => {
+                    setContactExtractMenuOpen(false);
+                    setEventExtractMenuOpen(false);
+                    setTodoExtractMenuOpen(false);
+                    setOrgExtractMenuOpen((open) => !open);
+                  }}
+                  className="rounded border border-fuchsia-300 bg-fuchsia-50 px-2 py-0.5 text-xs font-medium text-fuchsia-900 hover:bg-fuchsia-100 disabled:opacity-50"
+                >
+                  {bulkExtractKind === "organizations"
+                    ? "Extracting…"
+                    : "Extract Organizations"}
+                </button>
+                {orgExtractMenuOpen ? (
+                  <div
+                    role="menu"
+                    className="absolute left-0 z-30 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-1 shadow-lg"
+                  >
+                    <p className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                      Organization extraction model
+                    </p>
+                    {ORG_HIGHLIGHT_MODELS.map((modelId) => (
+                      <button
+                        key={modelId}
+                        type="button"
+                        role="menuitem"
+                        className="block w-full rounded-md px-2 py-1.5 text-left text-xs text-slate-800 hover:bg-fuchsia-50"
+                        onClick={() =>
+                          void runExtractionSelected("organizations", modelId)
+                        }
+                      >
+                        {formatOrgHighlightModelOptionLabel(modelId)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div ref={eventExtractMenuRef} className="relative shrink-0">
+                <button
+                  type="button"
+                  disabled={busyBulk}
+                  aria-expanded={eventExtractMenuOpen}
+                  aria-haspopup="menu"
+                  onClick={() => {
+                    setContactExtractMenuOpen(false);
+                    setOrgExtractMenuOpen(false);
+                    setTodoExtractMenuOpen(false);
+                    setEventExtractMenuOpen((open) => !open);
+                  }}
+                  className="rounded border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-900 hover:bg-sky-100 disabled:opacity-50"
+                >
+                  {bulkExtractKind === "events"
+                    ? "Extracting…"
+                    : "Extract Events"}
+                </button>
+                {eventExtractMenuOpen ? (
+                  <div
+                    role="menu"
+                    className="absolute left-0 z-30 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-1 shadow-lg"
+                  >
+                    <p className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                      Event harvest model
+                    </p>
+                    {EVENT_HIGHLIGHT_MODELS.map((modelId) => (
+                      <button
+                        key={modelId}
+                        type="button"
+                        role="menuitem"
+                        className="block w-full rounded-md px-2 py-1.5 text-left text-xs text-slate-800 hover:bg-sky-50"
+                        onClick={() =>
+                          void runExtractionSelected("events", modelId)
+                        }
+                      >
+                        {formatEventHighlightModelOptionLabel(modelId)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div ref={todoExtractMenuRef} className="relative shrink-0">
+                <button
+                  type="button"
+                  disabled={busyBulk}
+                  aria-expanded={todoExtractMenuOpen}
+                  aria-haspopup="menu"
+                  onClick={() => {
+                    setContactExtractMenuOpen(false);
+                    setOrgExtractMenuOpen(false);
+                    setEventExtractMenuOpen(false);
+                    setTodoExtractMenuOpen((open) => !open);
+                  }}
+                  className="rounded border border-lime-300 bg-lime-50 px-2 py-0.5 text-xs font-medium text-lime-900 hover:bg-lime-100 disabled:opacity-50"
+                >
+                  {bulkExtractKind === "todos"
+                    ? "Extracting…"
+                    : "Extract To-dos"}
+                </button>
+                {todoExtractMenuOpen ? (
+                  <div
+                    role="menu"
+                    className="absolute left-0 z-30 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-1 shadow-lg"
+                  >
+                    <p className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                      To-do harvest model
+                    </p>
+                    {TODO_HIGHLIGHT_MODELS.map((modelId) => (
+                      <button
+                        key={modelId}
+                        type="button"
+                        role="menuitem"
+                        className="block w-full rounded-md px-2 py-1.5 text-left text-xs text-slate-800 hover:bg-lime-50"
+                        onClick={() =>
+                          void runExtractionSelected("todos", modelId)
+                        }
+                      >
+                        {formatTodoHighlightModelOptionLabel(modelId)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <button
                 type="button"
-                disabled={bulkRunning}
+                disabled={busyBulk}
                 onClick={clearSelection}
                 className="shrink-0 rounded border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-white disabled:opacity-50"
               >
@@ -922,7 +1905,7 @@ export function EmailThreadList({
           )}
         </div>
 
-        <ul className="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto">
+        <ul className="min-h-0 flex-1 divide-y divide-slate-100 overflow-x-hidden overflow-y-auto">
           {view === "messages"
             ? messages?.map((message) => {
                 const liveProcessed = getLiveMessageProcessedSnapshot(
@@ -966,16 +1949,101 @@ export function EmailThreadList({
                       aria-label={`Select ${message.subject}`}
                     />
                   </label>
-                  <Link
-                    href={messageHref(message.id, filters)}
-                    className="block min-w-0 py-4"
-                  >
-                    <p className="font-medium text-slate-900">{message.subject}</p>
-                    <p className="mt-1 truncate text-sm text-slate-600">
-                      {message.fromAddress}
-                    </p>
-                  </Link>
-                  <div className="flex items-center py-4">
+                  <div className="block min-w-0 py-4">
+                    <Link
+                      href={messageHref(message.id, filters)}
+                      className="block min-w-0"
+                    >
+                      <p className="truncate font-medium text-slate-900">
+                        {message.subject}
+                      </p>
+                      <p className="mt-1 truncate text-sm text-slate-600">
+                        {message.fromAddress}
+                      </p>
+                    </Link>
+                    {(contactExtractProgressByKey[message.id] ||
+                      orgExtractProgressByKey[message.id] ||
+                      eventExtractProgressByKey[message.id] ||
+                      todoExtractProgressByKey[message.id] ||
+                      contactExtractSummaries[message.id] ||
+                      orgExtractSummaries[message.id] ||
+                      eventExtractSummaries[message.id] ||
+                      todoExtractSummaries[message.id]) && (
+                      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
+                        {contactExtractProgressByKey[message.id] ? (
+                          <ExtractProgressBadge
+                            progress={contactExtractProgressByKey[message.id]!}
+                            kind="contacts"
+                          />
+                        ) : contactExtractSummaries[message.id] ? (
+                          <ContactExtractCostBadge
+                            summary={contactExtractSummaries[message.id]!}
+                            onOpenHarvest={() =>
+                              setHarvestPanel({
+                                threadId: message.threadId,
+                                emailIds: [message.id],
+                                focusEmailId: message.id,
+                              })
+                            }
+                          />
+                        ) : null}
+                        {orgExtractProgressByKey[message.id] ? (
+                          <ExtractProgressBadge
+                            progress={orgExtractProgressByKey[message.id]!}
+                            kind="organizations"
+                          />
+                        ) : orgExtractSummaries[message.id] ? (
+                          <OrgExtractCostBadge
+                            summary={orgExtractSummaries[message.id]!}
+                            onOpenHarvest={() =>
+                              setHarvestPanel({
+                                threadId: message.threadId,
+                                emailIds: [message.id],
+                                focusEmailId: message.id,
+                              })
+                            }
+                          />
+                        ) : null}
+                        {eventExtractProgressByKey[message.id] ? (
+                          <ExtractProgressBadge
+                            progress={eventExtractProgressByKey[message.id]!}
+                            kind="events"
+                          />
+                        ) : eventExtractSummaries[message.id] ? (
+                          <EventExtractCostBadge
+                            summary={eventExtractSummaries[message.id]!}
+                            onOpenHarvest={(args) =>
+                              setHarvestPanel({
+                                threadId: message.threadId,
+                                emailIds: [message.id],
+                                focusEmailId: args?.focusEmailId ?? message.id,
+                                focusQuote: args?.focusQuote,
+                              })
+                            }
+                          />
+                        ) : null}
+                        {todoExtractProgressByKey[message.id] ? (
+                          <ExtractProgressBadge
+                            progress={todoExtractProgressByKey[message.id]!}
+                            kind="todos"
+                          />
+                        ) : todoExtractSummaries[message.id] ? (
+                          <TodoExtractCostBadge
+                            summary={todoExtractSummaries[message.id]!}
+                            onOpenHarvest={(args) =>
+                              setHarvestPanel({
+                                threadId: message.threadId,
+                                emailIds: [message.id],
+                                focusEmailId: args?.focusEmailId ?? message.id,
+                                focusQuote: args?.focusQuote,
+                              })
+                            }
+                          />
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex min-w-0 items-center overflow-hidden py-4">
                     <EmailStatusBadge
                       queueStatus={getMessageQueueStatus(message.id, queueState)}
                       processedAt={liveProcessed.processedAt}
@@ -1043,16 +2111,43 @@ export function EmailThreadList({
                         aria-label={`Select thread ${thread.subject}`}
                       />
                     </label>
-                    <Link
-                      href={emailThreadDetailHref(thread.id)}
-                      className="block min-w-0 py-4"
-                    >
-                      <p className="font-medium text-slate-900">{thread.subject}</p>
-                      <p className="mt-1 text-xs uppercase tracking-wide text-slate-500">
-                        Thread
-                      </p>
-                    </Link>
-                    <div className="flex items-center py-4">
+                    <div className="block min-w-0 py-4">
+                      <Link
+                        href={emailThreadDetailHref(thread.id)}
+                        className="block min-w-0"
+                      >
+                        <p className="truncate font-medium text-slate-900">
+                          {thread.subject}
+                        </p>
+                      </Link>
+                      <ThreadExtractMetaRow
+                        contactProgress={
+                          contactExtractProgressByKey[thread.id] ?? null
+                        }
+                        orgProgress={orgExtractProgressByKey[thread.id] ?? null}
+                        eventProgress={
+                          eventExtractProgressByKey[thread.id] ?? null
+                        }
+                        todoProgress={
+                          todoExtractProgressByKey[thread.id] ?? null
+                        }
+                        contactSummary={
+                          contactExtractSummaries[thread.id] ?? null
+                        }
+                        orgSummary={orgExtractSummaries[thread.id] ?? null}
+                        eventSummary={eventExtractSummaries[thread.id] ?? null}
+                        todoSummary={todoExtractSummaries[thread.id] ?? null}
+                        onOpenHarvest={(args) =>
+                          setHarvestPanel({
+                            threadId: thread.id,
+                            emailIds: threadEmailIds?.[thread.id] ?? [],
+                            focusEmailId: args?.focusEmailId,
+                            focusQuote: args?.focusQuote,
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="flex min-w-0 items-center overflow-hidden py-4">
                       <ThreadStatusBadge
                         messageCount={thread.messageCount}
                         processedCount={liveStats.processedCount}
@@ -1144,6 +2239,10 @@ export function EmailThreadList({
       onThreadDataDeleted={() => router.refresh()}
       onReanalyzeStart={handleReanalyzeStart}
       onReanalyzeComplete={handleReanalyzeComplete}
+    />
+    <ThreadHarvestSidePanel
+      target={harvestPanel}
+      onClose={() => setHarvestPanel(null)}
     />
     </>
   );

@@ -1,69 +1,39 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { desc, eq } from "drizzle-orm";
+import Link from "next/link";
 
-import { ActionItemsList } from "@/components/ActionItemsList";
-import { getDb } from "@/lib/db";
-import { actionItems, extractedActionItems, meetings } from "@/lib/db/schema";
+import { fetchGlobalTodoRows } from "@/lib/todos/global-todos";
+import { isWorkingListTodo } from "@/lib/email-analysis/todo-lifecycle";
 
 export default async function DashboardPage() {
-  const db = getDb();
-
-  const meetingBacklog = await db
-    .select({
-      id: actionItems.id,
-      assignee: actionItems.assignee,
-      role: actionItems.role,
-      description: actionItems.description,
-      deadline: actionItems.deadline,
-      meetingTitle: meetings.title,
-      meetingDate: meetings.meetingDate,
-    })
-    .from(actionItems)
-    .innerJoin(meetings, eq(actionItems.meetingId, meetings.id))
-    .where(eq(actionItems.completed, false))
-    .orderBy(desc(meetings.meetingDate));
-
-  const emailBacklog = await db
-    .select()
-    .from(extractedActionItems)
-    .where(eq(extractedActionItems.completed, false));
-
-  const backlog = [
-    ...meetingBacklog.map((task) => ({
-      id: `meeting-${task.id}`,
-      assignee: task.assignee,
-      role: task.role,
-      description: task.description,
-      deadline: task.deadline,
-      meetingTitle: task.meetingTitle,
-      meetingDate: task.meetingDate,
-    })),
-    ...emailBacklog.map((task) => ({
-      id: `email-${task.id}`,
-      assignee: task.assignee,
-      role: "Email",
-      description: task.description,
-      deadline: task.deadline,
-      meetingTitle: "Email extraction",
-      meetingDate: task.createdAt.slice(0, 10),
-    })),
-  ];
+  const rows = await fetchGlobalTodoRows();
+  const outstanding = rows.filter(
+    (row) =>
+      !row.completed &&
+      isWorkingListTodo(row.sourceKind, row.sourceEmailReceivedAt),
+  ).length;
 
   return (
     <section className="min-h-0 flex-1 space-y-4 overflow-y-auto">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-slate-500">
-            Task radar
-          </p>
-          <h1 className="text-2xl font-semibold text-slate-900">
-            Unresolved checklist items ({backlog.length})
-          </h1>
-        </div>
+      <div>
+        <p className="text-xs uppercase tracking-wide text-slate-500">
+          Overview
+        </p>
+        <h1 className="text-2xl font-semibold text-slate-900">
+          Board checklist
+        </h1>
+        <p className="mt-1 text-sm text-slate-600">
+          What still needs to be done lives on one list: meetings, recent email
+          harvests, and manual items. Older email harvests are on Archive.
+        </p>
       </div>
-      <ActionItemsList items={backlog.map((task) => ({ ...task }))} />
+      <Link
+        href="/operations/todos"
+        className="inline-flex rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-teal-800 shadow-sm hover:border-teal-300 hover:bg-teal-50"
+      >
+        Open global to-dos ({outstanding} outstanding) →
+      </Link>
     </section>
   );
 }

@@ -1,6 +1,6 @@
 export const runtime = "nodejs";
 
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
@@ -15,6 +15,7 @@ export async function GET(request: Request) {
   const events = await db
     .select()
     .from(calendarEvents)
+    .where(eq(calendarEvents.status, "scheduled"))
     .orderBy(asc(calendarEvents.startAt));
 
   const filtered = events.filter((event) => {

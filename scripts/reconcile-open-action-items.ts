@@ -1,6 +1,9 @@
 /**
- * Reconcile open extracted action items per thread (semantic duplicate cleanup).
+ * Reconcile unresolved extracted action items per thread (open + stale).
  * Usage: npx tsx scripts/reconcile-open-action-items.ts
+ * Optional: TODO_CLOSEOUT_MODEL=deepseek-v4-flash (harvest close-out when Gemini is unavailable)
+ *
+ * For harvests older than 120 days prefer: npm run closeout:archive-todos
  */
 import { eq } from "drizzle-orm";
 
@@ -12,6 +15,8 @@ import { extractedActionItems } from "@/lib/db/schema";
 async function main() {
   const db = getDb();
   const settings = await getAnalysisSettings();
+  const modelName =
+    process.env.TODO_CLOSEOUT_MODEL?.trim() || settings.analysisModel;
 
   const openRows = await db
     .select({
@@ -28,21 +33,29 @@ async function main() {
     ),
   ];
 
-  console.log(`Reconciling ${threadIds.length} thread(s) with open action items...`);
+  console.log(
+    `Reconciling ${threadIds.length} thread(s) with ${modelName}...`,
+  );
 
   let totalCompleted = 0;
   let totalSuperseded = 0;
 
   for (const threadId of threadIds) {
-    const result = await reconcileThreadActionItems({
-      threadId,
-      modelName: settings.analysisModel,
-    });
-    totalCompleted += result.completed;
-    totalSuperseded += result.superseded;
-    if (result.completed || result.superseded) {
-      console.log(
-        `  ${threadId}: completed=${result.completed}, superseded=${result.superseded}`,
+    try {
+      const result = await reconcileThreadActionItems({
+        threadId,
+        modelName,
+      });
+      totalCompleted += result.completed;
+      totalSuperseded += result.superseded;
+      if (result.completed || result.superseded) {
+        console.log(
+          `  ${threadId}: completed=${result.completed}, superseded=${result.superseded}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `  ${threadId}: FAILED ${error instanceof Error ? error.message : error}`,
       );
     }
   }

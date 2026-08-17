@@ -7,12 +7,14 @@ import {
 import type { ActionItemExtraction } from "@/lib/email-analysis/schema";
 import { getDb } from "@/lib/db";
 import { extractedActionItems } from "@/lib/db/schema";
-import { generateEmailExtraction } from "@/lib/gemini/client";
+import { generateActionItemJson, loadUnresolvedThreadActionItems } from "@/lib/email-analysis/action-item-reconciliation";
 import { unwrapJsonCodeBlock } from "@/lib/gemini/parse-output";
 import {
   estimateCostUsdForCalls,
   type GeminiUsageCall,
 } from "@/lib/gemini/usage";
+import { completedFieldsForLifecycle } from "@/lib/email-analysis/todo-lifecycle";
+import { markEmailGlobalTodosCompleted } from "@/lib/todos/sync-email-global-todos";
 
 const DEDUP_MAX_OUTPUT_TOKENS = 4096;
 
@@ -63,11 +65,13 @@ function parseInsertItems(value: unknown): ActionItemExtraction[] {
 export function parseSemanticActionItemDedupResult(raw: unknown): {
   insertItems: ActionItemExtraction[];
   supersedeOpenIds: string[];
+  insertItemsSpecified: boolean;
 } {
   if (!isObject(raw)) {
-    return { insertItems: [], supersedeOpenIds: [] };
+    return { insertItems: [], supersedeOpenIds: [], insertItemsSpecified: false };
   }
 
+  const insertItemsSpecified = Array.isArray(raw.insert_items);
   const insertItems = parseInsertItems(raw.insert_items);
   const supersedeOpenIds = Array.isArray(raw.supersede_open_ids)
     ? raw.supersede_open_ids
@@ -75,28 +79,28 @@ export function parseSemanticActionItemDedupResult(raw: unknown): {
         .filter((id): id is string => Boolean(id))
     : [];
 
-  return { insertItems, supersedeOpenIds };
+  return { insertItems, supersedeOpenIds, insertItemsSpecified };
+}
+
+/** Honor an explicit empty insert_items list; only fall back if the key is missing. */
+export function resolveSemanticDedupInsertItems(
+  parsed: { insertItems: ActionItemExtraction[]; insertItemsSpecified: boolean },
+  newItems: ActionItemExtraction[],
+): ActionItemExtraction[] {
+  return parsed.insertItemsSpecified ? parsed.insertItems : newItems;
 }
 
 async function loadOpenThreadActionItems(
   threadId: string,
 ): Promise<OpenActionItem[]> {
-  const db = getDb();
-  return db
-    .select({
-      id: extractedActionItems.id,
-      assignee: extractedActionItems.assignee,
-      description: extractedActionItems.description,
-      deadline: extractedActionItems.deadline,
-      createdAt: extractedActionItems.createdAt,
-    })
-    .from(extractedActionItems)
-    .where(
-      and(
-        eq(extractedActionItems.emailThreadId, threadId),
-        eq(extractedActionItems.completed, false),
-      ),
-    );
+  const rows = await loadUnresolvedThreadActionItems(threadId);
+  return rows.map((row) => ({
+    id: row.id,
+    assignee: row.assignee,
+    description: row.description,
+    deadline: row.deadline,
+    createdAt: row.createdAt,
+  }));
 }
 
 async function markSupersededOpenItems(ids: string[]): Promise<number> {
@@ -104,12 +108,17 @@ async function markSupersededOpenItems(ids: string[]): Promise<number> {
 
   const db = getDb();
   const now = new Date().toISOString();
+  const completedFields = completedFieldsForLifecycle("superseded", now);
   let closed = 0;
 
   for (const id of ids) {
     const result = await db
       .update(extractedActionItems)
-      .set({ completed: true, completedAt: now })
+      .set({
+        completed: completedFields.completed,
+        completedAt: completedFields.completedAt,
+        lifecycleStatus: "superseded",
+      })
       .where(
         and(
           eq(extractedActionItems.id, id),
@@ -117,6 +126,10 @@ async function markSupersededOpenItems(ids: string[]): Promise<number> {
         ),
       );
     if (result.rowCount) closed += 1;
+  }
+
+  if (closed) {
+    await markEmailGlobalTodosCompleted(ids, now);
   }
 
   return closed;
@@ -145,7 +158,7 @@ export async function semanticDeduplicateIncomingActionItems(input: {
     };
   }
 
-  const generation = await generateEmailExtraction({
+  const generation = await generateActionItemJson({
     systemInstruction: ACTION_ITEM_SEMANTIC_DEDUP_SYSTEM_PROMPT,
     userText: buildActionItemSemanticDedupUserPrompt({
       newItems: input.newItems,
@@ -184,14 +197,13 @@ export async function semanticDeduplicateIncomingActionItems(input: {
   }
 
   const calls = generation.usageCalls;
-  const insertItems =
-    parsed.insertItems.length > 0 ? parsed.insertItems : input.newItems;
+  const insertItems = resolveSemanticDedupInsertItems(parsed, input.newItems);
 
-  if (!parsed.insertItems.length && input.newItems.length > 1) {
+  if (!parsed.insertItemsSpecified && input.newItems.length > 1) {
     console.warn("[email-analysis:action-item-dedup]", {
       threadId: input.threadId,
       message:
-        "Semantic dedup returned no insert_items; falling back to raw extraction batch.",
+        "Semantic dedup omitted insert_items; falling back to raw extraction batch.",
       incomingCount: input.newItems.length,
     });
   }

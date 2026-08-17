@@ -579,6 +579,57 @@ export async function generateEmailExtraction(options: {
   });
 }
 
+/**
+ * Multimodal page transcription (Tier 2). Markdown output — no JSON mime type.
+ */
+export async function generatePageVision(options: {
+  systemInstruction: string;
+  userText: string;
+  modelName?: string;
+  maxOutputTokens?: number;
+  fileParts?: Array<{ mimeType: string; data: Buffer; label?: string }>;
+}): Promise<GeminiGenerationResult> {
+  const client = new GoogleGenerativeAI(requireApiKey());
+  const modelName =
+    options.modelName?.trim() ||
+    process.env.GEMINI_MODEL_PAGE_VISION?.trim() ||
+    DEFAULT_GEMINI_MODEL;
+
+  const maxOutputTokens =
+    options.maxOutputTokens ??
+    Number(process.env.GEMINI_MAX_OUTPUT_TOKENS_PAGE_VISION ?? 8192);
+
+  const generativeModel = client.getGenerativeModel({
+    model: modelName,
+    systemInstruction: options.systemInstruction,
+    generationConfig: buildGenerationConfig({
+      modelName,
+      maxOutputTokens,
+      temperature: 0.1,
+    }),
+  });
+
+  const parts: Array<
+    string | { inlineData: { mimeType: string; data: string } }
+  > = [`USER INPUT\n\n${options.userText}`];
+
+  for (const file of options.fileParts ?? []) {
+    parts.push({
+      inlineData: {
+        mimeType: file.mimeType,
+        data: file.data.toString("base64"),
+      },
+    });
+  }
+
+  const result = await generativeModel.generateContent(parts);
+
+  return parseGenerationResult(result.response, {
+    modelName,
+    step: "page_vision",
+  });
+}
+
 export async function generateEmailExtractionMerge(options: {
   systemInstruction: string;
   userText: string;

@@ -91,7 +91,7 @@ export function buildEmailThreadSearchParams(
 export function emailThreadsPageHref(filters: EmailThreadFilters, page = 1): string {
   const params = buildEmailThreadSearchParams({ ...filters, page });
   const qs = params.toString();
-  return qs ? `/emails?${qs}` : "/emails";
+  return qs ? `/knowledge/emails?${qs}` : "/knowledge/emails";
 }
 
 export function parseEmailDetailScope(
@@ -110,11 +110,11 @@ export function emailMessageDetailHref(
     ? buildEmailThreadSearchParams({ ...filters, view: "messages", page: 1 })
     : new URLSearchParams();
   params.set("scope", EMAIL_MESSAGE_SCOPE);
-  return `/emails/${messageId}?${params.toString()}`;
+  return `/knowledge/emails/${messageId}?${params.toString()}`;
 }
 
 export function emailThreadDetailHref(threadId: string): string {
-  return `/emails/${threadId}`;
+  return `/knowledge/emails/${threadId}`;
 }
 
 export function emailDetailBackHref(

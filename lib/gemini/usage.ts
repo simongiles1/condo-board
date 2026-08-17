@@ -42,11 +42,14 @@ const MODEL_PRICING_USD_PER_MILLION: Record<
 > = {
   "gemini-2.0-flash": { input: 0.1, output: 0.4 },
   "gemini-2.0-flash-lite": { input: 0.075, output: 0.3 },
-  "gemini-2.5-flash": { input: 0.15, output: 0.6 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5 },
   "gemini-2.5-pro": { input: 1.25, output: 10 },
   "gemini-3.1-flash-lite": { input: 0.25, output: 1.5 },
   "gemini-3.1-flash-live-preview": { input: 0.75, output: 4.5 },
+  "gemini-3.1-pro-preview": { input: 2, output: 12 },
   "gemini-3.5-flash": { input: 1.5, output: 9 },
+  "gemini-3.6-flash": { input: 1.5, output: 7.5 },
+  "deepseek-v4-flash": { input: 0.14, output: 0.28 },
 };
 
 const MODEL_PRICING_ALIASES: Array<{
@@ -54,8 +57,16 @@ const MODEL_PRICING_ALIASES: Array<{
   pricing: { input: number; output: number };
 }> = [
   {
+    match: /gemini-3\.6-flash/i,
+    pricing: MODEL_PRICING_USD_PER_MILLION["gemini-3.6-flash"],
+  },
+  {
     match: /gemini-3\.5-flash/i,
     pricing: MODEL_PRICING_USD_PER_MILLION["gemini-3.5-flash"],
+  },
+  {
+    match: /gemini-3\.1-pro/i,
+    pricing: MODEL_PRICING_USD_PER_MILLION["gemini-3.1-pro-preview"],
   },
   {
     match: /gemini-3\.1-flash-live-preview/i,
@@ -81,13 +92,43 @@ const MODEL_PRICING_ALIASES: Array<{
     match: /gemini-2\.5-pro/i,
     pricing: MODEL_PRICING_USD_PER_MILLION["gemini-2.5-pro"],
   },
+  {
+    match: /deepseek-v4-flash/i,
+    pricing: MODEL_PRICING_USD_PER_MILLION["deepseek-v4-flash"],
+  },
 ];
 
-export function extractTokenUsage(metadata?: UsageMetadata): TokenUsage {
+type UsageMetadataLike = Pick<
+  UsageMetadata,
+  "promptTokenCount" | "candidatesTokenCount" | "totalTokenCount"
+> & {
+  thoughtsTokenCount?: number;
+};
+
+/**
+ * Billed output includes thinking tokens. Prefer max(total - prompt,
+ * candidates + thoughts) so we do not undercount when the SDK omits
+ * `thoughtsTokenCount` but still folds thoughts into `totalTokenCount`.
+ */
+export function extractTokenUsage(
+  metadata?: UsageMetadata | UsageMetadataLike,
+): TokenUsage {
+  const inputTokens = metadata?.promptTokenCount ?? 0;
+  const candidates = metadata?.candidatesTokenCount ?? 0;
+  const thoughts = Number(
+    metadata && "thoughtsTokenCount" in metadata
+      ? metadata.thoughtsTokenCount
+      : 0,
+  ) || 0;
+  const totalTokens = metadata?.totalTokenCount ?? 0;
+  const outputTokens = Math.max(
+    Math.max(0, totalTokens - inputTokens),
+    candidates + thoughts,
+  );
   return {
-    inputTokens: metadata?.promptTokenCount ?? 0,
-    outputTokens: metadata?.candidatesTokenCount ?? 0,
-    totalTokens: metadata?.totalTokenCount ?? 0,
+    inputTokens,
+    outputTokens,
+    totalTokens: totalTokens || inputTokens + outputTokens,
   };
 }
 

@@ -97,17 +97,30 @@ export type MeetingExtraction = {
 };
 
 /**
- * A previously-scheduled meeting being cancelled or postponed.
- * The persistence layer uses (date, time) to find and delete the matching
- * calendar event, and to suppress any meeting on the same slot extracted
- * from the same document (e.g. .ics attachment that still describes the
- * original invite alongside a cancellation body).
+ * A previously-scheduled meeting being cancelled with no replacement date
+ * in this email. Persistence hides the matching calendar row (Google Calendar
+ * remove). A later new invite is a separate meetings[] insert, not this row.
  */
 export type MeetingCancellationExtraction = {
   date: string;
   time?: string;
   type?: string;
   reason?: string;
+  source_quote?: string;
+};
+
+/**
+ * One email that moves a confirmed meeting from an old slot to a new slot.
+ * Persistence UPDATES the existing calendar row (same id) so linked to-dos
+ * keep pointing at the AGM / board meeting after it moves.
+ */
+export type MeetingRescheduleExtraction = {
+  original_date: string;
+  original_time?: string;
+  new_date: string;
+  new_time?: string;
+  type?: string;
+  location?: string;
   source_quote?: string;
 };
 
@@ -225,6 +238,7 @@ export type EmailExtractionDocument = {
   contracts?: ContractExtraction[];
   meetings?: MeetingExtraction[];
   meeting_cancellations?: MeetingCancellationExtraction[];
+  meeting_reschedules?: MeetingRescheduleExtraction[];
   motions?: MotionExtraction[];
   board_changes?: Array<{
     name?: string;
@@ -522,6 +536,20 @@ export function validateEmailExtraction(
           }))
           .filter((item) => item.date)
       : [],
+    meeting_reschedules: Array.isArray(raw.meeting_reschedules)
+      ? raw.meeting_reschedules
+          .filter(isObject)
+          .map((item) => ({
+            original_date: asString(item.original_date) ?? "",
+            original_time: asString(item.original_time),
+            new_date: asString(item.new_date) ?? "",
+            new_time: asString(item.new_time),
+            type: asString(item.type),
+            location: asString(item.location),
+            source_quote: asString(item.source_quote),
+          }))
+          .filter((item) => item.original_date && item.new_date)
+      : [],
     motions: Array.isArray(raw.motions)
       ? raw.motions.filter(isObject).map((item) => ({
           text: asString(item.text),
@@ -601,6 +629,7 @@ export function mergeExtractionDocuments(
     "contracts",
     "meetings",
     "meeting_cancellations",
+    "meeting_reschedules",
     "motions",
     "deadlines",
     "resident_issues",

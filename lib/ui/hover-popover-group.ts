@@ -16,7 +16,7 @@ let activeForceClose: ForceCloseFn | null = null;
  * 4. Call `releaseHoverPopover(instanceId)` from `forceClose` and on unmount.
  *
  * Reference implementations: `EmailExtractionBadge`, `EmailAttachmentsBadge`,
- * `ProcessedCostBadge`, `InsightSourceEmailsBadge`.
+ * `ProcessedCostBadge`, `InsightSourceEmailsBadge`, `PageVisionCostBadge`.
  */
 export function claimHoverPopover(
   instanceId: symbol,

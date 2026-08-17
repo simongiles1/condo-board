@@ -40,6 +40,7 @@ const ROUTE_LABELS: Record<string, string> = {
   contracts: "Contracts",
   meetings: "Meetings",
   meeting_cancellations: "Meeting cancellations",
+  meeting_reschedules: "Meeting reschedules",
   motions: "Motions",
   board_changes: "Board changes",
   deadlines: "Deadlines",
@@ -61,7 +62,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     title: "Email summary metadata",
     description:
       "High-level classification shown in inbox extraction badges. Stored only in the extraction archive, not as separate database rows.",
-    appPages: [{ href: "/emails", label: "Emails processed panel" }],
+    appPages: [{ href: "/knowledge/emails", label: "Emails processed panel" }],
     dbTables: [],
     fields: ["document_type", "summary", "urgency", "tags"],
   },
@@ -69,17 +70,21 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     id: "calendar",
     title: "Calendar",
     description:
-      "Confirmed meetings, hard external deadlines, and dated maintenance work.",
-    appPages: [{ href: "/calendar", label: "Calendar" }],
+      "Confirmed meetings, hard external deadlines, dated inspections, and dated maintenance. Cancellations come off the calendar; reschedules move the same event.",
+    appPages: [{ href: "/operations/calendar", label: "Calendar" }],
     dbTables: ["calendar_events"],
-    fields: ["meetings", "deadlines", "meeting_cancellations"],
+    fields: ["meetings", "deadlines", "meeting_cancellations", "meeting_reschedules", "inspections"],
     fieldNotes: {
       meetings:
         "Tier-1 exact dedup (same date + identical source_quote, or same calendar day) runs at merge and persist. Tier-2 AI thread reconciliation merges semantic duplicates with different wording.",
       deadlines:
         "Tier-1 exact dedup (same date + identical source_quote) runs at merge and persist. Tier-2 AI thread reconciliation merges semantic duplicates when quotes differ but the thread shows one real deadline.",
       meeting_cancellations:
-        "Does not insert rows — removes matching meeting events from calendar_events.",
+        "Does not insert a calendar row — pulls the matching meeting off the calendar (status=cancelled), like Google Calendar.",
+      meeting_reschedules:
+        "Moves the existing calendar event to the new date (same id). A Teams cancel plus a later new invite is cancel then insert, not a reschedule.",
+      inspections:
+        "Dated inspections persist as calendar_events with event_type=inspection.",
     },
   },
   {
@@ -89,7 +94,8 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
       "Internal asks, requests, and follow-ups. These are not meeting to-dos and are not added to the global to-do list.",
     appPages: [
       { href: "/", label: "Dashboard task radar" },
-      { href: "/insights", label: "Insights" },
+      { href: "/insights/analytics", label: "Insights analytics" },
+      { href: "/operations/todos", label: "Global to-dos" },
     ],
     dbTables: ["extracted_action_items"],
     fields: ["action_items"],
@@ -102,12 +108,15 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     id: "maintenance",
     title: "Maintenance & equipment",
     description: "Equipment registry and maintenance history for building insights.",
-    appPages: [{ href: "/insights", label: "Insights equipment timeline" }],
+    appPages: [
+      { href: "/insights/analytics", label: "Insights equipment timeline" },
+      { href: "/building/maintenance", label: "Building maintenance" },
+    ],
     dbTables: ["maintenance_events", "equipment_assets", "calendar_events"],
     fields: ["maintenance_events", "equipment_mentions"],
     fieldNotes: {
       maintenance_events:
-        "Saved to maintenance_events. Also creates a calendar_events row when a date is present.",
+        "Saved to maintenance_events with free-text equipment names (no equipment_assets insert). Also creates a calendar_events row when a date is present.",
       equipment_mentions:
         "Saved to equipment_assets and as a mentioned maintenance event on Insights when no dated maintenance_events exist for the same equipment.",
     },
@@ -116,7 +125,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     id: "financial",
     title: "Financial records",
     description: "Budget figures and invoices extracted from email and attachments.",
-    appPages: [{ href: "/insights", label: "Insights budget charts" }],
+    appPages: [{ href: "/building/budget", label: "Building budget charts" }],
     dbTables: ["budget_line_items", "budget_categories", "invoices"],
     fields: [
       "budget_line_items",
@@ -137,7 +146,10 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     id: "vendors",
     title: "Vendors & contracts",
     description: "Vendor directory entries and contract records.",
-    appPages: [{ href: "/insights", label: "Insights vendors" }],
+    appPages: [
+      { href: "/insights/queue", label: "Insights review queue" },
+      { href: "/knowledge/entities", label: "Entities registry" },
+    ],
     dbTables: ["vendors", "contracts"],
     fields: ["vendors", "contracts"],
     fieldNotes: {
@@ -149,7 +161,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     id: "capital",
     title: "Capital projects",
     description: "Major building projects and their phases.",
-    appPages: [{ href: "/building", label: "Building" }],
+    appPages: [{ href: "/building/overview", label: "Building" }],
     dbTables: ["capital_projects"],
     fields: ["capital_projects"],
   },
@@ -157,7 +169,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     id: "resident",
     title: "Resident issues",
     description: "Unit-level complaints, requests, and resolutions.",
-    appPages: [{ href: "/building", label: "Building" }],
+    appPages: [{ href: "/building/overview", label: "Building" }],
     dbTables: ["resident_issues"],
     fields: ["resident_issues", "bylaw_mentions", "access_incidents"],
     fieldNotes: {
@@ -171,11 +183,10 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     description: "Board motions and membership changes mentioned in email.",
     appPages: [],
     dbTables: [],
-    fields: ["motions", "board_changes", "inspections", "permits"],
+    fields: ["motions", "board_changes", "permits"],
     fieldNotes: {
       motions: "Extracted only — not persisted to a dedicated table yet.",
       board_changes: "Extracted only — not persisted to a dedicated table yet.",
-      inspections: "Extracted only — not persisted to a dedicated table yet.",
       permits: "Extracted only — not persisted to a dedicated table yet.",
     },
   },
@@ -184,7 +195,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     title: "Named entities",
     description:
       "All people and organizations mentioned in the thread. Vendor-flagged orgs also appear under Vendors & contracts for review.",
-    appPages: [{ href: "/insights", label: "Insights named entities" }],
+    appPages: [{ href: "/insights/queue", label: "Insights named entities" }],
     dbTables: ["entity_mentions"],
     fields: ["entities"],
   },
@@ -193,7 +204,7 @@ export const EXTRACTION_DESTINATIONS: ExtractionDestination[] = [
     title: "Extraction skill learning",
     description:
       "Facts matched to learned concepts and proposals for new reusable extraction concepts.",
-    appPages: [{ href: "/skill", label: "Concepts" }],
+    appPages: [{ href: "/admin/concepts", label: "Concepts" }],
     dbTables: ["discovered_facts", "extraction_skill_entries"],
     fields: ["discovered_facts", "proposed_new_concepts"],
     fieldNotes: {
@@ -217,6 +228,8 @@ const PERSISTED_FIELDS = new Set<string>([
   "meetings",
   "deadlines",
   "meeting_cancellations",
+  "meeting_reschedules",
+  "inspections",
 ]);
 
 export function formatExtractionFieldKeyLabel(key: string): string {
@@ -264,4 +277,5 @@ export const PERSISTED_TABLE_LABELS: Record<string, string> = {
   calendar_events: "Calendar events",
   discovered_facts: "Discovered facts",
   meeting_cancellations: "Meeting cancellations processed",
+  meeting_reschedules: "Meeting reschedules processed",
 };

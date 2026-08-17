@@ -57,6 +57,216 @@
       "when": 1782300000000,
       "tag": "0007_gold_standard_validation",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1782400000000,
+      "tag": "0008_contact_highlight_extractions",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1782500000000,
+      "tag": "0009_contact_highlight_second_pass",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1782600000000,
+      "tag": "0010_contact_highlight_third_pass",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1782700000000,
+      "tag": "0011_contact_fingerprint_merges",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1782800000000,
+      "tag": "0012_contact_registry",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1782900000000,
+      "tag": "0013_organization_highlight_extractions",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1783000000000,
+      "tag": "0014_organization_manual_merges",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1783100000000,
+      "tag": "0015_organization_field_denials",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1783200000000,
+      "tag": "0016_bulk_extract_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1783300000000,
+      "tag": "0017_person_org_affiliations",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1783400000000,
+      "tag": "0018_contact_name_aliases",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1783500000000,
+      "tag": "0019_bulk_extract_stint_timing",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1783600000000,
+      "tag": "0020_email_perf",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1783700000000,
+      "tag": "0021_contact_person_field_denials",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1783800000000,
+      "tag": "0022_attachment_page_count",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1783900000000,
+      "tag": "0023_attachment_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1784000000000,
+      "tag": "0024_attachment_document_pages",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784100000000,
+      "tag": "0025_page_vision_ops",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784200000000,
+      "tag": "0026_docling_backfill_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1784300000000,
+      "tag": "0027_extraction_backfill_modes",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1784400000000,
+      "tag": "0028_docling_ibm_provider",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1784500000000,
+      "tag": "0029_ibm_docling_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1784600000000,
+      "tag": "0030_ibm_docling_key_slots",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1784700000000,
+      "tag": "0031_calendar_event_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1784800000000,
+      "tag": "0032_event_highlight_extractions",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1784900000000,
+      "tag": "0033_todo_highlight_extractions",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1785000000000,
+      "tag": "0034_global_todos_email_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1785100000000,
+      "tag": "0035_harvest_after_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1785200000000,
+      "tag": "0036_telegram_review",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1785300000000,
+      "tag": "0037_user_telegram_chat",
+      "breakpoints": true
     }
   ]
 }

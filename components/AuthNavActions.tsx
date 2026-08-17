@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
+import { ProfileDialog } from "@/components/ProfileDialog";
 import type { UserRole } from "@/lib/auth/roles";
 import type { AttachmentVisibilitySettings } from "@/lib/email/attachment-visibility";
 import {
@@ -54,11 +55,15 @@ export function AuthNavActions({
   firstName,
   lastName,
   role,
+  variant = "header",
+  collapsed = false,
 }: {
   email: string | null;
   firstName: string | null;
   lastName: string | null;
   role: UserRole | null;
+  variant?: "header" | "sidebar";
+  collapsed?: boolean;
 }) {
   const router = useRouter();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -66,12 +71,16 @@ export function AuthNavActions({
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [settings, setSettings] = useState<ModelSettings>(DEFAULT_MODEL_SETTINGS);
   const [pdfMargins, setPdfMargins] = useState<PdfMargins>(DEFAULT_PDF_MARGINS);
   const [attachmentVisibility, setAttachmentVisibility] =
     useState<AttachmentVisibilitySettings>(DEFAULT_ATTACHMENT_VISIBILITY_SETTINGS);
 
   const initials = email ? userInitials(firstName, lastName, email) : "U";
+  const displayName = [firstName, lastName].filter(Boolean).join(" ") || email;
+  const sidebar = variant === "sidebar";
+  const iconOnly = sidebar && collapsed;
 
   useEffect(() => {
     setSettings(loadModelSettings());
@@ -109,6 +118,11 @@ export function AuthNavActions({
     router.refresh();
   }
 
+  function openProfile() {
+    setMenuOpen(false);
+    setProfileOpen(true);
+  }
+
   function openSettings() {
     setMenuOpen(false);
     setSettingsOpen(true);
@@ -116,7 +130,7 @@ export function AuthNavActions({
 
   function openEmailSettings() {
     setMenuOpen(false);
-    router.push("/settings");
+    router.push("/admin/system/settings");
   }
 
   function handleSave(
@@ -133,9 +147,26 @@ export function AuthNavActions({
     setSettingsOpen(false);
   }
 
+  const triggerClass = iconOnly
+    ? "inline-flex h-9 w-9 items-center justify-center rounded-full border border-teal-700 bg-teal-700 text-sm font-semibold text-white shadow-sm hover:border-teal-800 hover:bg-teal-800"
+    : sidebar
+      ? "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-slate-50"
+      : "inline-flex h-9 w-9 items-center justify-center rounded-full border border-teal-700 bg-teal-700 text-sm font-semibold text-white shadow-sm hover:border-teal-800 hover:bg-teal-800";
+
+  const menuClass = iconOnly
+    ? "absolute left-full bottom-0 z-50 ml-2 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+    : sidebar
+      ? "absolute bottom-[calc(100%+0.375rem)] left-0 z-50 w-full overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+      : "absolute right-0 top-[calc(100%+0.375rem)] z-20 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg";
+
   return (
     <>
-      <div ref={rootRef} className="relative inline-flex">
+      <div
+        ref={rootRef}
+        className={
+          sidebar && !iconOnly ? "relative w-full" : "relative inline-flex"
+        }
+      >
         <button
           type="button"
           onClick={() => setMenuOpen((open) => !open)}
@@ -143,22 +174,50 @@ export function AuthNavActions({
           aria-expanded={menuOpen}
           aria-haspopup="menu"
           title="User menu"
-          className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-teal-700 bg-teal-700 text-sm font-semibold text-white shadow-sm hover:border-teal-800 hover:bg-teal-800"
+          className={triggerClass}
         >
-          {initials}
+          {sidebar && !iconOnly ? (
+            <>
+              <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-teal-700 bg-teal-700 text-sm font-semibold text-white">
+                {initials}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-slate-800">
+                  {displayName || "Account"}
+                </span>
+                {displayName && email && displayName !== email ? (
+                  <span className="block truncate text-xs text-slate-500">
+                    {email}
+                  </span>
+                ) : null}
+              </span>
+            </>
+          ) : (
+            initials
+          )}
         </button>
 
         {menuOpen ? (
           <div
             role="menu"
             aria-label="User menu"
-            className="absolute right-0 top-[calc(100%+0.375rem)] z-20 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+            className={menuClass}
           >
             {email ? (
               <div className="border-b border-slate-100 px-3 py-2">
                 <p className="truncate text-sm text-slate-700">{email}</p>
               </div>
             ) : null}
+
+            <button
+              type="button"
+              role="menuitem"
+              onClick={openProfile}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+            >
+              <ProfileIcon />
+              Profile
+            </button>
 
             <button
               type="button"
@@ -197,6 +256,11 @@ export function AuthNavActions({
         ) : null}
       </div>
 
+      <ProfileDialog
+        open={profileOpen}
+        onClose={() => setProfileOpen(false)}
+        onSaved={() => router.refresh()}
+      />
       <ModelSettingsDialog
         open={settingsOpen}
         settings={settings}
@@ -206,6 +270,25 @@ export function AuthNavActions({
         onSave={handleSave}
       />
     </>
+  );
+}
+
+function ProfileIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4 shrink-0 text-slate-500"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 20c0-4 4-6 8-6s8 2 8 6" />
+    </svg>
   );
 }
 

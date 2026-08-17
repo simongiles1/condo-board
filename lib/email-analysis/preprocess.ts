@@ -7,7 +7,10 @@ import {
   emailThreads,
   extractionSources,
 } from "@/lib/db/schema";
-import { computeThreadUniqueBodies } from "@/lib/email/thread-unique-content";
+import {
+  computeThreadAuthoredBodies,
+  computeThreadUniqueBodies,
+} from "@/lib/email/thread-unique-content";
 
 export async function preprocessEmailMessage(emailId: string): Promise<string> {
   const db = getDb();
@@ -22,7 +25,17 @@ export async function preprocessEmailMessage(emailId: string): Promise<string> {
         .orderBy(asc(emails.receivedAt))
     : [email];
 
-  const uniqueMap = computeThreadUniqueBodies(
+  // Persist authored blocks (intro + signature) for LLM extraction and strict
+  // unique bodies for evidence panels / UI.
+  const authoredMap = computeThreadAuthoredBodies(
+    threadMessages.map((m) => ({
+      id: m.id,
+      bodyText: m.bodyText,
+      bodyHtml: m.bodyHtml,
+      receivedAt: m.receivedAt,
+    })),
+  );
+  const strictMap = computeThreadUniqueBodies(
     threadMessages.map((m) => ({
       id: m.id,
       bodyText: m.bodyText,
@@ -32,14 +45,18 @@ export async function preprocessEmailMessage(emailId: string): Promise<string> {
   );
 
   for (const message of threadMessages) {
-    const unique = uniqueMap.get(message.id) ?? message.bodyText;
+    const authored = authoredMap.get(message.id) ?? message.bodyText;
+    const strict = strictMap.get(message.id) ?? authored;
     await db
       .update(emails)
-      .set({ bodyTextUnique: unique })
+      .set({
+        bodyTextUnique: authored,
+        bodyTextStrictUnique: strict,
+      })
       .where(eq(emails.id, message.id));
   }
 
-  return uniqueMap.get(emailId) ?? email.bodyText;
+  return authoredMap.get(emailId) ?? email.bodyText;
 }
 
 export async function getThreadContext(threadId: string | null) {

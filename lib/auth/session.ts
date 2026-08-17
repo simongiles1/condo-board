@@ -7,7 +7,7 @@ import { isAuthEnabled } from "@/lib/auth/config";
 import { isUserRole, type UserRole } from "@/lib/auth/roles";
 import { SESSION_COOKIE } from "@/lib/auth/constants";
 import { sessionCookieOptions } from "@/lib/auth/cookies";
-import { formatAuthDbError } from "@/lib/auth/db-errors";
+import { formatAuthDbError, isDbConnectionError } from "@/lib/auth/db-errors";
 import { hashPassword } from "@/lib/auth/password-hash";
 import {
   createSignedSessionToken,
@@ -214,29 +214,44 @@ export async function getSessionUser(): Promise<AppUser | null> {
   if (!token) return null;
 
   const session = verifySignedSessionToken(token);
-  if (!session) return null;
+  if (!session) {
+    await clearSessionCookie();
+    return null;
+  }
 
-  const db = getDb();
-  const [user] = await db
-    .select({
-      id: appUsers.id,
-      email: appUsers.email,
-      firstName: appUsers.firstName,
-      lastName: appUsers.lastName,
-      role: appUsers.role,
-    })
-    .from(appUsers)
-    .where(eq(appUsers.id, session.userId));
+  try {
+    const db = getDb();
+    const [user] = await db
+      .select({
+        id: appUsers.id,
+        email: appUsers.email,
+        firstName: appUsers.firstName,
+        lastName: appUsers.lastName,
+        role: appUsers.role,
+      })
+      .from(appUsers)
+      .where(eq(appUsers.id, session.userId));
 
-  if (!user || !isUserRole(user.role)) return null;
+    if (!user || !isUserRole(user.role)) {
+      await clearSessionCookie();
+      return null;
+    }
 
-  return {
-    id: user.id,
-    email: user.email,
-    firstName: user.firstName,
-    lastName: user.lastName,
-    role: user.role,
-  };
+    return {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role,
+    };
+  } catch (error) {
+    if (!isDbConnectionError(error)) {
+      console.warn(
+        `[auth/getSessionUser] Session lookup failed: ${formatAuthDbError(error, "Login")}`,
+      );
+    }
+    return null;
+  }
 }
 
 export async function setSessionCookie(token: string) {

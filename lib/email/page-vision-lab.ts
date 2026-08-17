@@ -21,6 +21,7 @@ import {
 import { sanitizePageVisionMarkdown } from "@/lib/email/page-vision-shared";
 import { readCachedAttachment } from "@/lib/gmail/attachments";
 import { extractPdfAllPageTexts } from "@/lib/pdf/extract-page-text";
+import { readExtractArtifactText } from "@/lib/storage/extract-artifacts";
 
 export type PageVisionListFilter = "pending" | "done" | "failed" | "all";
 
@@ -347,24 +348,14 @@ export async function getPageVisionDocumentDetail(
 
   let markdown: string | null = null;
   if (doc?.markdownPath) {
-    try {
-      markdown = await readFile(
-        resolveAttachmentStoragePath(doc.markdownPath),
-        "utf8",
-      );
-    } catch {
-      markdown = null;
-    }
+    markdown = await readExtractArtifactText(
+      resolveAttachmentStoragePath(doc.markdownPath),
+    );
   }
   if (markdown == null) {
-    try {
-      markdown = await readFile(
-        resolveAttachmentStoragePath(`data/email-attachments/${hash}.md`),
-        "utf8",
-      );
-    } catch {
-      markdown = null;
-    }
+    markdown = await readExtractArtifactText(
+      resolveAttachmentStoragePath(`data/email-attachments/${hash}.md`),
+    );
   }
 
   const nativeByPage = new Map<number, string>();
@@ -400,16 +391,10 @@ export async function getPageVisionDocumentDetail(
   for (const page of pages) {
     let artifactMarkdown: string | null = null;
     if (page.artifactPath) {
-      try {
-        artifactMarkdown = sanitizePageVisionMarkdown(
-          await readFile(
-            resolveAttachmentStoragePath(page.artifactPath),
-            "utf8",
-          ),
-        );
-      } catch {
-        artifactMarkdown = null;
-      }
+      const raw = await readExtractArtifactText(
+        resolveAttachmentStoragePath(page.artifactPath),
+      );
+      artifactMarkdown = raw != null ? sanitizePageVisionMarkdown(raw) : null;
     }
     const nativeText = nativeByPage.get(page.pageNo)?.trim() || null;
     pageDetails.push({

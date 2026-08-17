@@ -5,7 +5,6 @@
  * On-demand only (API / CLI). Does not auto-start with instrumentation.
  */
 
-import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
@@ -45,6 +44,10 @@ import { estimateCostUsd } from "@/lib/gemini/usage";
 import { extractPdfPageText } from "@/lib/pdf/extract-page-text";
 import { extractPdfPages } from "@/lib/pdf/extract-pages";
 import { readCachedAttachment } from "@/lib/gmail/attachments";
+import {
+  readExtractArtifactText,
+  writeExtractArtifactText,
+} from "@/lib/storage/extract-artifacts";
 import {
   isVisionImageExt,
   isVisionImageMime,
@@ -167,16 +170,14 @@ async function loadMarkdownForHash(contentHash: string): Promise<{
   ].filter(Boolean) as string[];
 
   for (const candidate of candidates) {
-    try {
-      const markdown = await readFile(candidate, "utf8");
+    const markdown = await readExtractArtifactText(candidate);
+    if (markdown != null) {
       return {
         markdown,
         markdownPath: doc.markdownPath,
         parseStatus: doc.parseStatus,
         pageCount: doc.pageCount,
       };
-    } catch {
-      // try next
     }
   }
 
@@ -504,9 +505,8 @@ async function processClaimedPage(
       page.pageNo,
     );
     const absolute = resolveArtifactAbsolute(relativeKey);
-    await mkdir(path.dirname(absolute), { recursive: true });
     const artifactBody = sanitizePageVisionMarkdown(result.text).trim();
-    await writeFile(absolute, artifactBody + "\n", "utf8");
+    await writeExtractArtifactText(absolute, artifactBody + "\n");
 
     await db
       .update(attachmentDocumentPages)
@@ -637,24 +637,21 @@ export async function mergeVisionArtifactsForHash(
 
   for (const page of donePages) {
     if (!page.artifactPath) continue;
-    try {
-      const body = await readFile(
-        resolveArtifactAbsolute(page.artifactPath),
-        "utf8",
-      );
-      markdown = spliceVisionPageIntoMarkdown(markdown, page.pageNo, body);
-    } catch (error) {
+    const body = await readExtractArtifactText(
+      resolveArtifactAbsolute(page.artifactPath),
+    );
+    if (body == null) {
       console.warn(
-        `[page-vision] missing artifact for ${contentHash} p${page.pageNo}:`,
-        error instanceof Error ? error.message : error,
+        `[page-vision] missing artifact for ${contentHash} p${page.pageNo}`,
       );
+      continue;
     }
+    markdown = spliceVisionPageIntoMarkdown(markdown, page.pageNo, body);
   }
 
   const mdKey = attachmentMarkdownRelativeKey(contentHash);
   const mdAbsolute = attachmentMarkdownAbsolutePath(contentHash);
-  await mkdir(path.dirname(mdAbsolute), { recursive: true });
-  await writeFile(mdAbsolute, markdown, "utf8");
+  await writeExtractArtifactText(mdAbsolute, markdown);
 
   const markdownChars = markdown.length;
   const pageCount = loaded.pageCount;

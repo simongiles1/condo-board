@@ -5,8 +5,6 @@
  * SHA-256 hash so duplicate attachments across emails convert once.
  */
 
-import { access, readFile, writeFile } from "fs/promises";
-
 import { and, count, eq, isNull, or, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
@@ -26,6 +24,11 @@ import {
 } from "@/lib/email/attachment-markdown-shared";
 import { enrollImageAttachmentForVision } from "@/lib/email/attachment-vision-image";
 import { readCachedAttachment } from "@/lib/gmail/attachments";
+import {
+  extractArtifactExists,
+  readExtractArtifactText,
+  writeExtractArtifactText,
+} from "@/lib/storage/extract-artifacts";
 
 export {
   ATTACHMENT_PARSE_BATCH_SIZE,
@@ -107,22 +110,15 @@ export async function readAttachmentMarkdown(
     return null;
   }
 
-  try {
-    const absolute = resolveAttachmentStoragePath(row.markdownPath);
-    const markdown = await readFile(absolute, "utf8");
-    return markdown.trim() ? markdown : null;
-  } catch {
-    // Fall back to conventional sidecar location (legacy absolute path drift).
-    try {
-      const markdown = await readFile(
-        attachmentMarkdownPath(contentHash),
-        "utf8",
-      );
-      return markdown.trim() ? markdown : null;
-    } catch {
-      return null;
-    }
+  const candidates = [
+    resolveAttachmentStoragePath(row.markdownPath),
+    attachmentMarkdownPath(contentHash),
+  ];
+  for (const candidate of candidates) {
+    const markdown = await readExtractArtifactText(candidate);
+    if (markdown?.trim()) return markdown;
   }
+  return null;
 }
 
 /**
@@ -283,12 +279,7 @@ export async function upsertAttachmentDocumentPending(input: {
 }
 
 async function markdownSidecarExists(contentHash: string): Promise<boolean> {
-  try {
-    await access(attachmentMarkdownPath(contentHash));
-    return true;
-  } catch {
-    return false;
-  }
+  return extractArtifactExists(attachmentMarkdownPath(contentHash));
 }
 
 /**
@@ -328,10 +319,9 @@ export async function parseAttachmentDocument(
 
   // Idempotent: sidecar already present from a prior success.
   if (await markdownSidecarExists(contentHash)) {
-    const existingMd = await readFile(
-      attachmentMarkdownPath(contentHash),
-      "utf8",
-    );
+    const existingMd =
+      (await readExtractArtifactText(attachmentMarkdownPath(contentHash))) ??
+      "";
     const markdownChars = existingMd.length;
     const pageCount = row.pageCount;
     const { needsOcr, charsPerPage } = shouldFlagNeedsOcr({
@@ -399,7 +389,7 @@ export async function parseAttachmentDocument(
     const markdownChars = markdown.length;
     const mdAbsolute = attachmentMarkdownPath(contentHash);
     const mdKey = attachmentMarkdownStorageKey(contentHash);
-    await writeFile(mdAbsolute, markdown, "utf8");
+    await writeExtractArtifactText(mdAbsolute, markdown);
 
     const { needsOcr, charsPerPage } = shouldFlagNeedsOcr({
       pageCount,

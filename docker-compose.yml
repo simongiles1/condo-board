@@ -27,7 +27,6 @@ services:
       - path: .env.local
         required: false
     environment:
-      COND_BOARD_POSTGRES_URL: postgresql://condo:condo@db:5432/condo_board
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
     volumes:
       - uploads_data:/app/uploads

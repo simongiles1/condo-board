@@ -5,7 +5,7 @@
  * Mixed docs: convert `route=text` pages only; vision/ambiguous stay on Gemini.
  */
 
-import { access, mkdir, readdir, readFile, writeFile } from "fs/promises";
+import { readdir } from "fs/promises";
 import path from "path";
 
 import { sql } from "drizzle-orm";
@@ -17,6 +17,10 @@ import {
   type DoclingProvider,
   normalizeDoclingProvider,
 } from "@/lib/email/docling-provider";
+import {
+  readExtractArtifactText,
+  writeExtractArtifactText,
+} from "@/lib/storage/extract-artifacts";
 
 const HASH_RE = /^[a-f0-9]{64}$/i;
 
@@ -209,34 +213,28 @@ export type DoclingConvertResult = {
 export async function readCachedDoclingMarkdown(
   contentHash: string,
 ): Promise<string | null> {
-  const filePath = doclingCacheAbsolutePath(contentHash);
-  try {
-    await access(filePath);
-    return await readFile(filePath, "utf8");
-  } catch {
-    return null;
-  }
+  return readExtractArtifactText(doclingCacheAbsolutePath(contentHash));
 }
 
 export async function writeCachedDoclingMarkdown(
   contentHash: string,
   markdown: string,
 ): Promise<void> {
-  await writeFile(doclingCacheAbsolutePath(contentHash), markdown, "utf8");
+  await writeExtractArtifactText(
+    doclingCacheAbsolutePath(contentHash),
+    markdown,
+  );
 }
 
 export async function readCachedDoclingPage(
   contentHash: string,
   pageNo: number,
 ): Promise<string | null> {
-  const filePath = doclingPageCacheAbsolutePath(contentHash, pageNo);
-  try {
-    await access(filePath);
-    const body = (await readFile(filePath, "utf8")).trim();
-    return body || null;
-  } catch {
-    return null;
-  }
+  const body = await readExtractArtifactText(
+    doclingPageCacheAbsolutePath(contentHash, pageNo),
+  );
+  const trimmed = body?.trim();
+  return trimmed || null;
 }
 
 export async function hasCachedDoclingPage(
@@ -424,7 +422,6 @@ async function mergeAssembledDoclingCache(
   textPagesByHash: Map<string, number[]>,
   cached: Map<string, Set<number>>,
 ): Promise<void> {
-  const root = path.join(process.cwd(), "data", "email-attachments");
   const hashes: string[] = [];
   for (const [hash, pages] of textPagesByHash) {
     const have = cached.get(hash);
@@ -435,15 +432,8 @@ async function mergeAssembledDoclingCache(
   }
 
   await mapPool(hashes, 16, async (hash) => {
-    let markdown: string;
-    try {
-      markdown = await readFile(
-        path.join(root, `${hash}.docling.md`),
-        "utf8",
-      );
-    } catch {
-      return;
-    }
+    const markdown = await readCachedDoclingMarkdown(hash);
+    if (!markdown?.trim()) return;
     for (const pageNo of listDoclingMarkerPageNos(markdown)) {
       addCachedPage(cached, hash, pageNo);
     }
@@ -506,9 +496,10 @@ async function writeCachedDoclingPage(
   pageNo: number,
   markdown: string,
 ): Promise<void> {
-  const filePath = doclingPageCacheAbsolutePath(contentHash, pageNo);
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${markdown.trim()}\n`, "utf8");
+  await writeExtractArtifactText(
+    doclingPageCacheAbsolutePath(contentHash, pageNo),
+    `${markdown.trim()}\n`,
+  );
 }
 
 /** Text-route pages for a document (1-based). Empty if unprofiled / none. */

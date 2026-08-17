@@ -5,9 +5,6 @@
  * Text PDFs stayed pending even after both pipelines finished.
  */
 
-import { mkdir, readFile, writeFile } from "fs/promises";
-import path from "path";
-
 import { and, eq, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
@@ -33,6 +30,10 @@ import {
   PAGE_VISION_PARSER_NAME,
   spliceVisionPageIntoMarkdown,
 } from "@/lib/email/page-vision-shared";
+import {
+  readExtractArtifactText,
+  writeExtractArtifactText,
+} from "@/lib/storage/extract-artifacts";
 
 const HASH_RE = /^[a-f0-9]{64}$/i;
 
@@ -41,7 +42,9 @@ function nowIso(): string {
 }
 
 function attachmentMarkdownAbsolutePath(contentHash: string): string {
-  return path.join(process.cwd(), attachmentMarkdownRelativeKey(contentHash));
+  return resolveAttachmentStoragePath(
+    attachmentMarkdownRelativeKey(contentHash),
+  );
 }
 
 export type PromoteParsedReason =
@@ -91,12 +94,8 @@ async function loadExistingAttachmentMarkdown(
     attachmentMarkdownAbsolutePath(contentHash),
   ].filter(Boolean) as string[];
   for (const candidate of candidates) {
-    try {
-      const markdown = await readFile(candidate, "utf8");
-      if (markdown.trim()) return markdown;
-    } catch {
-      // try next
-    }
+    const markdown = await readExtractArtifactText(candidate);
+    if (markdown?.trim()) return markdown;
   }
   return "";
 }
@@ -177,15 +176,11 @@ export async function promoteParsedIfExtractionComplete(
 
   for (const page of donePages) {
     if (!page.artifactPath) continue;
-    try {
-      const body = await readFile(
-        resolveAttachmentStoragePath(page.artifactPath),
-        "utf8",
-      );
-      markdown = spliceVisionPageIntoMarkdown(markdown, page.pageNo, body);
-    } catch {
-      // Skip a missing artifact; other pages may still make usable markdown.
-    }
+    const body = await readExtractArtifactText(
+      resolveAttachmentStoragePath(page.artifactPath),
+    );
+    if (body == null) continue;
+    markdown = spliceVisionPageIntoMarkdown(markdown, page.pageNo, body);
   }
 
   const trimmed = markdown.trim();
@@ -204,8 +199,7 @@ export async function promoteParsedIfExtractionComplete(
 
   const mdKey = attachmentMarkdownRelativeKey(hash);
   const mdAbsolute = attachmentMarkdownAbsolutePath(hash);
-  await mkdir(path.dirname(mdAbsolute), { recursive: true });
-  await writeFile(mdAbsolute, `${trimmed}\n`, "utf8");
+  await writeExtractArtifactText(mdAbsolute, `${trimmed}\n`);
 
   const markdownChars = trimmed.length + 1;
   const pageCount = doc.pageCount;

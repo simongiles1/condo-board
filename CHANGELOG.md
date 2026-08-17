@@ -6,6 +6,26 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Extract markdown Storage I/O** — A disk miss for assembled `.md`,
+  Docling, or vision artifacts downloads from the private
+  `extract-artifacts` bucket and writes the local cache. New Docling and
+  vision writes go to disk and Storage so Coolify and local share the paid
+  extract corpus. Original PDFs still stay on disk and re-fetch from Gmail.
+
+- **Extract markdown in Supabase Storage** — Assembled `.md`, Docling, and
+  vision artifacts (~257 MB) live in a private `extract-artifacts` bucket.
+  Original PDFs and video stay on local/Coolify disk and can be re-fetched
+  from Gmail.
+
+### Changed
+
+- **Compose Postgres URL** — The app service no longer hardcodes
+  `COND_BOARD_POSTGRES_URL` to the compose `db`. Local Docker still
+  defaults to that in the entrypoint. Coolify can point at Supabase
+  without the compose file overwriting it.
+
 ### Fixed
 
 - **Coolify production Docker build OOM** — `next build` type-checking now

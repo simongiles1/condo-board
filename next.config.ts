@@ -18,6 +18,25 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: process.env.SKIP_TYPECHECK === "1",
   },
+  productionBrowserSourceMaps: false,
+  experimental: {
+    // Coolify build dies during "Collecting build traces" on this codebase.
+    cpus: 1,
+    webpackMemoryOptimizations: true,
+    serverSourceMaps: false,
+    enablePrerenderSourceMaps: false,
+  },
+  outputFileTracingExcludes: {
+    "*": [
+      "./node_modules/@swc/**",
+      "./node_modules/webpack/**",
+      "./node_modules/typescript/**",
+      "./node_modules/eslint/**",
+      "./scripts/**",
+      "./drizzle/**",
+      "./supabase/**",
+    ],
+  },
 };
 
 export default nextConfig;

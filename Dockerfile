@@ -16,7 +16,8 @@ COPY . .
 RUN mkdir -p public
 # Type-checking after compile OOMs Coolify build containers on this codebase.
 # Skip tsc during Docker `next build`; local `next build` still typechecks.
-ENV NODE_OPTIONS="--max-old-space-size=4096"
+# 4 GB heap let trace collection exceed the Services host cgroup; 3 GB + GC headroom is safer.
+ENV NODE_OPTIONS="--max-old-space-size=3072"
 ENV SKIP_TYPECHECK=1
 RUN npm run build
 

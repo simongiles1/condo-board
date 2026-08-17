@@ -36,6 +36,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   message that Gmail then 404s (`Requested entity was not found`). Those
   are skipped so the cursor can advance and later mail still imports.
 
+- **Coolify build OOM during trace collection** — `next build` compiled but
+  died on "Collecting build traces". Docker builds now cap Next workers to
+  one CPU, enable webpack memory optimizations, skip source maps, exclude
+  dev-only paths from file tracing, and use a 3 GB heap so the process stays
+  under the Services host limit.
+
 - **Hosted Drizzle journal after dump restore** — Startup migrate no longer
   dies on `0002_worthless_talon` when `password_reset_tokens` already exists.
   That migration is idempotent, duplicate-object errors stamp and continue,

@@ -14,9 +14,10 @@ ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN mkdir -p public
-# Type-checking after compile can exceed 1.5 GB on this codebase; Coolify build
-# containers need headroom or `next build` aborts during "checking validity of types".
-ENV NODE_OPTIONS="--max-old-space-size=3072"
+# Type-checking after compile OOMs Coolify build containers on this codebase.
+# Skip tsc during Docker `next build`; local `next build` still typechecks.
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+ENV SKIP_TYPECHECK=1
 RUN npm run build
 
 FROM base AS runner

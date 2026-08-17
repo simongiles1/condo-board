@@ -6,6 +6,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Coolify production Docker build OOM** — `next build` type-checking now
+  skips in the Docker image (`SKIP_TYPECHECK=1`) and the Node heap is 4 GB,
+  so the larger extraction codebase can deploy on the Services host.
+
 ### Added
 
 - **Telegram digest after harvest** — After ingest + harvest-missing (cron

@@ -99,6 +99,10 @@ async function syncMessageIds(
       if (result === "added") added += 1;
       else skipped += 1;
     } catch (error) {
+      if (isGmailMissingEntityError(error)) {
+        skipped += 1;
+        continue;
+      }
       errors.push(
         `Message ${messageId}: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -197,6 +201,9 @@ async function syncPersonalHistoryThreads(
         threadsToImport.add(parsed.gmailThreadId);
       }
     } catch (error) {
+      if (isGmailMissingEntityError(error)) {
+        continue;
+      }
       errors.push(
         `Message ${messageId}: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -308,6 +315,16 @@ async function commitHistoryIdIfReady(
 function isExpiredHistoryError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("404") || message.toLowerCase().includes("history");
+}
+
+/** Gmail history can list a message that was deleted before we fetch it. */
+function isGmailMissingEntityError(error: unknown): boolean {
+  const err = error as { code?: number; status?: number | string };
+  if (err?.code === 404 || err?.status === 404 || err?.status === "NOT_FOUND") {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /requested entity was not found/i.test(message);
 }
 
 export async function syncPersonalAccount(

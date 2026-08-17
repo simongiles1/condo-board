@@ -28,6 +28,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Analysis Lab went blank on production** — `/admin/analysis` waited on
+  a cost summary that ran one query per extraction source (~14k). The hub
+  now renders immediately, and the summary uses a single aggregate query.
+
+- **Gmail history cursor stuck on deleted messages** — History can list a
+  message that Gmail then 404s (`Requested entity was not found`). Those
+  are skipped so the cursor can advance and later mail still imports.
+
 - **Hosted Drizzle journal after dump restore** — Startup migrate no longer
   dies on `0002_worthless_talon` when `password_reset_tokens` already exists.
   That migration is idempotent, duplicate-object errors stamp and continue,

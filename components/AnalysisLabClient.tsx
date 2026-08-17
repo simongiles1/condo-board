@@ -44,9 +44,17 @@ export function AnalysisLabClient() {
     setLoading(true);
     try {
       const costRes = await fetch("/api/analysis/cost-summary");
-      setSummary(await costRes.json());
-    } catch {
-      setError("Failed to load analysis data.");
+      const data = (await costRes.json()) as CostSummary & { error?: string };
+      if (!costRes.ok || data.error || data.extrapolation == null) {
+        throw new Error(data.error ?? "Failed to load analysis data.");
+      }
+      setSummary(data);
+      setError(null);
+    } catch (err) {
+      setSummary(null);
+      setError(
+        err instanceof Error ? err.message : "Failed to load analysis data.",
+      );
     } finally {
       setLoading(false);
     }
@@ -100,12 +108,8 @@ export function AnalysisLabClient() {
     await load();
   }
 
-  if (loading) {
-    return <div className="h-48 animate-pulse rounded-xl bg-slate-100" />;
-  }
-
   return (
-    <div className="min-h-0 flex-1 space-y-6 overflow-y-auto">
+    <div className="space-y-6">
       <div>
         <p className="text-xs uppercase tracking-wide text-slate-500">
           Email intelligence
@@ -149,6 +153,10 @@ export function AnalysisLabClient() {
       ) : null}
       {error ? (
         <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+      ) : null}
+
+      {loading && !summary ? (
+        <div className="h-24 animate-pulse rounded-xl bg-slate-100" />
       ) : null}
 
       {summary ? (

@@ -27,10 +27,8 @@ export async function register() {
 
       if (!backgroundWorkersEnabled()) {
         console.info(
-          "[instrumentation] Background workers disabled (DISABLE_BACKGROUND_WORKERS=true)",
+          "[instrumentation] Background workers disabled (DISABLE_BACKGROUND_WORKERS=true); Telegram long-poll skipped",
         );
-        const { startTelegramRuntime } = await import("@/lib/telegram/polling");
-        startTelegramRuntime();
         return;
       }
 

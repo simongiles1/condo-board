@@ -18,7 +18,10 @@ import {
   parseTelegramCallbackData,
   telegramCallbackData,
 } from "../lib/telegram/format";
-import { normalizeTelegramChatId } from "../lib/telegram/config";
+import {
+  normalizeTelegramChatId,
+  shouldPollTelegram,
+} from "../lib/telegram/config";
 import { explainTelegramSendFailure } from "../lib/telegram/api";
 
 function person(
@@ -147,6 +150,43 @@ describe("formatResolvedMessage", () => {
     const first = formatResolvedMessage("Ambiguous contact", "approved");
     assert.match(first, /Approved in Telegram/);
     assert.equal(formatResolvedMessage(first, "approved"), first);
+  });
+});
+
+describe("shouldPollTelegram", () => {
+  const originalToken = process.env.TELEGRAM_BOT_TOKEN;
+  const originalWebhook = process.env.TELEGRAM_WEBHOOK_URL;
+  const originalWorkers = process.env.DISABLE_BACKGROUND_WORKERS;
+
+  function restoreTelegramEnv() {
+    if (originalToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
+    else process.env.TELEGRAM_BOT_TOKEN = originalToken;
+    if (originalWebhook === undefined) delete process.env.TELEGRAM_WEBHOOK_URL;
+    else process.env.TELEGRAM_WEBHOOK_URL = originalWebhook;
+    if (originalWorkers === undefined) delete process.env.DISABLE_BACKGROUND_WORKERS;
+    else process.env.DISABLE_BACKGROUND_WORKERS = originalWorkers;
+  }
+
+  it("does not long-poll when background workers are disabled", () => {
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    delete process.env.TELEGRAM_WEBHOOK_URL;
+    process.env.DISABLE_BACKGROUND_WORKERS = "true";
+    try {
+      assert.equal(shouldPollTelegram(), false);
+    } finally {
+      restoreTelegramEnv();
+    }
+  });
+
+  it("long-polls when the bot is configured and workers are on", () => {
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    delete process.env.TELEGRAM_WEBHOOK_URL;
+    delete process.env.DISABLE_BACKGROUND_WORKERS;
+    try {
+      assert.equal(shouldPollTelegram(), true);
+    } finally {
+      restoreTelegramEnv();
+    }
   });
 });
 

@@ -113,6 +113,11 @@ async function ensureMigrationTable(client) {
   `);
 }
 
+function isAlreadyPresentError(error) {
+  const code = error?.code;
+  return code === "42P07" || code === "42710" || code === "42701";
+}
+
 async function getLastAppliedMigration(client) {
   const { rows } = await client.query(`
     SELECT id, hash, created_at
@@ -206,6 +211,21 @@ async function applyPendingMigrations(client) {
       console.log(`[db:migrate] Applied ${migration.tag}.`);
     } catch (error) {
       await client.query("ROLLBACK");
+      // Dump restores already have objects that early CREATE TABLE migrations
+      // lack IF NOT EXISTS. Stamp and continue so later journal rows still run.
+      if (isAlreadyPresentError(error)) {
+        await client.query(
+          `
+            INSERT INTO drizzle.__drizzle_migrations (hash, created_at)
+            VALUES ($1, $2)
+          `,
+          [migration.hash, migration.folderMillis],
+        );
+        console.warn(
+          `[db:migrate] ${migration.tag} already present in schema, stamped and skipped.`,
+        );
+        continue;
+      }
       throw error;
     }
   }

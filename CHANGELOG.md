@@ -28,6 +28,17 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Hosted Drizzle journal after dump restore** — Startup migrate no longer
+  dies on `0002_worthless_talon` when `password_reset_tokens` already exists.
+  That migration is idempotent, duplicate-object errors stamp and continue,
+  and the hosted database is marked through `0038` so later journal rows are
+  not skipped on every restart.
+
+- **Telegram getUpdates conflict** — Local `DISABLE_BACKGROUND_WORKERS=true`
+  no longer long-polls the bot, so production can keep Telegram HITL. Prefer
+  `TELEGRAM_WEBHOOK_URL` + `TELEGRAM_WEBHOOK_SECRET` on Coolify so a local
+  full-stack run cannot steal updates.
+
 - **Coolify production Docker build OOM** — `next build` type-checking now
   skips in the Docker image (`SKIP_TYPECHECK=1`) and the Node heap is 4 GB,
   so the larger extraction codebase can deploy on the Services host.

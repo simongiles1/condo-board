@@ -1,5 +1,7 @@
 /** Telegram bot env. Chat ids live on app_users, not in env. */
 
+import { backgroundWorkersEnabled } from "@/lib/background-workers";
+
 export function getTelegramBotToken(): string | null {
   const value = process.env.TELEGRAM_BOT_TOKEN?.trim();
   return value ? value : null;
@@ -20,7 +22,13 @@ export function isTelegramBotConfigured(): boolean {
 }
 
 export function shouldPollTelegram(): boolean {
-  return isTelegramBotConfigured() && !getTelegramWebhookUrl();
+  // Long-poll is a singleton per bot. Local `npm run dev` with
+  // DISABLE_BACKGROUND_WORKERS=true must not steal getUpdates from production.
+  return (
+    isTelegramBotConfigured() &&
+    !getTelegramWebhookUrl() &&
+    backgroundWorkersEnabled()
+  );
 }
 
 /** Telegram user/group chat ids are signed 64-bit integers. */

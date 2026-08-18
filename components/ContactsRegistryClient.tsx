@@ -235,6 +235,27 @@ type PendingSever = {
   value: string;
 };
 
+/** Avoid a white-screen when the proxy returns HTML (timeout/502) instead of JSON. */
+async function readApiJson<T extends { error?: string }>(
+  res: Response,
+): Promise<T> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const status = res.status;
+    const hint =
+      status === 502 || status === 504 || status === 524
+        ? " The request timed out; refresh the page — work may have finished on the server."
+        : status >= 500
+          ? " Refresh the page and try again."
+          : "";
+    return {
+      error: `Server error (${status || "empty response"}).${hint}`,
+    } as T;
+  }
+}
+
 function formatRange(from: string | null, to: string | null): string {
   const a = from?.slice(0, 10) ?? "…";
   const b = to?.slice(0, 10) ?? "present";
@@ -520,26 +541,32 @@ export function ContactsRegistryClient({
 
   async function runBackfillAsync(): Promise<void> {
     setMessage("Ingesting prior fingerprint merges into the registry…");
-    const res = await fetch("/api/contacts/registry", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "backfill", limit: 25 }),
-    });
-    const json = (await res.json()) as {
-      ok?: boolean;
-      processed?: number;
-      completed?: number;
-      failed?: number;
-      error?: string;
-    };
-    if (!res.ok) {
-      setMessage(json.error ?? "Backfill failed.");
-      return;
+    try {
+      const res = await fetch("/api/contacts/registry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "backfill", limit: 25 }),
+      });
+      const json = await readApiJson<{
+        ok?: boolean;
+        processed?: number;
+        completed?: number;
+        failed?: number;
+        error?: string;
+      }>(res);
+      if (!res.ok) {
+        setMessage(json.error ?? "Backfill failed.");
+        return;
+      }
+      setMessage(
+        `Backfill: ${json.completed ?? 0} completed, ${json.failed ?? 0} failed (${json.processed ?? 0} processed).`,
+      );
+      await refreshData();
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Backfill failed.",
+      );
     }
-    setMessage(
-      `Backfill: ${json.completed ?? 0} completed, ${json.failed ?? 0} failed (${json.processed ?? 0} processed).`,
-    );
-    await refreshData();
   }
 
   function runBackfill() {
@@ -560,36 +587,42 @@ export function ContactsRegistryClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on mount
   }, []);
 
-  // Fold nameless / "Haider M" mailbox stubs into the strongest named occupant.
-  // Also clears email-local-part first names left by older extractions.
+  // Fold same-human mailbox stubs ("Haider M") into the matching fuller
+  // identity, not the mailbox-wide highest-mention person (Bonnie on studiopm@).
   useEffect(() => {
     if (autoCoalesceStarted.current) return;
     autoCoalesceStarted.current = true;
     startTransition(async () => {
-      const res = await fetch("/api/contacts/registry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "coalesce" }),
-      });
-      if (!res.ok) return;
-      const json = (await res.json()) as {
-        merged?: number;
-        firstNamesRepaired?: number;
-        firstNamesRecovered?: number;
-        firstNamesCorrected?: number;
-        aliasesPruned?: number;
-      };
+      try {
+        const res = await fetch("/api/contacts/registry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "coalesce" }),
+        });
+        if (!res.ok) return;
+        const json = await readApiJson<{
+          merged?: number;
+          firstNamesRepaired?: number;
+          firstNamesRecovered?: number;
+          firstNamesCorrected?: number;
+          aliasesPruned?: number;
+          occupancyRowsUpdated?: number;
+          error?: string;
+        }>(res);
+        if (json.error) return;
       const merged = json.merged ?? 0;
       const repaired = json.firstNamesRepaired ?? 0;
       const recovered = json.firstNamesRecovered ?? 0;
       const corrected = json.firstNamesCorrected ?? 0;
       const aliasesPruned = json.aliasesPruned ?? 0;
+      const occupancyRowsUpdated = json.occupancyRowsUpdated ?? 0;
       if (
         merged > 0 ||
         repaired > 0 ||
         recovered > 0 ||
         corrected > 0 ||
-        aliasesPruned > 0
+        aliasesPruned > 0 ||
+        occupancyRowsUpdated > 0
       ) {
         const parts: string[] = [];
         if (recovered > 0) {
@@ -617,8 +650,16 @@ export function ContactsRegistryClient({
             `cleared ${repaired} email-local-part first name${repaired === 1 ? "" : "s"}`,
           );
         }
+        if (occupancyRowsUpdated > 0) {
+          parts.push(
+            `updated ${occupancyRowsUpdated} shared-mailbox occupancy range${occupancyRowsUpdated === 1 ? "" : "s"}`,
+          );
+        }
         setMessage(`${parts.join("; ")}.`);
         await refreshData();
+      }
+      } catch {
+        // Page-load coalesce must not white-screen the registry.
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on mount
@@ -627,25 +668,29 @@ export function ContactsRegistryClient({
   function runSweep() {
     startTransition(async () => {
       setMessage(null);
-      const res = await fetch("/api/contacts/registry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "sweep", limit: 20 }),
-      });
-      const json = (await res.json()) as {
-        emailsSwept?: number;
-        decisions?: number;
-        personsMerged?: number;
-        error?: string;
-      };
-      if (!res.ok) {
-        setMessage(json.error ?? "Sweep failed.");
-        return;
+      try {
+        const res = await fetch("/api/contacts/registry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "sweep", limit: 20 }),
+        });
+        const json = await readApiJson<{
+          emailsSwept?: number;
+          decisions?: number;
+          personsMerged?: number;
+          error?: string;
+        }>(res);
+        if (!res.ok) {
+          setMessage(json.error ?? "Sweep failed.");
+          return;
+        }
+        setMessage(
+          `Sweep: ${json.emailsSwept ?? 0} shared mailboxes, ${json.decisions ?? 0} occupancy updates, ${json.personsMerged ?? 0} stubs merged.`,
+        );
+        await refreshData();
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Sweep failed.");
       }
-      setMessage(
-        `Sweep: ${json.emailsSwept ?? 0} shared mailboxes, ${json.decisions ?? 0} interval updates, ${json.personsMerged ?? 0} stubs merged.`,
-      );
-      refresh();
     });
   }
 

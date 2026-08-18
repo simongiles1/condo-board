@@ -55,6 +55,8 @@ Hard rules:
 - NEVER merge people with different given names (Margot vs Atif vs Mehal vs Haider) or incompatible surnames (Kempton vs Khurshid vs Singh vs Mukadam), even when they share a role mailbox or job title. That MUST be link_email.
 - Sparse first-name-only stubs must stay separate unless unique corroboration (email or phone) appears in the evidence.
 - Shared / role mailboxes: same address ≠ same human. Prefer link_email with date ranges over merge when names differ across time.
+- Nameless incoming on a shared mailbox: do NOT pick a former occupant by mention count. Enrich the person whose occupancy is open-ended or has the latest validTo (current occupant). Never merge a nameless card into a person.
+- Named incoming on a shared mailbox: merge only into the candidate with a compatible name. Other occupants of that address are different people, not competing merge targets.
 - People may have multiple emails; that is merge/enrich, not a reason to invent a second person.
 - Titles change over time — do not treat title mismatch alone as proof of different people.
 - Do not invent names, emails, phones, or dates that are not in the input.

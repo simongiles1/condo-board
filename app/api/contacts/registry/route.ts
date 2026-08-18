@@ -146,27 +146,53 @@ export async function POST(request: Request) {
   }
 
   if (body.action === "sweep") {
-    const result = await sweepSharedMailboxConflicts({
-      modelId: body.modelId ?? null,
-      limit: body.limit ?? 20,
-    });
-    return NextResponse.json({ ok: true, ...result });
+    try {
+      const result = await sweepSharedMailboxConflicts({
+        modelId: body.modelId ?? null,
+        limit: body.limit ?? 20,
+      });
+      return NextResponse.json({ ok: true, ...result });
+    } catch (error) {
+      console.error("[contacts:sweep]", error);
+      return NextResponse.json(
+        {
+          error: error instanceof Error ? error.message : "Sweep failed.",
+        },
+        { status: 500 },
+      );
+    }
   }
 
   if (body.action === "coalesce") {
-    const result = await coalesceWeakEmailDuplicatePersons();
-    return NextResponse.json({ ok: true, ...result });
+    try {
+      const result = await coalesceWeakEmailDuplicatePersons();
+      return NextResponse.json({ ok: true, ...result });
+    } catch (error) {
+      console.error("[contacts:coalesce]", error);
+      return NextResponse.json(
+        { error: "Could not coalesce mailbox stubs." },
+        { status: 500 },
+      );
+    }
   }
 
   if (body.action === "cleanup_shared") {
-    const result = await cleanupSharedMailboxRegistry({
-      dryRun: false,
-      emailFilter:
-        typeof body.email === "string" && body.email.trim()
-          ? body.email.trim()
-          : null,
-    });
-    return NextResponse.json({ ok: true, ...result });
+    try {
+      const result = await cleanupSharedMailboxRegistry({
+        dryRun: false,
+        emailFilter:
+          typeof body.email === "string" && body.email.trim()
+            ? body.email.trim()
+            : null,
+      });
+      return NextResponse.json({ ok: true, ...result });
+    } catch (error) {
+      console.error("[contacts:cleanup_shared]", error);
+      return NextResponse.json(
+        { error: "Shared-mailbox cleanup failed." },
+        { status: 500 },
+      );
+    }
   }
 
   if (body.action === "merge") {
@@ -214,8 +240,17 @@ export async function POST(request: Request) {
   }
 
   // Default: process pending fingerprint merges into registry (mention-ordered).
-  const result = await processPendingRegistryIngests({
-    limit: body.limit ?? 25,
-  });
-  return NextResponse.json({ ok: true, ...result });
+  try {
+    const result = await processPendingRegistryIngests({
+      limit: body.limit ?? 25,
+    });
+    return NextResponse.json({ ok: true, ...result });
+  } catch (error) {
+    console.error("[contacts:backfill]", error);
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Could not process pending merges.";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }

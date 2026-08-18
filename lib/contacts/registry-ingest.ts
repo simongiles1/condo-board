@@ -9,7 +9,10 @@ import { eq, inArray } from "drizzle-orm";
 
 import { adjudicateContactRegistryBatch } from "@/lib/contacts/registry-adjudicate";
 import { applyAdjudicationDecisions } from "@/lib/contacts/registry-apply";
-import { contactHoldReason } from "@/lib/contacts/registry-hold";
+import {
+  contactHoldReason,
+  rewriteSharedMailboxDecision,
+} from "@/lib/contacts/registry-hold";
 import { loadContactRegistryPersons } from "@/lib/contacts/registry-load";
 import { shortlistAgainstRegistry } from "@/lib/contacts/registry-shortlist";
 import {
@@ -238,10 +241,16 @@ export async function ingestFingerprintMergeIntoRegistry(params: {
       for (const decision of decisions) {
         const item = itemsByTemp.get(decision.incomingTempId);
         if (!item) continue;
+        const resolved = rewriteSharedMailboxDecision({
+          incoming: item.incoming,
+          candidates: item.candidates,
+          decision,
+        });
         const holdReason = holdEnabled
           ? contactHoldReason({
-              decision,
+              decision: resolved,
               candidates: item.candidates,
+              incoming: item.incoming,
             })
           : null;
         if (holdReason) {
@@ -250,14 +259,14 @@ export async function ingestFingerprintMergeIntoRegistry(params: {
             fingerprintMergeId: params.fingerprintMergeId,
             payload: {
               incoming: item.incoming,
-              decision,
+              decision: resolved,
               candidates: compactContactCandidates(item.candidates),
               modelId: params.modelId,
             },
           });
           continue;
         }
-        autoDecisions.push(decision);
+        autoDecisions.push(resolved);
         autoIncoming.push(item.incoming);
       }
 

@@ -21,6 +21,7 @@ import {
   isNamelessPerson,
   isWeakNameVariantOf,
   parseIncomingCardSourceEmailIds,
+  planMailboxIdentityMerges,
 } from "../lib/contacts/registry-shared";
 
 describe("parseIncomingCardSourceEmailIds", () => {
@@ -62,6 +63,65 @@ describe("mailbox stub helpers", () => {
       isNamelessPerson({ firstName: "Haider", lastName: null }),
       false,
     );
+  });
+});
+
+describe("planMailboxIdentityMerges", () => {
+  it("folds Haider stubs into Mukadam even when Bonnie has more mentions", () => {
+    const bonnie = {
+      id: "bonnie",
+      firstName: "Bonnie",
+      lastName: "Kafi",
+      mentionWeight: 13642,
+    };
+    const mukadam = {
+      id: "mukadam",
+      firstName: "Haider",
+      lastName: "Mukadam",
+      mentionWeight: 5080,
+    };
+    const haiderM = {
+      id: "haider-m",
+      firstName: "Haider",
+      lastName: "M",
+      mentionWeight: 9,
+    };
+    const haider = {
+      id: "haider",
+      firstName: "Haider",
+      lastName: null,
+      mentionWeight: 0,
+    };
+    const plans = planMailboxIdentityMerges([
+      bonnie,
+      mukadam,
+      haiderM,
+      haider,
+    ]);
+    assert.equal(plans.length, 1);
+    assert.equal(plans[0]?.survivor.id, "mukadam");
+    assert.deepEqual(
+      plans[0]?.absorbed.map((p) => p.id).sort(),
+      ["haider", "haider-m"],
+    );
+  });
+
+  it("does not merge distinct full names on the same mailbox", () => {
+    const plans = planMailboxIdentityMerges([
+      {
+        id: "bonnie",
+        firstName: "Bonnie",
+        lastName: "Kafi",
+        mentionWeight: 100,
+      },
+      {
+        id: "haider",
+        firstName: "Haider",
+        lastName: "Mukadam",
+        mentionWeight: 50,
+      },
+    ]);
+    assert.equal(plans.length, 0);
   });
 });
 

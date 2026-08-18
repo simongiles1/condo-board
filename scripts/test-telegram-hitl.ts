@@ -9,15 +9,20 @@ import { describe, it } from "node:test";
 import {
   contactHoldReason,
   CONTACT_HOLD_EMAIL_SCORE,
+  rewriteSharedMailboxDecision,
 } from "../lib/contacts/registry-hold";
 import type { ShortlistHit } from "../lib/contacts/registry-shortlist";
 import type { ContactAdjudicationDecision } from "../lib/contacts/registry-shared";
+import type { ContactRegistryIncomingCard } from "../lib/contacts/registry-shared";
 import type { ContactRegistryPersonSummary } from "../lib/contacts/registry-shared";
 import {
   formatResolvedMessage,
   parseTelegramCallbackData,
   telegramCallbackData,
 } from "../lib/telegram/format";
+import {
+  contactReviewIdentityKey,
+} from "../lib/telegram/types";
 import {
   normalizeTelegramChatId,
   shouldPollTelegram,
@@ -28,20 +33,51 @@ function person(
   id: string,
   firstName: string,
   lastName: string,
+  extras?: Partial<ContactRegistryPersonSummary>,
 ): ContactRegistryPersonSummary {
   return {
     id,
     firstName,
     lastName,
     nameAliases: [],
-    mentionWeight: 1,
+    mentionWeight: extras?.mentionWeight ?? 1,
     sourceEmailCount: 1,
     sparseStub: false,
     currentOrganizationId: null,
     currentOrganizationName: null,
-    emails: [],
-    phones: [],
-    titles: [],
+    emails: extras?.emails ?? [],
+    phones: extras?.phones ?? [],
+    titles: extras?.titles ?? [],
+  };
+}
+
+function occupancyEmail(
+  address: string,
+  validFrom: string | null,
+  validTo: string | null,
+): ContactRegistryPersonSummary["emails"][number] {
+  return { id: address, email: address, validFrom, validTo };
+}
+
+function incomingCard(
+  extras: Partial<ContactRegistryIncomingCard> & {
+    first_name?: string | null;
+    last_name?: string | null;
+    email?: string | null;
+  },
+): ContactRegistryIncomingCard {
+  return {
+    tempId: extras.tempId ?? "t1",
+    first_name: extras.first_name ?? null,
+    last_name: extras.last_name ?? null,
+    email: extras.email ?? null,
+    phone: extras.phone ?? null,
+    job_title: extras.job_title ?? null,
+    sourceEmailIds: extras.sourceEmailIds ?? [],
+    dateMin: extras.dateMin ?? "2026-08-14",
+    dateMax: extras.dateMax ?? "2026-08-14",
+    mentionWeight: extras.mentionWeight ?? 1,
+    blockingKeys: extras.blockingKeys ?? [],
   };
 }
 
@@ -122,6 +158,148 @@ describe("contactHoldReason", () => {
       candidates: [],
     });
     assert.equal(reason, null);
+  });
+
+  it("does not hold a named role-mailbox match when other occupants are different people", () => {
+    const studio = "studiopm@iccpropertymanagement.com";
+    const reason = contactHoldReason({
+      incoming: incomingCard({
+        first_name: "Haider",
+        last_name: "Mukadam",
+        email: studio,
+      }),
+      decision: decision("merge", { targetPersonId: "haider" }),
+      candidates: [
+        {
+          person: person("haider", "Haider", "Mukadam", {
+            emails: [occupancyEmail(studio, "2023-07-27", "2026-08-14")],
+          }),
+          score: 160,
+        },
+        {
+          person: person("bonnie", "Bonnie", "Kafi", {
+            emails: [occupancyEmail(studio, "2023-07-27", "2026-05-11")],
+            mentionWeight: 1413,
+          }),
+          score: 105,
+        },
+        {
+          person: person("atif", "Atif", "Khurshid", {
+            emails: [occupancyEmail(studio, "2022-01-01", "2023-07-01")],
+          }),
+          score: 105,
+        },
+      ],
+    });
+    assert.equal(reason, null);
+  });
+
+  it("does not hold Haider stubs that share the role mailbox with the full name", () => {
+    const studio = "studiopm@iccpropertymanagement.com";
+    const reason = contactHoldReason({
+      incoming: incomingCard({
+        first_name: "Haider",
+        last_name: "Mukadam",
+        email: studio,
+      }),
+      decision: decision("merge", { targetPersonId: "haider" }),
+      candidates: [
+        {
+          person: person("haider", "Haider", "Mukadam", {
+            emails: [occupancyEmail(studio, "2023-07-27", "2026-08-14")],
+          }),
+          score: 160,
+        },
+        {
+          person: person("stub", "Haider", "M", {
+            emails: [occupancyEmail(studio, "2024-01-01", "2024-06-01")],
+          }),
+          score: 123,
+        },
+      ],
+    });
+    assert.equal(reason, null);
+  });
+});
+
+describe("rewriteSharedMailboxDecision", () => {
+  const studio = "studiopm@iccpropertymanagement.com";
+
+  it("attaches nameless incoming to the latest occupant, not the highest-mention person", () => {
+    const rewritten = rewriteSharedMailboxDecision({
+      incoming: incomingCard({
+        first_name: null,
+        last_name: null,
+        email: studio,
+      }),
+      candidates: [
+        {
+          person: person("bonnie", "Bonnie", "Kafi", {
+            mentionWeight: 1413,
+            emails: [occupancyEmail(studio, "2023-07-27", "2026-05-11")],
+          }),
+          score: 105,
+        },
+        {
+          person: person("haider", "Haider", "Mukadam", {
+            mentionWeight: 213,
+            emails: [occupancyEmail(studio, "2023-07-27", "2026-08-14")],
+          }),
+          score: 105,
+        },
+      ],
+      decision: decision("link_email", {
+        targetPersonId: "bonnie",
+        reason: "link to current occupant (Bonnie Kafi)",
+      }),
+    });
+    assert.equal(rewritten.action, "enrich");
+    assert.equal(rewritten.targetPersonId, "haider");
+    assert.equal(rewritten.reason, "nameless_role_mailbox_current_occupant");
+  });
+
+  it("retargets a named card away from a conflicting occupant", () => {
+    const rewritten = rewriteSharedMailboxDecision({
+      incoming: incomingCard({
+        first_name: "Haider",
+        last_name: "Mukadam",
+        email: studio,
+      }),
+      candidates: [
+        {
+          person: person("bonnie", "Bonnie", "Kafi", {
+            emails: [occupancyEmail(studio, "2023-07-27", "2026-05-11")],
+          }),
+          score: 105,
+        },
+        {
+          person: person("haider", "Haider", "Mukadam", {
+            emails: [occupancyEmail(studio, "2023-07-27", "2026-08-14")],
+          }),
+          score: 160,
+        },
+      ],
+      decision: decision("link_email", { targetPersonId: "bonnie" }),
+    });
+    assert.equal(rewritten.action, "merge");
+    assert.equal(rewritten.targetPersonId, "haider");
+  });
+});
+
+describe("contactReviewIdentityKey", () => {
+  it("collapses the same mailbox identity", () => {
+    assert.equal(
+      contactReviewIdentityKey({
+        first_name: "Haider",
+        last_name: "Mukadam",
+        email: "StudioPM@ICCPropertyManagement.com",
+      }),
+      contactReviewIdentityKey({
+        first_name: "Haider",
+        last_name: "Mukadam",
+        email: "studiopm@iccpropertymanagement.com",
+      }),
+    );
   });
 });
 

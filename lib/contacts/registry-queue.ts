@@ -7,26 +7,14 @@
  * at the same time.
  */
 
-import { desc, eq, isNull } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
-import { adjudicateContactRegistryBatch } from "@/lib/contacts/registry-adjudicate";
-import {
-  coalesceWeakEmailDuplicatePersons,
-  refreshEmailIndex,
-} from "@/lib/contacts/registry-apply";
+import { coalesceWeakEmailDuplicatePersons } from "@/lib/contacts/registry-apply";
+import { cleanupSharedMailboxRegistry } from "@/lib/contacts/registry-cleanup";
 import { ingestFingerprintMergeIntoRegistry } from "@/lib/contacts/registry-ingest";
-import { loadContactRegistryPersons } from "@/lib/contacts/registry-load";
-import { shortlistAgainstRegistry } from "@/lib/contacts/registry-shortlist";
-import {
-  buildBlockingKeys,
-  normalizeContactRegistryEmail,
-  scoreMentionWeight,
-  type ContactRegistryIncomingCard,
-} from "@/lib/contacts/registry-shared";
 import { getDb } from "@/lib/db";
 import {
   contactFingerprintMerges,
-  contactPersonEmails,
   contactRegistryIngests,
 } from "@/lib/db/schema";
 import { parseContactFingerprintResult } from "@/lib/email-analysis/contact-highlight-shared";
@@ -172,134 +160,21 @@ export async function processPendingRegistryIngests(params?: {
 }
 
 /**
- * Sweep: shared emails with multiple open-ended occupants → AI link_email
- * cleanup, then refresh current person index.
+ * Sweep: rebuild shared-mailbox occupancy from named evidence so the latest
+ * occupant is "present", not the highest-mention former manager.
  */
-export async function sweepSharedMailboxConflicts(params?: {
+export async function sweepSharedMailboxConflicts(_params?: {
   modelId?: string | null;
   limit?: number;
-}): Promise<{ emailsSwept: number; decisions: number }> {
-  const db = getDb();
-  const limit = params?.limit ?? 20;
-
-  const openRows = await db
-    .select()
-    .from(contactPersonEmails)
-    .where(isNull(contactPersonEmails.validTo));
-
-  const byEmail = new Map<string, typeof openRows>();
-  for (const row of openRows) {
-    const key = normalizeContactRegistryEmail(row.email);
-    const list = byEmail.get(key) ?? [];
-    list.push(row);
-    byEmail.set(key, list);
-  }
-
-  const conflicts = [...byEmail.entries()]
-    .filter(([, rows]) => {
-      const personIds = new Set(rows.map((r) => r.personId));
-      return personIds.size > 1;
-    })
-    .slice(0, limit);
-
-  if (conflicts.length === 0) {
-    return { emailsSwept: 0, decisions: 0 };
-  }
-
-  const registry = await loadContactRegistryPersons({
-    limit: 8000,
-    orderByMention: true,
+}): Promise<{ emailsSwept: number; decisions: number; personsMerged: number }> {
+  const cleanup = await cleanupSharedMailboxRegistry({
+    dryRun: false,
+    emailFilter: null,
   });
-  const personById = new Map(registry.map((p) => [p.id, p]));
-
-  let decisions = 0;
-  const touchedEmails: string[] = [];
-
-  for (const [email, rows] of conflicts) {
-    const persons = rows
-      .map((r) => personById.get(r.personId))
-      .filter(Boolean);
-    if (persons.length < 2) continue;
-
-    // Build synthetic incoming from the highest-mention occupant.
-    persons.sort((a, b) => (b!.mentionWeight ?? 0) - (a!.mentionWeight ?? 0));
-    const primary = persons[0]!;
-    const incoming: ContactRegistryIncomingCard = {
-      tempId: `sweep:${email}:${primary.id}`,
-      first_name: primary.firstName,
-      last_name: primary.lastName,
-      email,
-      phone: primary.phones[0]?.phone ?? null,
-      job_title: primary.titles[0]?.title ?? null,
-      sourceEmailIds: [],
-      dateMin: rows
-        .map((r) => r.validFrom)
-        .filter(Boolean)
-        .sort()[0] ?? null,
-      dateMax: null,
-      mentionWeight: scoreMentionWeight({
-        sourceEmailCount: Math.max(1, primary.mentionWeight),
-        card: {
-          first_name: primary.firstName,
-          last_name: primary.lastName,
-          email,
-          phone: primary.phones[0]?.phone ?? null,
-          job_title: primary.titles[0]?.title ?? null,
-        },
-      }),
-      blockingKeys: buildBlockingKeys({
-        first_name: primary.firstName,
-        last_name: primary.lastName,
-        email,
-        phone: primary.phones[0]?.phone ?? null,
-      }),
-    };
-
-    const candidates = shortlistAgainstRegistry(
-      incoming,
-      registry.filter((p) => p.id !== primary.id),
-    );
-
-    const { decisions: batchDecisions } = await adjudicateContactRegistryBatch(
-      [{ incoming, candidates }],
-      params?.modelId,
-    );
-
-    // Only apply link_email / keep_separate style outcomes for sweep;
-    // skip creating duplicate persons from keep_separate on synthetic cards.
-    for (const decision of batchDecisions) {
-      if (decision.action === "link_email" && decision.targetPersonId) {
-        const closeAt =
-          decision.validFrom ?? new Date().toISOString().slice(0, 10);
-        for (const row of rows) {
-          if (row.personId === decision.targetPersonId) continue;
-          if (row.validTo != null) continue;
-          // Keep primary (highest mention) open; close others.
-          if (row.personId === primary.id) continue;
-          await db
-            .update(contactPersonEmails)
-            .set({
-              validTo: closeAt,
-              updatedAt: new Date().toISOString(),
-            })
-            .where(eq(contactPersonEmails.id, row.id));
-          decisions += 1;
-        }
-      }
-    }
-
-    touchedEmails.push(email);
-  }
-
-  if (touchedEmails.length > 0) {
-    await refreshEmailIndex(touchedEmails);
-  }
-
-  const coalesce = await coalesceWeakEmailDuplicatePersons();
 
   return {
-    emailsSwept: conflicts.length,
-    decisions,
-    personsMerged: coalesce.merged,
+    emailsSwept: cleanup.emailsConsidered,
+    decisions: cleanup.occupancyRowsUpdated,
+    personsMerged: cleanup.duplicatesMerged,
   };
 }

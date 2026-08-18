@@ -28,6 +28,31 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Contacts sweep/backfill white-screen** — A failed or timed-out
+  registry POST returned HTML, and the People page crashed on
+  `res.json()`. Sweep, coalesce, and pending-merge ingest now return JSON
+  errors, and the client shows the message instead of an application
+  error overlay.
+
+- **Contacts auto-coalesce on shared mailboxes** — Opening People no
+  longer picks one mailbox-wide survivor (Bonnie on `studiopm@`) and then
+  leaves every other identity untouched. Same-human stubs such as
+  `Haider` / `Haider M` now cluster into Haider Mukadam even when a
+  former occupant has a higher mention count. Zero-mention rows were
+  those unmerged stubs, not a display bug.
+
+- **Shared-mailbox occupancy and Telegram holds** — Role addresses like
+  `studiopm@` were closed at the last thread date (so the current manager
+  never showed “present”), sweep kept the highest-mention former occupant
+  open, and harvest posted one Ambiguous contact message per mention —
+  sometimes proposing Bonnie Kafi and sometimes Haider Mukadam for the
+  same mailbox. Occupancy now keeps only the latest-evidence person
+  open-ended, nameless cards attach to that occupant, named cards that
+  uniquely match one human auto-apply, and pending Telegram reviews
+  collapse to one item per mailbox identity. Sweep rebuilds ranges from
+  named evidence instead of asking the model who has more mentions.
+  Opening Contacts also repairs occupancy (same pass as stub coalesce).
+
 - **Analysis Lab went blank on production** — `/admin/analysis` waited on
   a cost summary that ran one query per extraction source (~14k). The hub
   now renders immediately, and the summary uses a single aggregate query.

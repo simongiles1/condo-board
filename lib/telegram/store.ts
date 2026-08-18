@@ -12,6 +12,11 @@ import type {
   TelegramReviewKind,
   TelegramReviewStatus,
 } from "@/lib/telegram/types";
+import {
+  contactReviewEmailKey,
+  contactReviewIdentityKey,
+} from "@/lib/telegram/types";
+import { isNamelessPerson } from "@/lib/contacts/registry-shared";
 
 export type TelegramReviewRow = {
   id: string;
@@ -62,6 +67,56 @@ export async function insertContactReviewItem(input: {
   fingerprintMergeId: string | null;
 }): Promise<TelegramReviewRow> {
   const db = getDb();
+  const identityKey = contactReviewIdentityKey(input.payload.incoming);
+  const emailKey = contactReviewEmailKey(input.payload.incoming);
+  const incomingNameless = isNamelessPerson(input.payload.incoming);
+
+  const pending = await db
+    .select()
+    .from(telegramReviewItems)
+    .where(
+      and(
+        eq(telegramReviewItems.kind, "contact_identity"),
+        eq(telegramReviewItems.status, "pending"),
+      ),
+    );
+
+  for (const row of pending) {
+    let payload: ContactReviewPayload | null = null;
+    try {
+      payload = JSON.parse(row.payloadJson) as ContactReviewPayload;
+    } catch {
+      continue;
+    }
+    if (!payload?.incoming) continue;
+    const existingIdentity = contactReviewIdentityKey(payload.incoming);
+    const existingEmail = contactReviewEmailKey(payload.incoming);
+    const existingNameless = isNamelessPerson(payload.incoming);
+
+    if (existingIdentity === identityKey) {
+      return mapRow(row);
+    }
+    if (emailKey && existingEmail === emailKey) {
+      if (incomingNameless) return mapRow(row);
+      if (existingNameless && !incomingNameless) {
+        await db
+          .update(telegramReviewItems)
+          .set({
+            holdReason: input.holdReason,
+            payloadJson: JSON.stringify(input.payload),
+            fingerprintMergeId: input.fingerprintMergeId,
+          })
+          .where(eq(telegramReviewItems.id, row.id));
+        const [updated] = await db
+          .select()
+          .from(telegramReviewItems)
+          .where(eq(telegramReviewItems.id, row.id))
+          .limit(1);
+        return mapRow(updated!);
+      }
+    }
+  }
+
   const id = randomUUID();
   const createdAt = new Date().toISOString();
   await db.insert(telegramReviewItems).values({

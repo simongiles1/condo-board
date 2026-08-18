@@ -1,6 +1,13 @@
 /** Client-safe contact registry types and blocking / weight helpers. */
 
 import {
+  givenNamesConflict,
+  isGivenNameInitialExpansion,
+  isGivenNameSpellingVariant,
+  lastNamesCompatible,
+  normalizeGivenNameToken,
+} from "@/lib/contacts/person-name";
+import {
   normalizePersonName,
   normalizePhone,
 } from "@/lib/email/entity-dedup";
@@ -318,6 +325,128 @@ export function isSamePersonFullName(
   return Boolean(af && bf && al && bl && af === bf && al === bl);
 }
 
+export type MailboxIdentityPerson = {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  mentionWeight: number;
+};
+
+function identitiesCompatible(
+  a: { firstName: string | null; lastName: string | null },
+  b: { firstName: string | null; lastName: string | null },
+): boolean {
+  const af = a.firstName?.trim() || null;
+  const bf = b.firstName?.trim() || null;
+  const al = a.lastName?.trim() || null;
+  const bl = b.lastName?.trim() || null;
+
+  if (af && bf) {
+    if (
+      normalizeGivenNameToken(af) !== normalizeGivenNameToken(bf) &&
+      !isGivenNameSpellingVariant(af, bf) &&
+      !isGivenNameInitialExpansion(af, bf)
+    ) {
+      return false;
+    }
+  }
+  if (al && bl && !lastNamesCompatible(al, bl)) return false;
+  if (!af && !al) return false;
+  if (!bf && !bl) return false;
+  return true;
+}
+
+/**
+ * Same-human on a shared mailbox? Nameless stubs are excluded so they do not
+ * all collapse into the globally highest-mention occupant (e.g. Bonnie).
+ */
+export function canAbsorbMailboxIdentity(
+  other: MailboxIdentityPerson,
+  seed: MailboxIdentityPerson,
+): boolean {
+  if (isNamelessPerson(other) || isNamelessPerson(seed)) return false;
+  if (isSamePersonFullName(other, seed)) return true;
+  if (isWeakNameVariantOf(other, seed) || isWeakNameVariantOf(seed, other)) {
+    return true;
+  }
+  if (isLastNameOnlyMatchingFuller(other, seed)) return true;
+  if (
+    other.lastName?.trim() &&
+    seed.lastName?.trim() &&
+    !lastNamesCompatible(other.lastName, seed.lastName)
+  ) {
+    return false;
+  }
+  if (
+    givenNamesConflict(other.firstName, seed.firstName) &&
+    !isWeakNameVariantOf(other, seed) &&
+    !isWeakNameVariantOf(seed, other)
+  ) {
+    return false;
+  }
+  return identitiesCompatible(other, seed) && Boolean(seed.firstName?.trim());
+}
+
+function pickMailboxIdentitySurvivor<T extends MailboxIdentityPerson>(
+  persons: T[],
+): T {
+  return [...persons].sort((a, b) => {
+    const score = (p: MailboxIdentityPerson) => {
+      const first = p.firstName?.trim();
+      const last = p.lastName?.trim();
+      if (first && last && last.length > 1) return 3;
+      if (first && last) return 2;
+      if (first || last) return 1;
+      return 0;
+    };
+    const aNamed = score(a);
+    const bNamed = score(b);
+    if (bNamed !== aNamed) return bNamed - aNamed;
+    const aLast = a.lastName?.trim().length ?? 0;
+    const bLast = b.lastName?.trim().length ?? 0;
+    if (bLast !== aLast) return bLast - aLast;
+    return b.mentionWeight - a.mentionWeight;
+  })[0]!;
+}
+
+/**
+ * Cluster same-identity people on one mailbox. A role address can have several
+ * real humans (Bonnie vs Haider); each cluster merges independently so
+ * "Haider" / "Haider M" fold into Mukadam instead of the mailbox-wide
+ * highest-mention person.
+ */
+export function planMailboxIdentityMerges<T extends MailboxIdentityPerson>(
+  persons: T[],
+): Array<{ survivor: T; absorbed: T[] }> {
+  if (persons.length < 2) return [];
+
+  const clusters: T[][] = [];
+  const used = new Set<string>();
+  const ordered = [...persons].sort(
+    (a, b) => b.mentionWeight - a.mentionWeight,
+  );
+  for (const seed of ordered) {
+    if (used.has(seed.id)) continue;
+    const cluster = [seed];
+    used.add(seed.id);
+    for (const other of ordered) {
+      if (used.has(other.id)) continue;
+      if (!canAbsorbMailboxIdentity(other, seed)) continue;
+      cluster.push(other);
+      used.add(other.id);
+    }
+    if (cluster.length > 1) clusters.push(cluster);
+  }
+
+  return clusters.map((cluster) => {
+    const survivor = pickMailboxIdentitySurvivor(cluster);
+    return {
+      survivor,
+      absorbed: cluster.filter((person) => person.id !== survivor.id),
+    };
+  });
+}
+
 export function personDisplayName(person: {
   firstName?: string | null;
   lastName?: string | null;
@@ -409,6 +538,8 @@ export function occupancyCoversAt(
  * Merge email occupancy date windows.
  * Never reopen a closed range when the incoming update has validTo=null
  * (that is how role-mailbox ranges incorrectly stuck at "present").
+ * Never rewind validFrom — thread-wide dateMin would pull a later occupant
+ * back to the start of an older conversation they were not in.
  */
 export function mergeEmailOccupancyDates(params: {
   existingFrom: string | null;
@@ -416,9 +547,7 @@ export function mergeEmailOccupancyDates(params: {
   incomingFrom: string | null;
   incomingTo: string | null;
 }): { validFrom: string | null; validTo: string | null } {
-  const validFrom =
-    [params.existingFrom, params.incomingFrom].filter(Boolean).sort()[0] ??
-    null;
+  const validFrom = params.existingFrom ?? params.incomingFrom ?? null;
 
   let validTo = params.existingTo;
   if (params.incomingTo === null) {
@@ -439,9 +568,59 @@ export function mergeEmailOccupancyDates(params: {
   return { validFrom, validTo };
 }
 
+function occupancyEvidenceEnd(row: {
+  validFrom: string | null;
+  validTo: string | null;
+}): string {
+  return row.validTo ?? row.validFrom ?? "";
+}
+
 /**
- * Pick current person for an email: prefer open-ended (validTo null) with
- * latest validFrom; else occupancy covering now; else latest validTo.
+ * After occupancy writes: only the latest-evidence person stays open-ended
+ * ("present"). Earlier occupants keep a concrete validTo.
+ */
+export function planSharedMailboxSuccession(
+  rows: Array<{
+    id: string;
+    personId: string;
+    validFrom: string | null;
+    validTo: string | null;
+  }>,
+): Array<{ id: string; validTo: string | null }> {
+  if (rows.length === 0) return [];
+
+  const endByPerson = new Map<string, string>();
+  for (const row of rows) {
+    const end = occupancyEvidenceEnd(row);
+    const prev = endByPerson.get(row.personId) ?? "";
+    if (end > prev) endByPerson.set(row.personId, end);
+  }
+
+  let latest = "";
+  for (const end of endByPerson.values()) {
+    if (end > latest) latest = end;
+  }
+  if (!latest) return [];
+
+  const winnerIds = new Set<string>();
+  for (const [personId, end] of endByPerson) {
+    if (end === latest) winnerIds.add(personId);
+  }
+
+  const updates: Array<{ id: string; validTo: string | null }> = [];
+  for (const row of rows) {
+    const desiredTo = winnerIds.has(row.personId) ? null : (row.validTo ?? latest);
+    if (row.validTo !== desiredTo) {
+      updates.push({ id: row.id, validTo: desiredTo });
+    }
+  }
+  return updates;
+}
+
+/**
+ * Pick current person for an email: whoever has the latest evidence end
+ * (validTo, or validFrom when still open). A stale open-ended former occupant
+ * must not beat a later closed successor.
  */
 export function pickCurrentOccupancyPersonId(
   rows: Array<{
@@ -449,24 +628,16 @@ export function pickCurrentOccupancyPersonId(
     validFrom: string | null;
     validTo: string | null;
   }>,
-  nowIso: string = new Date().toISOString(),
+  _nowIso: string = new Date().toISOString(),
 ): string | null {
   if (rows.length === 0) return null;
 
-  const covering = rows.filter((r) =>
-    occupancyCoversAt(r.validFrom, r.validTo, nowIso),
-  );
-  if (covering.length > 0) {
-    const open = covering.filter((r) => !r.validTo);
-    const pool = open.length > 0 ? open : covering;
-    pool.sort((a, b) => (b.validFrom ?? "").localeCompare(a.validFrom ?? ""));
-    return pool[0]?.personId ?? null;
-  }
-
-  const sorted = [...rows].sort((a, b) => {
-    const aEnd = a.validTo ?? a.validFrom ?? "";
-    const bEnd = b.validTo ?? b.validFrom ?? "";
-    return bEnd.localeCompare(aEnd);
+  const ranked = [...rows].sort((a, b) => {
+    const endCmp = occupancyEvidenceEnd(b).localeCompare(occupancyEvidenceEnd(a));
+    if (endCmp !== 0) return endCmp;
+    const openCmp = Number(!a.validTo) - Number(!b.validTo);
+    if (openCmp !== 0) return openCmp;
+    return (b.validFrom ?? "").localeCompare(a.validFrom ?? "");
   });
-  return sorted[0]?.personId ?? null;
+  return ranked[0]?.personId ?? null;
 }

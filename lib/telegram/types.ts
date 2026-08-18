@@ -1,6 +1,10 @@
 /** Compact payload stored on telegram_review_items.payload_json. */
 
-import type { ContactAdjudicationDecision } from "@/lib/contacts/registry-shared";
+import {
+  isNamelessPerson,
+  normalizeContactRegistryEmail,
+  type ContactAdjudicationDecision,
+} from "@/lib/contacts/registry-shared";
 import type { ShortlistHit } from "@/lib/contacts/registry-shortlist";
 import type { ContactEntityCard } from "@/lib/email-analysis/contact-highlight-shared";
 
@@ -64,4 +68,28 @@ export function incomingCardLabel(card: {
   const name = [card.first_name, card.last_name].filter(Boolean).join(" ").trim();
   if (name && card.email) return `${name} <${card.email}>`;
   return name || card.email?.trim() || "unnamed contact";
+}
+
+export function contactReviewEmailKey(card: {
+  email?: string | null;
+}): string {
+  return card.email?.trim()
+    ? normalizeContactRegistryEmail(card.email)
+    : "";
+}
+
+/** One pending review per mailbox + identity (nameless shares the mailbox key). */
+export function contactReviewIdentityKey(card: {
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+}): string {
+  const email = contactReviewEmailKey(card);
+  const name = isNamelessPerson(card)
+    ? "nameless"
+    : [card.first_name, card.last_name]
+        .map((part) => part?.trim().toLowerCase())
+        .filter(Boolean)
+        .join(" ");
+  return `${email}|${name}`;
 }

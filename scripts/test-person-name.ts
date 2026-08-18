@@ -21,7 +21,11 @@ import {
   preferPersonGivenName,
   sanitizeGivenNameAgainstEmails,
 } from "../lib/contacts/person-name";
-import { mergeEmailOccupancyDates } from "../lib/contacts/registry-shared";
+import {
+  mergeEmailOccupancyDates,
+  pickCurrentOccupancyPersonId,
+  planSharedMailboxSuccession,
+} from "../lib/contacts/registry-shared";
 
 describe("preferPersonGivenName", () => {
   it("prefers real given name over email local-part", () => {
@@ -297,6 +301,18 @@ describe("mergeEmailOccupancyDates", () => {
     );
   });
 
+  it("does not rewind occupancy start from a later thread-wide dateMin", () => {
+    assert.deepEqual(
+      mergeEmailOccupancyDates({
+        existingFrom: "2026-06-02",
+        existingTo: "2026-08-14",
+        incomingFrom: "2023-07-27",
+        incomingTo: "2026-08-14",
+      }),
+      { validFrom: "2026-06-02", validTo: "2026-08-14" },
+    );
+  });
+
   it("extends or closes open ranges from concrete evidence ends", () => {
     assert.deepEqual(
       mergeEmailOccupancyDates({
@@ -316,5 +332,50 @@ describe("mergeEmailOccupancyDates", () => {
       }),
       { validFrom: "2023-10-04", validTo: "2024-12-20" },
     );
+  });
+});
+
+describe("planSharedMailboxSuccession", () => {
+  it("reopens the latest occupant and closes earlier ones", () => {
+    const updates = planSharedMailboxSuccession([
+      {
+        id: "bonnie",
+        personId: "b",
+        validFrom: "2023-07-27",
+        validTo: "2026-05-11",
+      },
+      {
+        id: "haider",
+        personId: "h",
+        validFrom: "2023-07-27",
+        validTo: "2026-08-14",
+      },
+    ]);
+    assert.deepEqual(
+      updates.find((u) => u.id === "haider"),
+      { id: "haider", validTo: null },
+    );
+    assert.equal(updates.find((u) => u.id === "bonnie"), undefined);
+  });
+});
+
+describe("pickCurrentOccupancyPersonId", () => {
+  it("prefers later closed evidence over a stale open former occupant", () => {
+    const id = pickCurrentOccupancyPersonId(
+      [
+        {
+          personId: "bonnie",
+          validFrom: "2023-07-27",
+          validTo: null,
+        },
+        {
+          personId: "haider",
+          validFrom: "2023-07-27",
+          validTo: "2026-08-14",
+        },
+      ],
+      "2026-08-17T12:00:00.000Z",
+    );
+    assert.equal(id, "haider");
   });
 });

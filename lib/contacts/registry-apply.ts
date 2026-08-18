@@ -30,10 +30,8 @@ import {
   hasStrongIdentity,
   isGivenNameInitialExpansion,
   isGivenNameSpellingVariant,
-  isLastNameOnlyMatchingFuller,
   isNamelessPerson,
   isNameMatchingEmailLocalPart,
-  isSamePersonFullName,
   isSparseFirstNameOnly,
   isWeakNameVariantOf,
   lastNamesCompatible,
@@ -41,6 +39,7 @@ import {
   mergeEmailOccupancyDates,
   mergeEvidence,
   normalizeContactRegistryEmail,
+  planMailboxIdentityMerges,
   normalizeGivenNameToken,
   occupancyCoversAt,
   parseEvidenceJson,
@@ -49,6 +48,7 @@ import {
   preferCompatibleLastName,
   preferPersonGivenName,
   pickCurrentOccupancyPersonId,
+  planSharedMailboxSuccession,
   sanitizeGivenNameAgainstEmails,
   serializeNameAliasesJson,
   titleCaseGivenName,
@@ -188,7 +188,83 @@ async function appendEmailOccupancy(params: {
     });
   }
 
+  await applySharedMailboxSuccession(email, params.nowIso);
   await refreshEmailIndex([email], params.nowIso);
+}
+
+async function applySharedMailboxSuccession(
+  email: string,
+  nowIso: string,
+): Promise<void> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: contactPersonEmails.id,
+      personId: contactPersonEmails.personId,
+      validFrom: contactPersonEmails.validFrom,
+      validTo: contactPersonEmails.validTo,
+    })
+    .from(contactPersonEmails)
+    .where(eq(contactPersonEmails.email, email));
+
+  const personIds = new Set(rows.map((row) => row.personId));
+  if (personIds.size < 2) return;
+
+  const updates = planSharedMailboxSuccession(rows);
+  for (const update of updates) {
+    await db
+      .update(contactPersonEmails)
+      .set({ validTo: update.validTo, updatedAt: nowIso })
+      .where(eq(contactPersonEmails.id, update.id));
+  }
+}
+
+/** Close stale shared-mailbox occupants; latest evidence stays "present". */
+export async function repairSharedMailboxOccupancy(): Promise<{
+  emails: number;
+  rowsUpdated: number;
+}> {
+  const db = getDb();
+  const nowIso = new Date().toISOString();
+  const rows = await db
+    .select({
+      id: contactPersonEmails.id,
+      email: contactPersonEmails.email,
+      personId: contactPersonEmails.personId,
+      validFrom: contactPersonEmails.validFrom,
+      validTo: contactPersonEmails.validTo,
+    })
+    .from(contactPersonEmails);
+
+  const byEmail = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const key = normalizeContactRegistryEmail(row.email);
+    const list = byEmail.get(key) ?? [];
+    list.push(row);
+    byEmail.set(key, list);
+  }
+
+  let emails = 0;
+  let rowsUpdated = 0;
+  const touched: string[] = [];
+  for (const [email, list] of byEmail) {
+    const personIds = new Set(list.map((row) => row.personId));
+    if (personIds.size < 2) continue;
+    emails += 1;
+    const updates = planSharedMailboxSuccession(list);
+    for (const update of updates) {
+      await db
+        .update(contactPersonEmails)
+        .set({ validTo: update.validTo, updatedAt: nowIso })
+        .where(eq(contactPersonEmails.id, update.id));
+      rowsUpdated += 1;
+    }
+    if (updates.length > 0) touched.push(email);
+  }
+  if (touched.length > 0) {
+    await refreshEmailIndex(touched, nowIso);
+  }
+  return { emails, rowsUpdated };
 }
 
 async function appendPhone(params: {
@@ -1701,8 +1777,10 @@ export async function repairEmailLocalPartFirstNames(): Promise<{
 }
 
 /**
- * Absorb nameless / weak-name / last-only duplicate people that share a mailbox
- * into the strongest named occupant (e.g. Wilson + John Wilson → John Wilson).
+ * Absorb weak-name / last-only / same-name duplicate people that share a
+ * mailbox into the strongest matching identity — clustered per human, not
+ * mailbox-wide. Otherwise `studiopm@` would pick Bonnie and leave every
+ * "Haider" / "Haider M" stub unmerged.
  */
 export async function coalesceWeakEmailDuplicatePersons(): Promise<{
   merged: number;
@@ -1711,6 +1789,7 @@ export async function coalesceWeakEmailDuplicatePersons(): Promise<{
   firstNamesRecovered: number;
   firstNamesCorrected: number;
   aliasesPruned: number;
+  occupancyRowsUpdated: number;
 }> {
   // Recover real given names before stripping leftover local-parts.
   const recovered = await recoverMissingFirstNamesFromEvidence();
@@ -1748,23 +1827,18 @@ export async function coalesceWeakEmailDuplicatePersons(): Promise<{
       .where(inArray(contactPersons.id, personIds));
     if (persons.length < 2) continue;
 
-    const survivor = pickBestEmailOwner(persons);
+    const plans = planMailboxIdentityMerges(persons);
     let didMerge = false;
-    for (const person of persons) {
-      if (person.id === survivor.id) continue;
-      const absorb =
-        isNamelessPerson(person) ||
-        isWeakNameVariantOf(person, survivor) ||
-        isLastNameOnlyMatchingFuller(person, survivor) ||
-        isSamePersonFullName(person, survivor);
-      if (!absorb) continue;
-      await mergePersons({
-        survivorId: survivor.id,
-        absorbedId: person.id,
-        nowIso,
-      });
-      merged += 1;
-      didMerge = true;
+    for (const plan of plans) {
+      for (const person of plan.absorbed) {
+        await mergePersons({
+          survivorId: plan.survivor.id,
+          absorbedId: person.id,
+          nowIso,
+        });
+        merged += 1;
+        didMerge = true;
+      }
     }
     if (didMerge) touchedEmails.push(email);
   }
@@ -1773,6 +1847,8 @@ export async function coalesceWeakEmailDuplicatePersons(): Promise<{
     await refreshEmailIndex(touchedEmails, nowIso);
   }
 
+  const occupancy = await repairSharedMailboxOccupancy();
+
   return {
     merged,
     emailsTouched: touchedEmails.length,
@@ -1780,6 +1856,7 @@ export async function coalesceWeakEmailDuplicatePersons(): Promise<{
     firstNamesRecovered: recovered.recovered,
     firstNamesCorrected: corrected.corrected,
     aliasesPruned: aliasPrune.pruned,
+    occupancyRowsUpdated: occupancy.rowsUpdated,
   };
 }
 

@@ -86,7 +86,11 @@ export default function MentionRulesPage() {
 
         <section className="space-y-3">
           <h2 className="text-lg font-semibold text-slate-900">
-            What Convert stubs does
+            What Convert stubs does{" "}
+            <span className="font-normal text-slate-600">
+              (stub = first-name-only People card with no last name, email, or
+              phone)
+            </span>
           </h2>
           <ol className="list-decimal space-y-2 pl-5 text-sm text-slate-700">
             <li>Copies harvested names from emails into the mentions table.</li>

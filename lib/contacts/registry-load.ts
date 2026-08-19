@@ -1,6 +1,6 @@
 /** Load contact registry persons for shortlist / UI. */
 
-import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { skipLiveMentionCounts } from "@/lib/background-workers";
 import { getDb } from "@/lib/db";
@@ -413,42 +413,64 @@ export async function getRegistryStats(): Promise<{
   mentionProvisionalCount: number;
   mentionUnresolvedCount: number;
 }> {
+  const started = Date.now();
   const db = getDb();
-  const persons = await db
-    .select({ id: contactPersons.id, sparseStub: contactPersons.sparseStub })
-    .from(contactPersons);
-  const emails = await db
-    .select({ email: contactEmailIndex.email })
-    .from(contactEmailIndex);
+  // Counts only — selecting every merge / proposal / person row made the
+  // Contacts header wait tens of seconds (14k+ AI decisions).
+  const [
+    [personAgg],
+    [emailAgg],
+    [pendingAgg],
+    [proposalAgg],
+    [ingestAgg],
+    mentionRows,
+  ] = await Promise.all([
+    db
+      .select({
+        personCount: sql<number>`count(*)::int`,
+        sparseStubCount: sql<number>`count(*) filter (where ${contactPersons.sparseStub} = true)::int`,
+      })
+      .from(contactPersons),
+    db
+      .select({
+        emailCount: sql<number>`count(*)::int`,
+      })
+      .from(contactEmailIndex),
+    db
+      .select({
+        pendingMergeCount: sql<number>`count(*)::int`,
+      })
+      .from(contactFingerprintMerges)
+      .where(
+        and(
+          isNull(contactFingerprintMerges.error),
+          sql`not exists (
+            select 1 from contact_registry_ingests
+            where fingerprint_merge_id = ${contactFingerprintMerges.id}
+              and status = 'completed'
+          )`,
+        ),
+      ),
+    db
+      .select({
+        mergeDecisionCount: sql<number>`count(*)::int`,
+      })
+      .from(contactMergeProposals),
+    db
+      .select({
+        ingestCompletedCount: sql<number>`count(*)::int`,
+      })
+      .from(contactRegistryIngests)
+      .where(eq(contactRegistryIngests.status, "completed")),
+    db
+      .select({
+        status: contactMentions.resolutionStatus,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(contactMentions)
+      .groupBy(contactMentions.resolutionStatus),
+  ]);
 
-  const completedIngests = await db
-    .select({
-      fingerprintMergeId: contactRegistryIngests.fingerprintMergeId,
-    })
-    .from(contactRegistryIngests)
-    .where(eq(contactRegistryIngests.status, "completed"));
-  const done = new Set(completedIngests.map((r) => r.fingerprintMergeId));
-
-  const merges = await db
-    .select({
-      id: contactFingerprintMerges.id,
-      error: contactFingerprintMerges.error,
-    })
-    .from(contactFingerprintMerges);
-  const pendingMergeCount = merges.filter(
-    (m) => !m.error && !done.has(m.id),
-  ).length;
-
-  const proposals = await db
-    .select({ id: contactMergeProposals.id })
-    .from(contactMergeProposals);
-  const mentionRows = await db
-    .select({
-      status: contactMentions.resolutionStatus,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(contactMentions)
-    .groupBy(contactMentions.resolutionStatus);
   const mentionCounts = {
     total: 0,
     confirmed: 0,
@@ -463,18 +485,23 @@ export async function getRegistryStats(): Promise<{
     else if (row.status === "unresolved") mentionCounts.unresolved = count;
   }
 
-  return {
-    personCount: persons.length,
-    emailCount: emails.length,
-    sparseStubCount: persons.filter((p) => p.sparseStub).length,
-    pendingMergeCount,
-    mergeDecisionCount: proposals.length,
-    ingestCompletedCount: completedIngests.length,
+  const stats = {
+    personCount: Number(personAgg?.personCount) || 0,
+    emailCount: Number(emailAgg?.emailCount) || 0,
+    sparseStubCount: Number(personAgg?.sparseStubCount) || 0,
+    pendingMergeCount: Number(pendingAgg?.pendingMergeCount) || 0,
+    mergeDecisionCount: Number(proposalAgg?.mergeDecisionCount) || 0,
+    ingestCompletedCount: Number(ingestAgg?.ingestCompletedCount) || 0,
     mentionTotalCount: mentionCounts.total,
     mentionConfirmedCount: mentionCounts.confirmed,
     mentionProvisionalCount: mentionCounts.provisional,
     mentionUnresolvedCount: mentionCounts.unresolved,
   };
+  console.info("[entities:contact-stats]", {
+    ms: Date.now() - started,
+    ...stats,
+  });
+  return stats;
 }
 
 export type ContactMergeActivityRow = {

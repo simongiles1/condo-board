@@ -202,7 +202,8 @@ type MergeContribution = {
   cards: ProjectEntityCard[];
 };
 
-const PROJECT_FINGERPRINT_CACHE_TTL_MS = 60_000;
+/** How often a background rebuild may run. Stale payloads stay until then. */
+const PROJECT_FINGERPRINT_CACHE_TTL_MS = 30 * 60_000;
 
 type ProjectFingerprintCachePayload = {
   projects: ProjectFingerprintSummary[];
@@ -226,17 +227,19 @@ export function invalidateProjectFingerprintSummariesCache() {
   globalForProjectFingerprints.projectFingerprintCache = undefined;
 }
 
-async function getProjectFingerprintPayload(): Promise<ProjectFingerprintCachePayload> {
-  const cached = globalForProjectFingerprints.projectFingerprintCache;
-  if (cached && cached.expiresAt > Date.now()) return cached.payload;
-  if (globalForProjectFingerprints.projectFingerprintInflight) {
-    return globalForProjectFingerprints.projectFingerprintInflight;
-  }
-
+function startProjectFingerprintRebuild(): Promise<ProjectFingerprintCachePayload> {
   const generation =
     globalForProjectFingerprints.projectFingerprintGeneration ?? 0;
+  const started = Date.now();
   const pending = computeAllProjectFingerprintSummaries()
     .then((payload) => {
+      console.info("[entities:project-fingerprints]", {
+        cache: "rebuild",
+        ms: Date.now() - started,
+        projects: payload.projects.length,
+        merges: payload.mergeCount,
+        emails: payload.emailCount,
+      });
       if (
         (globalForProjectFingerprints.projectFingerprintGeneration ?? 0) ===
         generation
@@ -260,6 +263,21 @@ async function getProjectFingerprintPayload(): Promise<ProjectFingerprintCachePa
 
   globalForProjectFingerprints.projectFingerprintInflight = pending;
   return pending;
+}
+
+async function getProjectFingerprintPayload(): Promise<ProjectFingerprintCachePayload> {
+  const cached = globalForProjectFingerprints.projectFingerprintCache;
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  if (cached) {
+    if (!globalForProjectFingerprints.projectFingerprintInflight) {
+      void startProjectFingerprintRebuild();
+    }
+    return cached.payload;
+  }
+  if (globalForProjectFingerprints.projectFingerprintInflight) {
+    return globalForProjectFingerprints.projectFingerprintInflight;
+  }
+  return startProjectFingerprintRebuild();
 }
 
 /**

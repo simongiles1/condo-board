@@ -452,7 +452,8 @@ async function loadMovedAliasSightings(params: {
   ];
 }
 
-const ORG_FINGERPRINT_CACHE_TTL_MS = 60_000;
+/** How often a background rebuild may run. Stale payloads stay until then. */
+const ORG_FINGERPRINT_CACHE_TTL_MS = 30 * 60_000;
 
 type OrgFingerprintCachePayload = {
   organizations: OrgFingerprintSummary[];
@@ -476,16 +477,18 @@ export function invalidateOrgFingerprintSummariesCache() {
   globalForOrgFingerprints.orgFingerprintCache = undefined;
 }
 
-async function getOrgFingerprintPayload(): Promise<OrgFingerprintCachePayload> {
-  const cached = globalForOrgFingerprints.orgFingerprintCache;
-  if (cached && cached.expiresAt > Date.now()) return cached.payload;
-  if (globalForOrgFingerprints.orgFingerprintInflight) {
-    return globalForOrgFingerprints.orgFingerprintInflight;
-  }
-
+function startOrgFingerprintRebuild(): Promise<OrgFingerprintCachePayload> {
   const generation = globalForOrgFingerprints.orgFingerprintGeneration ?? 0;
+  const started = Date.now();
   const pending = computeAllOrgFingerprintSummaries()
     .then((payload) => {
+      console.info("[entities:org-fingerprints]", {
+        cache: "rebuild",
+        ms: Date.now() - started,
+        organizations: payload.organizations.length,
+        merges: payload.mergeCount,
+        emails: payload.emailCount,
+      });
       if (
         (globalForOrgFingerprints.orgFingerprintGeneration ?? 0) === generation
       ) {
@@ -508,6 +511,23 @@ async function getOrgFingerprintPayload(): Promise<OrgFingerprintCachePayload> {
 
   globalForOrgFingerprints.orgFingerprintInflight = pending;
   return pending;
+}
+
+async function getOrgFingerprintPayload(): Promise<OrgFingerprintCachePayload> {
+  const cached = globalForOrgFingerprints.orgFingerprintCache;
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  // Keep serving the last rebuild after TTL; refresh in the background so
+  // sidebar tab switches do not wait on merge JSON + pass-3 parsing.
+  if (cached) {
+    if (!globalForOrgFingerprints.orgFingerprintInflight) {
+      void startOrgFingerprintRebuild();
+    }
+    return cached.payload;
+  }
+  if (globalForOrgFingerprints.orgFingerprintInflight) {
+    return globalForOrgFingerprints.orgFingerprintInflight;
+  }
+  return startOrgFingerprintRebuild();
 }
 
 /**
@@ -543,6 +563,7 @@ export async function loadOrgFingerprintSummaries(params?: {
 }
 
 async function computeAllOrgFingerprintSummaries(): Promise<OrgFingerprintCachePayload> {
+  const started = Date.now();
   const db = getDb();
 
   const mergeRows = await db
@@ -689,6 +710,7 @@ async function computeAllOrgFingerprintSummaries(): Promise<OrgFingerprintCacheP
   );
 
   let countedOrgs = withFieldMetadata;
+  const pass3Started = Date.now();
   if (!usedPass3Fallback) {
     const nameSightings = await loadOrgPass3NameSightings(denials, mergeMap);
     countedOrgs = rebuildOrgEmailIdsFromSightings({
@@ -719,6 +741,14 @@ async function computeAllOrgFingerprintSummaries(): Promise<OrgFingerprintCacheP
   for (const contrib of contributions) {
     for (const id of contrib.emailIds) allEmailIds.add(id);
   }
+
+  console.info("[entities:org-fingerprints:compute]", {
+    ms: Date.now() - started,
+    pass3Ms: Date.now() - pass3Started,
+    merges: mergeRows.length,
+    organizations: attributed.length,
+    usedPass3Fallback,
+  });
 
   return {
     organizations: attributed,

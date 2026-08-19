@@ -29,6 +29,7 @@ export default async function EntitiesPage({
     Array.isArray(tabParam) ? tabParam[0] : tabParam,
   );
 
+  const started = Date.now();
   // Only the visible tab is loaded on the server. The other tabs fetch on
   // first click so Contacts / Todos / nav is not blocked by org rebuilds.
   const [
@@ -82,6 +83,10 @@ export default async function EntitiesPage({
       ? loadSharedMailboxes()
       : Promise.resolve(null),
   ]);
+  console.info("[entities:page]", {
+    tab: initialTab,
+    ms: Date.now() - started,
+  });
 
   return (
     <EntitiesPageClient

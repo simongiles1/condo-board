@@ -54,8 +54,7 @@ export async function GET(request: Request) {
 
   if (view === "emails") {
     const emails = await loadContactEmailIndex(limit);
-    const stats = await getRegistryStats();
-    return NextResponse.json({ view: "emails", emails, stats });
+    return NextResponse.json({ view: "emails", emails });
   }
 
   if (view === "mailboxes") {
@@ -65,8 +64,7 @@ export async function GET(request: Request) {
 
   if (view === "activity") {
     const activity = await loadContactMergeActivity(limit);
-    const stats = await getRegistryStats();
-    return NextResponse.json({ view: "activity", activity, stats });
+    return NextResponse.json({ view: "activity", activity });
   }
 
   if (view === "stats") {

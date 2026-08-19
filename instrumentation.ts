@@ -21,6 +21,20 @@ export async function register() {
       const { ensureDefaultUsers } = await import("@/lib/auth/session");
       await ensureDefaultUsers();
 
+      void import("@/lib/organizations/fingerprint-list")
+        .then(({ loadOrgFingerprintSummaries }) =>
+          loadOrgFingerprintSummaries({ limit: 500 }),
+        )
+        .then((result) => {
+          console.info("[instrumentation] Warmed org fingerprints", {
+            organizations: result.organizations.length,
+            merges: result.stats.mergeCount,
+          });
+        })
+        .catch((error: unknown) => {
+          console.error("[instrumentation] Org fingerprint warm failed", error);
+        });
+
       if (!backgroundWorkersEnabled()) {
         console.info(
           "[instrumentation] Background workers disabled (DISABLE_BACKGROUND_WORKERS=true); Telegram long-poll skipped",

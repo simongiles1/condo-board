@@ -10,10 +10,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Page switches taking 30+ seconds** — Navigating no longer rebuilds every
   organization and project fingerprint (all merge JSON plus pass-3 email
-  sightings) on each request. Those lists are cached in memory for a minute
-  and shared across overlapping requests, Entities loads only the visible tab,
-  and the people list uses stored mention weights instead of re-scanning email
-  bodies. Local Internal Server Error from a corrupted Next.js cache is
+  sightings) on each request. Those lists stay in memory after the first
+  rebuild (background refresh every 30 minutes) so sidebar tab switches are
+  instant. Contacts header counts use `COUNT(*)` instead of downloading the
+  merge, ingest, and AI-decision tables. Sidebar remounts no longer restart
+  pending-merge ingest or mailbox coalesce. Entities loads only the visible
+  tab, and the people list uses stored mention weights instead of re-scanning
+  email bodies. Local Internal Server Error from a corrupted Next.js cache is
   cleared by deleting `.next` and restarting the dev server.
 
 ### Added

@@ -267,6 +267,10 @@ function formatRange(from: string | null, to: string | null): string {
   return `${a} → ${b}`;
 }
 
+/** Process-wide so sidebar remounts do not restart ingest/coalesce. */
+let contactsAutoBackfillStarted = false;
+let contactsAutoCoalesceStarted = false;
+
 export function ContactsRegistryClient({
   initialPersons,
   initialEmails,
@@ -302,8 +306,6 @@ export function ContactsRegistryClient({
   const [resolveResult, setResolveResult] = useState<ResolveResult | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const autoBackfillStarted = useRef(false);
-  const autoCoalesceStarted = useRef(false);
   const duplicatesLoaded = useRef(false);
   const [evidenceTarget, setEvidenceTarget] = useState<{
     kind: ContactEvidenceKind;
@@ -628,9 +630,9 @@ export function ContactsRegistryClient({
   // Prior pass-4 runs only wrote fingerprint merges; ingest into this registry
   // on first visit when anything is still pending.
   useEffect(() => {
-    if (autoBackfillStarted.current) return;
+    if (contactsAutoBackfillStarted) return;
     if ((initialStats.pendingMergeCount ?? 0) <= 0) return;
-    autoBackfillStarted.current = true;
+    contactsAutoBackfillStarted = true;
     startTransition(async () => {
       await runBackfillAsync();
     });
@@ -640,8 +642,8 @@ export function ContactsRegistryClient({
   // Fold same-human mailbox stubs ("Haider M") into the matching fuller
   // identity, not the mailbox-wide highest-mention person (Bonnie on studiopm@).
   useEffect(() => {
-    if (autoCoalesceStarted.current) return;
-    autoCoalesceStarted.current = true;
+    if (contactsAutoCoalesceStarted) return;
+    contactsAutoCoalesceStarted = true;
     startTransition(async () => {
       try {
         const res = await fetch("/api/contacts/registry", {

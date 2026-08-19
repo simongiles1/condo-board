@@ -27,4 +27,10 @@ echo "[startup] Running database migrations..."
 node scripts/db-migrate.cjs
 
 echo "[startup] Starting Next.js..."
+# Prefer IPv4 so a dead IPv6 route to the Supabase pooler does not stall ~30s.
+existing_node_options="${NODE_OPTIONS:-}"
+case "$existing_node_options" in
+  *dns-result-order*) ;;
+  *) export NODE_OPTIONS="${existing_node_options} --dns-result-order=ipv4first" ;;
+esac
 exec node server.js

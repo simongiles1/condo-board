@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "crypto";
 
 import { asc, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
+import { cache } from "react";
 
 import { isAuthEnabled } from "@/lib/auth/config";
 import { isUserRole, type UserRole } from "@/lib/auth/roles";
@@ -206,7 +207,7 @@ export function createSessionToken(user: {
   });
 }
 
-export async function getSessionUser(): Promise<AppUser | null> {
+export const getSessionUser = cache(async (): Promise<AppUser | null> => {
   if (!isAuthEnabled()) return null;
 
   const cookieStore = await cookies();
@@ -252,7 +253,7 @@ export async function getSessionUser(): Promise<AppUser | null> {
     }
     return null;
   }
-}
+});
 
 export async function setSessionCookie(token: string) {
   const cookieStore = await cookies();

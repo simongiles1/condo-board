@@ -49,8 +49,8 @@ export async function GET(request: Request) {
   const offset = Math.max(0, Number(url.searchParams.get("offset") ?? 0) || 0);
   const sort = parseContactPersonListSort(url.searchParams.get("sort"));
   const skipVerifiedMentions =
-    url.searchParams.get("skipVerifiedMentions") === "1" ||
-    url.searchParams.get("skipVerifiedMentions") === "true";
+    url.searchParams.get("skipVerifiedMentions") !== "0" &&
+    url.searchParams.get("skipVerifiedMentions") !== "false";
 
   if (view === "emails") {
     const emails = await loadContactEmailIndex(limit);

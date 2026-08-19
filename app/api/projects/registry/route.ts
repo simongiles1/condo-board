@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { isErrorResponse, requireSession } from "@/lib/auth/authorize";
 import { recordProjectFieldDenial } from "@/lib/projects/field-denials";
 import {
+  invalidateProjectFingerprintSummariesCache,
   loadProjectDuplicateGroups,
   loadProjectFingerprintSummaries,
   parseProjectFingerprintListSort,
@@ -82,6 +83,7 @@ export async function POST(request: Request) {
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: 400 });
     }
+    invalidateProjectFingerprintSummariesCache();
     return NextResponse.json({ ok: true, denial: result.denial });
   }
 
@@ -107,6 +109,7 @@ export async function POST(request: Request) {
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }
+  invalidateProjectFingerprintSummariesCache();
   return NextResponse.json({
     ok: true,
     survivorId: result.survivorKey,

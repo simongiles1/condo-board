@@ -151,12 +151,13 @@ export async function loadContactRegistryPersons(params?: {
     titlesBy.set(row.personId, list);
   }
 
-  // UI "mentions" = name in unique authored text (content only).
-  // Header participation is available in the evidence panel via scope=all.
-  const verifiedMentionCounts =
-    params?.skipVerifiedMentions || skipLiveMentionCounts()
-      ? new Map<string, number>()
-      : await countVerifiedPersonMentionEmailsByPersonId(
+  // List views use stored mentionWeight. Live recount loads full email
+  // bodies for every candidate and can block navigation for tens of seconds.
+  const skipVerifiedMentions =
+    skipLiveMentionCounts() || (params?.skipVerifiedMentions ?? true);
+  const verifiedMentionCounts = skipVerifiedMentions
+    ? new Map<string, number>()
+    : await countVerifiedPersonMentionEmailsByPersonId(
           rows.map((row) => ({
             id: row.id,
             firstName: row.firstName,

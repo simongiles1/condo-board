@@ -202,6 +202,66 @@ type MergeContribution = {
   cards: ProjectEntityCard[];
 };
 
+const PROJECT_FINGERPRINT_CACHE_TTL_MS = 60_000;
+
+type ProjectFingerprintCachePayload = {
+  projects: ProjectFingerprintSummary[];
+  mergeCount: number;
+  emailCount: number;
+};
+
+const globalForProjectFingerprints = globalThis as unknown as {
+  projectFingerprintCache?: {
+    expiresAt: number;
+    payload: ProjectFingerprintCachePayload;
+  };
+  projectFingerprintInflight?: Promise<ProjectFingerprintCachePayload>;
+  projectFingerprintGeneration?: number;
+};
+
+/** Drop the in-memory project list after merges or severs. */
+export function invalidateProjectFingerprintSummariesCache() {
+  globalForProjectFingerprints.projectFingerprintGeneration =
+    (globalForProjectFingerprints.projectFingerprintGeneration ?? 0) + 1;
+  globalForProjectFingerprints.projectFingerprintCache = undefined;
+}
+
+async function getProjectFingerprintPayload(): Promise<ProjectFingerprintCachePayload> {
+  const cached = globalForProjectFingerprints.projectFingerprintCache;
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  if (globalForProjectFingerprints.projectFingerprintInflight) {
+    return globalForProjectFingerprints.projectFingerprintInflight;
+  }
+
+  const generation =
+    globalForProjectFingerprints.projectFingerprintGeneration ?? 0;
+  const pending = computeAllProjectFingerprintSummaries()
+    .then((payload) => {
+      if (
+        (globalForProjectFingerprints.projectFingerprintGeneration ?? 0) ===
+        generation
+      ) {
+        globalForProjectFingerprints.projectFingerprintCache = {
+          payload,
+          expiresAt: Date.now() + PROJECT_FINGERPRINT_CACHE_TTL_MS,
+        };
+      }
+      if (globalForProjectFingerprints.projectFingerprintInflight === pending) {
+        globalForProjectFingerprints.projectFingerprintInflight = undefined;
+      }
+      return payload;
+    })
+    .catch((error: unknown) => {
+      if (globalForProjectFingerprints.projectFingerprintInflight === pending) {
+        globalForProjectFingerprints.projectFingerprintInflight = undefined;
+      }
+      throw error;
+    });
+
+  globalForProjectFingerprints.projectFingerprintInflight = pending;
+  return pending;
+}
+
 /**
  * Load unique projects from pass-4 fingerprint merges across all threads,
  * coalesced by name+year (same rules as merge pass safety net).
@@ -216,6 +276,22 @@ export async function loadProjectFingerprintSummaries(params?: {
 }> {
   const limit = params?.limit ?? 500;
   const sort = params?.sort ?? "mentions-desc";
+  const payload = await getProjectFingerprintPayload();
+  const projects = sortProjectFingerprintSummaries(payload.projects, sort).slice(
+    0,
+    limit,
+  );
+  return {
+    projects,
+    stats: {
+      projectCount: projects.length,
+      mergeCount: payload.mergeCount,
+      emailCount: payload.emailCount,
+    },
+  };
+}
+
+async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerprintCachePayload> {
   const db = getDb();
 
   const mergeRows = await db
@@ -286,7 +362,7 @@ export async function loadProjectFingerprintSummaries(params?: {
     denials,
     mergeMap,
   );
-  const uniqueCards = coalesceProjectEntityCards(flatCards).slice(0, limit);
+  const uniqueCards = coalesceProjectEntityCards(flatCards);
 
   type ContribStats = {
     emailIds: Set<string>;
@@ -340,14 +416,11 @@ export async function loadProjectFingerprintSummaries(params?: {
     };
   });
 
-  const mergedProjects = sortProjectFingerprintSummaries(
-    applyFieldDenialsToSummaries(
-      applyProjectManualMerges(projects, mergeMap),
-      denials,
-      mergeMap,
-    ),
-    sort,
-  ).slice(0, limit);
+  const mergedProjects = applyFieldDenialsToSummaries(
+    applyProjectManualMerges(projects, mergeMap),
+    denials,
+    mergeMap,
+  );
 
   const allEmailIds = new Set<string>();
   for (const contrib of contributions) {
@@ -356,11 +429,8 @@ export async function loadProjectFingerprintSummaries(params?: {
 
   return {
     projects: mergedProjects,
-    stats: {
-      projectCount: mergedProjects.length,
-      mergeCount: usedPass3Fallback ? 0 : mergeRows.length,
-      emailCount: allEmailIds.size,
-    },
+    mergeCount: usedPass3Fallback ? 0 : mergeRows.length,
+    emailCount: allEmailIds.size,
   };
 }
 

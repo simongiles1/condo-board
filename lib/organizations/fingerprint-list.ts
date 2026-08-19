@@ -452,10 +452,71 @@ async function loadMovedAliasSightings(params: {
   ];
 }
 
+const ORG_FINGERPRINT_CACHE_TTL_MS = 60_000;
+
+type OrgFingerprintCachePayload = {
+  organizations: OrgFingerprintSummary[];
+  mergeCount: number;
+  emailCount: number;
+};
+
+const globalForOrgFingerprints = globalThis as unknown as {
+  orgFingerprintCache?: {
+    expiresAt: number;
+    payload: OrgFingerprintCachePayload;
+  };
+  orgFingerprintInflight?: Promise<OrgFingerprintCachePayload>;
+  orgFingerprintGeneration?: number;
+};
+
+/** Drop the in-memory org list after merges, severs, or field moves. */
+export function invalidateOrgFingerprintSummariesCache() {
+  globalForOrgFingerprints.orgFingerprintGeneration =
+    (globalForOrgFingerprints.orgFingerprintGeneration ?? 0) + 1;
+  globalForOrgFingerprints.orgFingerprintCache = undefined;
+}
+
+async function getOrgFingerprintPayload(): Promise<OrgFingerprintCachePayload> {
+  const cached = globalForOrgFingerprints.orgFingerprintCache;
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  if (globalForOrgFingerprints.orgFingerprintInflight) {
+    return globalForOrgFingerprints.orgFingerprintInflight;
+  }
+
+  const generation = globalForOrgFingerprints.orgFingerprintGeneration ?? 0;
+  const pending = computeAllOrgFingerprintSummaries()
+    .then((payload) => {
+      if (
+        (globalForOrgFingerprints.orgFingerprintGeneration ?? 0) === generation
+      ) {
+        globalForOrgFingerprints.orgFingerprintCache = {
+          payload,
+          expiresAt: Date.now() + ORG_FINGERPRINT_CACHE_TTL_MS,
+        };
+      }
+      if (globalForOrgFingerprints.orgFingerprintInflight === pending) {
+        globalForOrgFingerprints.orgFingerprintInflight = undefined;
+      }
+      return payload;
+    })
+    .catch((error: unknown) => {
+      if (globalForOrgFingerprints.orgFingerprintInflight === pending) {
+        globalForOrgFingerprints.orgFingerprintInflight = undefined;
+      }
+      throw error;
+    });
+
+  globalForOrgFingerprints.orgFingerprintInflight = pending;
+  return pending;
+}
+
 /**
  * Load unique organizations from pass-4 fingerprint merges across all threads,
  * coalesced by email then name (same rules as merge pass safety net).
  * Falls back to pass-3 cards when no merges exist yet.
+ *
+ * Rebuilds from every merge JSON + pass-3 sighting; cache + in-flight
+ * coalescing keep list pages and concept-index from repeating that work.
  */
 export async function loadOrgFingerprintSummaries(params?: {
   limit?: number;
@@ -466,6 +527,22 @@ export async function loadOrgFingerprintSummaries(params?: {
 }> {
   const limit = params?.limit ?? 500;
   const sort = params?.sort ?? "mentions-desc";
+  const payload = await getOrgFingerprintPayload();
+  const organizations = sortOrgFingerprintSummaries(
+    payload.organizations,
+    sort,
+  ).slice(0, limit);
+  return {
+    organizations,
+    stats: {
+      organizationCount: organizations.length,
+      mergeCount: payload.mergeCount,
+      emailCount: payload.emailCount,
+    },
+  };
+}
+
+async function computeAllOrgFingerprintSummaries(): Promise<OrgFingerprintCachePayload> {
   const db = getDb();
 
   const mergeRows = await db
@@ -638,23 +715,15 @@ export async function loadOrgFingerprintSummaries(params?: {
 
   const attributed = countedOrgs.map(toPublicSummary);
 
-  const mergedOrganizations = sortOrgFingerprintSummaries(
-    attributed,
-    sort,
-  ).slice(0, limit);
-
   const allEmailIds = new Set<string>();
   for (const contrib of contributions) {
     for (const id of contrib.emailIds) allEmailIds.add(id);
   }
 
   return {
-    organizations: mergedOrganizations,
-    stats: {
-      organizationCount: mergedOrganizations.length,
-      mergeCount: usedPass3Fallback ? 0 : mergeRows.length,
-      emailCount: allEmailIds.size,
-    },
+    organizations: attributed,
+    mergeCount: usedPass3Fallback ? 0 : mergeRows.length,
+    emailCount: allEmailIds.size,
   };
 }
 

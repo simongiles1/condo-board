@@ -34,7 +34,13 @@ function getPool(): Pool {
     globalForDb.db = undefined;
   }
   if (!globalForDb.pool) {
-    globalForDb.pool = new Pool({ connectionString });
+    // Fail fast on a dead peer instead of waiting ~30s for TCP timeout.
+    globalForDb.pool = new Pool({
+      connectionString,
+      max: 10,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 8_000,
+    });
     globalForDb.databaseUrl = connectionString;
   }
   return globalForDb.pool;

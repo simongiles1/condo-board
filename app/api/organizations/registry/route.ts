@@ -12,6 +12,7 @@ import {
   loadOrgDuplicateGroups,
   loadOrgFingerprintSummaries,
   parseOrgFingerprintListSort,
+  invalidateOrgFingerprintSummariesCache,
 } from "@/lib/organizations/fingerprint-list";
 import { manualMergeManyOrganizations } from "@/lib/organizations/manual-merge";
 
@@ -89,6 +90,7 @@ export async function POST(request: Request) {
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: 400 });
     }
+    invalidateOrgFingerprintSummariesCache();
     return NextResponse.json({ ok: true, denial: result.denial });
   }
 
@@ -104,6 +106,7 @@ export async function POST(request: Request) {
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: 400 });
     }
+    invalidateOrgFingerprintSummariesCache();
     return NextResponse.json({ ok: true });
   }
 
@@ -118,6 +121,7 @@ export async function POST(request: Request) {
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: 400 });
     }
+    invalidateOrgFingerprintSummariesCache();
     return NextResponse.json({ ok: true, message: result.message });
   }
 
@@ -143,6 +147,7 @@ export async function POST(request: Request) {
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }
+  invalidateOrgFingerprintSummariesCache();
   return NextResponse.json({
     ok: true,
     survivorId: result.survivorKey,

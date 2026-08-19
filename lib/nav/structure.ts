@@ -48,8 +48,10 @@ export type SidebarSection = {
 
 export const ENTITY_KIND_VALUES = [
   "contacts",
-  "equipment",
   "organizations",
+  "projects",
+  "equipment",
+  "mailboxes",
 ] as const;
 
 export type EntityKindTab = (typeof ENTITY_KIND_VALUES)[number];
@@ -58,8 +60,10 @@ export const DEFAULT_ENTITY_KIND: EntityKindTab = "contacts";
 
 export const ENTITY_KIND_TABS: SubNavTab[] = [
   { href: "/knowledge/entities?tab=contacts", label: "Contacts" },
-  { href: "/knowledge/entities?tab=equipment", label: "Equipment" },
   { href: "/knowledge/entities?tab=organizations", label: "Organizations" },
+  { href: "/knowledge/entities?tab=projects", label: "Projects" },
+  { href: "/knowledge/entities?tab=equipment", label: "Equipment" },
+  { href: "/knowledge/entities?tab=mailboxes", label: "Shared mailboxes" },
 ];
 
 export const PRIMARY_NAV: NavLink[] = [
@@ -115,7 +119,10 @@ export const KNOWLEDGE_SUBNAV: SubNavTab[] = [
   {
     href: "/knowledge/entities",
     label: "Entities Registry",
-    children: ENTITY_KIND_TABS,
+    children: [
+      ...ENTITY_KIND_TABS,
+      { href: "/knowledge/entities/mention-rules", label: "How mentions match" },
+    ],
   },
   { href: "/knowledge/emails", label: "Synced Emails" },
   { href: "/knowledge/files", label: "Document Library" },
@@ -139,8 +146,23 @@ export const DEV_TOOLS_SUBNAV: SubNavTab[] = [
   { href: "/admin/notes", label: "Dev Notes" },
 ];
 
+export const USERS_ADMIN_TAB_VALUES = ["users", "roles"] as const;
+
+export type UsersAdminTab = (typeof USERS_ADMIN_TAB_VALUES)[number];
+
+export const DEFAULT_USERS_ADMIN_TAB: UsersAdminTab = "users";
+
+export const USERS_ADMIN_TABS: SubNavTab[] = [
+  { href: "/admin/system/users?tab=users", label: "Users" },
+  { href: "/admin/system/users?tab=roles", label: "User Roles" },
+];
+
 export const SYSTEM_ADMIN_SUBNAV: SubNavTab[] = [
-  { href: "/admin/system/users", label: "User Roles" },
+  {
+    href: "/admin/system/users",
+    label: "Users",
+    children: USERS_ADMIN_TABS,
+  },
   { href: "/admin/system/settings", label: "Email & Sync Settings" },
 ];
 
@@ -228,6 +250,16 @@ export function parseEntityKindTab(value: unknown): EntityKindTab {
   return DEFAULT_ENTITY_KIND;
 }
 
+export function parseUsersAdminTab(value: unknown): UsersAdminTab {
+  if (
+    typeof value === "string" &&
+    (USERS_ADMIN_TAB_VALUES as readonly string[]).includes(value)
+  ) {
+    return value as UsersAdminTab;
+  }
+  return DEFAULT_USERS_ADMIN_TAB;
+}
+
 export function splitNavHref(href: string): {
   pathname: string;
   tab: string | null;
@@ -281,8 +313,11 @@ export function isSubNavTabActive(
   const { pathname: tabPath, tab: tabQuery } = splitNavHref(tab.href);
 
   if (tabQuery) {
-    if (pathname !== tabPath && !pathname.startsWith(`${tabPath}/`)) {
+    if (pathname !== tabPath) {
       return false;
+    }
+    if (tabPath === "/admin/system/users") {
+      return parseUsersAdminTab(query?.get("tab")) === tabQuery;
     }
     return parseEntityKindTab(query?.get("tab")) === tabQuery;
   }

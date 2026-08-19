@@ -76,7 +76,8 @@ export async function handleTelegramUpdate(
       query.message.text ??
       (await getTelegramReviewItem(parsed.id).then((row) =>
         row ? `Review ${row.id}` : "Review item",
-      ));
+      )) ??
+      "Review item";
     await editTelegramMessage({
       chatId,
       messageId: query.message.message_id,

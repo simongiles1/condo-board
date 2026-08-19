@@ -10,6 +10,12 @@
 export type HighlightSplit = {
   highlighted: string;
   remainder: string;
+  /**
+   * True when `highlighted` is a prefix of the display body.
+   * False when unique could not be located in-place — `highlighted` is the
+   * mention unique string and `remainder` is the full display body.
+   */
+  aligned: boolean;
 };
 
 /** Index where same-thread reply history begins; null if none. */
@@ -40,7 +46,7 @@ export function splitAtReplyQuote(full: string): HighlightSplit | null {
 
   const start = findReplyQuoteStart(full);
   if (start == null) {
-    return { highlighted: full, remainder: "" };
+    return { highlighted: full, remainder: "", aligned: true };
   }
   if (start <= 0) {
     return null;
@@ -48,6 +54,7 @@ export function splitAtReplyQuote(full: string): HighlightSplit | null {
   return {
     highlighted: full.slice(0, start),
     remainder: full.slice(start),
+    aligned: true,
   };
 }
 
@@ -203,7 +210,7 @@ export function splitBodyForHighlight(
   if (!flat) return null;
 
   if (normalizeForPrefix(flat) === uniqueNorm) {
-    return { highlighted: full, remainder: "" };
+    return { highlighted: full, remainder: "", aligned: true };
   }
 
   const flatEnd = uniquePrefixEndIndex(flat, unique);
@@ -211,12 +218,13 @@ export function splitBodyForHighlight(
 
   const origEnd = origEnds[flatEnd - 1] ?? full.length;
   if (origEnd >= full.length) {
-    return { highlighted: full, remainder: "" };
+    return { highlighted: full, remainder: "", aligned: true };
   }
 
   return {
     highlighted: full.slice(0, origEnd),
     remainder: full.slice(origEnd),
+    aligned: true,
   };
 }
 
@@ -254,26 +262,33 @@ export function isReplySplitAcceptableForUnique(
 }
 
 /**
- * Resolve the teal unique span inside a display body.
- * Prefer unique→display alignment; fall back to On…wrote only when that cut
- * stays close to the unique excerpt length.
+ * Resolve the teal unique span. Same string mentions search: in-place when
+ * unique aligns to the display body; otherwise unique as the teal block and
+ * the full display as remainder. Empty unique → no teal span.
  */
 export function resolveUniqueHighlightSplit(
   displayContent: string,
   uniqueText: string | null | undefined,
 ): HighlightSplit | null {
   const unique = uniqueText?.trim() || "";
-  if (unique) {
-    const uniqueOnDisplay = splitBodyForHighlight(displayContent, unique);
-    if (uniqueOnDisplay) return uniqueOnDisplay;
-  }
+  if (!unique) return null;
+
+  const uniqueOnDisplay = splitBodyForHighlight(displayContent, unique);
+  if (uniqueOnDisplay) return uniqueOnDisplay;
 
   const replySplit = splitAtReplyQuote(displayContent);
-  if (!replySplit) return null;
-  if (unique && !isReplySplitAcceptableForUnique(replySplit, unique, displayContent)) {
-    return null;
+  if (
+    replySplit &&
+    isReplySplitAcceptableForUnique(replySplit, unique, displayContent)
+  ) {
+    return replySplit;
   }
-  return replySplit;
+
+  return {
+    highlighted: unique,
+    remainder: displayContent,
+    aligned: false,
+  };
 }
 
 /**

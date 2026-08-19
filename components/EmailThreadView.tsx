@@ -30,8 +30,7 @@ function highlightedSectionText(message: ThreadMessage): string {
 
 /** Authored body for fingerprinting (this message only, not the thread). */
 function fingerprintBodyText(message: ThreadMessage): string {
-  const unique = message.bodyTextUnique?.trim();
-  if (unique) return unique;
+  if (message.bodyTextUnique != null) return message.bodyTextUnique.trim();
   return message.bodyText.trim();
 }
 

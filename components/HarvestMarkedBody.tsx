@@ -88,6 +88,7 @@ export function HarvestMarkedBody({
   nodes,
   contactCards = [],
   orgCards = [],
+  projectCards = [],
   events = [],
   todos = [],
 }: {
@@ -95,6 +96,7 @@ export function HarvestMarkedBody({
   nodes: HarvestMarkNode[];
   contactCards?: HarvestMarkTooltipData["contactCards"];
   orgCards?: HarvestMarkTooltipData["orgCards"];
+  projectCards?: HarvestMarkTooltipData["projectCards"];
   events?: HarvestMarkTooltipData["events"];
   todos?: HarvestMarkTooltipData["todos"];
 }): ReactNode {
@@ -104,7 +106,7 @@ export function HarvestMarkedBody({
 
   return (
     <HarvestMarkDataProvider
-      value={{ text, contactCards, orgCards, events, todos }}
+      value={{ text, contactCards, orgCards, projectCards, events, todos }}
     >
       <div className="prose prose-sm max-w-none whitespace-pre-wrap">
         {renderHarvestRange(text, 0, text.length, nodes)}

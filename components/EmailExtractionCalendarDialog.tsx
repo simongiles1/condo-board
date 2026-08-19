@@ -60,6 +60,13 @@ const SLIVER_PAINT_CLASS: Record<
     full: "bg-fuchsia-700",
     disabled: "bg-slate-50",
   },
+  project: {
+    empty: "bg-transparent",
+    low: "bg-orange-300",
+    mid: "bg-orange-500",
+    full: "bg-orange-700",
+    disabled: "bg-slate-50",
+  },
   event: {
     empty: "bg-transparent",
     low: "bg-sky-300",
@@ -87,6 +94,7 @@ const SWATCH_CLASS: Record<ExtractionConceptId, string> = {
   attachment: "bg-amber-600",
   contact: "bg-violet-600",
   organization: "bg-fuchsia-600",
+  project: "bg-orange-600",
   event: "bg-sky-600",
   equipment: "bg-slate-200",
   todo: "bg-lime-600",

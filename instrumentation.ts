@@ -2,11 +2,7 @@ import { backgroundWorkersEnabled } from "@/lib/background-workers";
 
 /** pdfjs-dist reads these during server import; Node 22 has no DOM canvas. */
 function polyfillDomForPdfjs() {
-  const g = globalThis as typeof globalThis & {
-    DOMMatrix?: unknown;
-    ImageData?: unknown;
-    Path2D?: unknown;
-  };
+  const g = globalThis as Record<string, unknown>;
   if (typeof g.DOMMatrix === "undefined") {
     g.DOMMatrix = class DOMMatrix {};
   }

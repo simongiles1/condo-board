@@ -1,6 +1,7 @@
 import { DEFAULT_CONTACT_HIGHLIGHT_MODEL } from "@/lib/email-analysis/contact-highlight-models";
 import { DEFAULT_EVENT_HIGHLIGHT_MODEL } from "@/lib/email-analysis/event-highlight-models";
 import { DEFAULT_ORG_HIGHLIGHT_MODEL } from "@/lib/email-analysis/org-highlight-models";
+import { DEFAULT_PROJECT_HIGHLIGHT_MODEL } from "@/lib/email-analysis/project-highlight-models";
 import { DEFAULT_TODO_HIGHLIGHT_MODEL } from "@/lib/email-analysis/todo-highlight-models";
 import {
   createBulkExtractRun,
@@ -61,6 +62,8 @@ export function defaultHarvestModelId(kind: BulkExtractKind): string {
       return DEFAULT_CONTACT_HIGHLIGHT_MODEL;
     case "organizations":
       return DEFAULT_ORG_HIGHLIGHT_MODEL;
+    case "projects":
+      return DEFAULT_PROJECT_HIGHLIGHT_MODEL;
     case "events":
       return DEFAULT_EVENT_HIGHLIGHT_MODEL;
     case "todos":

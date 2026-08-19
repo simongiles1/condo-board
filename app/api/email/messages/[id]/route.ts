@@ -4,6 +4,10 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 
+import {
+  resolveMentionUniqueBody,
+  uniqueBodyFieldsAreStored,
+} from "@/lib/contacts/mention-presence";
 import { getDb } from "@/lib/db";
 import { emailAttachments, emails } from "@/lib/db/schema";
 import { deleteEmailMessage } from "@/lib/email/delete-message";
@@ -52,19 +56,13 @@ export async function GET(
       .from(emailAttachments)
       .where(eq(emailAttachments.emailId, message.id));
 
-    const bodyTextUnique =
-      message.bodyTextStrictUnique?.trim() ||
-      message.bodyTextUnique?.trim() ||
-      null;
-
-    let resolvedUnique = bodyTextUnique;
-    if (!resolvedUnique && message.threadId) {
+    let liveUnique: string | null = null;
+    if (!uniqueBodyFieldsAreStored(message) && message.threadId) {
       const threadMessages = await db
         .select({
           id: emails.id,
           bodyText: emails.bodyText,
           bodyHtml: emails.bodyHtml,
-          bodyTextStrictUnique: emails.bodyTextStrictUnique,
           receivedAt: emails.receivedAt,
         })
         .from(emails)
@@ -77,10 +75,10 @@ export async function GET(
           receivedAt: row.receivedAt,
         })),
       );
-      resolvedUnique = uniqueMap.get(message.id) ?? message.bodyText;
-    } else if (!resolvedUnique) {
-      resolvedUnique = message.bodyText;
+      liveUnique = uniqueMap.get(message.id) ?? null;
     }
+
+    const resolvedUnique = resolveMentionUniqueBody(message, liveUnique);
 
     return NextResponse.json({
       message: {

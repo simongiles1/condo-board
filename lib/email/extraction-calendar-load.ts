@@ -8,6 +8,7 @@ import {
   emails,
   eventHighlightExtractions,
   organizationHighlightExtractions,
+  projectHighlightExtractions,
   todoHighlightExtractions,
 } from "@/lib/db/schema";
 import {
@@ -74,6 +75,9 @@ export async function loadExtractionCalendar(input: {
   const orgWhere = filterWhere
     ? and(isNull(organizationHighlightExtractions.error), filterWhere)
     : isNull(organizationHighlightExtractions.error);
+  const projectWhere = filterWhere
+    ? and(isNull(projectHighlightExtractions.error), filterWhere)
+    : isNull(projectHighlightExtractions.error);
   const eventWhere = filterWhere
     ? and(isNull(eventHighlightExtractions.error), filterWhere)
     : isNull(eventHighlightExtractions.error);
@@ -98,7 +102,7 @@ export async function loadExtractionCalendar(input: {
     )
     .innerJoin(emails, eq(emailAttachments.emailId, emails.id));
 
-  const [attachmentRows, contactRows, orgRows, eventRows, todoRows] = await Promise.all([
+  const [attachmentRows, contactRows, orgRows, projectRows, eventRows, todoRows] = await Promise.all([
     filterWhere
       ? attachmentQuery.where(filterWhere).groupBy(emailAttachments.emailId)
       : attachmentQuery.groupBy(emailAttachments.emailId),
@@ -115,6 +119,14 @@ export async function loadExtractionCalendar(input: {
         eq(organizationHighlightExtractions.emailId, emails.id),
       )
       .where(orgWhere),
+    db
+      .selectDistinct({ emailId: projectHighlightExtractions.emailId })
+      .from(projectHighlightExtractions)
+      .innerJoin(
+        emails,
+        eq(projectHighlightExtractions.emailId, emails.id),
+      )
+      .where(projectWhere),
     db
       .selectDistinct({ emailId: eventHighlightExtractions.emailId })
       .from(eventHighlightExtractions)
@@ -138,6 +150,7 @@ export async function loadExtractionCalendar(input: {
   );
   const contactIds = new Set(contactRows.map((row) => row.emailId));
   const orgIds = new Set(orgRows.map((row) => row.emailId));
+  const projectIds = new Set(projectRows.map((row) => row.emailId));
   const eventIds = new Set(eventRows.map((row) => row.emailId));
   const todoIds = new Set(todoRows.map((row) => row.emailId));
 
@@ -150,6 +163,7 @@ export async function loadExtractionCalendar(input: {
       attachmentsExtracted: attachments?.extracted ?? false,
       contactExtracted: contactIds.has(row.id),
       organizationExtracted: orgIds.has(row.id),
+      projectExtracted: projectIds.has(row.id),
       eventExtracted: eventIds.has(row.id),
       todoExtracted: todoIds.has(row.id),
     });

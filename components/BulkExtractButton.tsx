@@ -28,6 +28,12 @@ import {
   type OrgHighlightModelId,
 } from "@/lib/email-analysis/org-highlight-models";
 import {
+  PROJECT_HIGHLIGHT_MODELS,
+  DEFAULT_PROJECT_HIGHLIGHT_MODEL,
+  formatProjectHighlightModelOptionLabel,
+  type ProjectHighlightModelId,
+} from "@/lib/email-analysis/project-highlight-models";
+import {
   estimateBulkExtractRate,
   formatBulkExtractDuration,
   formatBulkExtractEta,
@@ -36,7 +42,7 @@ import {
 } from "@/lib/email-analysis/bulk-extract-timing";
 import { formatCostUsd } from "@/lib/gemini/usage";
 
-type ExtractKind = "contacts" | "organizations" | "events" | "todos";
+type ExtractKind = "contacts" | "organizations" | "projects" | "events" | "todos";
 
 type BulkExtractRun = {
   id: string;
@@ -119,6 +125,7 @@ function formatWhen(iso: string): string {
 
 function kindLabel(kind: ExtractKind): string {
   if (kind === "organizations") return "Organizations";
+  if (kind === "projects") return "Projects";
   if (kind === "events") return "Events";
   if (kind === "todos") return "To-dos";
   return "Contacts";
@@ -142,6 +149,9 @@ export function BulkExtractButton() {
   );
   const [orgModel, setOrgModel] = useState<OrgHighlightModelId>(
     DEFAULT_ORG_HIGHLIGHT_MODEL,
+  );
+  const [projectModel, setProjectModel] = useState<ProjectHighlightModelId>(
+    DEFAULT_PROJECT_HIGHLIGHT_MODEL,
   );
   const [eventModel, setEventModel] = useState<EventHighlightModelId>(
     DEFAULT_EVENT_HIGHLIGHT_MODEL,
@@ -355,11 +365,13 @@ export function BulkExtractButton() {
     const modelId =
       selectedKind === "organizations"
         ? orgModel
-        : selectedKind === "events"
-          ? eventModel
-          : selectedKind === "todos"
-            ? todoModel
-            : contactModel;
+        : selectedKind === "projects"
+          ? projectModel
+          : selectedKind === "events"
+            ? eventModel
+            : selectedKind === "todos"
+              ? todoModel
+              : contactModel;
 
     try {
       await ensureExtractTargets();
@@ -418,6 +430,8 @@ export function BulkExtractButton() {
         setEventModel(run.modelId as EventHighlightModelId);
       } else if (run.kind === "todos") {
         setTodoModel(run.modelId as TodoHighlightModelId);
+      } else if (run.kind === "projects") {
+        setProjectModel(run.modelId as ProjectHighlightModelId);
       } else {
         setOrgModel(run.modelId as OrgHighlightModelId);
       }
@@ -455,11 +469,13 @@ export function BulkExtractButton() {
   const selectedModelLabel =
     kind === "organizations"
       ? formatOrgHighlightModelOptionLabel(orgModel)
-      : kind === "events"
-        ? formatEventHighlightModelOptionLabel(eventModel)
-        : kind === "todos"
-          ? formatTodoHighlightModelOptionLabel(todoModel)
-          : formatContactHighlightModelOptionLabel(contactModel);
+      : kind === "projects"
+        ? formatProjectHighlightModelOptionLabel(projectModel)
+        : kind === "events"
+          ? formatEventHighlightModelOptionLabel(eventModel)
+          : kind === "todos"
+            ? formatTodoHighlightModelOptionLabel(todoModel)
+            : formatContactHighlightModelOptionLabel(contactModel);
 
   const live = activeRun?.status === "running" ? activeRun : null;
 
@@ -553,6 +569,7 @@ export function BulkExtractButton() {
                   >
                     <option value="contacts">Contacts</option>
                     <option value="organizations">Organizations</option>
+                    <option value="projects">Projects</option>
                     <option value="events">Events</option>
                     <option value="todos">To-dos</option>
                   </select>
@@ -610,6 +627,23 @@ export function BulkExtractButton() {
                       {TODO_HIGHLIGHT_MODELS.map((modelId) => (
                         <option key={modelId} value={modelId}>
                           {formatTodoHighlightModelOptionLabel(modelId)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : kind === "projects" ? (
+                    <select
+                      value={projectModel}
+                      disabled={busy}
+                      onChange={(event) =>
+                        setProjectModel(
+                          event.target.value as ProjectHighlightModelId,
+                        )
+                      }
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:opacity-60"
+                    >
+                      {PROJECT_HIGHLIGHT_MODELS.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {formatProjectHighlightModelOptionLabel(modelId)}
                         </option>
                       ))}
                     </select>

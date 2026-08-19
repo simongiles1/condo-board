@@ -4,6 +4,8 @@
 
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
+type PdfDocumentInit = Parameters<typeof getDocument>[0];
+
 type TextItem = {
   str?: string;
   transform?: number[];
@@ -81,7 +83,7 @@ async function loadPdfDocument(bytes: Buffer) {
     isEvalSupported: false,
     useSystemFonts: true,
     password: "",
-  });
+  } as PdfDocumentInit);
   try {
     return await loadingTask.promise;
   } catch (error) {
@@ -93,7 +95,7 @@ async function loadPdfDocument(bytes: Buffer) {
       isEvalSupported: false,
       useSystemFonts: true,
       password: "",
-    });
+    } as PdfDocumentInit);
     return retry.promise;
   }
 }

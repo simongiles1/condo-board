@@ -23,6 +23,16 @@ type Props = {
   error?: string | null;
   onClose: () => void;
   onMerge: (targetId: string) => void;
+  /** Override merge copy for other actions (e.g. move a field). */
+  copy?: {
+    title: string;
+    description: string;
+    submitLabel: string;
+    busyLabel?: string;
+    intoLabel?: string;
+    hideSources?: boolean;
+    pickError?: string;
+  };
 };
 
 export function MergeIcon({ className }: { className?: string }) {
@@ -57,6 +67,7 @@ export function MergeEntityDialog({
   error = null,
   onClose,
   onMerge,
+  copy,
 }: Props) {
   const listboxId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -166,9 +177,25 @@ export function MergeEntityDialog({
   if (sources.length === 0) return null;
 
   const mergeDescription =
-    sources.length === 1
+    copy?.description ??
+    (sources.length === 1
       ? `Merge “${sources[0]!.displayName}” into another ${entityLabel}. The selected ${entityLabel} keeps the combined data; this one is removed.`
-      : `Merge ${sources.length} ${entityLabel}s into one. The ${entityLabel} you pick keeps the combined data; the selected ones are removed.`;
+      : `Merge ${sources.length} ${entityLabel}s into one. The ${entityLabel} you pick keeps the combined data; the selected ones are removed.`);
+
+  const dialogTitle =
+    copy?.title ??
+    (sources.length === 1
+      ? `Merge ${entityLabel}`
+      : `Merge ${sources.length} ${entityLabel}s`);
+  const submitLabel =
+    copy?.submitLabel ??
+    (sources.length === 1 ? "Merge" : `Merge ${sources.length}`);
+  const busyLabel = copy?.busyLabel ?? "Merging…";
+  const intoLabel = copy?.intoLabel ?? "Merge into";
+  const pickError =
+    copy?.pickError ??
+    `Pick a ${entityLabel} from the search results to merge into.`;
+  const hideSources = Boolean(copy?.hideSources);
 
   const dropdown =
     mounted && showDropdown && dropdownRect
@@ -227,18 +254,16 @@ export function MergeEntityDialog({
   return (
     <FormDialog
       open={open}
-      title={sources.length === 1 ? `Merge ${entityLabel}` : `Merge ${sources.length} ${entityLabel}s`}
+      title={dialogTitle}
       description={mergeDescription}
       busy={busy}
       error={localError ?? error}
-      submitLabel={sources.length === 1 ? "Merge" : `Merge ${sources.length}`}
-      busyLabel="Merging…"
+      submitLabel={submitLabel}
+      busyLabel={busyLabel}
       onClose={onClose}
       onSubmit={() => {
         if (!selectedId) {
-          setLocalError(
-            `Pick a ${entityLabel} from the search results to merge into.`,
-          );
+          setLocalError(pickError);
           return;
         }
         setLocalError(null);
@@ -246,6 +271,7 @@ export function MergeEntityDialog({
       }}
     >
       <div className="space-y-4">
+        {hideSources ? null : (
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
             Merging away ({sources.length})
@@ -263,13 +289,14 @@ export function MergeEntityDialog({
             ))}
           </ul>
         </div>
+        )}
 
         <div>
           <label
             htmlFor="merge-entity-search"
             className="block text-sm font-medium text-slate-800"
           >
-            Merge into
+            {intoLabel}
           </label>
           <div className="relative mt-1">
             <input

@@ -427,7 +427,7 @@ export async function persistExtractionDocument(input: {
    * Calendar occurrences follow Google Calendar semantics: cancellations hide
    * the existing row, same-email reschedules move it, a later new invite
    * inserts a new row. Dated maintenance titles stay free text — do not
-   * create equipment assets here (Stage 5).
+   * create equipment assets here (Stage 6).
    */
   const calendarWrites = planCalendarLifecycle({
     existing: await loadCalendarEventsOnDates(

@@ -4,7 +4,12 @@ import { randomUUID } from "crypto";
 import { getDb } from "@/lib/db";
 import { bulkExtractRuns } from "@/lib/db/schema";
 
-export type BulkExtractKind = "contacts" | "organizations" | "events" | "todos";
+export type BulkExtractKind =
+  | "contacts"
+  | "organizations"
+  | "projects"
+  | "events"
+  | "todos";
 export type BulkExtractTargetScope = "all" | "missing";
 export type BulkExtractRunStatus =
   | "running"

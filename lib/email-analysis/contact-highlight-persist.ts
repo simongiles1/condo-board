@@ -639,6 +639,18 @@ export async function saveContactHighlightThirdPass(
         thirdPassUpdatedAt: now,
       })
       .where(eq(contactHighlightExtractions.id, existing[0].id));
+
+    const {
+      loadMergedHighlightExtraction,
+      upsertContactMentionsForEmail,
+    } = await import("@/lib/contacts/mention-persist");
+    const extraction = await loadMergedHighlightExtraction(emailId, modelId);
+    await upsertContactMentionsForEmail({
+      sourceEmailId: emailId,
+      entityCards: item.entityCards ?? [],
+      extraction,
+      modelId,
+    });
   }
 
   // Re-running fingerprints invalidates any prior merge for these emails.

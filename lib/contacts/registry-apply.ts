@@ -38,12 +38,14 @@ import {
   looksLikeMailboxLocalPart,
   mergeEmailOccupancyDates,
   mergeEvidence,
+  mergeNameAliasLists,
   normalizeContactRegistryEmail,
   planMailboxIdentityMerges,
   normalizeGivenNameToken,
   occupancyCoversAt,
   parseEvidenceJson,
   parseNameAliasesJson,
+  personDisplayName,
   personIdentitiesConflict,
   preferCompatibleLastName,
   preferPersonGivenName,
@@ -401,12 +403,6 @@ export async function createPersonFromCard(params: {
     emails,
   );
   const lastName = params.card.last_name?.trim() || null;
-  const sparseStub = isSparseFirstNameOnly({
-    first_name: firstName,
-    last_name: lastName,
-    email: params.card.email,
-    phone: params.card.phone,
-  });
 
   await db.insert(contactPersons).values({
     id: personId,
@@ -414,7 +410,7 @@ export async function createPersonFromCard(params: {
     lastName,
     nameAliasesJson: null,
     mentionWeight: params.mentionWeight,
-    sparseStub,
+    sparseStub: false,
     createdAt: nowIso,
     updatedAt: nowIso,
   });
@@ -1959,6 +1955,86 @@ export async function manualMergePersons(params: {
   });
   if (!result.ok) return result;
   return { ok: true, survivorId: result.survivorId };
+}
+
+export async function attachManualContactField(params: {
+  personId: string;
+  field: "email" | "phone" | "name_alias";
+  value: string;
+}): Promise<
+  | {
+      ok: true;
+      attached: boolean;
+      alreadyIdentity: boolean;
+      displayName: string;
+    }
+  | { ok: false; error: string }
+> {
+  const personId = params.personId.trim();
+  const value = params.value.trim();
+  if (!personId) return { ok: false, error: "personId is required." };
+  if (!value) return { ok: false, error: "Cannot attach an empty value." };
+
+  const db = getDb();
+  const nowIso = new Date().toISOString();
+  const person = (
+    await db
+      .select({
+        id: contactPersons.id,
+        firstName: contactPersons.firstName,
+        lastName: contactPersons.lastName,
+        nameAliasesJson: contactPersons.nameAliasesJson,
+      })
+      .from(contactPersons)
+      .where(eq(contactPersons.id, personId))
+      .limit(1)
+  )[0];
+  if (!person) return { ok: false, error: "Person not found." };
+  const displayName = personDisplayName(person);
+
+  if (params.field === "email") {
+    await appendEmailOccupancy({
+      personId,
+      email: value,
+      validFrom: null,
+      validTo: null,
+      evidence: [],
+      nowIso,
+    });
+    return { ok: true, attached: true, alreadyIdentity: false, displayName };
+  }
+
+  if (params.field === "phone") {
+    await appendPhone({
+      personId,
+      phone: value,
+      validFrom: null,
+      validTo: null,
+      evidence: [],
+      nowIso,
+    });
+    return { ok: true, attached: true, alreadyIdentity: false, displayName };
+  }
+
+  const token = normalizeGivenNameToken(value);
+  const firstToken = normalizeGivenNameToken(person.firstName ?? "");
+  const lastToken = normalizeGivenNameToken(person.lastName ?? "");
+  if (token && (token === firstToken || token === lastToken)) {
+    return { ok: true, attached: false, alreadyIdentity: true, displayName };
+  }
+
+  const next = mergeNameAliasLists(
+    parseNameAliasesJson(person.nameAliasesJson),
+    [value],
+  );
+  await db
+    .update(contactPersons)
+    .set({
+      nameAliasesJson: serializeNameAliasesJson(next),
+      updatedAt: nowIso,
+    })
+    .where(eq(contactPersons.id, personId));
+  return { ok: true, attached: true, alreadyIdentity: false, displayName };
 }
 
 export { mergePersons, refreshEmailIndex };

@@ -14,12 +14,26 @@ import {
   type OrgEntityCard,
 } from "@/lib/email-analysis/org-highlight-shared";
 import {
+  applyOrgFieldAttachmentsToCards,
+  loadOrganizationFieldAttachments,
+  type OrgFieldAttachment,
+} from "@/lib/organizations/field-attachments";
+import {
   applyOrgFieldDenialsToCards,
   loadOrganizationFieldDenials,
+  normalizeOrgNameKey,
   orgIdentityKey,
   stripDeniedFieldsFromOrgCard,
   type OrgFieldDenial,
 } from "@/lib/organizations/field-denials";
+import {
+  applyResidualEmailsFromMovedIdentityBuckets,
+} from "@/lib/organizations/identity-email-bucket";
+import {
+  applyMovedAliasEmailAttribution,
+  rebuildOrgEmailIdsFromSightings,
+  type OrgNameSighting,
+} from "@/lib/organizations/moved-alias-attribution";
 import {
   loadOrganizationMergeMap,
   resolveOrgSurvivorKey,
@@ -27,6 +41,7 @@ import {
 import {
   foldOrgNames,
   mergeOrgMultiValues,
+  splitOrgMultiValue,
 } from "@/lib/organizations/org-multi-values";
 import {
   sortOrgFingerprintSummaries,
@@ -59,6 +74,8 @@ export type OrgFingerprintListStats = {
   emailCount: number;
 };
 
+type OrgSummaryBuild = OrgFingerprintSummary & { emailIds: Set<string> };
+
 function preferString(a: string | null, b: string | null): string | null {
   const left = a?.trim() || null;
   const right = b?.trim() || null;
@@ -72,10 +89,10 @@ function preferString(a: string | null, b: string | null): string | null {
  * survivor); the other name becomes an alias. Emails / phones / websites append.
  */
 function foldOrgSummaries(
-  a: OrgFingerprintSummary,
-  b: OrgFingerprintSummary,
+  a: OrgSummaryBuild,
+  b: OrgSummaryBuild,
   survivorId: string,
-): OrgFingerprintSummary {
+): OrgSummaryBuild {
   const foldedNames = foldOrgNames({
     preferredName: a.name,
     otherName: b.name,
@@ -97,24 +114,47 @@ function foldOrgSummaries(
     website,
     aliases: foldedNames.aliases,
   };
+  const emailIds = new Set([...a.emailIds, ...b.emailIds]);
   return {
     ...card,
     id: survivorId,
     displayName: entityCardDisplayName(card),
     aliases: foldedNames.aliases,
     sourceMergeCount: a.sourceMergeCount + b.sourceMergeCount,
-    sourceEmailCount: a.sourceEmailCount + b.sourceEmailCount,
+    emailIds,
+    sourceEmailCount: emailIds.size,
     modelIds: [...new Set([...a.modelIds, ...b.modelIds])],
   };
 }
 
+function recountEmailIds(org: OrgSummaryBuild): OrgSummaryBuild {
+  return { ...org, sourceEmailCount: org.emailIds.size };
+}
+
+function toPublicSummary(org: OrgSummaryBuild): OrgFingerprintSummary {
+  const counted = recountEmailIds(org);
+  return {
+    id: counted.id,
+    displayName: counted.displayName,
+    name: counted.name,
+    organization_role: counted.organization_role,
+    email: counted.email,
+    phone: counted.phone,
+    website: counted.website,
+    aliases: counted.aliases,
+    sourceMergeCount: counted.sourceMergeCount,
+    sourceEmailCount: counted.sourceEmailCount,
+    modelIds: counted.modelIds,
+  };
+}
+
 function applyOrganizationManualMerges(
-  organizations: OrgFingerprintSummary[],
+  organizations: OrgSummaryBuild[],
   mergeMap: Map<string, string>,
-): OrgFingerprintSummary[] {
+): OrgSummaryBuild[] {
   if (mergeMap.size === 0) return organizations;
 
-  const buckets = new Map<string, OrgFingerprintSummary[]>();
+  const buckets = new Map<string, OrgSummaryBuild[]>();
   for (const org of organizations) {
     const survivorId = resolveOrgSurvivorKey(org.id, mergeMap);
     const list = buckets.get(survivorId) ?? [];
@@ -122,16 +162,17 @@ function applyOrganizationManualMerges(
     buckets.set(survivorId, list);
   }
 
-  const out: OrgFingerprintSummary[] = [];
+  const out: OrgSummaryBuild[] = [];
   for (const [survivorId, group] of buckets) {
     // Seed with the true survivor so its name stays primary and absorbed
     // names become aliases (e.g. Studio… → ICC).
     const seed =
       group.find((org) => org.id === survivorId) ?? group[0]!;
-    let folded: OrgFingerprintSummary = {
+    let folded: OrgSummaryBuild = {
       ...seed,
       id: survivorId,
       aliases: [...(seed.aliases ?? [])],
+      emailIds: new Set(seed.emailIds),
     };
     for (const other of group) {
       if (other.id === seed.id) continue;
@@ -144,17 +185,18 @@ function applyOrganizationManualMerges(
 }
 
 function applyFieldDenialsToSummaries(
-  organizations: OrgFingerprintSummary[],
+  organizations: OrgSummaryBuild[],
   denials: OrgFieldDenial[],
   mergeMap: Map<string, string>,
-): OrgFingerprintSummary[] {
+): OrgSummaryBuild[] {
   if (denials.length === 0) return organizations;
 
-  const strippedOrgs: OrgFingerprintSummary[] = [];
+  const strippedOrgs: OrgSummaryBuild[] = [];
   for (const org of organizations) {
     const stripped = stripDeniedFieldsFromOrgCard(org, denials, mergeMap);
     if (
       !stripped.name?.trim() &&
+      !(stripped.aliases ?? []).some((alias) => alias.trim()) &&
       !stripped.organization_role?.trim() &&
       !stripped.email?.trim() &&
       !stripped.phone?.trim() &&
@@ -168,11 +210,12 @@ function applyFieldDenialsToSummaries(
       aliases: [...(stripped.aliases ?? [])],
       id: orgIdentityKey(stripped),
       displayName: entityCardDisplayName(stripped),
+      emailIds: new Set(org.emailIds),
     });
   }
 
   // Severing an identity email can collapse multiple rows onto the same name key.
-  const byId = new Map<string, OrgFingerprintSummary>();
+  const byId = new Map<string, OrgSummaryBuild>();
   for (const org of strippedOrgs) {
     const existing = byId.get(org.id);
     if (!existing) {
@@ -182,6 +225,29 @@ function applyFieldDenialsToSummaries(
     byId.set(org.id, foldOrgSummaries(existing, org, org.id));
   }
   return [...byId.values()];
+}
+
+function applyFieldAttachmentsToSummaries(
+  organizations: OrgSummaryBuild[],
+  attachments: OrgFieldAttachment[],
+  mergeMap: Map<string, string>,
+): OrgSummaryBuild[] {
+  if (attachments.length === 0) return organizations;
+  return organizations.map((org) => {
+    const next = applyOrgFieldAttachmentsToCards(
+      [org],
+      attachments,
+      mergeMap,
+    )[0];
+    if (!next) return org;
+    return {
+      ...org,
+      ...next,
+      aliases: [...(next.aliases ?? [])],
+      displayName: entityCardDisplayName(next),
+      id: org.id,
+    };
+  });
 }
 
 function parseEmailIdsJson(raw: string): string[] {
@@ -206,6 +272,185 @@ type MergeContribution = {
   emailIds: string[];
   cards: OrgEntityCard[];
 };
+
+type ContribStats = {
+  emailIds: Set<string>;
+  modelIds: Set<string>;
+  mergeCount: number;
+};
+
+function recoverDisplayNameForNameKey(
+  nameKey: string,
+  contributions: MergeContribution[],
+): string | null {
+  for (const contrib of contributions) {
+    for (const card of contrib.cards) {
+      if (normalizeOrgNameKey(card.name) === nameKey && card.name?.trim()) {
+        return card.name.trim();
+      }
+      for (const alias of card.aliases ?? []) {
+        if (normalizeOrgNameKey(alias) === nameKey && alias.trim()) {
+          return alias.trim();
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function ensureOrgsFromMovedIdentityEmailDenials(
+  organizations: OrgSummaryBuild[],
+  denials: OrgFieldDenial[],
+  contributions: MergeContribution[],
+): OrgSummaryBuild[] {
+  const byId = new Map(organizations.map((org) => [org.id, org]));
+  const additions: OrgSummaryBuild[] = [];
+
+  for (const denial of denials) {
+    if (
+      denial.field !== "email" ||
+      !denial.nameKey ||
+      !denial.orgKey.startsWith("email:")
+    ) {
+      continue;
+    }
+    const displayName = recoverDisplayNameForNameKey(
+      denial.nameKey,
+      contributions,
+    );
+    if (!displayName) continue;
+
+    const nameCard: OrgEntityCard = {
+      name: displayName,
+      organization_role: null,
+      email: null,
+      phone: null,
+      website: null,
+      aliases: [],
+    };
+    const nameId = orgIdentityKey(nameCard);
+    if (byId.has(nameId)) continue;
+
+    const org: OrgSummaryBuild = {
+      ...nameCard,
+      aliases: [],
+      id: nameId,
+      displayName: displayName,
+      sourceMergeCount: 0,
+      emailIds: new Set<string>(),
+      sourceEmailCount: 0,
+      modelIds: [],
+    };
+    additions.push(org);
+    byId.set(nameId, org);
+  }
+
+  if (additions.length === 0) return organizations;
+  return [...organizations, ...additions];
+}
+
+function identityKeysForHarvestCard(
+  card: OrgEntityCard,
+  denials: OrgFieldDenial[],
+  mergeMap: Map<string, string>,
+): string[] {
+  const keys = new Set<string>();
+  const raw = orgIdentityKey(card);
+  if (raw && !raw.startsWith("empty:")) keys.add(raw);
+  if (denials.length > 0) {
+    const stripped = orgIdentityKey(
+      stripDeniedFieldsFromOrgCard(card, denials, mergeMap),
+    );
+    if (stripped && !stripped.startsWith("empty:")) keys.add(stripped);
+  }
+  return [...keys];
+}
+
+function sightingsFromContributions(
+  contributions: MergeContribution[],
+  denials: OrgFieldDenial[],
+  mergeMap: Map<string, string>,
+): OrgNameSighting[] {
+  const out: OrgNameSighting[] = [];
+  for (const contrib of contributions) {
+    for (const card of contrib.cards) {
+      const name = card.name?.trim();
+      if (!name) continue;
+      const identityKeys = identityKeysForHarvestCard(card, denials, mergeMap);
+      if (identityKeys.length === 0) continue;
+      for (const emailId of contrib.emailIds) {
+        if (!emailId) continue;
+        out.push({ emailId, name, identityKeys });
+      }
+    }
+  }
+  return out;
+}
+
+async function loadOrgPass3NameSightings(
+  denials: OrgFieldDenial[],
+  mergeMap: Map<string, string>,
+): Promise<OrgNameSighting[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      emailId: organizationHighlightExtractions.emailId,
+      thirdPassExtractionJson:
+        organizationHighlightExtractions.thirdPassExtractionJson,
+    })
+    .from(organizationHighlightExtractions);
+
+  const out: OrgNameSighting[] = [];
+  for (const row of rows) {
+    if (!row.thirdPassExtractionJson) continue;
+    let parsed: ReturnType<typeof parseOrgFingerprintResult>;
+    try {
+      parsed = parseOrgFingerprintResult(
+        JSON.parse(row.thirdPassExtractionJson) as unknown,
+      );
+    } catch {
+      continue;
+    }
+    for (const card of parsed.entity_cards) {
+      const name = card.name?.trim();
+      if (!name) continue;
+      const identityKeys = identityKeysForHarvestCard(card, denials, mergeMap);
+      if (identityKeys.length === 0) continue;
+      out.push({ emailId: row.emailId, name, identityKeys });
+    }
+  }
+  return out;
+}
+
+async function loadMovedAliasSightings(params: {
+  attachments: OrgFieldAttachment[];
+  contributions: MergeContribution[];
+  denials: OrgFieldDenial[];
+  mergeMap: Map<string, string>;
+  usedPass3Fallback: boolean;
+}): Promise<OrgNameSighting[]> {
+  if (!params.attachments.some((row) => row.field === "name_alias")) {
+    return [];
+  }
+  const fromContribs = sightingsFromContributions(
+    params.contributions,
+    params.denials,
+    params.mergeMap,
+  );
+  if (params.usedPass3Fallback) return fromContribs;
+
+  const fromPass3 = await loadOrgPass3NameSightings(
+    params.denials,
+    params.mergeMap,
+  );
+  if (fromPass3.length === 0) return fromContribs;
+
+  const pass3Emails = new Set(fromPass3.map((row) => row.emailId));
+  return [
+    ...fromPass3,
+    ...fromContribs.filter((row) => !pass3Emails.has(row.emailId)),
+  ];
+}
 
 /**
  * Load unique organizations from pass-4 fingerprint merges across all threads,
@@ -281,9 +526,10 @@ export async function loadOrgFingerprintSummaries(params?: {
     }
   }
 
-  const [mergeMap, denials] = await Promise.all([
+  const [mergeMap, denials, attachments] = await Promise.all([
     loadOrganizationMergeMap(),
     loadOrganizationFieldDenials(),
+    loadOrganizationFieldAttachments(),
   ]);
 
   // Strip denied field pairs before coalesce so a severed email cannot
@@ -293,15 +539,10 @@ export async function loadOrgFingerprintSummaries(params?: {
     denials,
     mergeMap,
   );
-  const uniqueCards = coalesceOrgEntityCards(flatCards).slice(0, limit);
+  const uniqueCards = coalesceOrgEntityCards(flatCards);
 
   // Index contribution stats by identity key (raw + denial-stripped) so we
   // don't re-scan every card for every unique org (was O(orgs × cards)).
-  type ContribStats = {
-    emailIds: Set<string>;
-    modelIds: Set<string>;
-    mergeCount: number;
-  };
   const statsByIdentityKey = new Map<string, ContribStats>();
   function addContribStats(key: string, contrib: MergeContribution): void {
     if (!key || key.startsWith("empty:")) return;
@@ -333,7 +574,7 @@ export async function loadOrgFingerprintSummaries(params?: {
     for (const key of keysInContrib) addContribStats(key, contrib);
   }
 
-  const organizations: OrgFingerprintSummary[] = uniqueCards.map((card) => {
+  const organizations: OrgSummaryBuild[] = uniqueCards.map((card) => {
     const key = orgIdentityKey(card);
     const stats = statsByIdentityKey.get(key);
     return {
@@ -342,17 +583,63 @@ export async function loadOrgFingerprintSummaries(params?: {
       id: key,
       displayName: entityCardDisplayName(card),
       sourceMergeCount: usedPass3Fallback ? 0 : (stats?.mergeCount ?? 0),
+      emailIds: new Set(stats?.emailIds ?? []),
       sourceEmailCount: stats?.emailIds.size ?? 0,
       modelIds: stats ? [...stats.modelIds] : [],
     };
   });
 
-  const mergedOrganizations = sortOrgFingerprintSummaries(
-    applyFieldDenialsToSummaries(
-      applyOrganizationManualMerges(organizations, mergeMap),
+  const withRecovered = ensureOrgsFromMovedIdentityEmailDenials(
+    organizations,
+    denials,
+    contributions,
+  );
+
+  const afterDenials = applyFieldDenialsToSummaries(
+    applyOrganizationManualMerges(withRecovered, mergeMap),
+    denials,
+    mergeMap,
+  );
+  const withResidualEmails = applyResidualEmailsFromMovedIdentityBuckets({
+    organizations: afterDenials,
+    denials,
+    harvestCards: contributions.flatMap((contrib) => contrib.cards),
+  });
+  const withFieldMetadata = applyFieldAttachmentsToSummaries(
+    withResidualEmails,
+    attachments,
+    mergeMap,
+  );
+
+  let countedOrgs = withFieldMetadata;
+  if (!usedPass3Fallback) {
+    const nameSightings = await loadOrgPass3NameSightings(denials, mergeMap);
+    countedOrgs = rebuildOrgEmailIdsFromSightings({
+      organizations: withFieldMetadata,
+      nameSightings,
+      attachments,
+      mergeMap,
+    });
+  } else if (attachments.some((row) => row.field === "name_alias")) {
+    const sightings = await loadMovedAliasSightings({
+      attachments,
+      contributions,
       denials,
       mergeMap,
-    ),
+      usedPass3Fallback,
+    });
+    countedOrgs = applyMovedAliasEmailAttribution({
+      organizations: withFieldMetadata,
+      attachments,
+      sightings,
+      mergeMap,
+    });
+  }
+
+  const attributed = countedOrgs.map(toPublicSummary);
+
+  const mergedOrganizations = sortOrgFingerprintSummaries(
+    attributed,
     sort,
   ).slice(0, limit);
 

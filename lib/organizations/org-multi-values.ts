@@ -19,6 +19,12 @@ export function splitOrgMultiValue(
         const trimmed = sub.trim();
         if (trimmed) out.push(trimmed);
       }
+    } else if (part.includes(",") && part.includes("@")) {
+      // LLM harvest often packs multiple mailboxes into one comma-separated string.
+      for (const sub of part.split(",")) {
+        const trimmed = sub.trim();
+        if (trimmed) out.push(trimmed);
+      }
     } else {
       out.push(part);
     }

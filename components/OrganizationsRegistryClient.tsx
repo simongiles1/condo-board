@@ -8,7 +8,12 @@ import {
   MergeIcon,
   type MergeEntityOption,
 } from "@/components/MergeEntityDialog";
+import { OrgEvidenceSidePanel } from "@/components/OrgEvidenceSidePanel";
 import { OrganizationDuplicatesPanel } from "@/components/OrganizationDuplicatesPanel";
+import {
+  personDisplayName,
+  type ContactRegistryPersonSummary,
+} from "@/lib/contacts/registry-shared";
 import type {
   OrgDuplicateGroup,
   OrgDuplicateGroupMember,
@@ -24,9 +29,12 @@ import {
 } from "@/lib/organizations/org-list-sort";
 import {
   foldOrgNames,
+  mergeOrgAliasLists,
   mergeOrgMultiValues,
+  removeOrgMultiValue,
   splitOrgMultiValue,
 } from "@/lib/organizations/org-multi-values";
+import type { OrgEvidenceField } from "@/lib/organizations/registry-evidence-shared";
 
 const ORG_LIST_SORT_OPTIONS: Array<{
   value: OrgFingerprintListSort;
@@ -193,23 +201,52 @@ function SeverIcon({ className }: { className?: string }) {
   );
 }
 
+function MoveIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      aria-hidden="true"
+    >
+      <path d="M3 8h10M9 4l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function FieldRow({
   label,
   value,
   disabled,
   onSever,
+  onEvidence,
 }: {
   label: string;
   value: string | null;
   disabled?: boolean;
   onSever?: () => void;
+  onEvidence?: () => void;
 }) {
   const hasValue = Boolean(value?.trim());
   return (
     <div className="grid grid-cols-[7rem_1fr_auto] items-start gap-2 text-sm">
       <dt className="text-slate-500">{label}</dt>
       <dd className="min-w-0 break-words text-slate-900">
-        {hasValue ? value : <span className="text-slate-400">—</span>}
+        {hasValue && onEvidence ? (
+          <button
+            type="button"
+            onClick={onEvidence}
+            className="text-left text-teal-800 underline-offset-2 hover:underline"
+          >
+            {value}
+          </button>
+        ) : hasValue ? (
+          value
+        ) : (
+          <span className="text-slate-400">—</span>
+        )}
       </dd>
       {hasValue && onSever ? (
         <button
@@ -234,11 +271,15 @@ function MultiValueField({
   values,
   disabled,
   onSever,
+  onMove,
+  onEvidence,
 }: {
   label: string;
   values: string[];
   disabled?: boolean;
   onSever: (value: string) => void;
+  onMove?: (value: string) => void;
+  onEvidence?: (value: string) => void;
 }) {
   if (values.length === 0) {
     return <FieldRow label={label} value={null} disabled={disabled} />;
@@ -251,9 +292,31 @@ function MultiValueField({
           {values.map((value) => (
             <li
               key={`${label}:${value}`}
-              className="grid grid-cols-[1fr_auto] items-start gap-2"
+              className="grid grid-cols-[1fr_auto_auto] items-start gap-1"
             >
-              <span className="break-words text-slate-900">{value}</span>
+              {onEvidence ? (
+                <button
+                  type="button"
+                  onClick={() => onEvidence(value)}
+                  className="min-w-0 break-words text-left text-teal-800 underline-offset-2 hover:underline"
+                >
+                  {value}
+                </button>
+              ) : (
+                <span className="break-words text-slate-900">{value}</span>
+              )}
+              {onMove ? (
+                <button
+                  type="button"
+                  title={`Move this ${label.toLowerCase()} to another organization or contact`}
+                  aria-label={`Move ${label.toLowerCase()} “${value}”`}
+                  disabled={disabled}
+                  onClick={() => onMove(value)}
+                  className="shrink-0 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-teal-700 disabled:opacity-50"
+                >
+                  <MoveIcon className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
               <button
                 type="button"
                 title={`Stop associating this ${label.toLowerCase()}`}
@@ -304,6 +367,26 @@ function orgToMergeOption(org: OrgFingerprintSummary): MergeEntityOption {
   };
 }
 
+function personToMergeOption(person: ContactRegistryPersonSummary): MergeEntityOption {
+  const displayName = personDisplayName(person);
+  const emails = person.emails.map((row) => row.email);
+  const searchParts = [
+    displayName,
+    person.firstName,
+    person.lastName,
+    ...person.nameAliases,
+    ...emails,
+    ...person.phones.map((row) => row.phone),
+  ];
+  return {
+    id: `person:${person.id}`,
+    displayName,
+    subtitle: `Person${emails[0] ? ` · ${emails[0]}` : ""}`,
+    searchText: searchParts.filter(Boolean).join("\n").toLowerCase(),
+    rankHint: person.sourceEmailCount,
+  };
+}
+
 /** Local fold so the UI updates before the slow registry reload finishes. */
 function foldOrgSummariesLocally(
   target: OrgFingerprintSummary,
@@ -336,6 +419,66 @@ function foldOrgSummariesLocally(
     };
   }
   return folded;
+}
+
+function applyOptimisticOrgFieldMove(params: {
+  organizations: OrgFingerprintSummary[];
+  sourceId: string;
+  targetId: string;
+  field: "email" | "phone" | "website" | "name_alias";
+  value: string;
+}): {
+  organizations: OrgFingerprintSummary[];
+  target: OrgFingerprintSummary | null;
+} {
+  const source = params.organizations.find((org) => org.id === params.sourceId);
+  const target = params.organizations.find((org) => org.id === params.targetId);
+  if (!source || !target || source.id === target.id) {
+    return { organizations: params.organizations, target: target ?? null };
+  }
+
+  let nextSource: OrgFingerprintSummary = {
+    ...source,
+    aliases: [...(source.aliases ?? [])],
+  };
+  let nextTarget: OrgFingerprintSummary = {
+    ...target,
+    aliases: [...(target.aliases ?? [])],
+  };
+  const value = params.value.trim();
+
+  if (params.field === "name_alias") {
+    const valueKey = value.toLowerCase();
+    nextSource = {
+      ...nextSource,
+      aliases: mergeOrgAliasLists(
+        nextSource.name,
+        nextSource.aliases.filter((alias) => alias.trim().toLowerCase() !== valueKey),
+      ),
+    };
+    nextTarget = {
+      ...nextTarget,
+      aliases: mergeOrgAliasLists(nextTarget.name, nextTarget.aliases, [value]),
+    };
+  } else {
+    nextSource = {
+      ...nextSource,
+      [params.field]: removeOrgMultiValue(params.field, nextSource[params.field], value),
+    };
+    nextTarget = {
+      ...nextTarget,
+      [params.field]: mergeOrgMultiValues(params.field, nextTarget[params.field], value),
+    };
+  }
+
+  return {
+    organizations: params.organizations.map((org) => {
+      if (org.id === nextSource.id) return nextSource;
+      if (org.id === nextTarget.id) return nextTarget;
+      return org;
+    }),
+    target: nextTarget,
+  };
 }
 
 function applyOptimisticOrgMerge(params: {
@@ -425,6 +568,12 @@ type PendingSever = {
   value: string;
 };
 
+type PendingMove = {
+  field: "email" | "phone" | "website" | "name_alias";
+  label: string;
+  value: string;
+};
+
 export function OrganizationsRegistryClient({
   initialOrganizations,
   initialStats,
@@ -447,6 +596,17 @@ export function OrganizationsRegistryClient({
   const [checkedOrgIds, setCheckedOrgIds] = useState<Set<string>>(new Set());
   const [pendingSever, setPendingSever] = useState<PendingSever | null>(null);
   const [severError, setSeverError] = useState<string | null>(null);
+  const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [peopleMoveOptions, setPeopleMoveOptions] = useState<MergeEntityOption[]>(
+    [],
+  );
+  const [evidenceTarget, setEvidenceTarget] = useState<{
+    organizationId: string;
+    organizationName: string;
+    field: OrgEvidenceField;
+    value: string;
+  } | null>(null);
   const [orgSort, setOrgSort] = useState<OrgFingerprintListSort>("mentions-desc");
   const [tab, setTab] = useState<"organizations" | "duplicates">(
     "organizations",
@@ -477,6 +637,32 @@ export function OrganizationsRegistryClient({
   useEffect(() => {
     if (listSearchOpen) listSearchInputRef.current?.focus();
   }, [listSearchOpen]);
+
+  useEffect(() => {
+    if (!pendingMove) return;
+    if (peopleMoveOptions.length > 0) return;
+    let cancelled = false;
+    fetch("/api/contacts/registry?limit=2000&skipVerifiedMentions=1")
+      .then(async (response) => {
+        const data = (await response.json()) as {
+          persons?: ContactRegistryPersonSummary[];
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(data.error ?? "Could not load people.");
+        }
+        return data.persons ?? [];
+      })
+      .then((persons) => {
+        if (!cancelled) setPeopleMoveOptions(persons.map(personToMergeOption));
+      })
+      .catch(() => {
+        if (!cancelled) setPeopleMoveOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingMove, peopleMoveOptions.length]);
 
   const checkedCount = checkedOrgIds.size;
   const allVisibleSelected =
@@ -728,6 +914,120 @@ export function OrganizationsRegistryClient({
     });
   }
 
+  function confirmMoveField(targetId: string) {
+    if (!selected || !pendingMove) return;
+    const org = selected;
+    const move = pendingMove;
+    if (targetId.startsWith("person:")) {
+      const personId = targetId.slice("person:".length);
+      const personOption = peopleMoveOptions.find((item) => item.id === targetId);
+      startTransition(async () => {
+        setMoveError(null);
+        setMessage(null);
+        const res = await fetch("/api/organizations/registry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "move_field_to_person",
+            sourceOrganizationId: org.id,
+            targetPersonId: personId,
+            field: move.field,
+            value: move.value,
+            sourceOrganizationName: org.name ?? org.displayName,
+          }),
+        });
+        const json = (await res.json()) as {
+          ok?: boolean;
+          error?: string;
+          message?: string;
+        };
+        if (!res.ok) {
+          setMoveError(json.error ?? "Could not move that value.");
+          return;
+        }
+        const stripped = organizations.map((item) => {
+          if (item.id !== org.id) return item;
+          if (move.field === "name_alias") {
+            const valueKey = move.value.trim().toLowerCase();
+            return {
+              ...item,
+              aliases: mergeOrgAliasLists(
+                item.name,
+                (item.aliases ?? []).filter(
+                  (alias) => alias.trim().toLowerCase() !== valueKey,
+                ),
+              ),
+            };
+          }
+          return {
+            ...item,
+            [move.field]: removeOrgMultiValue(
+              move.field,
+              item[move.field],
+              move.value,
+            ),
+          };
+        });
+        setOrganizations(stripped);
+        setPendingMove(null);
+        setMessage(
+          json.message ??
+            `Moved ${move.label.toLowerCase()} “${move.value}” onto ${personOption?.displayName ?? "the contact"}.`,
+        );
+        await refreshData();
+      });
+      return;
+    }
+    const target = organizations.find((item) => item.id === targetId);
+    if (!target) {
+      setMoveError("Pick an organization or person from the search results.");
+      return;
+    }
+    startTransition(async () => {
+      setMoveError(null);
+      setMessage(null);
+      const res = await fetch("/api/organizations/registry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "move_field",
+          sourceOrganizationId: org.id,
+          targetOrganizationId: target.id,
+          field: move.field,
+          value: move.value,
+          sourceOrganizationName: org.name ?? org.displayName,
+          targetOrganizationName: target.name ?? target.displayName,
+        }),
+      });
+      const json = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok) {
+        setMoveError(json.error ?? "Could not move that value.");
+        return;
+      }
+      const optimistic = applyOptimisticOrgFieldMove({
+        organizations,
+        sourceId: org.id,
+        targetId: target.id,
+        field: move.field,
+        value: move.value,
+      });
+      setOrganizations(optimistic.organizations);
+      setPendingMove(null);
+      setMessage(
+        `Moved ${move.label.toLowerCase()} “${move.value}” from “${org.displayName}” to “${target.displayName}”.`,
+      );
+      const next = await refreshData();
+      if (next) {
+        const byName = next.find(
+          (o) =>
+            (o.name ?? o.displayName).toLowerCase() ===
+            (target.name ?? target.displayName).toLowerCase(),
+        );
+        if (byName) setSelectedId(byName.id);
+      }
+    });
+  }
+
   return (
     <div>
       <header className="mb-6">
@@ -749,8 +1049,11 @@ export function OrganizationsRegistryClient({
           Unique organizations from extraction pass 4 (thread merges),
           coalesced across threads by email and name. Use the merge icon to
           fold duplicates by hand — the absorbed name is kept as an alias, and
-          emails / phones / websites are combined. Use × on a field to sever a
-          wrong association; the system remembers not to reattach it. Check the
+          emails / phones / websites are combined. Use the arrow on a field to
+          move that value to another organization without merging cards. Moving
+          an alias takes the source emails harvested under that name with it
+          (including aliases you already moved). Use × to sever a wrong
+          association; the system remembers not to reattach it. Check the
           Duplicates tab for fuzzy name matches (Inc / Ltd / spelling variants).
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
@@ -1001,6 +1304,15 @@ export function OrganizationsRegistryClient({
                   label="Name"
                   value={selected.name}
                   disabled={pending}
+                  onEvidence={() => {
+                    if (!selected.name?.trim()) return;
+                    setEvidenceTarget({
+                      organizationId: selected.id,
+                      organizationName: selected.displayName,
+                      field: "name",
+                      value: selected.name.trim(),
+                    });
+                  }}
                   onSever={() => {
                     if (!selected.name?.trim()) return;
                     setSeverError(null);
@@ -1015,6 +1327,22 @@ export function OrganizationsRegistryClient({
                   label="Also known as"
                   values={selected.aliases ?? []}
                   disabled={pending}
+                  onEvidence={(value) => {
+                    setEvidenceTarget({
+                      organizationId: selected.id,
+                      organizationName: selected.displayName,
+                      field: "name_alias",
+                      value,
+                    });
+                  }}
+                  onMove={(value) => {
+                    setMoveError(null);
+                    setPendingMove({
+                      field: "name_alias",
+                      label: "Alias",
+                      value,
+                    });
+                  }}
                   onSever={(value) => {
                     setSeverError(null);
                     setPendingSever({
@@ -1028,6 +1356,15 @@ export function OrganizationsRegistryClient({
                   label="Role"
                   value={selected.organization_role}
                   disabled={pending}
+                  onEvidence={() => {
+                    if (!selected.organization_role?.trim()) return;
+                    setEvidenceTarget({
+                      organizationId: selected.id,
+                      organizationName: selected.displayName,
+                      field: "organization_role",
+                      value: selected.organization_role.trim(),
+                    });
+                  }}
                   onSever={() => {
                     if (!selected.organization_role?.trim()) return;
                     setSeverError(null);
@@ -1042,6 +1379,22 @@ export function OrganizationsRegistryClient({
                   label="Email"
                   values={splitOrgMultiValue(selected.email)}
                   disabled={pending}
+                  onEvidence={(value) => {
+                    setEvidenceTarget({
+                      organizationId: selected.id,
+                      organizationName: selected.displayName,
+                      field: "email",
+                      value,
+                    });
+                  }}
+                  onMove={(value) => {
+                    setMoveError(null);
+                    setPendingMove({
+                      field: "email",
+                      label: "Email",
+                      value,
+                    });
+                  }}
                   onSever={(value) => {
                     setSeverError(null);
                     setPendingSever({
@@ -1055,6 +1408,22 @@ export function OrganizationsRegistryClient({
                   label="Phone"
                   values={splitOrgMultiValue(selected.phone)}
                   disabled={pending}
+                  onEvidence={(value) => {
+                    setEvidenceTarget({
+                      organizationId: selected.id,
+                      organizationName: selected.displayName,
+                      field: "phone",
+                      value,
+                    });
+                  }}
+                  onMove={(value) => {
+                    setMoveError(null);
+                    setPendingMove({
+                      field: "phone",
+                      label: "Phone",
+                      value,
+                    });
+                  }}
                   onSever={(value) => {
                     setSeverError(null);
                     setPendingSever({
@@ -1068,6 +1437,22 @@ export function OrganizationsRegistryClient({
                   label="Website"
                   values={splitOrgMultiValue(selected.website)}
                   disabled={pending}
+                  onEvidence={(value) => {
+                    setEvidenceTarget({
+                      organizationId: selected.id,
+                      organizationName: selected.displayName,
+                      field: "website",
+                      value,
+                    });
+                  }}
+                  onMove={(value) => {
+                    setMoveError(null);
+                    setPendingMove({
+                      field: "website",
+                      label: "Website",
+                      value,
+                    });
+                  }}
                   onSever={(value) => {
                     setSeverError(null);
                     setPendingSever({
@@ -1110,6 +1495,39 @@ export function OrganizationsRegistryClient({
         onMerge={runMerge}
       />
 
+      <MergeEntityDialog
+        open={pendingMove != null && selected != null}
+        entityLabel="destination"
+        sources={selected ? [orgToMergeOption(selected)] : []}
+        candidates={[
+          ...organizations.map(orgToMergeOption),
+          ...(pendingMove?.field === "website" ? [] : peopleMoveOptions),
+        ]}
+        searchPlaceholder="Search organizations or people…"
+        busy={pending}
+        error={moveError}
+        copy={
+          pendingMove && selected
+            ? {
+                title: `Move ${pendingMove.label.toLowerCase()}`,
+                description: `Move ${pendingMove.label.toLowerCase()} “${pendingMove.value}” from “${selected.displayName}” to another organization or a contact. Harvest emails that used that name as the organization name move with an alias. The source card keeps its other fields.`,
+                submitLabel: "Move",
+                busyLabel: "Moving…",
+                intoLabel: "Move to",
+                hideSources: true,
+                pickError:
+                  "Pick an organization or person from the search results to move to.",
+              }
+            : undefined
+        }
+        onClose={() => {
+          if (pending) return;
+          setPendingMove(null);
+          setMoveError(null);
+        }}
+        onMerge={confirmMoveField}
+      />
+
       <ConfirmDialog
         open={pendingSever != null && selected != null}
         title="Sever association?"
@@ -1149,6 +1567,11 @@ export function OrganizationsRegistryClient({
           setPendingSever(null);
           setSeverError(null);
         }}
+      />
+
+      <OrgEvidenceSidePanel
+        target={evidenceTarget}
+        onClose={() => setEvidenceTarget(null)}
       />
     </div>
   );

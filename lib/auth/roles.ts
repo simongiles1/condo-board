@@ -80,3 +80,14 @@ export function roleLabel(role: UserRole): string {
       return "User";
   }
 }
+
+export function roleDescription(role: UserRole): string {
+  switch (role) {
+    case "user":
+      return "Board-facing workspace: operations, knowledge, building, and insights. Cannot open Dev Tools or System Admin.";
+    case "admin":
+      return "Everything a user can access, plus Dev Tools (extraction concepts, analysis lab, and notes). Cannot manage accounts or email sync.";
+    case "super_admin":
+      return "Everything an admin can access, plus System Admin: user accounts, role assignment, and email and sync settings.";
+  }
+}

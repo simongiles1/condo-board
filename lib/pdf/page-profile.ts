@@ -9,6 +9,8 @@
 
 import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
 
+type PdfDocumentInit = Parameters<typeof getDocument>[0];
+
 export const PAGE_PROFILER_VERSION = "pdfjs-profile-v3";
 
 /** Tunable thresholds — calibrate against the golden set (P0-4). */
@@ -396,7 +398,7 @@ export async function profilePdfPages(bytes: Buffer): Promise<PageProfile[]> {
     useSystemFonts: true,
     // Owner-restricted condo PDFs are still readable for layout metrics.
     password: "",
-  });
+  } as PdfDocumentInit);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let doc: any;
@@ -411,7 +413,7 @@ export async function profilePdfPages(bytes: Buffer): Promise<PageProfile[]> {
         isEvalSupported: false,
         useSystemFonts: true,
         password: "",
-      });
+      } as PdfDocumentInit);
       doc = await retry.promise;
     } else {
       throw error;

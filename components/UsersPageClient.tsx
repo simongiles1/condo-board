@@ -1,10 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { UserRolesAccessPanel } from "@/components/UserRolesAccessPanel";
 import { roleLabel, USER_ROLES, type UserRole } from "@/lib/auth/roles";
 import { formatDateTime } from "@/lib/format/datetime";
+import {
+  parseUsersAdminTab,
+  splitNavHref,
+  USERS_ADMIN_TABS,
+  type UsersAdminTab,
+} from "@/lib/nav/structure";
 
 type AppUserRow = {
   id: string;
@@ -15,13 +23,31 @@ type AppUserRow = {
   createdAt: string;
 };
 
-export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
+export function UsersPageClient({
+  currentUserId,
+  initialTab,
+}: {
+  currentUserId: string;
+  initialTab?: string;
+}) {
+  const router = useRouter();
+  const resolvedTab = parseUsersAdminTab(initialTab);
+  const [view, setView] = useState<UsersAdminTab>(resolvedTab);
   const [users, setUsers] = useState<AppUserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AppUserRow | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setView(resolvedTab);
+  }, [resolvedTab]);
+
+  function selectView(tab: UsersAdminTab) {
+    setView(tab);
+    router.replace(`/admin/system/users?tab=${tab}`, { scroll: false });
+  }
 
   useEffect(() => {
     void (async () => {
@@ -143,26 +169,58 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
     }
   }
 
-  if (loading) {
-    return <p className="text-sm text-slate-600">Loading users…</p>;
-  }
-
   return (
-    <div className="space-y-4">
-      <div>
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+      <div className="shrink-0">
         <h1 className="text-2xl font-semibold text-slate-900">Users</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Manage accounts and roles. Only super admins can access this page.
+          {view === "roles"
+            ? "What each role can access in the app."
+            : "Manage accounts and roles. Only super admins can access this page."}
         </p>
+        <div
+          className="mt-4 inline-flex max-w-full flex-wrap rounded-xl border border-slate-200 bg-slate-100 p-1"
+          role="tablist"
+          aria-label="Users views"
+        >
+          {USERS_ADMIN_TABS.map((tab) => {
+            const tabId = parseUsersAdminTab(splitNavHref(tab.href).tab);
+            const selected = view === tabId;
+            return (
+              <button
+                key={tab.href}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => selectView(tabId)}
+                className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                  selected
+                    ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
+      {view === "roles" ? <UserRolesAccessPanel /> : null}
+
+      {view === "users" && loading ? (
+        <p className="text-sm text-slate-600">Loading users…</p>
+      ) : null}
+
+      {view === "users" && !loading ? (
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
       {error ? (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+        <div className="shrink-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
           {error}
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-sm">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50">
             <tr>
@@ -262,6 +320,8 @@ export function UsersPageClient({ currentUserId }: { currentUserId: string }) {
           </tbody>
         </table>
       </div>
+        </div>
+      ) : null}
 
       <ConfirmDialog
         open={deleteTarget !== null}

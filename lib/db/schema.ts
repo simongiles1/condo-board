@@ -509,6 +509,34 @@ export const organizationFieldDenials = pgTable(
 );
 
 /**
+ * Positive associations: attach this field value to this organization.
+ * Inverse of organization_field_denials. Used to move an alias/email/phone/website
+ * from one org card to another without merging the whole card.
+ */
+export const organizationFieldAttachments = pgTable(
+  "organization_field_attachments",
+  {
+    id: text("id").primaryKey(),
+    /** Target org identity key (email:… / name:… / …). */
+    orgKey: text("org_key").notNull(),
+    /** email | phone | website | name_alias */
+    field: text("field").notNull(),
+    /** Display string as shown on the source card. */
+    attachedValue: text("attached_value").notNull(),
+    /** Normalized value for uniqueness (see field-denials.ts). */
+    valueKey: text("value_key").notNull(),
+    /** Normalized target org name at attach time; preferred match key when set. */
+    nameKey: text("name_key"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    orgFieldValueUnique: uniqueIndex(
+      "organization_field_attachments_org_field_value_unique",
+    ).on(table.orgKey, table.field, table.valueKey),
+  }),
+);
+
+/**
  * Thin durable organization registry (materialized from fingerprint keys).
  * identity_key mirrors orgIdentityKey (email:… / name:… / web:… / phone:…).
  * Manual merges set merged_into_id and rewrite affiliations to the survivor.
@@ -534,6 +562,142 @@ export const organizationEntities = pgTable(
   },
   (table) => ({
     statusIdx: index("organization_entities_status_idx").on(table.status),
+  }),
+);
+
+/** Per-email project highlight extraction (names, years, phases, contractors). */
+export const projectHighlightExtractions = pgTable(
+  "project_highlight_extractions",
+  {
+    id: text("id").primaryKey(),
+    emailId: text("email_id")
+      .notNull()
+      .references(() => emails.id, { onDelete: "cascade" }),
+    modelId: text("model_id").notNull(),
+    extractionJson: text("extraction_json").notNull(),
+    skipped: boolean("skipped").notNull().default(false),
+    error: text("error"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    totalTokens: integer("total_tokens"),
+    costUsd: text("cost_usd"),
+    apiModelName: text("api_model_name"),
+    updatedAt: text("updated_at").notNull(),
+    secondPassExtractionJson: text("second_pass_extraction_json"),
+    secondPassSkipped: boolean("second_pass_skipped").notNull().default(false),
+    secondPassError: text("second_pass_error"),
+    secondPassInputTokens: integer("second_pass_input_tokens"),
+    secondPassOutputTokens: integer("second_pass_output_tokens"),
+    secondPassTotalTokens: integer("second_pass_total_tokens"),
+    secondPassCostUsd: text("second_pass_cost_usd"),
+    secondPassApiModelName: text("second_pass_api_model_name"),
+    secondPassUpdatedAt: text("second_pass_updated_at"),
+    thirdPassExtractionJson: text("third_pass_extraction_json"),
+    thirdPassSkipped: boolean("third_pass_skipped").notNull().default(false),
+    thirdPassError: text("third_pass_error"),
+    thirdPassInputTokens: integer("third_pass_input_tokens"),
+    thirdPassOutputTokens: integer("third_pass_output_tokens"),
+    thirdPassTotalTokens: integer("third_pass_total_tokens"),
+    thirdPassCostUsd: text("third_pass_cost_usd"),
+    thirdPassApiModelName: text("third_pass_api_model_name"),
+    thirdPassUpdatedAt: text("third_pass_updated_at"),
+  },
+  (table) => ({
+    emailModelUnique: uniqueIndex(
+      "project_highlight_extractions_email_model_unique",
+    ).on(table.emailId, table.modelId),
+  }),
+);
+
+/**
+ * Thread-scoped merge of pass-3 project entity cards (4th pass).
+ * One row per model + exact email-id set.
+ */
+export const projectFingerprintMerges = pgTable(
+  "project_fingerprint_merges",
+  {
+    id: text("id").primaryKey(),
+    modelId: text("model_id").notNull(),
+    emailIdsKey: text("email_ids_key").notNull(),
+    emailIdsJson: text("email_ids_json").notNull(),
+    entityCardsJson: text("entity_cards_json").notNull(),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    totalTokens: integer("total_tokens"),
+    costUsd: text("cost_usd"),
+    apiModelName: text("api_model_name"),
+    error: text("error"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    modelEmailsUnique: uniqueIndex(
+      "project_fingerprint_merges_model_emails_unique",
+    ).on(table.modelId, table.emailIdsKey),
+  }),
+);
+
+/**
+ * Manual project merges from Entities → Projects.
+ * absorbed_key / survivor_key are project identity keys (name:…|year:…).
+ */
+export const projectManualMerges = pgTable(
+  "project_manual_merges",
+  {
+    id: text("id").primaryKey(),
+    absorbedKey: text("absorbed_key").notNull().unique(),
+    survivorKey: text("survivor_key").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+);
+
+/**
+ * Negative associations: do not attach this field value to this project.
+ */
+export const projectFieldDenials = pgTable(
+  "project_field_denials",
+  {
+    id: text("id").primaryKey(),
+    projectKey: text("project_key").notNull(),
+    /** name | year_hint | phase | contractor | location | equipment_mentions | name_alias */
+    field: text("field").notNull(),
+    deniedValue: text("denied_value").notNull(),
+    nameKey: text("name_key"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    projectFieldValueUnique: uniqueIndex(
+      "project_field_denials_project_field_value_unique",
+    ).on(table.projectKey, table.field, table.deniedValue),
+  }),
+);
+
+/**
+ * Thin durable project registry (materialized from fingerprint keys).
+ * identity_key is name:… or name:…|year:… — human merge decides if years
+ * are the same initiative. Never slugify-only.
+ */
+export const projectEntities = pgTable(
+  "project_entities",
+  {
+    id: text("id").primaryKey(),
+    identityKey: text("identity_key").notNull().unique(),
+    name: text("name"),
+    yearHint: text("year_hint"),
+    phase: text("phase"),
+    contractor: text("contractor"),
+    location: text("location"),
+    equipmentMentions: text("equipment_mentions"),
+    status: text("status", {
+      enum: ["active", "merged"],
+    })
+      .notNull()
+      .default("active"),
+    mergedIntoId: text("merged_into_id"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    statusIdx: index("project_entities_status_idx").on(table.status),
   }),
 );
 
@@ -594,13 +758,13 @@ export const todoHighlightExtractions = pgTable(
 );
 
 /**
- * Inbox-wide bulk contact/org/event/todo extraction jobs (modal on /emails).
+ * Inbox-wide bulk contact/org/project/event/todo extraction jobs (modal on /emails).
  * Progress + cumulative cost are updated as the client walks threads.
  */
 export const bulkExtractRuns = pgTable("bulk_extract_runs", {
   id: text("id").primaryKey(),
   kind: text("kind", {
-    enum: ["contacts", "organizations", "events", "todos"],
+    enum: ["contacts", "organizations", "projects", "events", "todos"],
   }).notNull(),
   modelId: text("model_id").notNull(),
   /**
@@ -953,6 +1117,72 @@ export const contactRegistryIngests = pgTable("contact_registry_ingests", {
   createdAt: text("created_at").notNull(),
   completedAt: text("completed_at"),
 });
+
+/**
+ * Per-email contact observations. Sparse first-name cards stay here until
+ * the resolver attaches them to a canonical contact_persons row.
+ */
+export const contactMentions = pgTable(
+  "contact_mentions",
+  {
+    id: text("id").primaryKey(),
+    sourceEmailId: text("source_email_id").references(() => emails.id, {
+      onDelete: "cascade",
+    }),
+    fingerprintMergeId: text("fingerprint_merge_id").references(
+      () => contactFingerprintMerges.id,
+      { onDelete: "set null" },
+    ),
+    modelId: text("model_id"),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    email: text("email"),
+    phone: text("phone"),
+    jobTitle: text("job_title"),
+    rawCompany: text("raw_company"),
+    mentionKind: text("mention_kind", {
+      enum: ["participant", "referred", "unknown"],
+    })
+      .notNull()
+      .default("unknown"),
+    fingerprint: text("fingerprint").notNull(),
+    firstNameKey: text("first_name_key"),
+    firstOrgKey: text("first_org_key"),
+    blockingKeysJson: text("blocking_keys_json").notNull().default("[]"),
+    resolutionStatus: text("resolution_status", {
+      enum: ["unresolved", "provisional", "confirmed"],
+    })
+      .notNull()
+      .default("unresolved"),
+    resolvedPersonId: text("resolved_person_id").references(
+      () => contactPersons.id,
+      { onDelete: "set null" },
+    ),
+    resolvedOrganizationId: text("resolved_organization_id").references(
+      () => organizationEntities.id,
+      { onDelete: "set null" },
+    ),
+    resolutionReason: text("resolution_reason"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    emailFingerprintUnique: uniqueIndex(
+      "contact_mentions_email_fingerprint_unique",
+    ).on(table.sourceEmailId, table.fingerprint),
+    statusIdx: index("contact_mentions_status_idx").on(table.resolutionStatus),
+    firstNameKeyIdx: index("contact_mentions_first_name_key_idx").on(
+      table.firstNameKey,
+    ),
+    firstOrgKeyIdx: index("contact_mentions_first_org_key_idx").on(
+      table.firstOrgKey,
+    ),
+    resolvedPersonIdx: index("contact_mentions_resolved_person_idx").on(
+      table.resolvedPersonId,
+    ),
+    emailIdx: index("contact_mentions_email_idx").on(table.email),
+  }),
+);
 
 /**
  * Human review queue for Telegram HITL. Contact holds skip auto-apply;

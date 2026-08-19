@@ -155,3 +155,23 @@ export async function recordContactFieldDenial(params: {
     denial: { id, personId, field, deniedValue, createdAt: nowIso },
   };
 }
+
+export async function deleteContactFieldDenial(params: {
+  personId: string;
+  field: ContactDeniableField;
+  value: string;
+}): Promise<void> {
+  const personId = params.personId.trim();
+  const deniedValue = normalizeContactDeniedValue(params.field, params.value);
+  if (!personId || !deniedValue) return;
+  const db = getDb();
+  await db
+    .delete(contactPersonFieldDenials)
+    .where(
+      and(
+        eq(contactPersonFieldDenials.personId, personId),
+        eq(contactPersonFieldDenials.field, params.field),
+        eq(contactPersonFieldDenials.deniedValue, deniedValue),
+      ),
+    );
+}

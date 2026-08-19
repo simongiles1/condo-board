@@ -179,6 +179,7 @@ describe("resolveUniqueHighlightSplit / resolveHighlightedExcerpt", () => {
     const split = resolveUniqueHighlightSplit(display, unique);
     // unique aligns as a prefix here, so unique→display should win
     assert.ok(split);
+    assert.equal(split.aligned, true);
     assert.doesNotMatch(split.highlighted, /See below notes from Shawna/);
     assert.doesNotMatch(split.highlighted, /On Sun/);
 
@@ -217,7 +218,10 @@ describe("resolveUniqueHighlightSplit / resolveHighlightedExcerpt", () => {
       displayWithStreet,
       uniqueMissingStreet,
     );
-    assert.equal(failedAlign, null);
+    assert.ok(failedAlign);
+    assert.equal(failedAlign.aligned, false);
+    assert.equal(failedAlign.highlighted, uniqueMissingStreet);
+    assert.equal(failedAlign.remainder, displayWithStreet);
 
     const excerpt = resolveHighlightedExcerpt(
       displayWithStreet,
@@ -226,6 +230,18 @@ describe("resolveUniqueHighlightSplit / resolveHighlightedExcerpt", () => {
     assert.equal(excerpt, uniqueMissingStreet);
     assert.doesNotMatch(excerpt, /See below notes from Shawna/);
     assert.doesNotMatch(excerpt, /393 University/);
+  });
+
+  it("does not paint a teal unique span when mentions have no unique body", () => {
+    const display = [
+      "Thanks.",
+      "",
+      "On Mon, Jane wrote:",
+      "> Can we meet Tuesday?",
+    ].join("\n");
+    assert.equal(resolveUniqueHighlightSplit(display, ""), null);
+    assert.equal(resolveUniqueHighlightSplit(display, null), null);
+    assert.equal(resolveHighlightedExcerpt(display, ""), "");
   });
 });
 

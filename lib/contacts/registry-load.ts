@@ -7,6 +7,7 @@ import { getDb } from "@/lib/db";
 import {
   contactEmailIndex,
   contactFingerprintMerges,
+  contactMentions,
   contactMergeProposals,
   contactPersonEmails,
   contactPersonPhones,
@@ -38,6 +39,13 @@ import {
   type ContactPersonListSort,
   type ContactRegistryPersonSummary,
 } from "@/lib/contacts/registry-shared";
+import {
+  buildSharedMailboxes,
+  sharedMailboxStats,
+  type SharedMailboxPersonInfo,
+  type SharedMailboxStats,
+  type SharedMailboxSummary,
+} from "@/lib/contacts/shared-mailboxes";
 
 function orderByForPersonList(params?: {
   orderByMention?: boolean;
@@ -330,6 +338,67 @@ export async function loadContactEmailIndex(
   });
 }
 
+/** Addresses with two or more occupancy people, plus date ranges. */
+export async function loadSharedMailboxes(): Promise<{
+  mailboxes: SharedMailboxSummary[];
+  stats: SharedMailboxStats;
+}> {
+  const db = getDb();
+  const occupancy = await db.select().from(contactPersonEmails);
+  if (occupancy.length === 0) {
+    return { mailboxes: [], stats: { mailboxCount: 0, occupantCount: 0 } };
+  }
+
+  const personIds = [...new Set(occupancy.map((row) => row.personId))];
+  const personRows = await db
+    .select({
+      id: contactPersons.id,
+      firstName: contactPersons.firstName,
+      lastName: contactPersons.lastName,
+      sparseStub: contactPersons.sparseStub,
+      mentionWeight: contactPersons.mentionWeight,
+      currentOrganizationId: contactPersons.currentOrganizationId,
+    })
+    .from(contactPersons)
+    .where(inArray(contactPersons.id, personIds));
+
+  const orgIds = [
+    ...new Set(
+      personRows
+        .map((row) => row.currentOrganizationId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  const orgRows =
+    orgIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: organizationEntities.id,
+            name: organizationEntities.name,
+          })
+          .from(organizationEntities)
+          .where(inArray(organizationEntities.id, orgIds));
+  const orgNameById = new Map(orgRows.map((row) => [row.id, row.name]));
+
+  const persons = new Map<string, SharedMailboxPersonInfo>();
+  for (const row of personRows) {
+    persons.set(row.id, {
+      id: row.id,
+      firstName: row.firstName,
+      lastName: row.lastName,
+      sparseStub: row.sparseStub,
+      mentionWeight: row.mentionWeight,
+      currentOrganizationName: row.currentOrganizationId
+        ? (orgNameById.get(row.currentOrganizationId) ?? null)
+        : null,
+    });
+  }
+
+  const mailboxes = buildSharedMailboxes(occupancy, persons);
+  return { mailboxes, stats: sharedMailboxStats(mailboxes) };
+}
+
 export async function getRegistryStats(): Promise<{
   personCount: number;
   emailCount: number;
@@ -338,6 +407,10 @@ export async function getRegistryStats(): Promise<{
   pendingMergeCount: number;
   mergeDecisionCount: number;
   ingestCompletedCount: number;
+  mentionTotalCount: number;
+  mentionConfirmedCount: number;
+  mentionProvisionalCount: number;
+  mentionUnresolvedCount: number;
 }> {
   const db = getDb();
   const persons = await db
@@ -368,6 +441,26 @@ export async function getRegistryStats(): Promise<{
   const proposals = await db
     .select({ id: contactMergeProposals.id })
     .from(contactMergeProposals);
+  const mentionRows = await db
+    .select({
+      status: contactMentions.resolutionStatus,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(contactMentions)
+    .groupBy(contactMentions.resolutionStatus);
+  const mentionCounts = {
+    total: 0,
+    confirmed: 0,
+    provisional: 0,
+    unresolved: 0,
+  };
+  for (const row of mentionRows) {
+    const count = Number(row.count) || 0;
+    mentionCounts.total += count;
+    if (row.status === "confirmed") mentionCounts.confirmed = count;
+    else if (row.status === "provisional") mentionCounts.provisional = count;
+    else if (row.status === "unresolved") mentionCounts.unresolved = count;
+  }
 
   return {
     personCount: persons.length,
@@ -376,6 +469,10 @@ export async function getRegistryStats(): Promise<{
     pendingMergeCount,
     mergeDecisionCount: proposals.length,
     ingestCompletedCount: completedIngests.length,
+    mentionTotalCount: mentionCounts.total,
+    mentionConfirmedCount: mentionCounts.confirmed,
+    mentionProvisionalCount: mentionCounts.provisional,
+    mentionUnresolvedCount: mentionCounts.unresolved,
   };
 }
 

@@ -27,6 +27,7 @@ function email(
     attachmentsExtracted: false,
     contactExtracted: false,
     organizationExtracted: false,
+    projectExtracted: false,
     eventExtracted: false,
     todoExtracted: false,
     ...overrides,

@@ -4,11 +4,21 @@ import { NextResponse } from "next/server";
 
 import { isErrorResponse, requireSession } from "@/lib/auth/authorize";
 import {
+  backfillSparsePersonsToMentions,
+  previewContactMentionBackfill,
+} from "@/lib/contacts/mention-backfill";
+import {
+  attachUnresolvedMentionGroup,
+  createPersonFromUnresolvedMentionGroup,
+  loadMentionQueueGroups,
+} from "@/lib/contacts/mention-queue";
+import {
   getRegistryStats,
   loadContactDuplicateGroups,
   loadContactEmailIndex,
   loadContactMergeActivity,
   loadContactRegistryPersons,
+  loadSharedMailboxes,
 } from "@/lib/contacts/registry-load";
 import {
   processPendingRegistryIngests,
@@ -48,6 +58,11 @@ export async function GET(request: Request) {
     return NextResponse.json({ view: "emails", emails, stats });
   }
 
+  if (view === "mailboxes") {
+    const { mailboxes, stats } = await loadSharedMailboxes();
+    return NextResponse.json({ view: "mailboxes", mailboxes, stats });
+  }
+
   if (view === "activity") {
     const activity = await loadContactMergeActivity(limit);
     const stats = await getRegistryStats();
@@ -69,6 +84,23 @@ export async function GET(request: Request) {
       groups,
       stats,
       groupCount: groups.length,
+    });
+  }
+
+  if (view === "mentions") {
+    const [queue, stats] = await Promise.all([
+      loadMentionQueueGroups({
+        view: url.searchParams.get("mentionView"),
+      }),
+      getRegistryStats(),
+    ]);
+    return NextResponse.json({
+      view: "mentions",
+      mentionView: queue.view,
+      groups: queue.groups,
+      mentionStats: queue.stats,
+      stats,
+      groupCount: queue.groups.length,
     });
   }
 
@@ -118,6 +150,11 @@ export async function POST(request: Request) {
     memberIds?: string[];
     field?: string;
     value?: string;
+    groupId?: string;
+    mentionIds?: string[];
+    dryRun?: boolean;
+    forceHarvest?: boolean;
+    harvestLimit?: number;
   } = {};
   try {
     body = (await request.json()) as typeof body;
@@ -215,6 +252,101 @@ export async function POST(request: Request) {
     });
   }
 
+  if (body.action === "attach_mentions") {
+    try {
+      const result = await attachUnresolvedMentionGroup({
+        groupId: body.groupId ?? "",
+        personId: body.personId ?? body.targetPersonId ?? "",
+        mentionIds: Array.isArray(body.mentionIds)
+          ? body.mentionIds.filter(
+              (id: unknown): id is string =>
+                typeof id === "string" && id.trim().length > 0,
+            )
+          : undefined,
+      });
+      if (!result.ok) {
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      }
+      return NextResponse.json(result);
+    } catch (error) {
+      console.error("[contacts:attach_mentions]", error);
+      return NextResponse.json(
+        { error: "Could not attach mention group." },
+        { status: 500 },
+      );
+    }
+  }
+
+  if (body.action === "create_person_from_mentions") {
+    try {
+      const result = await createPersonFromUnresolvedMentionGroup({
+        groupId: body.groupId ?? "",
+        mentionIds: Array.isArray(body.mentionIds)
+          ? body.mentionIds.filter(
+              (id: unknown): id is string =>
+                typeof id === "string" && id.trim().length > 0,
+            )
+          : undefined,
+      });
+      if (!result.ok) {
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      }
+      return NextResponse.json(result);
+    } catch (error) {
+      console.error("[contacts:create_person_from_mentions]", error);
+      return NextResponse.json(
+        { error: "Could not create a person from those mentions." },
+        { status: 500 },
+      );
+    }
+  }
+
+  if (body.action === "preview_convert_stubs") {
+    try {
+      const preview = await previewContactMentionBackfill();
+      return NextResponse.json({ ok: true, ...preview });
+    } catch (error) {
+      console.error("[contacts:preview_convert_stubs]", error);
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not preview stub conversion.",
+        },
+        { status: 500 },
+      );
+    }
+  }
+
+  if (body.action === "convert_stubs") {
+    try {
+      const result = await backfillSparsePersonsToMentions({
+        dryRun: body.dryRun === true,
+        forceHarvest: body.forceHarvest === true,
+        harvestLimit:
+          typeof body.harvestLimit === "number" && body.harvestLimit > 0
+            ? Math.min(200, body.harvestLimit)
+            : undefined,
+      });
+      return NextResponse.json({
+        ok: true,
+        ...result,
+        details: result.details.slice(0, 40),
+      });
+    } catch (error) {
+      console.error("[contacts:convert_stubs]", error);
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not convert sparse stubs.",
+        },
+        { status: 500 },
+      );
+    }
+  }
   if (body.action === "deny_field") {
     const field = body.field ?? "";
     if (

@@ -6,6 +6,8 @@ import { ContactsRegistryClient } from "@/components/ContactsRegistryClient";
 import { EquipmentRegistryClient } from "@/components/EquipmentRegistryClient";
 import { MentionsChartDialog } from "@/components/MentionsChartDialog";
 import { OrganizationsRegistryClient } from "@/components/OrganizationsRegistryClient";
+import { ProjectsRegistryClient } from "@/components/ProjectsRegistryClient";
+import { SharedMailboxesClient } from "@/components/SharedMailboxesClient";
 import type {
   ContactEmailIndexRow,
   ContactMergeActivityRow,
@@ -23,6 +25,14 @@ import type {
   OrgFingerprintListStats,
   OrgFingerprintSummary,
 } from "@/lib/organizations/fingerprint-list";
+import type {
+  ProjectFingerprintListStats,
+  ProjectFingerprintSummary,
+} from "@/lib/projects/fingerprint-list";
+import type {
+  SharedMailboxStats,
+  SharedMailboxSummary,
+} from "@/lib/contacts/shared-mailboxes";
 
 type PersonRow = ContactRegistryPersonSummary & { displayName: string };
 
@@ -33,12 +43,18 @@ type Stats = {
   pendingMergeCount: number;
   mergeDecisionCount?: number;
   ingestCompletedCount?: number;
+  mentionTotalCount?: number;
+  mentionConfirmedCount?: number;
+  mentionProvisionalCount?: number;
+  mentionUnresolvedCount?: number;
 };
 
 const ENTITY_TABS: Array<{ id: EntityKindTab; label: string }> = [
   { id: "contacts", label: "Contacts" },
-  { id: "equipment", label: "Equipment" },
   { id: "organizations", label: "Organizations" },
+  { id: "projects", label: "Projects" },
+  { id: "equipment", label: "Equipment" },
+  { id: "mailboxes", label: "Shared mailboxes" },
 ];
 
 export function EntitiesPageClient({
@@ -53,10 +69,21 @@ export function EntitiesPageClient({
     mergeCount: 0,
     emailCount: 0,
   },
+  initialProjects = [],
+  initialProjectStats = {
+    projectCount: 0,
+    mergeCount: 0,
+    emailCount: 0,
+  },
   initialEquipment = [],
   initialEquipmentStats = {
     equipmentCount: 0,
     eventCount: 0,
+  },
+  initialMailboxes = [],
+  initialMailboxStats = {
+    mailboxCount: 0,
+    occupantCount: 0,
   },
 }: {
   initialTab?: string;
@@ -66,8 +93,12 @@ export function EntitiesPageClient({
   initialActivity?: ContactMergeActivityRow[];
   initialOrganizations?: OrgFingerprintSummary[];
   initialOrgStats?: OrgFingerprintListStats;
+  initialProjects?: ProjectFingerprintSummary[];
+  initialProjectStats?: ProjectFingerprintListStats;
   initialEquipment?: EquipmentRegistrySummary[];
   initialEquipmentStats?: EquipmentRegistryStats;
+  initialMailboxes?: SharedMailboxSummary[];
+  initialMailboxStats?: SharedMailboxStats;
 }) {
   const resolvedTab = parseEntityKindTab(initialTab);
   const [entityTab, setEntityTab] = useState<EntityKindTab>(resolvedTab);
@@ -87,13 +118,15 @@ export function EntitiesPageClient({
       <header className="mb-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <h1 className="text-2xl font-semibold text-slate-900">Entities</h1>
-          <button
-            type="button"
-            onClick={() => setChartOpen(true)}
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
-          >
-            Mention frequency
-          </button>
+          {entityTab !== "mailboxes" ? (
+            <button
+              type="button"
+              onClick={() => setChartOpen(true)}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
+            >
+              Mention frequency
+            </button>
+          ) : null}
         </div>
 
         <div
@@ -130,15 +163,25 @@ export function EntitiesPageClient({
           initialStats={initialStats}
           initialActivity={initialActivity}
         />
-      ) : entityTab === "equipment" ? (
-        <EquipmentRegistryClient
-          initialEquipment={initialEquipment}
-          initialStats={initialEquipmentStats}
-        />
-      ) : (
+      ) : entityTab === "organizations" ? (
         <OrganizationsRegistryClient
           initialOrganizations={initialOrganizations}
           initialStats={initialOrgStats}
+        />
+      ) : entityTab === "projects" ? (
+        <ProjectsRegistryClient
+          initialProjects={initialProjects}
+          initialStats={initialProjectStats}
+        />
+      ) : entityTab === "mailboxes" ? (
+        <SharedMailboxesClient
+          initialMailboxes={initialMailboxes}
+          initialStats={initialMailboxStats}
+        />
+      ) : (
+        <EquipmentRegistryClient
+          initialEquipment={initialEquipment}
+          initialStats={initialEquipmentStats}
         />
       )}
 
@@ -146,7 +189,11 @@ export function EntitiesPageClient({
         open={chartOpen}
         onClose={() => setChartOpen(false)}
         initialEntity={
-          entityTab === "organizations" ? "organizations" : "contacts"
+          entityTab === "organizations"
+            ? "organizations"
+            : entityTab === "projects"
+              ? "projects"
+              : "contacts"
         }
       />
     </div>

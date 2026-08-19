@@ -8,6 +8,46 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Organization field evidence + move to contacts** — Click an organization
+  name, alias, email, phone, or website to open a side panel of the emails
+  where that value was extracted as an org field (same pattern as Contacts).
+  The move control can send an alias, email, or phone onto a person card, so
+  a last name like Gartenburg can leave the corporation and land on the
+  contact. If it already is that person’s last or first name, it is only
+  removed from the organization.
+
+- **Shared mailboxes** — Entities has a Shared mailboxes tab for addresses
+  occupied by more than one contact. The left list is those email addresses;
+  the detail view shows each associated person on a shared occupancy timeline
+  (closed ranges and “present” for the current occupant).
+
+- **Contact mentions vs people** — Sparse first-name harvests (`Dan`, `Dan from XYZ`)
+  land in `contact_mentions` instead of minting People cards. Pass 3 keeps
+  `raw_company`. A discrete resolver attaches mentions when identity is unique
+  (email/phone, thread participant, unique first+last, full name in the email
+  subject, or a well-known first+org match) and retracts provisional links if a
+  second Dan at that org appears. Convert existing stubs from **Contacts →
+  Convert stubs** (preview, then apply). CLI `npm run backfill:contact-mentions`
+  still works.
+
+- **Contacts Mentions tab** — Unresolved harvests are grouped by first+org
+  (not listed as People). Open the source email in the side panel, attach a
+  group to an existing person, or leave it unresolved. Provisional and
+  thread-participant samples are available for review. Header counts show
+  confirmed / provisional / unresolved.
+
+- **Mentions Full names queue** — Unresolved harvests that already have a
+  first and last name no longer sit in the first-name pile (the “John”
+  bucket). They have their own Full names list so leftover ingest leaks can
+  be reviewed. Create a People card from the checked mentions, or attach to
+  someone who already exists. The matcher also treats a trailing middle
+  initial (`John P.`) as the same given name as `John`.
+
+- **How mentions match** — Knowledge → Entities → How mentions match is a
+  plain-language rulebook for turning email name sightings into People cards,
+  with examples (including Haider / Haider Mukadam) and a checklist for when
+  a mention looks wrong.
+
 - **Extract markdown Storage I/O** — A disk miss for assembled `.md`,
   Docling, or vision artifacts downloads from the private
   `extract-artifacts` bucket and writes the local cache. New Docling and
@@ -19,7 +59,45 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Original PDFs and video stay on local/Coolify disk and can be re-fetched
   from Gmail.
 
+- **Move org fields** — On Entities → Organizations, the arrow next to an
+  alias, email, phone, or website moves that value to another organization
+  without merging the cards. Example: `Studio 1 Property Management` can leave
+  the management-office card and land on ICC. Sever (×) still drops a value
+  without assigning it elsewhere.
+
 ### Changed
+
+- **Moved org aliases take their emails** — Moving an organization alias onto
+  another card now re-buckets source emails harvested under that name (the
+  name that had been folded into the source card). Already-moved aliases are
+  not lost: harvest still has the original names, and the move rows are the
+  record of where each alias went. Emails that also harvested the source
+  card’s remaining name stay on both cards. Leftover mentions of the source
+  primary name stay put until you decide where those go.
+
+- **Moved org email keeps the name card** — Moving an organization’s identity
+  email to another card no longer drops the source from the list. The name
+  card stays visible with its remaining mentions; sparse mailbox-only harvest
+  stubs are cleaned up instead of leaving a ghost `studiopm@…` row.
+
+- **Org source-email counts match harvest names** — Sidebar “source email”
+  counts now follow pass-3 per-message harvest names (and moved mailboxes), not
+  whole-thread buckets. After moving aliases or an email address off a card,
+  the source count is only messages extracted under that card’s remaining
+  primary name; click **Name** to open the same set in the evidence panel.
+
+- **Identity email move keeps sibling mailboxes** — Moving one mailbox off a
+  card that was keyed by `studiopm@…` no longer drops the other addresses that
+  had been co-bucketed on that card. They stay on the name card (and are pinned
+  on move going forward).
+
+- **Mentions review cards** — Each mention shows about 100 characters of
+  email text before and after the name, with the same yellow quote mark
+  used in the email side panel. Open email is an eye icon on the right of
+  the card. Check the mentions that belong to one person, then attach via
+  a same-name badge or the search box; unchecked rows stay unresolved. A
+  header checkbox selects all or none, and shows a dash when the list is
+  mixed.
 
 - **Compose Postgres URL** — The app service no longer hardcodes
   `COND_BOARD_POSTGRES_URL` to the compose `db`. Local Docker still
@@ -27,6 +105,54 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without the compose file overwriting it.
 
 ### Fixed
+
+- **Org identity email move — co-bucket mailboxes and source counts** — Moving
+  one mailbox off an `email:…` org card no longer wipes sibling ICC addresses
+  from the named survivor (e.g. Studio on Richmond Management Office). Residual
+  collection now finds mailboxes on any pass-4 card that included the moved
+  address, not only cards keyed on that exact mailbox. Pinned mailboxes are kept
+  for the Email field only; they no longer inflate source-email counts across
+  every message that mentions that address. Moving a sibling mailbox off the
+  name card afterward no longer snaps back on refresh.
+
+- **Teal unique overlay vs mentions** — Teal tried to locate unique text
+  inside HTML and drew nothing when that failed (Outlook replies), while
+  mentions still searched the unique string. The overlay now paints that
+  same unique body mentions use: in place when it lines up, otherwise as a
+  teal unique block above the full message. Harvest uses that same unique
+  source.
+
+- **Mentions copied onto the wrong emails in a thread** — Fingerprint ingest
+  used every email in the thread as evidence for every merged person, and
+  Convert stubs then wrote first-name mentions onto those messages. A Judy
+  sighting on one reply became a Judy mention on twenty. Ingest now keeps
+  only emails whose pass-3 card (or visible name/mailbox) belongs to that
+  person. Convert stubs skips evidence emails that do not contain the name
+  and drops existing mentions that are not on their source email.
+
+- **Mentions flagged from quoted reply history** — Presence still treated the
+  full stored body as “this email,” so a name in an earlier message was
+  counted again on later replies that only quoted it (Judy on the Sharing
+  request thread). Mentions now use each message’s unique authored text
+  (plus headers). Open email highlights the name there, not in the quoted
+  remainder. Convert stubs drops leftovers that fail that check.
+
+- **Convert stubs looked finished when it did nothing** — After harvest and
+  stubs were already done, Confirm was labeled “OK” and closed immediately
+  without re-running matching. It now keeps the dialog open, re-runs the
+  matcher on unresolved mentions, and shows confirmed / provisional /
+  still-unresolved counts when it finishes.
+
+- **Mentions “Open email” skipped the side panel** — The Mentions tab opened
+  `/knowledge/emails/…` in a new tab (extract-lab first, body below). It now
+  uses the same source-email side panel as to-dos and equipment, with the
+  mention name highlighted.
+
+- **First-name mentions ignored an obvious full name** — `Haider` stayed
+  unresolved even when the harvest already had last name Mukadam, or the
+  subject was `Re: Haider Mukadam - Condominium Manager`. The resolver now
+  confirms a unique first+last, or a unique full name already in the subject,
+  without the 8-email first-name prior.
 
 - **Contacts sweep/backfill white-screen** — A failed or timed-out
   registry POST returned HTML, and the People page crashed on

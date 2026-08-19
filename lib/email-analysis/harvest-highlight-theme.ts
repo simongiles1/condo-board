@@ -1,8 +1,9 @@
-/** Group-level harvest highlight theme (contacts / orgs / events / to-dos). */
+/** Group-level harvest highlight theme (contacts / orgs / projects / events / to-dos). */
 
 export const HARVEST_GROUPS = [
   "contact",
   "organization",
+  "project",
   "event",
   "todo",
 ] as const;
@@ -12,6 +13,7 @@ export type HarvestGroupId = (typeof HARVEST_GROUPS)[number];
 export const HARVEST_GROUP_LABELS: Record<HarvestGroupId, string> = {
   contact: "Contacts",
   organization: "Organizations",
+  project: "Projects",
   event: "Events",
   todo: "To-dos",
 };
@@ -20,8 +22,9 @@ export const HARVEST_GROUP_LABELS: Record<HarvestGroupId, string> = {
 export const HARVEST_GROUP_PRIORITY: Record<HarvestGroupId, number> = {
   contact: 0,
   organization: 1,
-  event: 2,
-  todo: 3,
+  project: 2,
+  event: 3,
+  todo: 4,
 };
 
 export const HARVEST_GROUP_MARK_CLASS: Record<HarvestGroupId, string> = {
@@ -29,6 +32,8 @@ export const HARVEST_GROUP_MARK_CLASS: Record<HarvestGroupId, string> = {
     "rounded-sm bg-violet-200/90 text-violet-950 ring-1 ring-violet-300/50 box-decoration-clone px-0.5",
   organization:
     "rounded-sm bg-fuchsia-200/90 text-fuchsia-950 ring-1 ring-fuchsia-300/50 box-decoration-clone px-0.5",
+  project:
+    "rounded-sm bg-orange-200/90 text-orange-950 ring-1 ring-orange-300/50 box-decoration-clone px-0.5",
   event:
     "rounded-sm bg-sky-200/80 text-sky-950 ring-1 ring-sky-300/50 box-decoration-clone px-0.5",
   todo:
@@ -38,6 +43,7 @@ export const HARVEST_GROUP_MARK_CLASS: Record<HarvestGroupId, string> = {
 export const HARVEST_GROUP_SWATCH_CLASS: Record<HarvestGroupId, string> = {
   contact: "bg-violet-200 ring-violet-300 text-violet-950",
   organization: "bg-fuchsia-200 ring-fuchsia-300 text-fuchsia-950",
+  project: "bg-orange-200 ring-orange-300 text-orange-950",
   event: "bg-sky-200 ring-sky-300 text-sky-950",
   todo: "bg-lime-200 ring-lime-300 text-lime-950",
 };
@@ -71,6 +77,14 @@ export const ORG_HARVEST_ICONS: Record<string, HarvestIconId> = {
   website: "globe",
 };
 
+export const PROJECT_HARVEST_ICONS: Record<string, HarvestIconId> = {
+  project_name: "clipboard",
+  year_hint: "calendar",
+  phase: "flag",
+  contractor: "building",
+  location: "wrench",
+};
+
 export const EVENT_HARVEST_ICONS: Record<string, HarvestIconId> = {
   meeting: "calendar",
   cancellation: "calendar-x",
@@ -90,6 +104,7 @@ export function harvestIconFor(
 ): HarvestIconId {
   if (group === "contact") return CONTACT_HARVEST_ICONS[type] ?? "person";
   if (group === "organization") return ORG_HARVEST_ICONS[type] ?? "building";
+  if (group === "project") return PROJECT_HARVEST_ICONS[type] ?? "clipboard";
   if (group === "todo") return TODO_HARVEST_ICONS[type] ?? "checklist";
   return EVENT_HARVEST_ICONS[type] ?? "calendar";
 }

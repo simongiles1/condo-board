@@ -7,6 +7,7 @@ import {
   emailThreads,
   eventHighlightExtractions,
   organizationHighlightExtractions,
+  projectHighlightExtractions,
   todoHighlightExtractions,
 } from "@/lib/db/schema";
 import type {
@@ -193,6 +194,13 @@ async function loadSuccessfulHarvestEmailIds(
       .selectDistinct({ emailId: organizationHighlightExtractions.emailId })
       .from(organizationHighlightExtractions)
       .where(isNull(organizationHighlightExtractions.error));
+    return rows.map((row) => row.emailId);
+  }
+  if (kind === "projects") {
+    const rows = await db
+      .selectDistinct({ emailId: projectHighlightExtractions.emailId })
+      .from(projectHighlightExtractions)
+      .where(isNull(projectHighlightExtractions.error));
     return rows.map((row) => row.emailId);
   }
   if (kind === "events") {

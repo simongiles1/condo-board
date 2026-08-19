@@ -3,6 +3,10 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 
 import { isErrorResponse, requireSession } from "@/lib/auth/authorize";
+import {
+  moveOrganizationField,
+  moveOrganizationFieldToPerson,
+} from "@/lib/organizations/field-attachments";
 import { recordOrganizationFieldDenial } from "@/lib/organizations/field-denials";
 import {
   loadOrgDuplicateGroups,
@@ -65,6 +69,9 @@ export async function POST(request: Request) {
     field?: string;
     value?: string;
     organizationName?: string | null;
+    sourceOrganizationName?: string | null;
+    targetOrganizationName?: string | null;
+    targetPersonId?: string;
   } = {};
   try {
     body = (await request.json()) as typeof body;
@@ -85,11 +92,40 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, denial: result.denial });
   }
 
+  if (body.action === "move_field") {
+    const result = await moveOrganizationField({
+      sourceOrganizationId: body.sourceOrganizationId ?? body.organizationId ?? "",
+      targetOrganizationId: body.targetOrganizationId ?? "",
+      field: body.field ?? "",
+      value: body.value ?? "",
+      sourceOrganizationName: body.sourceOrganizationName ?? body.organizationName,
+      targetOrganizationName: body.targetOrganizationName,
+    });
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "move_field_to_person") {
+    const result = await moveOrganizationFieldToPerson({
+      sourceOrganizationId: body.sourceOrganizationId ?? body.organizationId ?? "",
+      targetPersonId: body.targetPersonId ?? "",
+      field: body.field ?? "",
+      value: body.value ?? "",
+      sourceOrganizationName: body.sourceOrganizationName ?? body.organizationName,
+    });
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    return NextResponse.json({ ok: true, message: result.message });
+  }
+
   if (body.action !== "merge") {
     return NextResponse.json(
       {
         error:
-          'Unsupported action. Use action: "merge" or action: "deny_field".',
+          'Unsupported action. Use action: "merge", "deny_field", "move_field", or "move_field_to_person".',
       },
       { status: 400 },
     );

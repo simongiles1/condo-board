@@ -50,6 +50,13 @@ import {
   type OrgEntityCard,
   type OrgHighlightExtraction,
 } from "@/lib/email-analysis/org-highlight-shared";
+import {
+  mergeProjectHighlightExtractions,
+  PROJECT_HIGHLIGHT_LABELS,
+  uniqueProjectHarvestCount,
+  type ProjectEntityCard,
+  type ProjectHighlightExtraction,
+} from "@/lib/email-analysis/project-highlight-shared";
 import { formatDateTime } from "@/lib/format/datetime";
 
 export type ThreadHarvestPanelTarget = {
@@ -98,6 +105,15 @@ type OrgRun = {
   fourthPass?: { entityCards?: OrgEntityCard[] } | null;
 };
 
+type ProjectRun = {
+  extractions?: Record<string, ProjectHighlightExtraction>;
+  secondPass?: { extractions?: Record<string, ProjectHighlightExtraction> } | null;
+  thirdPass?: {
+    entityCardsByEmailId?: Record<string, ProjectEntityCard[]>;
+  } | null;
+  fourthPass?: { entityCards?: ProjectEntityCard[] } | null;
+};
+
 type EventRun = {
   extractions?: Record<string, EventHighlightExtraction>;
 };
@@ -121,6 +137,16 @@ function emptyOrg(): OrgHighlightExtraction {
     phones: [],
     organization_roles: [],
     websites: [],
+  };
+}
+
+function emptyProject(): ProjectHighlightExtraction {
+  return {
+    project_names: [],
+    year_hints: [],
+    phases: [],
+    contractors: [],
+    locations: [],
   };
 }
 
@@ -172,6 +198,37 @@ function orgCardsForEmail(
   emailId: string,
 ): OrgEntityCard[] {
   const cards: OrgEntityCard[] = [];
+  for (const run of Object.values(runs)) {
+    const third = run.thirdPass?.entityCardsByEmailId?.[emailId];
+    if (third?.length) cards.push(...third);
+    if (run.fourthPass?.entityCards?.length) {
+      cards.push(...run.fourthPass.entityCards);
+    }
+  }
+  return cards;
+}
+
+function projectForEmail(
+  runs: Record<string, ProjectRun>,
+  emailId: string,
+): ProjectHighlightExtraction {
+  const parts: ProjectHighlightExtraction[] = [];
+  for (const run of Object.values(runs)) {
+    if (run.extractions?.[emailId]) parts.push(run.extractions[emailId]!);
+    if (run.secondPass?.extractions?.[emailId]) {
+      parts.push(run.secondPass.extractions[emailId]!);
+    }
+  }
+  return parts.length > 0
+    ? mergeProjectHighlightExtractions(parts)
+    : emptyProject();
+}
+
+function projectCardsForEmail(
+  runs: Record<string, ProjectRun>,
+  emailId: string,
+): ProjectEntityCard[] {
+  const cards: ProjectEntityCard[] = [];
   for (const run of Object.values(runs)) {
     const third = run.thirdPass?.entityCardsByEmailId?.[emailId];
     if (third?.length) cards.push(...third);
@@ -243,6 +300,13 @@ const HARVEST_TYPE_ROWS: Record<
     { type: "organization_role", label: ORG_HIGHLIGHT_LABELS.organization_role },
     { type: "website", label: ORG_HIGHLIGHT_LABELS.website },
   ],
+  project: [
+    { type: "project_name", label: PROJECT_HIGHLIGHT_LABELS.project_name },
+    { type: "year_hint", label: PROJECT_HIGHLIGHT_LABELS.year_hint },
+    { type: "phase", label: PROJECT_HIGHLIGHT_LABELS.phase },
+    { type: "contractor", label: PROJECT_HIGHLIGHT_LABELS.contractor },
+    { type: "location", label: PROJECT_HIGHLIGHT_LABELS.location },
+  ],
   event: [
     { type: "meeting", label: EVENT_HIGHLIGHT_LABELS.meeting },
     { type: "cancellation", label: EVENT_HIGHLIGHT_LABELS.cancellation },
@@ -287,20 +351,24 @@ function HarvestEmailRow({
   focusQuote,
   contact,
   org,
+  project,
   events,
   todos,
   contactCards,
   orgCards,
+  projectCards,
 }: {
   header: ThreadMessageHeader;
   defaultOpen: boolean;
   focusQuote?: string | null;
   contact: ContactHighlightExtraction;
   org: OrgHighlightExtraction;
+  project: ProjectHighlightExtraction;
   events: EventExtractListItem[];
   todos: TodoExtractListItem[];
   contactCards: ContactEntityCard[];
   orgCards: OrgEntityCard[];
+  projectCards: ProjectEntityCard[];
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [loading, setLoading] = useState(false);
@@ -358,6 +426,7 @@ function HarvestEmailRow({
           text: bodyText,
           contact,
           org,
+          project,
           events: events.map((event) => ({
             type: event.type,
             title: event.title,
@@ -370,7 +439,7 @@ function HarvestEmailRow({
           focusQuote,
         }),
       ),
-    [bodyText, contact, org, events, todos, focusQuote],
+    [bodyText, contact, org, project, events, todos, focusQuote],
   );
 
   const unmatchedEventQuotes = events.filter((event) => {
@@ -392,6 +461,7 @@ function HarvestEmailRow({
     org.phones.length +
     org.organization_roles.length +
     org.websites.length;
+  const projectCount = uniqueProjectHarvestCount(projectCards, project);
 
   return (
     <li className="border-b border-slate-100">
@@ -424,6 +494,13 @@ function HarvestEmailRow({
                 className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ${HARVEST_GROUP_SWATCH_CLASS.organization}`}
               >
                 {orgCount} org
+              </span>
+            ) : null}
+            {projectCount > 0 ? (
+              <span
+                className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ${HARVEST_GROUP_SWATCH_CLASS.project}`}
+              >
+                {projectCount} project{projectCount === 1 ? "" : "s"}
               </span>
             ) : null}
             {events.length > 0 ? (
@@ -476,6 +553,7 @@ function HarvestEmailRow({
                 nodes={tree}
                 contactCards={contactCards}
                 orgCards={orgCards}
+                projectCards={projectCards}
                 events={events}
                 todos={todos.map((todo) => ({
                   type: "action_item",
@@ -496,6 +574,7 @@ export function ThreadHarvestSidePanel({ target, onClose }: Props) {
   const [headers, setHeaders] = useState<ThreadMessageHeader[]>([]);
   const [contactRuns, setContactRuns] = useState<Record<string, ContactRun>>({});
   const [orgRuns, setOrgRuns] = useState<Record<string, OrgRun>>({});
+  const [projectRuns, setProjectRuns] = useState<Record<string, ProjectRun>>({});
   const [eventRuns, setEventRuns] = useState<Record<string, EventRun>>({});
   const [todoRuns, setTodoRuns] = useState<Record<string, TodoRun>>({});
   const [loading, setLoading] = useState(false);
@@ -516,6 +595,7 @@ export function ThreadHarvestSidePanel({ target, onClose }: Props) {
       setHeaders([]);
       setContactRuns({});
       setOrgRuns({});
+      setProjectRuns({});
       setEventRuns({});
       setTodoRuns({});
       setError(null);
@@ -575,7 +655,7 @@ export function ThreadHarvestSidePanel({ target, onClose }: Props) {
 
       const harvestIds =
         loadedHeaders.map((header) => header.id).join(",") || emailQuery;
-      const [contacts, orgs, events, todos] = await Promise.all([
+      const [contacts, orgs, projects, events, todos] = await Promise.all([
         harvestIds
           ? fetch(`/api/analysis/extract-contacts?emailIds=${encodeURIComponent(harvestIds)}`)
               .then(async (response) => {
@@ -597,6 +677,18 @@ export function ThreadHarvestSidePanel({ target, onClose }: Props) {
                 return data.runs ?? {};
               })
               .catch(() => ({} as Record<string, OrgRun>))
+          : {},
+        harvestIds
+          ? fetch(
+              `/api/analysis/extract-projects?emailIds=${encodeURIComponent(harvestIds)}`,
+            )
+              .then(async (response) => {
+                const data = (await response.json()) as {
+                  runs?: Record<string, ProjectRun>;
+                };
+                return data.runs ?? {};
+              })
+              .catch(() => ({} as Record<string, ProjectRun>))
           : {},
         harvestIds
           ? fetch(`/api/analysis/extract-events?emailIds=${encodeURIComponent(harvestIds)}`)
@@ -638,6 +730,7 @@ export function ThreadHarvestSidePanel({ target, onClose }: Props) {
       );
       setContactRuns(contacts);
       setOrgRuns(orgs);
+      setProjectRuns(projects);
       setEventRuns(events);
       setTodoRuns(todos);
     }
@@ -724,10 +817,12 @@ export function ThreadHarvestSidePanel({ target, onClose }: Props) {
                 }
                 contact={contactForEmail(contactRuns, header.id)}
                 org={orgForEmail(orgRuns, header.id)}
+                project={projectForEmail(projectRuns, header.id)}
                 events={eventsForEmail(eventRuns, header.id)}
                 todos={todosForEmail(todoRuns, header.id)}
                 contactCards={contactCardsForEmail(contactRuns, header.id)}
                 orgCards={orgCardsForEmail(orgRuns, header.id)}
+                projectCards={projectCardsForEmail(projectRuns, header.id)}
               />
             ))}
           </ul>

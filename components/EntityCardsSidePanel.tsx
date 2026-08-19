@@ -220,7 +220,10 @@ export function EntityCardsFilterPanel({
   if (!open) return null;
 
   const dataset = kind === "organizations" ? organizations : contacts;
-  const { listed, showingPreferredAll, showSource } = listCards(dataset);
+  const { listed, showingPreferredAll, showSource } =
+    kind === "organizations"
+      ? listCards(organizations)
+      : listCards(contacts);
   const contactCount = countCardsInDataset(contacts);
   const orgCount = countCardsInDataset(organizations);
   const eyebrow =

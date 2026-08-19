@@ -1,5 +1,6 @@
 import { asc, eq, inArray } from "drizzle-orm";
 
+import { resolveMentionUniqueBody } from "@/lib/contacts/mention-presence";
 import { getDb } from "@/lib/db";
 import { emails } from "@/lib/db/schema";
 import { formatEmailBodyForDisplay } from "@/lib/email/format-body-display";
@@ -36,8 +37,7 @@ function fingerprintBodyText(
   bodyText: string,
   bodyTextUnique: string | null | undefined,
 ): string {
-  const unique = bodyTextUnique?.trim();
-  if (unique) return unique;
+  if (bodyTextUnique != null) return bodyTextUnique.trim();
   return bodyText.trim();
 }
 
@@ -154,8 +154,14 @@ function buildPreparedItems(
     );
 
   return messages.map((message) => {
-    const uniqueText =
-      (uniqueMap.get(message.id) ?? message.bodyTextUnique)?.trim() || null;
+    const uniqueText = resolveMentionUniqueBody(
+      {
+        bodyText: message.bodyText,
+        bodyTextUnique: message.bodyTextUnique,
+        bodyTextStrictUnique: message.bodyTextStrictUnique,
+      },
+      uniqueMap.get(message.id),
+    );
     const bodyDisplay = formatEmailBodyForDisplay(
       message.bodyText,
       message.bodyHtml,

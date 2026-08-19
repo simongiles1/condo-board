@@ -13,6 +13,8 @@ import {
   type HarvestGroupId,
 } from "@/lib/email-analysis/harvest-highlight-theme";
 import type { OrgEntityCard } from "@/lib/email-analysis/org-highlight-shared";
+import type { ProjectEntityCard } from "@/lib/email-analysis/project-highlight-shared";
+import { normalizeProjectNameKey } from "@/lib/projects/project-multi-values";
 import {
   normalizeOrgName,
   normalizePersonName,
@@ -36,6 +38,10 @@ export type HarvestTooltipContent = {
   } | null;
   organization: {
     card: OrgEntityCard | null;
+    layers: HarvestSpan[];
+  } | null;
+  project: {
+    card: ProjectEntityCard | null;
     layers: HarvestSpan[];
   } | null;
   events: Array<{
@@ -202,6 +208,63 @@ export function pickBestOrgCard(
   );
 }
 
+export function scoreProjectCard(
+  card: ProjectEntityCard,
+  needle: string,
+): number {
+  const n = collapseNeedle(needle);
+  if (!n) return 0;
+
+  let score = 0;
+  if (card.name) {
+    const cardName = normalizeProjectNameKey(card.name);
+    const needleName = normalizeProjectNameKey(needle);
+    if (cardName && needleName) {
+      if (cardName === needleName) score += 12;
+      else if (containsEither(cardName, needleName)) score += 8;
+    }
+  }
+  for (const alias of card.aliases ?? []) {
+    const aliasName = normalizeProjectNameKey(alias);
+    const needleName = normalizeProjectNameKey(needle);
+    if (aliasName && needleName && containsEither(aliasName, needleName)) {
+      score += 9;
+    }
+  }
+  if (card.contractor && containsEither(collapseNeedle(card.contractor), n)) {
+    score += 8;
+  }
+  if (card.location && containsEither(collapseNeedle(card.location), n)) {
+    score += 8;
+  }
+  if (card.year_hint && containsEither(collapseNeedle(card.year_hint), n)) {
+    score += 6;
+  }
+  if (card.phase && containsEither(collapseNeedle(card.phase), n)) {
+    score += 6;
+  }
+  return score;
+}
+
+export function pickBestProjectCard(
+  cards: ProjectEntityCard[],
+  needle: string,
+): ProjectEntityCard | null {
+  return pickBestCard(
+    cards,
+    (card) => scoreProjectCard(card, needle),
+    (card) =>
+      fieldCount([
+        card.name,
+        card.year_hint,
+        card.phase,
+        card.contractor,
+        card.location,
+        card.equipment_mentions,
+      ]),
+  );
+}
+
 function rangesOverlap(
   a: { start: number; end: number },
   b: { start: number; end: number },
@@ -244,6 +307,7 @@ export function resolveHarvestTooltipContent(input: {
   bodyText: string;
   contactCards: ContactEntityCard[];
   orgCards: OrgEntityCard[];
+  projectCards?: ProjectEntityCard[];
   events: HarvestTooltipEvent[];
   todos?: HarvestTooltipEvent[];
 }): HarvestTooltipContent {
@@ -252,6 +316,9 @@ export function resolveHarvestTooltipContent(input: {
   );
   const orgLayers = input.node.layers.filter(
     (layer) => layer.group === "organization",
+  );
+  const projectLayers = input.node.layers.filter(
+    (layer) => layer.group === "project",
   );
   const needle = input.highlightedText;
 
@@ -272,6 +339,13 @@ export function resolveHarvestTooltipContent(input: {
         ? {
             card: pickBestOrgCard(input.orgCards, needle),
             layers: orgLayers,
+          }
+        : null,
+    project:
+      projectLayers.length > 0
+        ? {
+            card: pickBestProjectCard(input.projectCards ?? [], needle),
+            layers: projectLayers,
           }
         : null,
     events: matchHarvestEvents(input.node, input.events, input.bodyText),

@@ -352,7 +352,6 @@ export async function createDoclingBackfillRun(input: {
     id,
     status: "running",
     mode: input.mode,
-    phase: null,
     docLimit: input.docLimit,
     totalDocs: plannedHashes.length,
     totalPages,

@@ -42,6 +42,11 @@ import {
   type OrgEntityCard,
 } from "@/lib/email-analysis/org-highlight-shared";
 import {
+  PROJECT_HIGHLIGHT_LABELS,
+  projectCardDisplayName,
+  type ProjectEntityCard,
+} from "@/lib/email-analysis/project-highlight-shared";
+import {
   claimHoverPopover,
   releaseHoverPopover,
 } from "@/lib/ui/hover-popover-group";
@@ -53,6 +58,7 @@ const HARVEST_MARK_ATTR = "data-harvest-mark";
 const GROUP_TITLE: Record<HarvestGroupId, string> = {
   contact: "Contact",
   organization: "Organization",
+  project: "Project",
   event: "Event",
   todo: "To-do",
 };
@@ -60,6 +66,7 @@ const GROUP_TITLE: Record<HarvestGroupId, string> = {
 const GROUP_HEADER_CLASS: Record<HarvestGroupId, string> = {
   contact: "bg-violet-50 text-violet-950 border-violet-100",
   organization: "bg-fuchsia-50 text-fuchsia-950 border-fuchsia-100",
+  project: "bg-orange-50 text-orange-950 border-orange-100",
   event: "bg-sky-50 text-sky-950 border-sky-100",
   todo: "bg-lime-50 text-lime-950 border-lime-100",
 };
@@ -68,6 +75,7 @@ export type HarvestMarkTooltipData = {
   text: string;
   contactCards: ContactEntityCard[];
   orgCards: OrgEntityCard[];
+  projectCards: ProjectEntityCard[];
   events: HarvestTooltipEvent[];
   todos: HarvestTooltipEvent[];
 };
@@ -131,6 +139,9 @@ function layerLabel(group: HarvestGroupId, type: string): string {
   }
   if (group === "organization") {
     return ORG_HIGHLIGHT_LABELS[type as keyof typeof ORG_HIGHLIGHT_LABELS] ?? type;
+  }
+  if (group === "project") {
+    return PROJECT_HIGHLIGHT_LABELS[type as keyof typeof PROJECT_HIGHLIGHT_LABELS] ?? type;
   }
   if (group === "todo") return "To-do";
   return EVENT_HIGHLIGHT_LABELS[type as keyof typeof EVENT_HIGHLIGHT_LABELS] ?? type;
@@ -336,6 +347,78 @@ function OrgTooltipCard({
   );
 }
 
+function ProjectTooltipCard({
+  card,
+  layers,
+  highlightedText,
+}: {
+  card: ProjectEntityCard | null;
+  layers: HarvestSpan[];
+  highlightedText: string;
+}) {
+  if (card) {
+    return (
+      <CardShell group="project" type="project_name" title={projectCardDisplayName(card)}>
+        <dl className="space-y-1.5">
+          <FieldRow label="Name" value={card.name} />
+          <FieldRow label="Year" value={card.year_hint} />
+          <FieldRow label="Phase" value={card.phase} />
+          <FieldRow label="Contractor" value={card.contractor} />
+          <FieldRow label="Location" value={card.location} />
+          <FieldRow label="Equipment" value={card.equipment_mentions} />
+        </dl>
+        <TaggedChips
+          group="project"
+          types={layers.map((layer) => layer.type)}
+        />
+      </CardShell>
+    );
+  }
+
+  const byType = new Map(
+    layers.map((layer) => [
+      layer.type,
+      layerValue(layer.title, highlightedText),
+    ]),
+  );
+  return (
+    <CardShell
+      group="project"
+      type={layers[0]?.type ?? "project_name"}
+      title={byType.get("project_name") ?? highlightedText}
+    >
+      <dl className="space-y-1.5">
+        {byType.has("project_name") ? (
+          <FieldRow
+            label="Name"
+            value={byType.get("project_name") ?? null}
+          />
+        ) : null}
+        {byType.has("year_hint") ? (
+          <FieldRow label="Year" value={byType.get("year_hint") ?? null} />
+        ) : null}
+        {byType.has("phase") ? (
+          <FieldRow label="Phase" value={byType.get("phase") ?? null} />
+        ) : null}
+        {byType.has("contractor") ? (
+          <FieldRow
+            label="Contractor"
+            value={byType.get("contractor") ?? null}
+          />
+        ) : null}
+        {byType.has("location") ? (
+          <FieldRow label="Location" value={byType.get("location") ?? null} />
+        ) : null}
+      </dl>
+      <p className="mt-2 text-[10px] text-slate-400">From this highlight</p>
+      <TaggedChips
+        group="project"
+        types={layers.map((layer) => layer.type)}
+      />
+    </CardShell>
+  );
+}
+
 function EventTooltipCard({
   event,
   layer,
@@ -401,6 +484,13 @@ function HarvestTooltipPanel({
             highlightedText={content.highlightedText}
           />
         ) : null}
+        {content.project ? (
+          <ProjectTooltipCard
+            card={content.project.card}
+            layers={content.project.layers}
+            highlightedText={content.highlightedText}
+          />
+        ) : null}
         {content.events.map((entry, index) => (
           <EventTooltipCard
             key={`${entry.layer.type}:${index}`}
@@ -459,6 +549,7 @@ export function HarvestHoverMark({
             bodyText: data.text,
             contactCards: data.contactCards,
             orgCards: data.orgCards,
+            projectCards: data.projectCards,
             events: data.events,
             todos: data.todos,
           })

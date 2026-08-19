@@ -39,6 +39,7 @@ const SEQUENCE_PILL: Record<BuildoutSequenceKind, string> = {
   blocked: "bg-rose-50 text-rose-800 ring-rose-200",
   after: "bg-sky-50 text-sky-900 ring-sky-200",
   later: "bg-violet-50 text-violet-900 ring-violet-200",
+  deferred: "bg-slate-100 text-slate-700 ring-slate-200",
 };
 
 function formatCount(value: number): string {
@@ -165,6 +166,9 @@ function BuildoutProgressDialog({
             {formatCount(BUILDOUT_COVERAGE_SNAPSHOT.eventsExtracted)}
             {" · "}to-dos{" "}
             {formatCount(BUILDOUT_COVERAGE_SNAPSHOT.todosExtracted)} /{" "}
+            {formatCount(BUILDOUT_COVERAGE_SNAPSHOT.emails)}
+            {" · "}projects{" "}
+            {formatCount(BUILDOUT_COVERAGE_SNAPSHOT.projectsExtracted)} /{" "}
             {formatCount(BUILDOUT_COVERAGE_SNAPSHOT.emails)}. Vision{" "}
             {formatCount(BUILDOUT_COVERAGE_SNAPSHOT.visionPagesDone)} /{" "}
             {formatCount(BUILDOUT_COVERAGE_SNAPSHOT.visionPagesTotal)} pages (
@@ -260,6 +264,14 @@ function StageMeter({
         <span className="font-medium text-slate-600">
           {counts.not_started} not started
         </span>
+        {counts.deferred > 0 ? (
+          <>
+            {" · "}
+            <span className="font-medium text-violet-800">
+              {counts.deferred} parked
+            </span>
+          </>
+        ) : null}
         {" of "}
         {total} harvest stages
       </p>

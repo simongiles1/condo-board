@@ -7,6 +7,7 @@ import {
   loadContactEmailIndex,
   loadContactMergeActivity,
   loadContactRegistryPersons,
+  loadSharedMailboxes,
 } from "@/lib/contacts/registry-load";
 import {
   CONTACT_PERSONS_PAGE_SIZE,
@@ -15,6 +16,7 @@ import {
 import { loadEquipmentRegistry } from "@/lib/equipment/registry";
 import { parseEntityKindTab } from "@/lib/nav/structure";
 import { loadOrgFingerprintSummaries } from "@/lib/organizations/fingerprint-list";
+import { loadProjectFingerprintSummaries } from "@/lib/projects/fingerprint-list";
 
 export default async function EntitiesPage({
   searchParams,
@@ -26,7 +28,16 @@ export default async function EntitiesPage({
   const initialTab = parseEntityKindTab(
     Array.isArray(tabParam) ? tabParam[0] : tabParam,
   );
-  const [persons, emails, stats, activity, orgList, equipmentList] =
+  const [
+    persons,
+    emails,
+    stats,
+    activity,
+    orgList,
+    projectList,
+    equipmentList,
+    mailboxList,
+  ] =
     await Promise.all([
       loadContactRegistryPersons({
         limit: CONTACT_PERSONS_PAGE_SIZE,
@@ -37,7 +48,9 @@ export default async function EntitiesPage({
       getRegistryStats(),
       loadContactMergeActivity(100),
       loadOrgFingerprintSummaries({ limit: 500 }),
+      loadProjectFingerprintSummaries({ limit: 500 }),
       loadEquipmentRegistry({ limit: 500 }),
+      loadSharedMailboxes(),
     ]);
 
   return (
@@ -52,8 +65,12 @@ export default async function EntitiesPage({
       initialActivity={activity}
       initialOrganizations={orgList.organizations}
       initialOrgStats={orgList.stats}
+      initialProjects={projectList.projects}
+      initialProjectStats={projectList.stats}
       initialEquipment={equipmentList.equipment}
       initialEquipmentStats={equipmentList.stats}
+      initialMailboxes={mailboxList.mailboxes}
+      initialMailboxStats={mailboxList.stats}
     />
   );
 }

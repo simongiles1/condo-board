@@ -1,0 +1,738 @@
+/** Client-safe project-highlight types and helpers (no DB / Gemini imports). */
+
+import { chunkContactHighlightText } from "@/lib/email-analysis/contact-highlight-shared";
+import {
+  foldProjectNames,
+  joinProjectMultiValue,
+  mergeProjectMultiValues,
+  normalizeProjectNameKey,
+  normalizeProjectYearHint,
+  splitProjectMultiValue,
+} from "@/lib/projects/project-multi-values";
+
+export { chunkContactHighlightText as chunkProjectHighlightText };
+
+export const PROJECT_HIGHLIGHT_TYPES = [
+  "project_name",
+  "year_hint",
+  "phase",
+  "contractor",
+  "location",
+] as const;
+
+export type ProjectHighlightType = (typeof PROJECT_HIGHLIGHT_TYPES)[number];
+
+export type ProjectHighlightExtraction = {
+  project_names: string[];
+  year_hints: string[];
+  phases: string[];
+  contractors: string[];
+  locations: string[];
+};
+
+export type ProjectHighlightSpan = {
+  type: ProjectHighlightType;
+  text: string;
+  start?: number;
+  end?: number;
+};
+
+export type ProjectTextSegment = {
+  text: string;
+  type: ProjectHighlightType | null;
+};
+
+export const PROJECT_HIGHLIGHT_CLASS: Record<ProjectHighlightType, string> = {
+  project_name:
+    "rounded-sm bg-orange-200/90 text-orange-950 box-decoration-clone px-0.5",
+  year_hint:
+    "rounded-sm bg-slate-200/90 text-slate-950 box-decoration-clone px-0.5",
+  phase: "rounded-sm bg-sky-200/90 text-sky-950 box-decoration-clone px-0.5",
+  contractor:
+    "rounded-sm bg-teal-200/90 text-teal-950 box-decoration-clone px-0.5",
+  location:
+    "rounded-sm bg-lime-200/90 text-lime-950 box-decoration-clone px-0.5",
+};
+
+export const PROJECT_HIGHLIGHT_LABELS: Record<ProjectHighlightType, string> = {
+  project_name: "Project",
+  year_hint: "Year",
+  phase: "Phase",
+  contractor: "Contractor",
+  location: "Location",
+};
+
+export function emptyProjectHighlightExtraction(): ProjectHighlightExtraction {
+  return {
+    project_names: [],
+    year_hints: [],
+    phases: [],
+    contractors: [],
+    locations: [],
+  };
+}
+
+export function buildProjectHighlightDomainContext(): string {
+  return `Domain context: These emails concern Studio 1, a condominium corporation. A PROJECT is a named building job that lasts months or years (maglock installation, EV charging stations, envelope repair, boiler replacement tender). It is NOT a single meeting, NOT one to-do ("get three quotes"), NOT a one-off maintenance visit, and NOT the physical asset itself (that is equipment). Vague "we should look at X someday" is not a project. Bid options and component SKUs are not new projects. Location is a specific place in the building (unit 201, ninth floor amenity space, P1, roof, garage, front doors). Never use generic words as a location: building, property, site, condo, premises, facility.`;
+}
+
+export function buildProjectHighlightSystemPrompt(): string {
+  return `You extract building-project identity fields from a single email excerpt.
+
+${buildProjectHighlightDomainContext()}
+
+Return ONLY valid JSON with this exact shape:
+{
+  "project_names": string[],
+  "year_hints": string[],
+  "phases": string[],
+  "contractors": string[],
+  "locations": string[]
+}
+
+Rules:
+- Extract only values that literally appear in the excerpt (copy exact substrings as written).
+- project_names: names of capital / improvement jobs as written (e.g. "maglock installation", "EV charging"). Not person names, not company names unless the company name IS the job nickname.
+- year_hints: years or fiscal years tied to a project (e.g. "2024", "FY2025"). Do not emit unrelated dates like a meeting Tuesday.
+- phases: planning, tender, quote, in progress, complete, cancelled, on hold — only if written or clearly implied by those words.
+- contractors: vendor / contractor firm names attached to the job, as written.
+- locations: specific places for the job as written (unit 201, ninth floor amenity space, P1, front doors, roof, garage). Do not extract generic words (building, property, site, condo, premises, facility) or phrases whose only content is those words ("the building", "throughout the building").
+- Do not invent values. If none for a field, use [].
+- Deduplicate case-insensitively within each array.
+- Ignore quoted reply history if somehow present; focus on the given excerpt only.`;
+}
+
+export function buildProjectHighlightUserPrompt(highlightedText: string): string {
+  return `EMAIL EXCERPT (unique / authored highlight for this message)
+
+---
+${highlightedText}
+---
+
+Extract project_names, year_hints, phases, contractors, and locations as JSON.`;
+}
+
+export function buildProjectHighlightSecondPassSystemPrompt(): string {
+  return `You are doing a SECOND PASS over a single email excerpt to find building-project identity fields that were MISSED in the first pass.
+
+${buildProjectHighlightDomainContext()}
+
+Return ONLY valid JSON with this exact shape:
+{
+  "project_names": string[],
+  "year_hints": string[],
+  "phases": string[],
+  "contractors": string[],
+  "locations": string[]
+}
+
+Rules:
+- You are given the email excerpt AND the first-pass extractions.
+- Return ONLY values that literally appear in the excerpt AND were not already found in the first pass.
+- Copy exact substrings as written (do not normalize or invent).
+- Do not repeat anything already listed in the first-pass JSON (case-insensitive match).
+- Do not invent values. If nothing was missed, return empty arrays for every field.
+- Deduplicate case-insensitively within each array.
+- Ignore quoted reply history if somehow present; focus on the given excerpt only.`;
+}
+
+export function buildProjectHighlightSecondPassUserPrompt(
+  highlightedText: string,
+  priorExtraction: ProjectHighlightExtraction,
+): string {
+  return `EMAIL EXCERPT (unique / authored highlight for this message)
+
+---
+${highlightedText}
+---
+
+FIRST-PASS EXTRACTIONS (already found — do not repeat these)
+\`\`\`json
+${JSON.stringify(priorExtraction, null, 2)}
+\`\`\`
+
+Find any missed project_names, year_hints, phases, contractors, and locations. Return ONLY newly found values as JSON.`;
+}
+
+function lowerSet(values: string[]): Set<string> {
+  return new Set(values.map((v) => v.trim().toLowerCase()).filter(Boolean));
+}
+
+export function diffProjectHighlightExtractions(
+  prior: ProjectHighlightExtraction,
+  candidate: ProjectHighlightExtraction,
+): ProjectHighlightExtraction {
+  const priorNames = lowerSet(prior.project_names);
+  const priorYears = lowerSet(prior.year_hints);
+  const priorPhases = lowerSet(prior.phases);
+  const priorContractors = lowerSet(prior.contractors);
+  const priorLocations = lowerSet(prior.locations);
+
+  return {
+    project_names: candidate.project_names.filter(
+      (v) => !priorNames.has(v.trim().toLowerCase()),
+    ),
+    year_hints: candidate.year_hints.filter(
+      (v) => !priorYears.has(v.trim().toLowerCase()),
+    ),
+    phases: candidate.phases.filter(
+      (v) => !priorPhases.has(v.trim().toLowerCase()),
+    ),
+    contractors: candidate.contractors.filter(
+      (v) => !priorContractors.has(v.trim().toLowerCase()),
+    ),
+    locations: candidate.locations.filter(
+      (v) => !priorLocations.has(v.trim().toLowerCase()),
+    ),
+  };
+}
+
+export function mergeProjectHighlightExtractions(
+  parts: ProjectHighlightExtraction[],
+): ProjectHighlightExtraction {
+  return {
+    project_names: asStringArray(parts.flatMap((p) => p.project_names)),
+    year_hints: asStringArray(parts.flatMap((p) => p.year_hints)),
+    phases: asStringArray(parts.flatMap((p) => p.phases)),
+    contractors: asStringArray(parts.flatMap((p) => p.contractors)),
+    locations: filterProjectLocations(parts.flatMap((p) => p.locations)),
+  };
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+const PROJECT_LOCATION_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "around",
+  "across",
+  "at",
+  "entire",
+  "for",
+  "in",
+  "inside",
+  "of",
+  "on",
+  "or",
+  "our",
+  "outside",
+  "that",
+  "the",
+  "their",
+  "this",
+  "throughout",
+  "to",
+  "whole",
+  "within",
+  "your",
+]);
+
+const PROJECT_GENERIC_LOCATION_TOKENS = new Set([
+  "apartment",
+  "apartments",
+  "area",
+  "areas",
+  "building",
+  "buildings",
+  "communities",
+  "community",
+  "complex",
+  "complexes",
+  "condo",
+  "condominium",
+  "condominiums",
+  "condos",
+  "development",
+  "developments",
+  "facilities",
+  "facility",
+  "floor",
+  "floors",
+  "here",
+  "home",
+  "house",
+  "level",
+  "levels",
+  "location",
+  "locations",
+  "onsite",
+  "place",
+  "places",
+  "premises",
+  "properties",
+  "property",
+  "residence",
+  "residences",
+  "room",
+  "rooms",
+  "site",
+  "sites",
+  "space",
+  "spaces",
+  "suite",
+  "suites",
+  "there",
+  "tower",
+  "towers",
+  "unit",
+  "units",
+]);
+
+/** True for unit 201 / ninth floor amenity; false for "building" / "the property". */
+export function isSpecificProjectLocation(value: string): boolean {
+  const tokens = value
+    .trim()
+    .toLowerCase()
+    .replace(/['\u2019]s\b/g, "")
+    .replace(/['\u2019]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((token) => !PROJECT_LOCATION_STOPWORDS.has(token));
+  if (tokens.length === 0) return false;
+  return tokens.some((token) => !PROJECT_GENERIC_LOCATION_TOKENS.has(token));
+}
+
+function filterProjectLocations(values: string[]): string[] {
+  return asStringArray(values).filter(isSpecificProjectLocation);
+}
+
+function filterProjectLocationField(value: string | null): string | null {
+  if (!value) return null;
+  return joinProjectMultiValue(
+    splitProjectMultiValue(value).filter(isSpecificProjectLocation),
+  );
+}
+
+export function parseProjectHighlightExtraction(
+  raw: unknown,
+): ProjectHighlightExtraction {
+  if (!raw || typeof raw !== "object") {
+    return emptyProjectHighlightExtraction();
+  }
+  const obj = raw as Record<string, unknown>;
+  return {
+    project_names: asStringArray(obj.project_names),
+    year_hints: asStringArray(obj.year_hints),
+    phases: asStringArray(obj.phases),
+    contractors: asStringArray(obj.contractors),
+    locations: filterProjectLocations(asStringArray(obj.locations)),
+  };
+}
+
+export function parseProjectHighlightJson(text: string): ProjectHighlightExtraction {
+  const trimmed = text.trim();
+  if (!trimmed) return emptyProjectHighlightExtraction();
+  try {
+    return parseProjectHighlightExtraction(JSON.parse(trimmed));
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return parseProjectHighlightExtraction(
+          JSON.parse(trimmed.slice(start, end + 1)),
+        );
+      } catch {
+        return emptyProjectHighlightExtraction();
+      }
+    }
+    return emptyProjectHighlightExtraction();
+  }
+}
+
+export function toProjectHighlightSpans(
+  extraction: ProjectHighlightExtraction,
+): ProjectHighlightSpan[] {
+  const spans: ProjectHighlightSpan[] = [];
+  for (const text of extraction.project_names) {
+    spans.push({ type: "project_name", text });
+  }
+  for (const text of extraction.year_hints) {
+    spans.push({ type: "year_hint", text });
+  }
+  for (const text of extraction.phases) {
+    spans.push({ type: "phase", text });
+  }
+  for (const text of extraction.contractors) {
+    spans.push({ type: "contractor", text });
+  }
+  for (const text of extraction.locations) {
+    if (!isSpecificProjectLocation(text)) continue;
+    spans.push({ type: "location", text });
+  }
+  spans.sort((a, b) => b.text.length - a.text.length);
+  return spans;
+}
+
+export function projectExtractionHasAny(
+  extraction: ProjectHighlightExtraction,
+): boolean {
+  return (
+    extraction.project_names.length > 0 ||
+    extraction.year_hints.length > 0 ||
+    extraction.phases.length > 0 ||
+    extraction.contractors.length > 0 ||
+    extraction.locations.length > 0
+  );
+}
+
+export type ProjectEntityCard = {
+  name: string | null;
+  year_hint: string | null;
+  phase: string | null;
+  contractor: string | null;
+  location: string | null;
+  equipment_mentions: string | null;
+  aliases?: string[];
+};
+
+export type ProjectFingerprintResult = {
+  entity_cards: ProjectEntityCard[];
+};
+
+export function emptyProjectFingerprintResult(): ProjectFingerprintResult {
+  return { entity_cards: [] };
+}
+
+export function emptyProjectEntityCard(): ProjectEntityCard {
+  return {
+    name: null,
+    year_hint: null,
+    phase: null,
+    contractor: null,
+    location: null,
+    equipment_mentions: null,
+    aliases: [],
+  };
+}
+
+function nullableTrimmedString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function parseProjectAliases(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+export function parseProjectEntityCard(raw: unknown): ProjectEntityCard | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const card: ProjectEntityCard = {
+    name: nullableTrimmedString(obj.name),
+    year_hint: nullableTrimmedString(obj.year_hint),
+    phase: nullableTrimmedString(obj.phase),
+    contractor: nullableTrimmedString(obj.contractor),
+    location: filterProjectLocationField(nullableTrimmedString(obj.location)),
+    equipment_mentions: nullableTrimmedString(obj.equipment_mentions),
+    aliases: parseProjectAliases(obj.aliases),
+  };
+  if (
+    !card.name &&
+    !card.year_hint &&
+    !card.phase &&
+    !card.contractor &&
+    !card.location &&
+    !card.equipment_mentions
+  ) {
+    return null;
+  }
+  return card;
+}
+
+export function parseProjectFingerprintResult(
+  raw: unknown,
+): ProjectFingerprintResult {
+  if (!raw || typeof raw !== "object") {
+    return emptyProjectFingerprintResult();
+  }
+  const obj = raw as Record<string, unknown>;
+  const list = Array.isArray(obj.entity_cards) ? obj.entity_cards : [];
+  const entity_cards: ProjectEntityCard[] = [];
+  for (const item of list) {
+    const card = parseProjectEntityCard(item);
+    if (card) entity_cards.push(card);
+  }
+  return { entity_cards };
+}
+
+export function parseProjectFingerprintJson(text: string): ProjectFingerprintResult {
+  const trimmed = text.trim();
+  if (!trimmed) return emptyProjectFingerprintResult();
+  try {
+    return parseProjectFingerprintResult(JSON.parse(trimmed));
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return parseProjectFingerprintResult(
+          JSON.parse(trimmed.slice(start, end + 1)),
+        );
+      } catch {
+        return emptyProjectFingerprintResult();
+      }
+    }
+    return emptyProjectFingerprintResult();
+  }
+}
+
+export function projectCardDisplayName(card: ProjectEntityCard): string {
+  if (card.name) {
+    const year = normalizeProjectYearHint(card.year_hint);
+    return year ? `${card.name} (${year})` : card.name;
+  }
+  if (card.contractor) return card.contractor;
+  if (card.location) return card.location;
+  return "Unknown project";
+}
+
+export function projectEntityCardHasAny(card: ProjectEntityCard): boolean {
+  return Boolean(
+    card.name ||
+      card.year_hint ||
+      card.phase ||
+      card.contractor ||
+      card.location ||
+      card.equipment_mentions,
+  );
+}
+
+/**
+ * Option C identity: name plus year when a year is present.
+ * "Maglock 2024" and "Maglock 2026" stay separate until a human merges them.
+ */
+export function projectIdentityKey(card: ProjectEntityCard): string {
+  const name = normalizeProjectNameKey(card.name);
+  const year = normalizeProjectYearHint(card.year_hint);
+  if (name && year) return `name:${name}|year:${year}`;
+  if (name) return `name:${name}`;
+  if (year) return `year:${year}|empty:${projectCardDisplayName(card).toLowerCase()}`;
+  return `empty:${projectCardDisplayName(card).toLowerCase()}`;
+}
+
+export type ProjectFingerprintEmailContext = {
+  subject: string;
+  fromAddress: string;
+  toAddresses: string[];
+  ccAddresses: string[];
+  bodyText: string;
+};
+
+export function buildProjectFingerprintSystemPrompt(): string {
+  return `You build project fingerprints (entity cards) for building projects mentioned in ONE email message.
+
+${buildProjectHighlightDomainContext()}
+
+Return ONLY valid JSON with this exact shape:
+{
+  "entity_cards": [
+    {
+      "name": string | null,
+      "year_hint": string | null,
+      "phase": string | null,
+      "contractor": string | null,
+      "location": string | null,
+      "equipment_mentions": string | null
+    }
+  ]
+}
+
+You receive:
+1) Header fields for this message (From, To, Cc, Subject)
+2) The full body of this single message (not the whole thread)
+3) Prior highlight extractions (project names, years, phases, contractors, locations)
+
+Rules:
+- Create one entity card per distinct project you can identify from this message.
+- If the same named job appears with two different years (e.g. maglock 2024 vs maglock 2026), those are TWO cards. Do not collapse them.
+- Partial cards are expected and OK. Fill only fields supported by evidence; leave others null.
+- year_hint: a year or fiscal year for THAT job when the email ties one. Do not copy a meeting date.
+- location: a specific place (unit 201, ninth floor amenity space, P1, roof). Never "building", "property", "site", or other generic words.
+- equipment_mentions: physical systems the job is about (boiler, maglocks), as written. Do not invent registry IDs.
+- Do NOT invent missing pieces.
+- Deduplicate: one card per project identity in this message (same name + same year).
+- Ignore quoted reply history if somehow present.`;
+}
+
+export function buildProjectFingerprintUserPrompt(
+  email: ProjectFingerprintEmailContext,
+  priorExtraction: ProjectHighlightExtraction,
+): string {
+  const toLine =
+    email.toAddresses.length > 0 ? email.toAddresses.join(", ") : "(none)";
+  const ccLine =
+    email.ccAddresses.length > 0 ? email.ccAddresses.join(", ") : "(none)";
+
+  return `EMAIL HEADERS (this message only)
+From: ${email.fromAddress || "(unknown)"}
+To: ${toLine}
+Cc: ${ccLine}
+Subject: ${email.subject || "(none)"}
+
+EMAIL BODY (this message only)
+---
+${email.bodyText.trim() || "(empty)"}
+---
+
+PRIOR HIGHLIGHT EXTRACTIONS (pass 1 + any pass 2 finds, merged)
+\`\`\`json
+${JSON.stringify(priorExtraction, null, 2)}
+\`\`\`
+
+Build entity_cards fingerprints as JSON.`;
+}
+
+export type SourcedProjectEntityCard = ProjectEntityCard & {
+  source_email_id: string;
+  source_label: string;
+};
+
+export function buildProjectFingerprintMergeSystemPrompt(): string {
+  return `You merge project fingerprint entity cards from multiple emails in the SAME thread into a unique set of projects.
+
+${buildProjectHighlightDomainContext()}
+
+Return ONLY valid JSON with this exact shape:
+{
+  "entity_cards": [
+    {
+      "name": string | null,
+      "year_hint": string | null,
+      "phase": string | null,
+      "contractor": string | null,
+      "location": string | null,
+      "equipment_mentions": string | null
+    }
+  ]
+}
+
+You receive a list of entity cards produced per-email (pass 3). The same project often appears multiple times with sparse vs richer fields.
+
+Rules:
+- Output ONE card per distinct project identity.
+- Merge when the normalized name matches AND the year matches (including both missing a year).
+- NEVER merge two cards that share a name but have different years (maglock 2024 vs maglock 2026 stay separate). A human will merge them later if they are the same initiative.
+- When merging, keep non-null fields; prefer the most complete name; keep contractor/location/phase/equipment when any source has it. Do not invent values.
+- If two cards have conflicting non-null values for the same field, prefer the longer/more specific value; never invent a compromise.
+- Drop empty cards. Partial cards are OK.
+- Output cards only — no source_email_id / source_label fields.`;
+}
+
+export function buildProjectFingerprintMergeUserPrompt(
+  cards: SourcedProjectEntityCard[],
+): string {
+  return `ENTITY CARDS FROM PASS 3 (per-email fingerprints; may contain duplicates across messages)
+
+\`\`\`json
+${JSON.stringify(cards, null, 2)}
+\`\`\`
+
+Merge into a unique entity_cards list as JSON.`;
+}
+
+function preferString(a: string | null, b: string | null): string | null {
+  const left = a?.trim() || null;
+  const right = b?.trim() || null;
+  if (!left) return right;
+  if (!right) return left;
+  return right.length > left.length ? right : left;
+}
+
+function preferRicherProjectEntityCard(
+  a: ProjectEntityCard,
+  b: ProjectEntityCard,
+): ProjectEntityCard {
+  const aName = a.name?.trim() || null;
+  const bName = b.name?.trim() || null;
+  const preferB = Boolean(bName && (!aName || bName.length > aName.length));
+  const folded = foldProjectNames({
+    preferredName: preferB ? bName : aName,
+    otherName: preferB ? aName : bName,
+    preferredAliases: preferB ? b.aliases : a.aliases,
+    otherAliases: preferB ? a.aliases : b.aliases,
+  });
+  return {
+    name: folded.name,
+    year_hint: preferString(a.year_hint, b.year_hint),
+    phase: preferString(a.phase, b.phase),
+    contractor: mergeProjectMultiValues(a.contractor, b.contractor),
+    location: filterProjectLocationField(
+      mergeProjectMultiValues(a.location, b.location),
+    ),
+    equipment_mentions: mergeProjectMultiValues(
+      a.equipment_mentions,
+      b.equipment_mentions,
+    ),
+    aliases: folded.aliases,
+  };
+}
+
+/**
+ * Guarantee at most one card per identity key (name + year when present).
+ * Same name with different years stay separate.
+ */
+export function coalesceProjectEntityCards(
+  cards: ProjectEntityCard[],
+): ProjectEntityCard[] {
+  const byKey = new Map<string, ProjectEntityCard>();
+  const unnamed: ProjectEntityCard[] = [];
+
+  for (const card of cards) {
+    const key = projectIdentityKey(card);
+    if (key.startsWith("empty:")) {
+      unnamed.push(card);
+      continue;
+    }
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { ...card, aliases: [...(card.aliases ?? [])] });
+      continue;
+    }
+    byKey.set(key, preferRicherProjectEntityCard(existing, card));
+  }
+
+  return [...byKey.values(), ...unnamed];
+}
+
+/**
+ * Unique project cards for a harvest badge. Falls back to named spans so
+ * phase/location marks are not counted as extra projects.
+ */
+export function uniqueProjectHarvestCount(
+  cards: ProjectEntityCard[],
+  extraction: ProjectHighlightExtraction,
+): number {
+  const unique = coalesceProjectEntityCards(cards);
+  if (unique.length > 0) return unique.length;
+  return extraction.project_names.length;
+}

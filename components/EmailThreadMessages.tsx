@@ -151,7 +151,12 @@ function HighlightedFullBody({
         <p className="text-sm text-slate-500">(No unique content for this message)</p>
       );
     }
-    return <BodyContent display={display} quote={highlightQuote} />;
+    const quoteInUnique = quoteMatches(uniqueText, highlightQuote);
+    const quote =
+      quoteInUnique || (!uniqueText.trim() && quoteMatches(display.content, highlightQuote))
+        ? highlightQuote
+        : null;
+    return <BodyContent display={display} quote={quote} />;
   }
 
   const highlightClass =
@@ -160,12 +165,36 @@ function HighlightedFullBody({
   const showContactMarks =
     contactExtraction != null && extractionHasAny(contactExtraction);
   const showRemainder = Boolean(split.remainder) && !uniqueOnly;
-  const quoteText = uniqueText || display.content;
-  const renderQuoted =
-    Boolean(highlightQuote?.trim()) &&
-    (quoteMatches(quoteText, highlightQuote) ||
-      quoteMatches(split.highlighted, highlightQuote) ||
-      quoteMatches(display.content, highlightQuote));
+  const quoteInAuthored =
+    quoteMatches(uniqueText, highlightQuote) ||
+    quoteMatches(split.highlighted, highlightQuote);
+  const renderQuoted = Boolean(highlightQuote?.trim()) && quoteInAuthored;
+
+  // Unique could not be located as a prefix of the HTML display. Paint the
+  // mention unique string teal so the overlay matches what mentions search,
+  // then show the full message unhighlighted.
+  if (!split.aligned) {
+    const quote = renderQuoted ? highlightQuote : null;
+    return (
+      <div className="w-full max-w-none">
+        <div
+          className={`prose prose-sm whitespace-pre-wrap ${highlightClass}`}
+        >
+          {showContactMarks ? (
+            <ContactMarkedText
+              text={split.highlighted}
+              extraction={contactExtraction}
+            />
+          ) : quote ? (
+            <QuoteMarkedText text={split.highlighted} quote={quote} />
+          ) : (
+            split.highlighted
+          )}
+        </div>
+        {showRemainder ? <BodyContent display={display} /> : null}
+      </div>
+    );
+  }
 
   // When contact marks are active, render the unique span as plain text so
   // substring marks stay reliable (markdown AST would break mid-token wraps).
@@ -194,13 +223,10 @@ function HighlightedFullBody({
   }
 
   if (renderQuoted) {
-    const markedText = quoteMatches(quoteText, highlightQuote)
-      ? quoteText
-      : quoteMatches(split.highlighted, highlightQuote)
-        ? split.highlighted
-        : display.content;
-    const showQuotedRemainder =
-      showRemainder && markedText !== display.content;
+    const markedText = quoteMatches(uniqueText, highlightQuote)
+      ? uniqueText
+      : split.highlighted;
+    const showQuotedRemainder = showRemainder && markedText !== display.content;
     return (
       <div className="w-full max-w-none">
         <div
@@ -355,7 +381,9 @@ export function EmailThreadMessages({
         const quoteMissing =
           Boolean(messageQuote?.trim()) &&
           !quoteMatches(uniqueText, messageQuote) &&
-          !quoteMatches(message.bodyDisplay.content, messageQuote);
+          (uniqueText
+            ? true
+            : !quoteMatches(message.bodyDisplay.content, messageQuote));
 
         return (
           <article
@@ -430,7 +458,7 @@ export function EmailThreadMessages({
                 {quoteMissing && messageQuote ? (
                   <div className="mb-3">
                     <p className="mb-1 text-xs text-slate-500">
-                      To-do quote was not found in the authored body
+                      Quote was not found in this email's unique content
                     </p>
                     <SourceQuoteDisplay quote={messageQuote} />
                   </div>

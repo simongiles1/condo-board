@@ -59,6 +59,26 @@ import {
   saveOrgHighlightThirdPass,
 } from "@/lib/email-analysis/org-highlight-persist";
 import type { SourcedOrgEntityCard } from "@/lib/email-analysis/org-highlight-shared";
+import {
+  emptyProjectHighlightExtraction,
+  extractProjectFingerprints,
+  extractProjectHighlightsFromText,
+  extractProjectHighlightsSecondPass,
+  mergeProjectFingerprints,
+} from "@/lib/email-analysis/project-highlight-extraction";
+import {
+  resolveProjectHighlightModel,
+  type ProjectHighlightModelId,
+} from "@/lib/email-analysis/project-highlight-models";
+import {
+  loadProjectHighlightRuns,
+  mergedPriorExtractionsForEmail as mergedProjectPriorExtractionsForEmail,
+  saveProjectFingerprintMerge,
+  saveProjectHighlightExtractions,
+  saveProjectHighlightSecondPass,
+  saveProjectHighlightThirdPass,
+} from "@/lib/email-analysis/project-highlight-persist";
+import type { SourcedProjectEntityCard } from "@/lib/email-analysis/project-highlight-shared";
 import { estimateCostUsd } from "@/lib/gemini/usage";
 
 export type BulkHighlightPass = 1 | 2 | 3 | 4;
@@ -451,6 +471,162 @@ async function runOrgPass(
   return sumCostUsd(results, modelId);
 }
 
+async function runProjectPass(
+  items: PreparedContactExtractItem[],
+  modelId: ProjectHighlightModelId,
+  pass: BulkHighlightPass,
+): Promise<number> {
+  if (pass === 4) {
+    const priorRuns = await loadProjectHighlightRuns(
+      items.map((item) => item.emailId),
+    );
+    const priorRun = priorRuns[modelId];
+    if (!priorRun?.thirdPass) {
+      throw new Error(
+        "Run the fingerprint (3rd) pass for this model before merging.",
+      );
+    }
+
+    const sourced: SourcedProjectEntityCard[] = [];
+    for (const item of items) {
+      const cards =
+        priorRun.thirdPass.entityCardsByEmailId[item.emailId] ?? [];
+      const sourceLabel = sourceLabelForItem(item);
+      for (const card of cards) {
+        sourced.push({
+          ...card,
+          source_email_id: item.emailId,
+          source_label: sourceLabel,
+        });
+      }
+    }
+
+    const { entityCards, usage, costUsd, modelName } =
+      await mergeProjectFingerprints(sourced, modelId);
+    await saveProjectFingerprintMerge({
+      modelId,
+      emailIds: items.map((item) => item.emailId),
+      entityCards,
+      inputCardCount: sourced.length,
+      usage,
+      costUsd,
+      modelName,
+    });
+
+    return costUsd;
+  }
+
+  if (pass === 3) {
+    const priorRuns = await loadProjectHighlightRuns(
+      items.map((item) => item.emailId),
+    );
+    const priorRun = priorRuns[modelId];
+    if (!priorRun) {
+      throw new Error(
+        "Run the first pass for this model before the fingerprint pass.",
+      );
+    }
+
+    const results = await mapWithConcurrency(items, CONCURRENCY, async (item) => {
+      const priorExtraction = mergedProjectPriorExtractionsForEmail(
+        priorRun,
+        item.emailId,
+      );
+      const hasContent =
+        item.bodyText.length > 0 ||
+        item.fromAddress.length > 0 ||
+        item.toAddresses.length > 0 ||
+        item.ccAddresses.length > 0;
+
+      if (!hasContent) {
+        return { emailId: item.emailId, entityCards: [], skipped: true };
+      }
+
+      const { entityCards, usage, costUsd, modelName } =
+        await extractProjectFingerprints(
+          {
+            subject: item.subject,
+            fromAddress: item.fromAddress,
+            toAddresses: item.toAddresses,
+            ccAddresses: item.ccAddresses,
+            bodyText: item.bodyText,
+          },
+          priorExtraction,
+          modelId,
+        );
+      return { emailId: item.emailId, entityCards, usage, costUsd, modelName };
+    });
+
+    await saveProjectHighlightThirdPass(modelId, results);
+    return sumCostUsd(results, modelId);
+  }
+
+  if (pass === 2) {
+    const priorRuns = await loadProjectHighlightRuns(
+      items.map((item) => item.emailId),
+    );
+    const priorRun = priorRuns[modelId];
+    if (!priorRun) {
+      throw new Error(
+        "Run the first pass for this model before the second pass.",
+      );
+    }
+
+    const results = await mapWithConcurrency(items, CONCURRENCY, async (item) => {
+      const priorExtraction =
+        priorRun.extractions[item.emailId] ?? emptyProjectHighlightExtraction();
+
+      if (!item.highlightedText) {
+        return {
+          emailId: item.emailId,
+          extraction: emptyProjectHighlightExtraction(),
+          skipped: true,
+        };
+      }
+
+      const { extraction, usage, costUsd, modelName } =
+        await extractProjectHighlightsSecondPass(
+          item.highlightedText,
+          priorExtraction,
+          modelId,
+        );
+      return {
+        emailId: item.emailId,
+        extraction,
+        usage,
+        costUsd,
+        modelName,
+      };
+    });
+
+    await saveProjectHighlightSecondPass(modelId, results);
+    return sumCostUsd(results, modelId);
+  }
+
+  const results = await mapWithConcurrency(items, CONCURRENCY, async (item) => {
+    if (!item.highlightedText) {
+      return {
+        emailId: item.emailId,
+        extraction: emptyProjectHighlightExtraction(),
+        skipped: true,
+      };
+    }
+
+    const { extraction, usage, costUsd, modelName } =
+      await extractProjectHighlightsFromText(item.highlightedText, modelId);
+    return {
+      emailId: item.emailId,
+      extraction,
+      usage,
+      costUsd,
+      modelName,
+    };
+  });
+
+  await saveProjectHighlightExtractions(modelId, results);
+  return sumCostUsd(results, modelId);
+}
+
 async function runEventPass(
   items: PreparedContactExtractItem[],
   modelId: EventHighlightModelId,
@@ -555,6 +731,12 @@ export async function runBulkHighlightPass(params: {
   if (kind === "todos") {
     const modelId = resolveTodoHighlightModel(params.modelId);
     const costUsd = await runTodoPass(items, modelId);
+    return { costUsd, registryIngestPromise: null };
+  }
+
+  if (kind === "projects") {
+    const modelId = resolveProjectHighlightModel(params.modelId);
+    const costUsd = await runProjectPass(items, modelId, pass);
     return { costUsd, registryIngestPromise: null };
   }
 

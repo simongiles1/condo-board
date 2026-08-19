@@ -267,6 +267,27 @@
       "when": 1785300000000,
       "tag": "0037_user_telegram_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1785400000000,
+      "tag": "0038_project_harvest",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1785500000000,
+      "tag": "0039_contact_mentions",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1785600000000,
+      "tag": "0040_organization_field_attachments",
+      "breakpoints": true
     }
   ]
 }

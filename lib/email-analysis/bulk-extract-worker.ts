@@ -38,6 +38,10 @@ import {
   prepareOrgExtractItemsForEmails,
   prepareOrgExtractItemsForThread,
 } from "@/lib/email-analysis/org-highlight-prepare";
+import {
+  prepareProjectExtractItemsForEmails,
+  prepareProjectExtractItemsForThread,
+} from "@/lib/email-analysis/project-highlight-prepare";
 import { runBulkHighlightPass } from "@/lib/email-analysis/bulk-extract-highlight";
 import { listBulkExtractTargets, listMissingExtractTargets } from "@/lib/email-analysis/bulk-extract-targets";
 import {
@@ -93,6 +97,12 @@ async function prepareTargetItems(
       return prepareOrgExtractItemsForThread(target.threadId);
     }
     return prepareOrgExtractItemsForEmails(target.emailIds);
+  }
+  if (kind === "projects") {
+    if (!useEmailIds && target.threadId) {
+      return prepareProjectExtractItemsForThread(target.threadId);
+    }
+    return prepareProjectExtractItemsForEmails(target.emailIds);
   }
   if (kind === "events") {
     if (!useEmailIds && target.threadId) {

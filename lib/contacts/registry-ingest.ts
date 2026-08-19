@@ -1,6 +1,7 @@
 /**
  * Ingest a thread pass-4 fingerprint merge into the global contact registry.
- * Mention-ordered: high-weight cards adjudicated first; sparse stubs inserted raw.
+ * Strong-identity cards are adjudicated into people. Weak first-name cards
+ * are written as contact_mentions and resolved after ingest.
  */
 
 import { randomUUID } from "crypto";
@@ -16,9 +17,14 @@ import {
 import { loadContactRegistryPersons } from "@/lib/contacts/registry-load";
 import { shortlistAgainstRegistry } from "@/lib/contacts/registry-shortlist";
 import {
+  filterEmailIdsWhereMentionAppears,
+  loadPass3EntityCardsByEmailId,
+} from "@/lib/contacts/mention-persist";
+import { sourceEmailIdsForMergedCard } from "@/lib/contacts/mention-presence";
+import { resolveContactMentions } from "@/lib/contacts/mention-resolve";
+import {
   buildBlockingKeys,
   hasStrongIdentity,
-  isSparseFirstNameOnly,
   scoreMentionWeight,
   type ContactRegistryIncomingCard,
 } from "@/lib/contacts/registry-shared";
@@ -46,29 +52,46 @@ export type RegistryIngestResult = {
 
 function buildIncomingCards(params: {
   entityCards: ContactEntityCard[];
-  emailIds: string[];
   datesByEmailId: Map<string, string>;
+  sourceEmailIdsByIndex: string[][];
 }): ContactRegistryIncomingCard[] {
-  const dateValues = [...params.datesByEmailId.values()].filter(Boolean).sort();
-  const dateMin = dateValues[0] ?? null;
-  const dateMax = dateValues[dateValues.length - 1] ?? null;
-  const sourceCount = Math.max(1, params.emailIds.length);
-
-  return params.entityCards.map((card) => {
-    const mentionWeight = scoreMentionWeight({
-      sourceEmailCount: sourceCount,
-      card,
-    });
+  return params.entityCards.map((card, index) => {
+    const sourceEmailIds = params.sourceEmailIdsByIndex[index] ?? [];
+    const dateValues = sourceEmailIds
+      .map((id) => params.datesByEmailId.get(id))
+      .filter((value): value is string => Boolean(value))
+      .sort();
     return {
       ...card,
       tempId: randomUUID(),
-      sourceEmailIds: params.emailIds,
-      dateMin,
-      dateMax,
-      mentionWeight,
+      sourceEmailIds,
+      dateMin: dateValues[0] ?? null,
+      dateMax: dateValues[dateValues.length - 1] ?? null,
+      mentionWeight: scoreMentionWeight({
+        sourceEmailCount: Math.max(1, sourceEmailIds.length),
+        card,
+      }),
       blockingKeys: buildBlockingKeys(card),
     };
   });
+}
+
+async function sourceEmailIdsForIngestCard(params: {
+  card: ContactEntityCard;
+  threadEmailIds: string[];
+  cardsByEmailId: Map<string, ContactEntityCard[]>;
+}): Promise<string[]> {
+  const { attributed, missingPass3 } = sourceEmailIdsForMergedCard({
+    merged: params.card,
+    threadEmailIds: params.threadEmailIds,
+    cardsByEmailId: params.cardsByEmailId,
+  });
+  if (missingPass3.length === 0) return attributed;
+  const extra = await filterEmailIdsWhereMentionAppears(
+    missingPass3,
+    params.card,
+  );
+  return [...new Set([...attributed, ...extra])];
 }
 
 /**
@@ -165,59 +188,43 @@ export async function ingestFingerprintMergeIntoRegistry(params: {
       }
     }
 
+    const threadEmailIds = emailIds ?? [];
+    const cardsByEmailId = await loadPass3EntityCardsByEmailId({
+      emailIds: threadEmailIds,
+      modelId: params.modelId,
+    });
+    const sourceEmailIdsByIndex = await Promise.all(
+      (entityCards ?? []).map((card) =>
+        sourceEmailIdsForIngestCard({
+          card,
+          threadEmailIds,
+          cardsByEmailId,
+        }),
+      ),
+    );
+
     const incoming = buildIncomingCards({
       entityCards: entityCards ?? [],
-      emailIds: emailIds ?? [],
       datesByEmailId,
+      sourceEmailIdsByIndex,
     });
 
-    // Pareto: high mention weight first.
-    incoming.sort((a, b) => b.mentionWeight - a.mentionWeight);
-
-    const registry = await loadContactRegistryPersons({
-      limit: 8000,
-      orderByMention: true,
-    });
-
-    const sparse: ContactRegistryIncomingCard[] = [];
     const toAdjudicate: ContactRegistryIncomingCard[] = [];
     for (const card of incoming) {
-      if (isSparseFirstNameOnly(card) && !hasStrongIdentity(card)) {
-        sparse.push(card);
-      } else {
+      if (hasStrongIdentity(card)) {
         toAdjudicate.push(card);
       }
     }
 
-    // Sparse stubs: keep_separate without AI.
+    toAdjudicate.sort((a, b) => b.mentionWeight - a.mentionWeight);
+
     let personsCreated = 0;
     let decisionsApplied = 0;
 
-    if (sparse.length > 0) {
-      const sparseDecisions = sparse.map((card) => ({
-        incomingTempId: card.tempId,
-        action: "keep_separate" as const,
-        targetPersonId: null,
-        email: null,
-        validFrom: null,
-        validTo: null,
-        reason: "sparse_stub_no_ai",
-      }));
-      const applied = await applyAdjudicationDecisions({
-        incoming: sparse,
-        decisions: sparseDecisions,
-        modelId: params.modelId,
-        fingerprintMergeId: params.fingerprintMergeId,
-      });
-      personsCreated += applied.personsCreated;
-      decisionsApplied += applied.decisionsApplied;
-    }
-
-    // Refresh registry after sparse inserts so later shortlists see them weakly.
-    let liveRegistry =
-      sparse.length > 0
-        ? await loadContactRegistryPersons({ limit: 8000, orderByMention: true })
-        : registry;
+    let liveRegistry = await loadContactRegistryPersons({
+      limit: 8000,
+      orderByMention: true,
+    });
 
     const holdEnabled = await isTelegramHitlReady();
 
@@ -297,6 +304,10 @@ export async function ingestFingerprintMergeIntoRegistry(params: {
         completedAt: new Date().toISOString(),
       })
       .where(eq(contactRegistryIngests.id, ingestId));
+
+    if ((emailIds?.length ?? 0) > 0) {
+      await resolveContactMentions({ emailIds });
+    }
 
     return {
       ingestId,

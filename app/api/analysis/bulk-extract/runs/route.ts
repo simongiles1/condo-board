@@ -13,6 +13,7 @@ import { isContactHighlightModel } from "@/lib/email-analysis/contact-highlight-
 import { isEventHighlightModel } from "@/lib/email-analysis/event-highlight-models";
 import { isTodoHighlightModel } from "@/lib/email-analysis/todo-highlight-models";
 import { isOrgHighlightModel } from "@/lib/email-analysis/org-highlight-models";
+import { isProjectHighlightModel } from "@/lib/email-analysis/project-highlight-models";
 import { listBulkExtractTargets } from "@/lib/email-analysis/bulk-extract-targets";
 
 export async function GET(request: Request) {
@@ -47,13 +48,14 @@ export async function POST(request: Request) {
     const kind: BulkExtractKind | null =
       body.kind === "contacts" ||
       body.kind === "organizations" ||
+      body.kind === "projects" ||
       body.kind === "events" ||
       body.kind === "todos"
         ? body.kind
         : null;
     if (!kind) {
       return NextResponse.json(
-        { error: "kind must be contacts, organizations, events, or todos." },
+        { error: "kind must be contacts, organizations, projects, events, or todos." },
         { status: 400 },
       );
     }
@@ -71,6 +73,12 @@ export async function POST(request: Request) {
     if (kind === "organizations" && !isOrgHighlightModel(model)) {
       return NextResponse.json(
         { error: "Unsupported organization extraction model." },
+        { status: 400 },
+      );
+    }
+    if (kind === "projects" && !isProjectHighlightModel(model)) {
+      return NextResponse.json(
+        { error: "Unsupported project extraction model." },
         { status: 400 },
       );
     }

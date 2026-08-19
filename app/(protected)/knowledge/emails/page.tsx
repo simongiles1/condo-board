@@ -35,6 +35,8 @@ import { loadEventExtractSummariesForGroups } from "@/lib/email-analysis/event-h
 import type { EventExtractSummary } from "@/lib/email-analysis/event-highlight-run-display";
 import { loadOrgExtractSummariesForGroups } from "@/lib/email-analysis/org-highlight-summary";
 import type { OrgExtractSummary } from "@/lib/email-analysis/org-highlight-run-display";
+import { loadProjectExtractSummariesForGroups } from "@/lib/email-analysis/project-highlight-summary";
+import type { ProjectExtractSummary } from "@/lib/email-analysis/project-highlight-run-display";
 import { loadTodoExtractSummariesForGroups } from "@/lib/email-analysis/todo-highlight-summary";
 import type { TodoExtractSummary } from "@/lib/email-analysis/todo-highlight-run-display";
 import {
@@ -102,6 +104,7 @@ export default async function EmailsPage({
       queueState,
       contactExtractSummaries,
       orgExtractSummaries,
+      projectExtractSummaries,
       eventExtractSummaries,
       todoExtractSummaries,
     ] = await Promise.all([
@@ -113,6 +116,9 @@ export default async function EmailsPage({
         Object.fromEntries(messageIds.map((id) => [id, [id]])),
       ),
       loadOrgExtractSummariesForGroups(
+        Object.fromEntries(messageIds.map((id) => [id, [id]])),
+      ),
+      loadProjectExtractSummariesForGroups(
         Object.fromEntries(messageIds.map((id) => [id, [id]])),
       ),
       loadEventExtractSummariesForGroups(
@@ -149,6 +155,7 @@ export default async function EmailsPage({
         threadProcessingDetails={threadProcessingDetails}
         contactExtractSummaries={contactExtractSummaries}
         orgExtractSummaries={orgExtractSummaries}
+        projectExtractSummaries={projectExtractSummaries}
         eventExtractSummaries={eventExtractSummaries}
         todoExtractSummaries={todoExtractSummaries}
         initialQueueState={queueState}
@@ -210,12 +217,14 @@ export default async function EmailsPage({
     initialQueueState,
     contactExtractSummaries,
     orgExtractSummaries,
+    projectExtractSummaries,
     eventExtractSummaries,
     todoExtractSummaries,
   ] = await Promise.all([
     loadInboxAnalysisQueueState(pageEmailIds),
     loadContactExtractSummariesForGroups(threadEmailIds),
     loadOrgExtractSummariesForGroups(threadEmailIds),
+    loadProjectExtractSummariesForGroups(threadEmailIds),
     loadEventExtractSummariesForGroups(threadEmailIds),
     loadTodoExtractSummariesForGroups(threadEmailIds),
   ]);
@@ -240,6 +249,7 @@ export default async function EmailsPage({
       threadProcessingDetails={threadProcessingDetails}
       contactExtractSummaries={contactExtractSummaries}
       orgExtractSummaries={orgExtractSummaries}
+      projectExtractSummaries={projectExtractSummaries}
       eventExtractSummaries={eventExtractSummaries}
       todoExtractSummaries={todoExtractSummaries}
       initialQueueState={initialQueueState}
@@ -387,6 +397,7 @@ function EmailsPageShell({
   threadProcessingDetails,
   contactExtractSummaries,
   orgExtractSummaries,
+  projectExtractSummaries,
   eventExtractSummaries,
   todoExtractSummaries,
   initialQueueState = {
@@ -433,6 +444,7 @@ function EmailsPageShell({
   threadProcessingDetails?: Record<string, EmailProcessingStats[]>;
   contactExtractSummaries?: Record<string, ContactExtractSummary>;
   orgExtractSummaries?: Record<string, OrgExtractSummary>;
+  projectExtractSummaries?: Record<string, ProjectExtractSummary>;
   eventExtractSummaries?: Record<string, EventExtractSummary>;
   todoExtractSummaries?: Record<string, TodoExtractSummary>;
   initialQueueState?: InboxAnalysisQueueState;
@@ -498,6 +510,7 @@ function EmailsPageShell({
         threadProcessingDetails={threadProcessingDetails}
         contactExtractSummaries={contactExtractSummaries}
         orgExtractSummaries={orgExtractSummaries}
+        projectExtractSummaries={projectExtractSummaries}
         eventExtractSummaries={eventExtractSummaries}
         todoExtractSummaries={todoExtractSummaries}
         initialQueueState={initialQueueState}

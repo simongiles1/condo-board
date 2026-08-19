@@ -402,6 +402,8 @@ export type ContactEntityCard = {
   email: string | null;
   phone: string | null;
   job_title: string | null;
+  /** Company / "Dan from XYZ" phrase as written. Not invented. */
+  raw_company?: string | null;
 };
 
 export type ContactFingerprintResult = {
@@ -419,6 +421,7 @@ export function emptyContactEntityCard(): ContactEntityCard {
     email: null,
     phone: null,
     job_title: null,
+    raw_company: null,
   };
 }
 
@@ -437,6 +440,9 @@ export function parseContactEntityCard(raw: unknown): ContactEntityCard | null {
     email: nullableTrimmedString(obj.email),
     phone: nullableTrimmedString(obj.phone),
     job_title: nullableTrimmedString(obj.job_title),
+    raw_company:
+      nullableTrimmedString(obj.raw_company) ??
+      nullableTrimmedString(obj.company_name),
   };
   if (
     !card.first_name &&
@@ -504,7 +510,8 @@ export function entityCardHasAny(card: ContactEntityCard): boolean {
       card.last_name ||
       card.email ||
       card.phone ||
-      card.job_title,
+      card.job_title ||
+      card.raw_company,
   );
 }
 
@@ -530,7 +537,8 @@ Return ONLY valid JSON with this exact shape:
       "last_name": string | null,
       "email": string | null,
       "phone": string | null,
-      "job_title": string | null
+      "job_title": string | null,
+      "raw_company": string | null
     }
   ]
 }
@@ -544,6 +552,7 @@ Rules:
 - Create one entity card per distinct person you can identify from this message.
 - Partial cards are expected and OK. Fill only fields supported by evidence; leave others null.
 - Prefer splitting person names into first_name and last_name when both are clearly present. If only a first name (or only a last name) appears, put that in the matching field and leave the other null.
+- raw_company: copy the organization / firm phrase tied to this person when it appears (e.g. "Dan from XYZ consulting group" → first_name "Dan", raw_company "XYZ consulting group"). Use prior company_names when they clearly belong to this person. Leave null when no org is stated. Do not invent a company.
 - Populate cards from header participants (From / To / Cc display names and addresses) as well as the body and prior extractions.
 - You MAY link evidence logically when it is strongly supported. Example: To includes studiopm@iccpropertymanagement.com and the body greets "Hi Haider" / "Hi Hyder" while extractions include "Haider Mukadam" — you may put that name on the StudioPM address card.
 - Do NOT invent missing pieces. Example: if someone is addressed only as "Bonnie" and the Cc address is bkafi@…, do NOT invent last name "Kafi" from the local-part unless that last name also appears as evidence in this message (headers, body, or prior extractions).
@@ -601,7 +610,8 @@ Return ONLY valid JSON with this exact shape:
       "last_name": string | null,
       "email": string | null,
       "phone": string | null,
-      "job_title": string | null
+      "job_title": string | null,
+      "raw_company": string | null
     }
   ]
 }
@@ -612,7 +622,7 @@ Rules:
 - Output ONE card per distinct person.
 - ALWAYS merge cards that share the same email address (case-insensitive). Example: an email-only card for studiopm@… and a "Haider Mukadam" card with that same email MUST become one card with the richest fields.
 - Merge when strong identity evidence matches (same email, or same full name with no conflicting emails).
-- When merging, keep non-null fields; prefer the most complete name (first+last over first-only), keep a phone/title when any source has it. Do not invent values that appear nowhere in the input cards.
+- When merging, keep non-null fields; prefer the most complete name (first+last over first-only), keep a phone/title/raw_company when any source has it. Do not invent values that appear nowhere in the input cards.
 - If two cards have conflicting non-null values for the same field (rare), prefer the longer/more specific value; never invent a compromise.
 - Do NOT merge different people who only share a first name.
 - Do NOT invent last names from email local-parts.
@@ -675,6 +685,7 @@ function preferRicherEntityCard(
     email: preferString(a.email, b.email),
     phone: preferString(a.phone, b.phone),
     job_title: preferString(a.job_title, b.job_title),
+    raw_company: preferString(a.raw_company ?? null, b.raw_company ?? null),
   };
 }
 

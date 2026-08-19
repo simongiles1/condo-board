@@ -4,6 +4,7 @@ export const EXTRACTION_CONCEPTS = [
   "attachment",
   "contact",
   "organization",
+  "project",
   "event",
   "equipment",
   "todo",
@@ -27,6 +28,11 @@ export const EXTRACTION_CONCEPT_META: Record<
   },
   organization: {
     label: "Organizations",
+    implemented: true,
+    eligibleHint: "every email",
+  },
+  project: {
+    label: "Projects",
     implemented: true,
     eligibleHint: "every email",
   },
@@ -58,6 +64,7 @@ export type EmailExtractionRow = {
   attachmentsExtracted: boolean;
   contactExtracted: boolean;
   organizationExtracted: boolean;
+  projectExtracted: boolean;
   eventExtracted: boolean;
   todoExtracted: boolean;
 };
@@ -132,6 +139,7 @@ function emptyConcepts(): Record<ExtractionConceptId, ConceptCount> {
     attachment: { eligible: 0, extracted: 0 },
     contact: { eligible: 0, extracted: 0 },
     organization: { eligible: 0, extracted: 0 },
+    project: { eligible: 0, extracted: 0 },
     event: { eligible: 0, extracted: 0 },
     equipment: { eligible: 0, extracted: 0 },
     todo: { eligible: 0, extracted: 0 },
@@ -227,6 +235,9 @@ function applyEmailToDay(
   day.concepts.organization.eligible += 1;
   if (email.organizationExtracted) day.concepts.organization.extracted += 1;
 
+  day.concepts.project.eligible += 1;
+  if (email.projectExtracted) day.concepts.project.extracted += 1;
+
   day.concepts.event.eligible += 1;
   if (email.eventExtracted) day.concepts.event.extracted += 1;
 
@@ -282,6 +293,7 @@ function cloneDay(
       attachment: { ...source.concepts.attachment },
       contact: { ...source.concepts.contact },
       organization: { ...source.concepts.organization },
+      project: { ...source.concepts.project },
       event: { ...source.concepts.event },
       equipment: { ...source.concepts.equipment },
       todo: { ...source.concepts.todo },

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import { AffiliationMatchingQueue } from "@/components/AffiliationMatchingQueue";
 import { ContactDuplicatesPanel } from "@/components/ContactDuplicatesPanel";
+import { ContactMentionsPanel } from "@/components/ContactMentionsPanel";
 import { ContactEvidenceSidePanel } from "@/components/ContactEvidenceSidePanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PersonAffiliationsPanel } from "@/components/PersonAffiliationsPanel";
@@ -217,6 +218,10 @@ type Stats = {
   pendingMergeCount: number;
   mergeDecisionCount?: number;
   ingestCompletedCount?: number;
+  mentionTotalCount?: number;
+  mentionConfirmedCount?: number;
+  mentionProvisionalCount?: number;
+  mentionUnresolvedCount?: number;
 };
 
 type ResolveResult = {
@@ -275,6 +280,7 @@ export function ContactsRegistryClient({
 }) {
   const [tab, setTab] = useState<
     | "persons"
+    | "mentions"
     | "link_orgs"
     | "duplicates"
     | "emails"
@@ -320,6 +326,30 @@ export function ContactsRegistryClient({
   >([]);
   const [duplicatesLoading, setDuplicatesLoading] = useState(false);
   const [duplicatesError, setDuplicatesError] = useState<string | null>(null);
+  const [convertPreview, setConvertPreview] = useState<{
+    existingMentions: number;
+    harvestEmails: number;
+    pendingHarvestEmails: number;
+    stubsConsidered: number;
+    harvestNeeded: boolean;
+    stubsNeeded: boolean;
+    ghostMentions: number;
+    ghostsNeeded: boolean;
+  } | null>(null);
+  const [convertBusy, setConvertBusy] = useState(false);
+  const [convertProgress, setConvertProgress] = useState<string | null>(null);
+  const [convertResult, setConvertResult] = useState<{
+    harvestSkipped: boolean;
+    harvestMentionsWritten: number;
+    personsDeleted: number;
+    mentionsDropped: number;
+    scanned: number;
+    confirmed: number;
+    provisional: number;
+    unresolved: number;
+  } | null>(null);
+  const [mentionPeople, setMentionPeople] = useState<PersonRow[]>([]);
+  const mentionPeopleLoaded = useRef(false);
 
   const selectedPerson = useMemo(
     () => persons.find((p) => p.id === selectedPersonId) ?? null,
@@ -426,6 +456,26 @@ export function ContactsRegistryClient({
         await loadDuplicates();
       });
     }
+  }
+
+  function openMentionsTab() {
+    setTab("mentions");
+    if (mentionPeopleLoaded.current) return;
+    mentionPeopleLoaded.current = true;
+    setMentionPeople(persons);
+    void fetch(
+      `/api/contacts/registry?view=persons&limit=${MERGE_CANDIDATE_FETCH_LIMIT}&skipVerifiedMentions=1`,
+    )
+      .then(async (res) => {
+        if (!res.ok) return;
+        const json = (await res.json()) as { persons?: PersonRow[] };
+        if (json.persons && json.persons.length > 0) {
+          setMentionPeople(json.persons);
+        }
+      })
+      .catch(() => {
+        // Keep the visible page as a fallback.
+      });
   }
 
   function refresh() {
@@ -694,6 +744,134 @@ export function ContactsRegistryClient({
     });
   }
 
+  function previewConvertStubs() {
+    startTransition(async () => {
+      setMessage(null);
+      setConvertResult(null);
+      setConvertProgress(null);
+      try {
+        const res = await fetch("/api/contacts/registry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "preview_convert_stubs" }),
+        });
+        const json = await readApiJson<{
+          existingMentions?: number;
+          harvestEmails?: number;
+          pendingHarvestEmails?: number;
+          stubsConsidered?: number;
+          harvestNeeded?: boolean;
+          stubsNeeded?: boolean;
+          ghostMentions?: number;
+          ghostsNeeded?: boolean;
+          error?: string;
+        }>(res);
+        if (!res.ok) {
+          setMessage(json.error ?? "Could not preview stub conversion.");
+          return;
+        }
+        setConvertPreview({
+          existingMentions: json.existingMentions ?? 0,
+          harvestEmails: json.harvestEmails ?? 0,
+          pendingHarvestEmails: json.pendingHarvestEmails ?? 0,
+          stubsConsidered: json.stubsConsidered ?? 0,
+          harvestNeeded: json.harvestNeeded === true,
+          stubsNeeded: json.stubsNeeded === true,
+          ghostMentions: json.ghostMentions ?? 0,
+          ghostsNeeded: json.ghostsNeeded === true,
+        });
+      } catch (error) {
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : "Could not preview stub conversion.",
+        );
+      }
+    });
+  }
+
+  async function applyConvertStubs() {
+    setConvertBusy(true);
+    setConvertResult(null);
+    setConvertProgress("Starting…");
+    setMessage("Convert stubs is running. This dialog stays open until it finishes.");
+    try {
+      let harvestRemaining = convertPreview?.pendingHarvestEmails ?? 0;
+      let lastJson: {
+        harvestSkipped?: boolean;
+        harvestMentionsWritten?: number;
+        harvestRemaining?: number;
+        personsDeleted?: number;
+        mentionsDropped?: number;
+        resolve?: {
+          scanned?: number;
+          confirmed?: number;
+          provisional?: number;
+          unresolved?: number;
+        } | null;
+        error?: string;
+      } = {};
+      do {
+        if (harvestRemaining > 0) {
+          setConvertProgress(
+            `Copying names from emails into mentions (${harvestRemaining.toLocaleString()} emails left)…`,
+          );
+        } else {
+          setConvertProgress(
+            "Matching unresolved mentions to people. This can take a minute…",
+          );
+        }
+        const res = await fetch("/api/contacts/registry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "convert_stubs",
+            dryRun: false,
+            harvestLimit: harvestRemaining > 0 ? 40 : undefined,
+          }),
+        });
+        lastJson = await readApiJson<typeof lastJson>(res);
+        if (!res.ok) {
+          setMessage(lastJson.error ?? "Could not convert sparse stubs.");
+          setConvertProgress(null);
+          return;
+        }
+        harvestRemaining = lastJson.harvestRemaining ?? 0;
+      } while (harvestRemaining > 0);
+
+      const resolved = lastJson.resolve;
+      const result = {
+        harvestSkipped: lastJson.harvestSkipped === true,
+        harvestMentionsWritten: lastJson.harvestMentionsWritten ?? 0,
+        personsDeleted: lastJson.personsDeleted ?? 0,
+        mentionsDropped: lastJson.mentionsDropped ?? 0,
+        scanned: resolved?.scanned ?? 0,
+        confirmed: resolved?.confirmed ?? 0,
+        provisional: resolved?.provisional ?? 0,
+        unresolved: resolved?.unresolved ?? 0,
+      };
+      setConvertResult(result);
+      setConvertProgress(null);
+      setMessage(
+        `Convert stubs finished. Matcher looked at ${result.scanned.toLocaleString()} mention${result.scanned === 1 ? "" : "s"}: ${result.confirmed.toLocaleString()} confirmed, ${result.provisional.toLocaleString()} provisional, ${result.unresolved.toLocaleString()} still unresolved${
+          result.mentionsDropped > 0
+            ? `, dropped ${result.mentionsDropped.toLocaleString()} not on their emails`
+            : ""
+        }.`,
+      );
+      await refreshData();
+    } catch (error) {
+      setConvertProgress(null);
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not convert sparse stubs.",
+      );
+    } finally {
+      setConvertBusy(false);
+    }
+  }
+
   function runResolve() {
     startTransition(async () => {
       setMessage(null);
@@ -833,6 +1011,24 @@ export function ContactsRegistryClient({
             <dd className="font-semibold">{stats.sparseStubCount}</dd>
           </div>
           <div>
+            <dt className="text-slate-500">Mentions unresolved</dt>
+            <dd className="font-semibold">
+              {(stats.mentionUnresolvedCount ?? 0).toLocaleString()}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">Provisional</dt>
+            <dd className="font-semibold">
+              {(stats.mentionProvisionalCount ?? 0).toLocaleString()}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">Confirmed</dt>
+            <dd className="font-semibold">
+              {(stats.mentionConfirmedCount ?? 0).toLocaleString()}
+            </dd>
+          </div>
+          <div>
             <dt className="text-slate-500">AI decisions</dt>
             <dd className="font-semibold">{stats.mergeDecisionCount ?? activity.length}</dd>
           </div>
@@ -853,7 +1049,7 @@ export function ContactsRegistryClient({
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={pending}
+            disabled={pending || convertBusy}
             onClick={runBackfill}
             className="rounded-md bg-teal-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-50"
           >
@@ -864,7 +1060,7 @@ export function ContactsRegistryClient({
           </button>
           <button
             type="button"
-            disabled={pending}
+            disabled={pending || convertBusy}
             onClick={runSweep}
             className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
           >
@@ -872,15 +1068,38 @@ export function ContactsRegistryClient({
           </button>
           <button
             type="button"
-            disabled={pending}
+            disabled={pending || convertBusy}
+            onClick={previewConvertStubs}
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {convertBusy ? "Convert stubs (working…)" : "Convert stubs"}
+            {!convertBusy && stats.sparseStubCount > 0
+              ? ` (${stats.sparseStubCount})`
+              : ""}
+          </button>
+          <button
+            type="button"
+            disabled={pending || convertBusy}
             onClick={refresh}
             className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
           >
             Refresh
           </button>
         </div>
-        {message ? (
-          <p className="mt-3 text-sm text-slate-600" role="status">
+        {convertBusy ? (
+          <p
+            className="mt-3 rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-950"
+            role="status"
+          >
+            {convertProgress ?? "Convert stubs is running…"} Keep this page
+            open. The dialog stays until it finishes.
+          </p>
+        ) : null}
+        {!convertBusy && message ? (
+          <p
+            className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800"
+            role="status"
+          >
             {message}
           </p>
         ) : null}
@@ -890,6 +1109,7 @@ export function ContactsRegistryClient({
         {(
           [
             ["persons", "People"],
+            ["mentions", "Mentions"],
             ["link_orgs", "Link orgs"],
             ["duplicates", "Duplicates"],
             ["emails", "Emails"],
@@ -900,7 +1120,9 @@ export function ContactsRegistryClient({
           const count =
             id === "persons"
               ? stats.personCount
-              : id === "duplicates"
+              : id === "mentions"
+                ? stats.mentionUnresolvedCount ?? 0
+                : id === "duplicates"
                 ? duplicateGroups.length
                 : id === "emails"
                   ? stats.emailCount
@@ -913,6 +1135,7 @@ export function ContactsRegistryClient({
             type="button"
             onClick={() => {
               if (id === "duplicates") openDuplicatesTab();
+              else if (id === "mentions") openMentionsTab();
               else setTab(id);
             }}
             className={
@@ -922,12 +1145,12 @@ export function ContactsRegistryClient({
             }
           >
             {label}
-            {id === "duplicates"
+            {id === "duplicates" || id === "mentions"
               ? count > 0
-                ? ` (${count})`
+                ? ` (${count.toLocaleString()})`
                 : ""
               : count > 0
-                ? ` (${count})`
+                ? ` (${count.toLocaleString()})`
                 : ""}
           </button>
           );
@@ -1322,6 +1545,24 @@ export function ContactsRegistryClient({
         </div>
       ) : null}
 
+      {tab === "mentions" ? (
+        <ContactMentionsPanel
+          stats={stats}
+          pending={pending}
+          people={(mentionPeople.length > 0 ? mentionPeople : persons).map(
+            personToMergeOption,
+          )}
+          onStats={(mentionCounts) => {
+            setStats((prev) => ({ ...prev, ...mentionCounts }));
+          }}
+          onChanged={() => {
+            startTransition(async () => {
+              await refreshData();
+            });
+          }}
+        />
+      ) : null}
+
       {tab === "link_orgs" ? (
         <AffiliationMatchingQueue
           onLinked={() => {
@@ -1593,6 +1834,166 @@ export function ContactsRegistryClient({
           if (pending) return;
           setPendingSever(null);
           setSeverError(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={convertPreview != null}
+        title={
+          convertResult
+            ? "Matching finished"
+            : convertBusy
+              ? "Convert stubs running"
+              : convertPreview &&
+                  !convertPreview.harvestNeeded &&
+                  !convertPreview.stubsNeeded &&
+                  !convertPreview.ghostsNeeded
+                ? "Re-run mention matching?"
+                : convertPreview &&
+                    convertPreview.ghostsNeeded &&
+                    !convertPreview.harvestNeeded &&
+                    !convertPreview.stubsNeeded
+                  ? "Clean misplaced mentions?"
+                  : "Convert sparse stubs?"
+        }
+        description={
+          convertResult ? (
+            <div className="space-y-2">
+              <p>Done. You can close this and check Mentions.</p>
+              <ul className="list-disc pl-5">
+                <li>
+                  Matcher looked at{" "}
+                  <span className="font-medium text-slate-800">
+                    {convertResult.scanned.toLocaleString()}
+                  </span>{" "}
+                  unresolved mention{convertResult.scanned === 1 ? "" : "s"}
+                </li>
+                <li>
+                  {convertResult.confirmed.toLocaleString()} confirmed (attached
+                  to a person)
+                </li>
+                <li>
+                  {convertResult.provisional.toLocaleString()} provisional
+                  (attached, can be unhooked later)
+                </li>
+                <li>
+                  {convertResult.unresolved.toLocaleString()} still unresolved
+                  (not enough unique context)
+                </li>
+                {convertResult.personsDeleted > 0 ? (
+                  <li>
+                    Removed {convertResult.personsDeleted.toLocaleString()}{" "}
+                    first-name-only stub people
+                  </li>
+                ) : null}
+                {convertResult.mentionsDropped > 0 ? (
+                  <li>
+                    Dropped {convertResult.mentionsDropped.toLocaleString()}{" "}
+                    mention{convertResult.mentionsDropped === 1 ? "" : "s"} whose
+                    name was not on the source email
+                  </li>
+                ) : null}
+              </ul>
+              <p>
+                <a
+                  href="/knowledge/entities/mention-rules"
+                  className="font-medium text-teal-800 hover:underline"
+                >
+                  How mentions match
+                </a>
+              </p>
+            </div>
+          ) : convertBusy ? (
+            <p>{convertProgress ?? "Working… Keep this page open."}</p>
+          ) : convertPreview ? (
+            <div className="space-y-2">
+              {convertPreview.harvestNeeded ||
+              convertPreview.stubsNeeded ||
+              convertPreview.ghostsNeeded ? (
+                <>
+                  <ol className="list-decimal space-y-1 pl-5">
+                    {convertPreview.harvestNeeded ? (
+                      <li>
+                        Copy names from{" "}
+                        {convertPreview.pendingHarvestEmails.toLocaleString()}{" "}
+                        remaining harvest email
+                        {convertPreview.pendingHarvestEmails === 1 ? "" : "s"}{" "}
+                        into mentions.
+                      </li>
+                    ) : null}
+                    {convertPreview.stubsNeeded ? (
+                      <li>
+                        Remove{" "}
+                        {convertPreview.stubsConsidered.toLocaleString()}{" "}
+                        first-name-only stub people.
+                      </li>
+                    ) : null}
+                    {convertPreview.ghostsNeeded ? (
+                      <li>
+                        Drop{" "}
+                        {convertPreview.ghostMentions.toLocaleString()} mention
+                        {convertPreview.ghostMentions === 1 ? "" : "s"} whose
+                        name is not on that email (headers or body).
+                      </li>
+                    ) : null}
+                    <li>
+                      Match unresolved mentions to people (this is the step
+                      that can take a minute).
+                    </li>
+                  </ol>
+                  <p>
+                    Click Convert. This dialog stays open until matching
+                    finishes, then it will say Matching finished.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    Mentions are already stored (
+                    {convertPreview.existingMentions.toLocaleString()} mentions,
+                    no stub people left).
+                  </p>
+                  <p>
+                    This still re-runs matching on unresolved mentions with the
+                    current rules — for example attaching “Haider” when the
+                    email already says Haider Mukadam.
+                  </p>
+                  <p>
+                    That can take a minute. The dialog stays open until it
+                    finishes.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : null
+        }
+        confirmLabel={
+          convertResult
+            ? "Close"
+            : convertPreview &&
+                !convertPreview.harvestNeeded &&
+                !convertPreview.stubsNeeded &&
+                !convertPreview.ghostsNeeded
+              ? "Run matcher"
+              : "Convert"
+        }
+        cancelLabel="Cancel"
+        busy={convertBusy}
+        busyLabel="Working…"
+        onConfirm={() => {
+          if (convertBusy) return;
+          if (convertResult) {
+            setConvertPreview(null);
+            setConvertResult(null);
+            return;
+          }
+          void applyConvertStubs();
+        }}
+        onCancel={() => {
+          if (convertBusy) return;
+          setConvertPreview(null);
+          setConvertResult(null);
+          setConvertProgress(null);
         }}
       />
     </div>

@@ -17,6 +17,11 @@ import {
   toOrgHighlightSpans,
   type OrgHighlightExtraction,
 } from "@/lib/email-analysis/org-highlight-shared";
+import {
+  PROJECT_HIGHLIGHT_LABELS,
+  toProjectHighlightSpans,
+  type ProjectHighlightExtraction,
+} from "@/lib/email-analysis/project-highlight-shared";
 
 export type HarvestEventHighlight = {
   type: EventHighlightType;
@@ -233,6 +238,7 @@ export function resolveHarvestSpans(input: {
   text: string;
   contact?: ContactHighlightExtraction | null;
   org?: OrgHighlightExtraction | null;
+  project?: ProjectHighlightExtraction | null;
   events?: HarvestEventHighlight[];
   todos?: HarvestTodoHighlight[];
   focusQuote?: string | null;
@@ -282,6 +288,31 @@ export function resolveHarvestSpans(input: {
       for (const range of findAllSubstringRanges(text, span.text)) {
         spans.push({
           group: "organization",
+          type: span.type,
+          start: range.start,
+          end: range.end,
+          title: `${label}: ${text.slice(range.start, range.end)}`,
+        });
+      }
+    }
+  }
+
+  if (input.project) {
+    for (const span of toProjectHighlightSpans(input.project)) {
+      const label = PROJECT_HIGHLIGHT_LABELS[span.type] ?? span.type;
+      if (span.start != null && span.end != null) {
+        spans.push({
+          group: "project",
+          type: span.type,
+          start: span.start,
+          end: span.end,
+          title: `${label}: ${text.slice(span.start, span.end)}`,
+        });
+        continue;
+      }
+      for (const range of findAllSubstringRanges(text, span.text)) {
+        spans.push({
+          group: "project",
           type: span.type,
           start: range.start,
           end: range.end,

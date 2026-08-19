@@ -22,6 +22,18 @@ describe("splitOrgMultiValue", () => {
     ]);
     assert.deepEqual(splitOrgMultiValue("a|b;c"), ["a", "b", "c"]);
   });
+
+  it("splits comma-separated mailboxes from harvest output", () => {
+    assert.deepEqual(
+      splitOrgMultiValue(
+        "jwilson@iccpropertymanagement.com, studiopm@iccpropertymanagement.com",
+      ),
+      [
+        "jwilson@iccpropertymanagement.com",
+        "studiopm@iccpropertymanagement.com",
+      ],
+    );
+  });
 });
 
 describe("mergeOrgMultiValues", () => {

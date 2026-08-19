@@ -19,6 +19,7 @@ import {
 import { EventExtractCostBadge } from "@/components/EventExtractCostBadge";
 import { TodoExtractCostBadge } from "@/components/TodoExtractCostBadge";
 import { OrgExtractCostBadge } from "@/components/OrgExtractCostBadge";
+import { ProjectExtractCostBadge } from "@/components/ProjectExtractCostBadge";
 import { ProcessedCostBadge } from "@/components/ProcessedCostBadge";
 import {
   ThreadHarvestSidePanel,
@@ -66,6 +67,16 @@ import {
   orgExtractSummaryFromApiRuns,
   type OrgExtractSummary,
 } from "@/lib/email-analysis/org-highlight-run-display";
+import {
+  PROJECT_HIGHLIGHT_MODELS,
+  formatProjectHighlightModelOptionLabel,
+  getProjectHighlightModelMeta,
+  type ProjectHighlightModelId,
+} from "@/lib/email-analysis/project-highlight-models";
+import {
+  projectExtractSummaryFromApiRuns,
+  type ProjectExtractSummary,
+} from "@/lib/email-analysis/project-highlight-run-display";
 import { formatCostUsd } from "@/lib/gemini/usage";
 import type {
   EmailAttachmentSummary,
@@ -111,7 +122,7 @@ type BulkProgress = {
   failed: number;
 };
 
-type ExtractKind = "contacts" | "organizations" | "events" | "todos";
+type ExtractKind = "contacts" | "organizations" | "projects" | "events" | "todos";
 
 function isSinglePassKind(kind: ExtractKind): boolean {
   return kind === "events" || kind === "todos";
@@ -277,6 +288,7 @@ function ExtractProgressBadge({
   kind: ExtractKind;
 }) {
   const isOrg = kind === "organizations";
+  const isProject = kind === "projects";
   const isEvents = kind === "events";
   const isTodos = kind === "todos";
   const tone = isOrg
@@ -285,6 +297,12 @@ function ExtractProgressBadge({
         pulse: "bg-fuchsia-500",
         fail: "bg-red-50 text-red-800 ring-red-200",
       }
+    : isProject
+      ? {
+          wrap: "bg-orange-50 text-orange-900 ring-orange-200",
+          pulse: "bg-orange-500",
+          fail: "bg-red-50 text-red-800 ring-red-200",
+        }
     : isEvents
       ? {
           wrap: "bg-sky-50 text-sky-900 ring-sky-200",
@@ -304,11 +322,13 @@ function ExtractProgressBadge({
           };
   const noun = isOrg
     ? "organization"
-    : isEvents
-      ? "event"
-      : isTodos
-        ? "to-do"
-        : "contact";
+    : isProject
+      ? "project"
+      : isEvents
+        ? "event"
+        : isTodos
+          ? "to-do"
+          : "contact";
 
   if (progress.status === "preparing") {
     return (
@@ -343,7 +363,7 @@ function ExtractProgressBadge({
   const title =
     progress.status === "failed"
       ? progress.error ??
-        `${isOrg ? "Organization" : isEvents ? "Event" : isTodos ? "To-do" : "Contact"} extraction failed on phase ${progress.pass}`
+        `${isOrg ? "Organization" : isProject ? "Project" : isEvents ? "Event" : isTodos ? "To-do" : "Contact"} extraction failed on phase ${progress.pass}`
       : countLabel
         ? `${phaseLabel}: ${countLabel}`
         : phaseLabel;
@@ -421,6 +441,14 @@ function InboxAnalysisStatusBar({
       "flex shrink-0 items-start gap-3 rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-4 py-3 text-sm text-fuchsia-950";
     pulseClass = "mt-1.5 size-2 shrink-0 animate-pulse rounded-full bg-fuchsia-500";
     detailClass = "text-xs text-fuchsia-800/90";
+  } else if (bulkExtractKind === "projects") {
+    headline = "Running project extraction on selected threads";
+    detail =
+      "All 4 passes run in series per thread. Row badges show the current phase and email index.";
+    barClass =
+      "flex shrink-0 items-start gap-3 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-950";
+    pulseClass = "mt-1.5 size-2 shrink-0 animate-pulse rounded-full bg-orange-500";
+    detailClass = "text-xs text-orange-800/90";
   } else if (bulkExtractKind === "events") {
     headline = "Running event harvest on selected threads";
     detail =
@@ -661,20 +689,24 @@ function ThreadStatusBadge({
 function ThreadExtractMetaRow({
   contactProgress,
   orgProgress,
+  projectProgress,
   eventProgress,
   todoProgress,
   contactSummary,
   orgSummary,
+  projectSummary,
   eventSummary,
   todoSummary,
   onOpenHarvest,
 }: {
   contactProgress?: ExtractProgress | null;
   orgProgress?: ExtractProgress | null;
+  projectProgress?: ExtractProgress | null;
   eventProgress?: ExtractProgress | null;
   todoProgress?: ExtractProgress | null;
   contactSummary?: ContactExtractSummary | null;
   orgSummary?: OrgExtractSummary | null;
+  projectSummary?: ProjectExtractSummary | null;
   eventSummary?: EventExtractSummary | null;
   todoSummary?: TodoExtractSummary | null;
   onOpenHarvest?: (args?: {
@@ -684,16 +716,19 @@ function ThreadExtractMetaRow({
 }) {
   const showContactBadge = !contactProgress && contactSummary;
   const showOrgBadge = !orgProgress && orgSummary;
+  const showProjectBadge = !projectProgress && projectSummary;
   const showEventBadge = !eventProgress && eventSummary;
   const showTodoBadge = !todoProgress && todoSummary;
 
   if (
     !contactProgress &&
     !orgProgress &&
+    !projectProgress &&
     !eventProgress &&
     !todoProgress &&
     !showContactBadge &&
     !showOrgBadge &&
+    !showProjectBadge &&
     !showEventBadge &&
     !showTodoBadge
   ) {
@@ -715,6 +750,9 @@ function ThreadExtractMetaRow({
       {orgProgress ? (
         <ExtractProgressBadge progress={orgProgress} kind="organizations" />
       ) : null}
+      {projectProgress ? (
+        <ExtractProgressBadge progress={projectProgress} kind="projects" />
+      ) : null}
       {eventProgress ? (
         <ExtractProgressBadge progress={eventProgress} kind="events" />
       ) : null}
@@ -730,6 +768,12 @@ function ThreadExtractMetaRow({
       {showOrgBadge ? (
         <OrgExtractCostBadge
           summary={orgSummary}
+          onOpenHarvest={onOpenHarvest}
+        />
+      ) : null}
+      {showProjectBadge ? (
+        <ProjectExtractCostBadge
+          summary={projectSummary}
           onOpenHarvest={onOpenHarvest}
         />
       ) : null}
@@ -897,6 +941,7 @@ export function EmailThreadList({
   threadProcessingDetails,
   contactExtractSummaries: contactExtractSummariesProp = {},
   orgExtractSummaries: orgExtractSummariesProp = {},
+  projectExtractSummaries: projectExtractSummariesProp = {},
   eventExtractSummaries: eventExtractSummariesProp = {},
   todoExtractSummaries: todoExtractSummariesProp = {},
   initialQueueState = EMPTY_QUEUE_STATE,
@@ -913,6 +958,7 @@ export function EmailThreadList({
   threadProcessingDetails?: Record<string, EmailProcessingStats[]>;
   contactExtractSummaries?: Record<string, ContactExtractSummary>;
   orgExtractSummaries?: Record<string, OrgExtractSummary>;
+  projectExtractSummaries?: Record<string, ProjectExtractSummary>;
   eventExtractSummaries?: Record<string, EventExtractSummary>;
   todoExtractSummaries?: Record<string, TodoExtractSummary>;
   initialQueueState?: InboxAnalysisQueueState;
@@ -923,6 +969,7 @@ export function EmailThreadList({
   const router = useRouter();
   const contactExtractMenuRef = useRef<HTMLDivElement>(null);
   const orgExtractMenuRef = useRef<HTMLDivElement>(null);
+  const projectExtractMenuRef = useRef<HTMLDivElement>(null);
   const eventExtractMenuRef = useRef<HTMLDivElement>(null);
   const todoExtractMenuRef = useRef<HTMLDivElement>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -931,6 +978,7 @@ export function EmailThreadList({
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [contactExtractMenuOpen, setContactExtractMenuOpen] = useState(false);
   const [orgExtractMenuOpen, setOrgExtractMenuOpen] = useState(false);
+  const [projectExtractMenuOpen, setProjectExtractMenuOpen] = useState(false);
   const [eventExtractMenuOpen, setEventExtractMenuOpen] = useState(false);
   const [todoExtractMenuOpen, setTodoExtractMenuOpen] = useState(false);
   const [bulkExtractKind, setBulkExtractKind] = useState<ExtractKind | null>(
@@ -939,6 +987,9 @@ export function EmailThreadList({
   const [contactExtractProgressByKey, setContactExtractProgressByKey] =
     useState<Record<string, ExtractProgress>>({});
   const [orgExtractProgressByKey, setOrgExtractProgressByKey] = useState<
+    Record<string, ExtractProgress>
+  >({});
+  const [projectExtractProgressByKey, setProjectExtractProgressByKey] = useState<
     Record<string, ExtractProgress>
   >({});
   const [eventExtractProgressByKey, setEventExtractProgressByKey] = useState<
@@ -952,6 +1003,9 @@ export function EmailThreadList({
   );
   const [orgExtractSummaries, setOrgExtractSummaries] = useState(
     orgExtractSummariesProp,
+  );
+  const [projectExtractSummaries, setProjectExtractSummaries] = useState(
+    projectExtractSummariesProp,
   );
   const [eventExtractSummaries, setEventExtractSummaries] = useState(
     eventExtractSummariesProp,
@@ -986,6 +1040,10 @@ export function EmailThreadList({
   }, [orgExtractSummariesProp]);
 
   useEffect(() => {
+    setProjectExtractSummaries(projectExtractSummariesProp);
+  }, [projectExtractSummariesProp]);
+
+  useEffect(() => {
     setEventExtractSummaries(eventExtractSummariesProp);
   }, [eventExtractSummariesProp]);
 
@@ -1007,6 +1065,7 @@ export function EmailThreadList({
     if (
       !contactExtractMenuOpen &&
       !orgExtractMenuOpen &&
+      !projectExtractMenuOpen &&
       !eventExtractMenuOpen &&
       !todoExtractMenuOpen
     )
@@ -1015,6 +1074,7 @@ export function EmailThreadList({
     function handlePointerDown(event: MouseEvent) {
       const contactRoot = contactExtractMenuRef.current;
       const orgRoot = orgExtractMenuRef.current;
+      const projectRoot = projectExtractMenuRef.current;
       const eventRoot = eventExtractMenuRef.current;
       const todoRoot = todoExtractMenuRef.current;
       if (!(event.target instanceof Node)) return;
@@ -1023,6 +1083,9 @@ export function EmailThreadList({
       }
       if (orgRoot && !orgRoot.contains(event.target)) {
         setOrgExtractMenuOpen(false);
+      }
+      if (projectRoot && !projectRoot.contains(event.target)) {
+        setProjectExtractMenuOpen(false);
       }
       if (eventRoot && !eventRoot.contains(event.target)) {
         setEventExtractMenuOpen(false);
@@ -1036,6 +1099,7 @@ export function EmailThreadList({
       if (event.key === "Escape") {
         setContactExtractMenuOpen(false);
         setOrgExtractMenuOpen(false);
+        setProjectExtractMenuOpen(false);
         setEventExtractMenuOpen(false);
         setTodoExtractMenuOpen(false);
       }
@@ -1274,11 +1338,13 @@ export function EmailThreadList({
     const setProgress =
       kind === "organizations"
         ? setOrgExtractProgressByKey
-        : kind === "events"
-          ? setEventExtractProgressByKey
-          : kind === "todos"
-            ? setTodoExtractProgressByKey
-            : setContactExtractProgressByKey;
+        : kind === "projects"
+          ? setProjectExtractProgressByKey
+          : kind === "events"
+            ? setEventExtractProgressByKey
+            : kind === "todos"
+              ? setTodoExtractProgressByKey
+              : setContactExtractProgressByKey;
     // Force a paint before the next long API await so phase badges are visible.
     flushSync(() => {
       setProgress((prev) => {
@@ -1302,11 +1368,13 @@ export function EmailThreadList({
     const base =
       kind === "organizations"
         ? "/api/analysis/extract-organizations/prepare"
-        : kind === "events"
-          ? "/api/analysis/extract-events/prepare"
-          : kind === "todos"
-            ? "/api/analysis/extract-todos/prepare"
-            : "/api/analysis/extract-contacts/prepare";
+        : kind === "projects"
+          ? "/api/analysis/extract-projects/prepare"
+          : kind === "events"
+            ? "/api/analysis/extract-events/prepare"
+            : kind === "todos"
+              ? "/api/analysis/extract-todos/prepare"
+              : "/api/analysis/extract-contacts/prepare";
     const response = await fetch(`${base}?${target.prepareQuery}`);
     const data = (await response.json()) as {
       items?: PreparedExtractItem[];
@@ -1327,11 +1395,13 @@ export function EmailThreadList({
     const endpoint =
       params.kind === "organizations"
         ? "/api/analysis/extract-organizations"
-        : params.kind === "events"
-          ? "/api/analysis/extract-events"
-          : params.kind === "todos"
-            ? "/api/analysis/extract-todos"
-            : "/api/analysis/extract-contacts";
+        : params.kind === "projects"
+          ? "/api/analysis/extract-projects"
+          : params.kind === "events"
+            ? "/api/analysis/extract-events"
+            : params.kind === "todos"
+              ? "/api/analysis/extract-todos"
+              : "/api/analysis/extract-contacts";
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1346,11 +1416,13 @@ export function EmailThreadList({
       const label =
         params.kind === "organizations"
           ? "Organization"
-          : params.kind === "events"
-            ? "Event"
-            : params.kind === "todos"
-              ? "To-do"
-              : "Contact";
+          : params.kind === "projects"
+            ? "Project"
+            : params.kind === "events"
+              ? "Event"
+              : params.kind === "todos"
+                ? "To-do"
+                : "Contact";
       throw new Error(
         data.error ?? `${label} extraction pass ${params.pass} failed.`,
       );
@@ -1416,11 +1488,13 @@ export function EmailThreadList({
     const summaryEndpoint =
       kind === "organizations"
         ? "/api/analysis/extract-organizations"
-        : kind === "events"
-          ? "/api/analysis/extract-events"
-          : kind === "todos"
-            ? "/api/analysis/extract-todos"
-            : "/api/analysis/extract-contacts";
+        : kind === "projects"
+          ? "/api/analysis/extract-projects"
+          : kind === "events"
+            ? "/api/analysis/extract-events"
+            : kind === "todos"
+              ? "/api/analysis/extract-todos"
+              : "/api/analysis/extract-contacts";
     const summaryResponse = await fetch(
       `${summaryEndpoint}?emailIds=${encodeURIComponent(summaryEmailIds.join(","))}`,
     );
@@ -1436,6 +1510,24 @@ export function EmailThreadList({
         if (summary) {
           flushSync(() => {
             setOrgExtractSummaries((prev) => {
+              const next = { ...prev };
+              for (const key of target.badgeKeys) {
+                next[key] = summary;
+              }
+              next[target.progressKey] = summary;
+              return next;
+            });
+          });
+        }
+      } else if (kind === "projects") {
+        const summary = projectExtractSummaryFromApiRuns(
+          summaryData.runs as Parameters<
+            typeof projectExtractSummaryFromApiRuns
+          >[0],
+        );
+        if (summary) {
+          flushSync(() => {
+            setProjectExtractSummaries((prev) => {
               const next = { ...prev };
               for (const key of target.badgeKeys) {
                 next[key] = summary;
@@ -1510,6 +1602,7 @@ export function EmailThreadList({
     modelId:
       | ContactHighlightModelId
       | OrgHighlightModelId
+      | ProjectHighlightModelId
       | EventHighlightModelId
       | TodoHighlightModelId,
   ) {
@@ -1517,6 +1610,8 @@ export function EmailThreadList({
       setContactExtractMenuOpen(false);
     } else if (kind === "organizations") {
       setOrgExtractMenuOpen(false);
+    } else if (kind === "projects") {
+      setProjectExtractMenuOpen(false);
     } else if (kind === "todos") {
       setTodoExtractMenuOpen(false);
     } else {
@@ -1533,12 +1628,14 @@ export function EmailThreadList({
     const modelLabel =
       kind === "organizations"
         ? getOrgHighlightModelMeta(modelId as OrgHighlightModelId).label
-        : kind === "events"
-          ? getEventHighlightModelMeta(modelId as EventHighlightModelId).label
-          : kind === "todos"
-            ? getTodoHighlightModelMeta(modelId as TodoHighlightModelId).label
-            : getContactHighlightModelMeta(modelId as ContactHighlightModelId)
-                .label;
+        : kind === "projects"
+          ? getProjectHighlightModelMeta(modelId as ProjectHighlightModelId).label
+          : kind === "events"
+            ? getEventHighlightModelMeta(modelId as EventHighlightModelId).label
+            : kind === "todos"
+              ? getTodoHighlightModelMeta(modelId as TodoHighlightModelId).label
+              : getContactHighlightModelMeta(modelId as ContactHighlightModelId)
+                  .label;
     const unitLabel =
       view === "threads"
         ? `${targets.length} thread${targets.length === 1 ? "" : "s"}`
@@ -1546,11 +1643,13 @@ export function EmailThreadList({
     const kindLabel =
       kind === "organizations"
         ? "organization extraction"
-        : kind === "events"
-          ? "event harvest"
-          : kind === "todos"
-            ? "to-do harvest"
-            : "contact extraction";
+        : kind === "projects"
+          ? "project extraction"
+          : kind === "events"
+            ? "event harvest"
+            : kind === "todos"
+              ? "to-do harvest"
+              : "contact extraction";
     const passNote = isSinglePassKind(kind)
       ? kind === "todos"
         ? "This runs one to-do harvest pass per email and uses the AI API. Asks older than 120 days are archived, not added to the open list."
@@ -1567,11 +1666,13 @@ export function EmailThreadList({
     const setProgress =
       kind === "organizations"
         ? setOrgExtractProgressByKey
-        : kind === "events"
-          ? setEventExtractProgressByKey
-          : kind === "todos"
-            ? setTodoExtractProgressByKey
-            : setContactExtractProgressByKey;
+        : kind === "projects"
+          ? setProjectExtractProgressByKey
+          : kind === "events"
+            ? setEventExtractProgressByKey
+            : kind === "todos"
+              ? setTodoExtractProgressByKey
+              : setContactExtractProgressByKey;
 
     flushSync(() => {
       setProgress((prev) => {
@@ -1593,7 +1694,7 @@ export function EmailThreadList({
           const message =
             err instanceof Error
               ? err.message
-              : `${kind === "organizations" ? "Organization" : kind === "events" ? "Event" : kind === "todos" ? "To-do" : "Contact"} extraction failed.`;
+              : `${kind === "organizations" ? "Organization" : kind === "projects" ? "Project" : kind === "events" ? "Event" : kind === "todos" ? "To-do" : "Contact"} extraction failed.`;
           flushSync(() => {
             setProgress((prev) => {
               const current = prev[target.badgeKeys[0] ?? target.progressKey];
@@ -1731,6 +1832,7 @@ export function EmailThreadList({
                   aria-haspopup="menu"
                   onClick={() => {
                     setOrgExtractMenuOpen(false);
+                    setProjectExtractMenuOpen(false);
                     setEventExtractMenuOpen(false);
                     setTodoExtractMenuOpen(false);
                     setContactExtractMenuOpen((open) => !open);
@@ -1773,6 +1875,7 @@ export function EmailThreadList({
                   aria-haspopup="menu"
                   onClick={() => {
                     setContactExtractMenuOpen(false);
+                    setProjectExtractMenuOpen(false);
                     setEventExtractMenuOpen(false);
                     setTodoExtractMenuOpen(false);
                     setOrgExtractMenuOpen((open) => !open);
@@ -1807,6 +1910,49 @@ export function EmailThreadList({
                   </div>
                 ) : null}
               </div>
+              <div ref={projectExtractMenuRef} className="relative shrink-0">
+                <button
+                  type="button"
+                  disabled={busyBulk}
+                  aria-expanded={projectExtractMenuOpen}
+                  aria-haspopup="menu"
+                  onClick={() => {
+                    setContactExtractMenuOpen(false);
+                    setOrgExtractMenuOpen(false);
+                    setEventExtractMenuOpen(false);
+                    setTodoExtractMenuOpen(false);
+                    setProjectExtractMenuOpen((open) => !open);
+                  }}
+                  className="rounded border border-orange-300 bg-orange-50 px-2 py-0.5 text-xs font-medium text-orange-900 hover:bg-orange-100 disabled:opacity-50"
+                >
+                  {bulkExtractKind === "projects"
+                    ? "Extracting…"
+                    : "Extract Projects"}
+                </button>
+                {projectExtractMenuOpen ? (
+                  <div
+                    role="menu"
+                    className="absolute left-0 z-30 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-1 shadow-lg"
+                  >
+                    <p className="px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                      Project extraction model
+                    </p>
+                    {PROJECT_HIGHLIGHT_MODELS.map((modelId) => (
+                      <button
+                        key={modelId}
+                        type="button"
+                        role="menuitem"
+                        className="block w-full rounded-md px-2 py-1.5 text-left text-xs text-slate-800 hover:bg-orange-50"
+                        onClick={() =>
+                          void runExtractionSelected("projects", modelId)
+                        }
+                      >
+                        {formatProjectHighlightModelOptionLabel(modelId)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <div ref={eventExtractMenuRef} className="relative shrink-0">
                 <button
                   type="button"
@@ -1816,6 +1962,7 @@ export function EmailThreadList({
                   onClick={() => {
                     setContactExtractMenuOpen(false);
                     setOrgExtractMenuOpen(false);
+                    setProjectExtractMenuOpen(false);
                     setTodoExtractMenuOpen(false);
                     setEventExtractMenuOpen((open) => !open);
                   }}
@@ -1858,6 +2005,7 @@ export function EmailThreadList({
                   onClick={() => {
                     setContactExtractMenuOpen(false);
                     setOrgExtractMenuOpen(false);
+                    setProjectExtractMenuOpen(false);
                     setEventExtractMenuOpen(false);
                     setTodoExtractMenuOpen((open) => !open);
                   }}
@@ -1963,10 +2111,12 @@ export function EmailThreadList({
                     </Link>
                     {(contactExtractProgressByKey[message.id] ||
                       orgExtractProgressByKey[message.id] ||
+                      projectExtractProgressByKey[message.id] ||
                       eventExtractProgressByKey[message.id] ||
                       todoExtractProgressByKey[message.id] ||
                       contactExtractSummaries[message.id] ||
                       orgExtractSummaries[message.id] ||
+                      projectExtractSummaries[message.id] ||
                       eventExtractSummaries[message.id] ||
                       todoExtractSummaries[message.id]) && (
                       <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
@@ -1995,6 +2145,23 @@ export function EmailThreadList({
                         ) : orgExtractSummaries[message.id] ? (
                           <OrgExtractCostBadge
                             summary={orgExtractSummaries[message.id]!}
+                            onOpenHarvest={() =>
+                              setHarvestPanel({
+                                threadId: message.threadId,
+                                emailIds: [message.id],
+                                focusEmailId: message.id,
+                              })
+                            }
+                          />
+                        ) : null}
+                        {projectExtractProgressByKey[message.id] ? (
+                          <ExtractProgressBadge
+                            progress={projectExtractProgressByKey[message.id]!}
+                            kind="projects"
+                          />
+                        ) : projectExtractSummaries[message.id] ? (
+                          <ProjectExtractCostBadge
+                            summary={projectExtractSummaries[message.id]!}
                             onOpenHarvest={() =>
                               setHarvestPanel({
                                 threadId: message.threadId,
@@ -2125,6 +2292,9 @@ export function EmailThreadList({
                           contactExtractProgressByKey[thread.id] ?? null
                         }
                         orgProgress={orgExtractProgressByKey[thread.id] ?? null}
+                        projectProgress={
+                          projectExtractProgressByKey[thread.id] ?? null
+                        }
                         eventProgress={
                           eventExtractProgressByKey[thread.id] ?? null
                         }
@@ -2135,6 +2305,9 @@ export function EmailThreadList({
                           contactExtractSummaries[thread.id] ?? null
                         }
                         orgSummary={orgExtractSummaries[thread.id] ?? null}
+                        projectSummary={
+                          projectExtractSummaries[thread.id] ?? null
+                        }
                         eventSummary={eventExtractSummaries[thread.id] ?? null}
                         todoSummary={todoExtractSummaries[thread.id] ?? null}
                         onOpenHarvest={(args) =>

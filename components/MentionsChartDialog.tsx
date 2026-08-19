@@ -19,7 +19,7 @@ import { fitMentionFrequencyCurve } from "@/lib/contacts/mention-curve-fit";
 
 import styles from "./MentionsChartDialog.module.css";
 
-type EntityKind = "contacts" | "organizations";
+type EntityKind = "contacts" | "organizations" | "projects";
 type FilterKind = "all" | MentionChartKind | "fingerprint";
 
 type Props = {
@@ -32,6 +32,7 @@ type Props = {
 const ENTITY_TABS: Array<{ id: EntityKind; label: string }> = [
   { id: "contacts", label: "Contacts" },
   { id: "organizations", label: "Organizations" },
+  { id: "projects", label: "Projects" },
 ];
 
 const CONTACT_FILTERS: Array<{ id: FilterKind; label: string }> = [
@@ -47,6 +48,12 @@ const ORG_FILTERS: Array<{ id: FilterKind; label: string }> = [
   { id: "email", label: "Email only" },
   { id: "website", label: "Website only" },
   { id: "phone", label: "Phone only" },
+  { id: "fingerprint", label: "Fingerprints" },
+];
+
+const PROJECT_FILTERS: Array<{ id: FilterKind; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "name", label: "Name only" },
   { id: "fingerprint", label: "Fingerprints" },
 ];
 
@@ -147,7 +154,12 @@ export function MentionsChartDialog({
   const dragOriginEnd = useRef(0);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  const kindFilters = entity === "organizations" ? ORG_FILTERS : CONTACT_FILTERS;
+  const kindFilters =
+    entity === "organizations"
+      ? ORG_FILTERS
+      : entity === "projects"
+        ? PROJECT_FILTERS
+        : CONTACT_FILTERS;
 
   const filtered = useMemo(() => {
     if (filter === "fingerprint") return fingerprintMentions;
@@ -251,7 +263,9 @@ export function MentionsChartDialog({
     const endpoint =
       entity === "organizations"
         ? "/api/organizations/mention-stats"
-        : "/api/contacts/mention-stats";
+        : entity === "projects"
+          ? "/api/projects/mention-stats"
+          : "/api/contacts/mention-stats";
     try {
       const res = await fetch(endpoint);
       const data = (await res.json()) as {
@@ -418,6 +432,10 @@ export function MentionsChartDialog({
       ? filter === "fingerprint"
         ? "One bar per organization (height = max of name / email / website / phone evidence). Scroll to zoom X · drag to pan · hover for member breakdown."
         : "Organization names, emails, websites, and phones by source-email count. Scroll to zoom X · drag to pan · hover for labels."
+      : entity === "projects"
+        ? filter === "fingerprint"
+          ? "One bar per project (height = source-email count). Scroll to zoom X · drag to pan · hover for member breakdown."
+          : "Project names, contractors, and locations by source-email count. Scroll to zoom X · drag to pan · hover for labels."
       : filter === "fingerprint"
         ? "Confirmed fingerprint links merge into one bar (height = max member mentions). Unlinked surfaces stay separate. Scroll to zoom X · drag to pan · hover for member breakdown."
         : meta?.fallback

@@ -307,6 +307,7 @@ export async function mergeContactFingerprints(
           email: cards[0]!.email,
           phone: cards[0]!.phone,
           job_title: cards[0]!.job_title,
+          raw_company: cards[0]!.raw_company ?? null,
         },
       ]),
       modelName: getContactHighlightPassConfig(resolvedModel, 4).apiModelName,

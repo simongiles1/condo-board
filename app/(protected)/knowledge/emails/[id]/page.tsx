@@ -7,6 +7,7 @@ import { notFound } from "next/navigation";
 
 import { AnalyzeEmailButton } from "@/components/AnalyzeEmailButton";
 import { EmailThreadView } from "@/components/EmailThreadView";
+import { resolveMentionUniqueBody } from "@/lib/contacts/mention-presence";
 import { getDb } from "@/lib/db";
 import { emailAttachments, emails, emailThreads } from "@/lib/db/schema";
 import { formatEmailBodyForDisplay } from "@/lib/email/format-body-display";
@@ -28,7 +29,14 @@ async function loadMessageWithAttachments(
     .from(emailAttachments)
     .where(eq(emailAttachments.emailId, message.id));
 
-  const uniqueText = (bodyTextUnique ?? message.bodyTextUnique)?.trim() || null;
+  const uniqueText = resolveMentionUniqueBody(
+    {
+      bodyText: message.bodyText,
+      bodyTextUnique: message.bodyTextUnique,
+      bodyTextStrictUnique: message.bodyTextStrictUnique,
+    },
+    bodyTextUnique,
+  );
 
   return {
     id: message.id,

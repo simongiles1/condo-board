@@ -117,7 +117,18 @@ export function orgCardMatchesFieldDenial(
   if (!fieldValueMatchesDenial(card, denial)) return false;
 
   if (denial.nameKey) {
-    return normalizeOrgNameKey(card.name) === denial.nameKey;
+    if (normalizeOrgNameKey(card.name) === denial.nameKey) return true;
+    // Identity-keyed email move: strip sparse harvest stubs keyed on that
+    // mailbox without a name (named cards on other orgs keep the address).
+    if (
+      denial.field === "email" &&
+      denial.orgKey.startsWith("email:") &&
+      !card.name?.trim() &&
+      orgIdentityKey(card) === denial.orgKey
+    ) {
+      return true;
+    }
+    return false;
   }
 
   const cardKey = orgIdentityKey(card);
@@ -178,6 +189,7 @@ export function applyOrgFieldDenialsToCards(
       (card) =>
         Boolean(
           card.name?.trim() ||
+            (card.aliases ?? []).some((alias) => alias.trim()) ||
             card.organization_role?.trim() ||
             card.email?.trim() ||
             card.phone?.trim() ||
@@ -290,4 +302,25 @@ export async function recordOrganizationFieldDenial(params: {
       createdAt: nowIso,
     },
   };
+}
+
+/** Drop a denial so a later attach/move can put this value on this org. */
+export async function deleteOrganizationFieldDenial(params: {
+  organizationId: string;
+  field: OrgDeniableField;
+  value: string;
+}): Promise<void> {
+  const organizationId = params.organizationId.trim();
+  const deniedValue = normalizeOrgDeniedValue(params.field, params.value);
+  if (!organizationId || !deniedValue) return;
+  const db = getDb();
+  await db
+    .delete(organizationFieldDenials)
+    .where(
+      and(
+        eq(organizationFieldDenials.orgKey, organizationId),
+        eq(organizationFieldDenials.field, params.field),
+        eq(organizationFieldDenials.deniedValue, deniedValue),
+      ),
+    );
 }

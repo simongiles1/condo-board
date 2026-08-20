@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import {
+  AnchoredMenuPortal,
+  useAnchoredMenuDismiss,
+} from "@/components/AnchoredMenuPortal";
 import { EntityListPagination } from "@/components/EntityListPagination";
 import {
   MergeEntityDialog,
@@ -72,36 +76,19 @@ function ProjectListSortMenu({
   value: ProjectFingerprintListSort;
   onChange: (next: ProjectFingerprintListSort) => void;
 }) {
-  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const currentLabel =
     PROJECT_LIST_SORT_OPTIONS.find((option) => option.value === value)?.label ??
     "Sort";
 
-  useEffect(() => {
-    if (!open) return;
-
-    function onPointerDown(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
+  useAnchoredMenuDismiss(open, () => setOpen(false), triggerRef, menuRef);
 
   return (
-    <div ref={rootRef} className="relative shrink-0 border-b border-slate-200 bg-slate-50">
+    <div className="shrink-0 border-b border-slate-200 bg-slate-50">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
@@ -121,12 +108,15 @@ function ProjectListSortMenu({
           <path d="M4 6l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {open ? (
-        <div
-          role="menu"
-          aria-label="Project sort options"
-          className="absolute left-0 right-0 top-full z-20 border border-slate-200 bg-white py-1 shadow-lg"
-        >
+      <AnchoredMenuPortal
+        open={open}
+        triggerRef={triggerRef}
+        menuRef={menuRef}
+        matchTriggerWidth
+        align="start"
+        className="border border-slate-200 bg-white py-1 shadow-lg"
+      >
+        <div role="menu" aria-label="Project sort options">
           {PROJECT_LIST_SORT_OPTIONS.map((option) => {
             const selected = option.value === value;
             return (
@@ -166,7 +156,7 @@ function ProjectListSortMenu({
             );
           })}
         </div>
-      ) : null}
+      </AnchoredMenuPortal>
     </div>
   );
 }
@@ -224,6 +214,27 @@ function FilterIcon({ className }: { className?: string }) {
   );
 }
 
+function LegendIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.75}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M4 7h16M4 12h10M4 17h6"
+      />
+      <circle cx="18" cy="12" r="2.25" fill="currentColor" stroke="none" />
+      <circle cx="14" cy="17" r="2.25" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 const PRESENCE_OPTIONS: Array<{ value: PresenceFilter; label: string }> = [
   { value: "any", label: "Any" },
   { value: "set", label: "Has value" },
@@ -274,34 +285,17 @@ function ProjectListFilterMenu({
   phases: string[];
   onChange: (next: ProjectListFilters) => void;
 }) {
-  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const active = hasActiveProjectListFilters(filters);
 
-  useEffect(() => {
-    if (!open) return;
-
-    function onPointerDown(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
+  useAnchoredMenuDismiss(open, () => setOpen(false), triggerRef, menuRef);
 
   return (
-    <div ref={rootRef} className="relative shrink-0">
+    <div className="shrink-0">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         title="Filter projects"
@@ -322,128 +316,216 @@ function ProjectListFilterMenu({
           />
         ) : null}
       </button>
-      {open ? (
-        <div
-          role="menu"
-          aria-label="Project filters"
-          className="absolute right-0 top-full z-20 w-64 border border-slate-200 bg-white px-3 py-2 shadow-lg"
-        >
-          <div className="space-y-2">
-            <FilterSelect
-              id="project-scope-filter"
-              label="Scope"
-              value={filters.scope}
-              onChange={(value) =>
-                onChange({
-                  ...filters,
-                  scope: value === "all" ? "all" : (value as ProjectScope),
-                })
-              }
+      <AnchoredMenuPortal
+        open={open}
+        triggerRef={triggerRef}
+        menuRef={menuRef}
+        width={256}
+        align="end"
+        className="border border-slate-200 bg-white px-3 py-2 shadow-lg"
+      >
+        <div role="menu" aria-label="Project filters" className="space-y-2">
+          <FilterSelect
+            id="project-scope-filter"
+            label="Scope"
+            value={filters.scope}
+            onChange={(value) =>
+              onChange({
+                ...filters,
+                scope: value === "all" ? "all" : (value as ProjectScope),
+              })
+            }
+          >
+            <option value="all">All scopes</option>
+            {PROJECT_SCOPES.map((scope) => (
+              <option key={scope} value={scope}>
+                {PROJECT_SCOPE_LABELS[scope]}
+              </option>
+            ))}
+          </FilterSelect>
+          <FilterSelect
+            id="project-completeness-filter"
+            label="Metadata"
+            value={filters.completeness}
+            onChange={(value) =>
+              onChange({
+                ...filters,
+                completeness: value as ProjectListFilters["completeness"],
+              })
+            }
+          >
+            <option value="all">All</option>
+            <option value="incomplete">Incomplete</option>
+            <option value="complete">Complete</option>
+          </FilterSelect>
+          <FilterSelect
+            id="project-year-filter"
+            label="Year"
+            value={filters.year}
+            onChange={(value) => onChange({ ...filters, year: value })}
+          >
+            <option value="all">All years</option>
+            <option value="missing">Missing year</option>
+            {years.map((year) => (
+              <option key={year} value={year}>
+                {year}
+              </option>
+            ))}
+          </FilterSelect>
+          <FilterSelect
+            id="project-phase-filter"
+            label="Phase"
+            value={filters.phase}
+            onChange={(value) => onChange({ ...filters, phase: value })}
+          >
+            <option value="all">All phases</option>
+            <option value="missing">Missing phase</option>
+            {phases.map((phase) => (
+              <option key={phase} value={phase}>
+                {phase}
+              </option>
+            ))}
+          </FilterSelect>
+          <FilterSelect
+            id="project-contractor-filter"
+            label="Contractor"
+            value={filters.contractor}
+            onChange={(value) =>
+              onChange({ ...filters, contractor: value as PresenceFilter })
+            }
+          >
+            {PRESENCE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </FilterSelect>
+          <FilterSelect
+            id="project-location-filter"
+            label="Location"
+            value={filters.location}
+            onChange={(value) =>
+              onChange({ ...filters, location: value as PresenceFilter })
+            }
+          >
+            {PRESENCE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </FilterSelect>
+          <FilterSelect
+            id="project-equipment-filter"
+            label="Equipment"
+            value={filters.equipment}
+            onChange={(value) =>
+              onChange({ ...filters, equipment: value as PresenceFilter })
+            }
+          >
+            {PRESENCE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </FilterSelect>
+          {active ? (
+            <button
+              type="button"
+              onClick={() => onChange(EMPTY_PROJECT_LIST_FILTERS)}
+              className="w-full rounded px-2 py-1 text-xs font-medium text-orange-800 hover:bg-orange-50"
             >
-              <option value="all">All scopes</option>
+              Clear filters
+            </button>
+          ) : null}
+        </div>
+      </AnchoredMenuPortal>
+    </div>
+  );
+}
+
+function ProjectBadgeLegendSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+        {title}
+      </p>
+      <div className="mt-1.5 flex flex-wrap gap-1">{children}</div>
+    </div>
+  );
+}
+
+function ProjectListBadgeLegendMenu({
+  years,
+  phases,
+}: {
+  years: string[];
+  phases: string[];
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+
+  useAnchoredMenuDismiss(open, () => setOpen(false), triggerRef, menuRef);
+
+  return (
+    <div className="shrink-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        title="Badge legend"
+        aria-label="Badge legend"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className={
+          open
+            ? "rounded p-1.5 text-orange-700 bg-orange-50"
+            : "rounded p-1.5 text-slate-500 hover:bg-orange-50 hover:text-orange-700"
+        }
+      >
+        <LegendIcon className="h-4 w-4" />
+      </button>
+      <AnchoredMenuPortal
+        open={open}
+        triggerRef={triggerRef}
+        menuRef={menuRef}
+        width={288}
+        align="end"
+        className="border border-slate-200 bg-white px-3 py-2 shadow-lg"
+      >
+        <div role="menu" aria-label="Project badge legend">
+          <p className="text-xs font-medium text-slate-800">Badge legend</p>
+          <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+            List rows use color to group scope, phase, and year.
+          </p>
+          <div className="mt-3 max-h-64 space-y-3 overflow-y-auto pr-0.5">
+            <ProjectBadgeLegendSection title="Scope">
               {PROJECT_SCOPES.map((scope) => (
-                <option key={scope} value={scope}>
-                  {PROJECT_SCOPE_LABELS[scope]}
-                </option>
+                <ProjectScopeBadge key={scope} scope={scope} />
               ))}
-            </FilterSelect>
-            <FilterSelect
-              id="project-completeness-filter"
-              label="Metadata"
-              value={filters.completeness}
-              onChange={(value) =>
-                onChange({
-                  ...filters,
-                  completeness: value as ProjectListFilters["completeness"],
-                })
-              }
-            >
-              <option value="all">All</option>
-              <option value="incomplete">Incomplete</option>
-              <option value="complete">Complete</option>
-            </FilterSelect>
-            <FilterSelect
-              id="project-year-filter"
-              label="Year"
-              value={filters.year}
-              onChange={(value) => onChange({ ...filters, year: value })}
-            >
-              <option value="all">All years</option>
-              <option value="missing">Missing year</option>
-              {years.map((year) => (
-                <option key={year} value={year}>
-                  {year}
-                </option>
-              ))}
-            </FilterSelect>
-            <FilterSelect
-              id="project-phase-filter"
-              label="Phase"
-              value={filters.phase}
-              onChange={(value) => onChange({ ...filters, phase: value })}
-            >
-              <option value="all">All phases</option>
-              <option value="missing">Missing phase</option>
+            </ProjectBadgeLegendSection>
+            <ProjectBadgeLegendSection title="Phase">
+              <ProjectPhaseBadge phase={null} />
               {phases.map((phase) => (
-                <option key={phase} value={phase}>
-                  {phase}
-                </option>
+                <ProjectPhaseBadge key={phase} phase={phase} />
               ))}
-            </FilterSelect>
-            <FilterSelect
-              id="project-contractor-filter"
-              label="Contractor"
-              value={filters.contractor}
-              onChange={(value) =>
-                onChange({ ...filters, contractor: value as PresenceFilter })
-              }
-            >
-              {PRESENCE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </FilterSelect>
-            <FilterSelect
-              id="project-location-filter"
-              label="Location"
-              value={filters.location}
-              onChange={(value) =>
-                onChange({ ...filters, location: value as PresenceFilter })
-              }
-            >
-              {PRESENCE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </FilterSelect>
-            <FilterSelect
-              id="project-equipment-filter"
-              label="Equipment"
-              value={filters.equipment}
-              onChange={(value) =>
-                onChange({ ...filters, equipment: value as PresenceFilter })
-              }
-            >
-              {PRESENCE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </FilterSelect>
-            {active ? (
-              <button
-                type="button"
-                onClick={() => onChange(EMPTY_PROJECT_LIST_FILTERS)}
-                className="w-full rounded px-2 py-1 text-xs font-medium text-orange-800 hover:bg-orange-50"
-              >
-                Clear filters
-              </button>
-            ) : null}
+            </ProjectBadgeLegendSection>
+            <ProjectBadgeLegendSection title="Year">
+              {years.length > 0 ? (
+                years.map((year) => <ProjectYearBadge key={year} year={year} />)
+              ) : (
+                <span className="text-[11px] text-slate-400">No years yet</span>
+              )}
+            </ProjectBadgeLegendSection>
           </div>
         </div>
-      ) : null}
+      </AnchoredMenuPortal>
     </div>
   );
 }
@@ -1237,6 +1319,10 @@ export function ProjectsRegistryClient({
                   years={filterOptions.years}
                   phases={filterOptions.phases}
                   onChange={changeListFilters}
+                />
+                <ProjectListBadgeLegendMenu
+                  years={filterOptions.years}
+                  phases={filterOptions.phases}
                 />
                 <button
                   type="button"

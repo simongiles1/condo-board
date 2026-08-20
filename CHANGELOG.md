@@ -14,7 +14,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Projects list filter popover** — Project filters open in a dropdown from the
   toolbar filter icon (same interaction model as sort) instead of expanding an
-  inline panel that steals vertical space from the list.
+  inline panel that steals vertical space from the list. Menus portal to
+  `document.body` with fixed positioning so they are not clipped by the
+  scrollable list column.
+
+- **Projects list badge legend** — A legend button beside the filter control
+  opens a popover that explains scope, phase, and year badge colors and lists
+  the values seen in the current registry.
 
 ### Added
 

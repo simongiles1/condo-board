@@ -6,7 +6,95 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Business plan grounded in this building** — The super-admin Business
+  Plan still sells the multi-building thesis, but ROI dollars now come
+  from TSCC 2517’s latest operating-budget GL (same source as Budget &
+  Financials). Cleaning and security show real spend with $0 hard
+  savings; PM is 10–20% of actual management fees; equipment +
+  preventative stay inside 15–35% of repairs/HVAC/elevator spend;
+  reserve-study value stays consulting dollars, not a cut to the
+  contribution. The size slider defaults to 333 units and scales from
+  this building, not a generic 250-unit memo.
+
+- **Budget section plots** — Clicking a category header (Administration,
+  Utilities, …) plots the sum of every GL line in that section. Works on
+  the Plots list and the Line items table; the detail panel titles the
+  chart with the section name and the line-item count.
+
+- **Budget line-item linearity** — The Line items table has a **Fit**
+  column between the account name and the first fiscal year. It is
+  `1 − RMSE / mean(|amount|)` of a straight-line fit: how tightly the
+  plotted points hug a line, as a share of the typical dollar amount.
+  Budgeted and actual are scored separately and the worse one is shown.
+  100% is a perfect line, including a nearly-flat fee; the cell is blank
+  below three years. Teal / amber / rose mark high, moderate, and poor
+  fits. (R² is not used — it treats a flat $8k levy as “noisy” and a
+  rising staircase as “linear.”)
+
+- **Building budget page** — Budget & Financials lists emailed TSCC 2517
+  operating-budget packages by fiscal year. Click a file to preview it. Parsed
+  PDF tables populate GL line items with year-over-year charts (each account
+  and revenue vs expenditures) plus a pivot table. Later packages supply
+  prior-year actuals from their projected column.
+
+### Changed
+
+- **Business plan formulas** — Rate × spend equations on ROI and Budget
+  impact are large enough to read. The percentage is an “assumption”
+  chip (the Conservative / Full potential toggle) with a short note on
+  where that rate comes from in the value memo and what justifies it.
+
+- **Business plan number provenance** — ROI model and Budget impact now
+  show the arithmetic for every figure (rate × this building’s GL spend
+  × unit scale) plus a short note on which books and which assumption
+  produced it. The formulas stay visible; only the GL line list and
+  operating story remain behind the category toggle.
+
+- **Budget document badges** — Documents tab uses a PDF wordmark icon and
+  an Excel X icon. Spreadsheets were previously tagged as Word because the
+  Excel MIME type contains “document.” Parsed files show **extracted**; the
+  highest-ranked file for that year shows **primary**.
+
+- **Budget line-item detail** — Clicking a Line items row opens a chart
+  panel that pushes the table left. Clicking another row updates the panel
+  in one click. The close control on the panel’s top-left restores the
+  full-width table.
+
+- **Budget & financials tabs** — Plots, documents, and line items are now
+  separate tabs instead of one long scroll. Plots is the default view.
+  Heading and tabs stay fixed; only the tab body scrolls. Line items uses
+  a separate header row and a scrolling body so the scrollbar does not
+  sit on the header; the name column stays pinned when scrolling
+  sideways. Plots shows an all-items year-over-year chart on top; click a
+  GL line on the right to populate the budgeted vs actual chart on the
+  left.
+
+- **Project minting gate** — Entities → Projects no longer treats contractor-only
+  fingerprints as projects. A card must have a work-name that is not the
+  contractor and not an organization identity. Display titles no longer fall
+  back to contractor or location. Pass 4 now applies a thread-level boundary
+  test (multi-step, non-routine, discrete lifecycle) so vendor names, complaint
+  threads with no named job, and missed service calls stay out. Source-email
+  evidence lists only messages whose pass-3 card matches that identity or whose
+  body names the work, and hides signature stubs. Existing junk cards disappear
+  on the next project-list rebuild; named-but-routine leftovers still need a
+  pass-4 re-extract.
+
+### Added
+
+- **Project scope** — `project_entities.scope` (`building`, `multi_unit`,
+  `unit`, `unknown`) is extracted with each fingerprint and shown as a filter
+  on Entities → Projects. When the model omits it, scope is derived from
+  location (named units vs building common elements).
+
 ### Fixed
+
+- **Project “source emails” panel crashed** — Clicking the source-email count
+  hit an in-memory project list built before that index existed and showed
+  “Could not load evidence.” A stale cache is now rebuilt, and the lookup
+  no longer throws.
 
 - **Page switches taking 30+ seconds** — Navigating no longer rebuilds every
   organization and project fingerprint (all merge JSON plus pass-3 email
@@ -20,6 +108,22 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cleared by deleting `.next` and restarting the dev server.
 
 ### Added
+
+- **Sidebar click loading overlay** — Clicking a destination in the left nav
+  immediately blurs the page content and shows a spinner until the new page
+  is ready, so a slow switch still feels like it registered.
+
+- **Project field evidence** — Click a project name, alias, year, phase,
+  contractor, location, or equipment to open emails where that value was
+  extracted. Click **N source emails** to list every message attributed to
+  that project card (works when Name is empty and the title is a contractor).
+  Expand a row to read the message with project fields highlighted.
+
+- **Business Plan (super admin)** — System Admin sidebar includes a Business
+  Plan page built from `.doc/business-ase-and-value-proposition.md`. Hero
+  savings figures, conservative vs full-potential scenarios, a unit/price
+  scaler for ROI, expandable budget categories, and a network-effects view
+  replace a raw markdown dump.
 
 - **Organization field evidence + move to contacts** — Click an organization
   name, alias, email, phone, or website to open a side panel of the emails

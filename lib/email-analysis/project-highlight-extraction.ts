@@ -1,6 +1,7 @@
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
 import { generateEmailExtraction } from "@/lib/gemini/client";
 import { estimateCostUsd } from "@/lib/gemini/usage";
+import { loadOrganizationIdentityNameKeys } from "@/lib/projects/org-identity-keys";
 import {
   getProjectHighlightModelMeta,
   getProjectHighlightPassConfig,
@@ -21,6 +22,7 @@ import {
   coalesceProjectEntityCards,
   diffProjectHighlightExtractions,
   emptyProjectHighlightExtraction,
+  filterMintedProjectCards,
   mergeProjectHighlightExtractions,
   parseProjectFingerprintJson,
   parseProjectHighlightJson,
@@ -265,8 +267,11 @@ export async function extractProjectFingerprints(
   });
 
   const parsed = parseProjectFingerprintJson(llm.text);
+  const orgNameKeys = await loadOrganizationIdentityNameKeys().catch(
+    () => new Set<string>(),
+  );
   return {
-    entityCards: parsed.entity_cards,
+    entityCards: filterMintedProjectCards(parsed.entity_cards, orgNameKeys),
     modelName: llm.modelName,
     usage: llm.usage,
     costUsd: llm.costUsd,
@@ -293,18 +298,25 @@ export async function mergeProjectFingerprints(
   }
 
   if (cards.length === 1) {
+    const orgNameKeys = await loadOrganizationIdentityNameKeys().catch(
+      () => new Set<string>(),
+    );
     return {
-      entityCards: coalesceProjectEntityCards([
-        {
-          name: cards[0]!.name,
-          year_hint: cards[0]!.year_hint,
-          phase: cards[0]!.phase,
-          contractor: cards[0]!.contractor,
-          location: cards[0]!.location,
-          equipment_mentions: cards[0]!.equipment_mentions,
-          aliases: cards[0]!.aliases,
-        },
-      ]),
+      entityCards: coalesceProjectEntityCards(
+        [
+          {
+            name: cards[0]!.name,
+            year_hint: cards[0]!.year_hint,
+            phase: cards[0]!.phase,
+            contractor: cards[0]!.contractor,
+            location: cards[0]!.location,
+            equipment_mentions: cards[0]!.equipment_mentions,
+            scope: cards[0]!.scope,
+            aliases: cards[0]!.aliases,
+          },
+        ],
+        orgNameKeys,
+      ),
       modelName: getProjectHighlightPassConfig(resolvedModel, 4).apiModelName,
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       costUsd: 0,
@@ -320,8 +332,11 @@ export async function mergeProjectFingerprints(
   });
 
   const parsed = parseProjectFingerprintJson(llm.text);
+  const orgNameKeys = await loadOrganizationIdentityNameKeys().catch(
+    () => new Set<string>(),
+  );
   return {
-    entityCards: coalesceProjectEntityCards(parsed.entity_cards),
+    entityCards: coalesceProjectEntityCards(parsed.entity_cards, orgNameKeys),
     modelName: llm.modelName,
     usage: llm.usage,
     costUsd: llm.costUsd,

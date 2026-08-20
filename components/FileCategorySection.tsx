@@ -33,7 +33,7 @@ function ExternalLinkIcon() {
 }
 
 function FileRow({ file }: { file: CategorizedFile }) {
-  const kind = attachmentKind(file.mimeType);
+  const kind = attachmentKind(file.mimeType, file.filename);
   const sizeLabel = formatAttachmentSize(file.sizeBytes);
   const emailHref = file.threadId ? `/knowledge/emails/${file.threadId}` : null;
 

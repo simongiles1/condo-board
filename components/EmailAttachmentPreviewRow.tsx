@@ -29,7 +29,7 @@ export function EmailAttachmentPreviewRow({ attachments }: Props) {
         </p>
         <ul className="flex flex-wrap gap-2">
           {attachments.map((attachment) => {
-            const kind = attachmentKind(attachment.mimeType);
+            const kind = attachmentKind(attachment.mimeType, attachment.filename);
             const sizeLabel = formatAttachmentSize(attachment.sizeBytes);
             const meta = [attachmentKindLabel(kind), sizeLabel]
               .filter(Boolean)

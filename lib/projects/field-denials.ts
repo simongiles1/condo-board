@@ -8,6 +8,7 @@ import { getDb } from "@/lib/db";
 import { projectFieldDenials } from "@/lib/db/schema";
 import {
   projectIdentityKey,
+  cardPassesNameMintingGate,
   type ProjectEntityCard,
 } from "@/lib/email-analysis/project-highlight-shared";
 import { resolveProjectSurvivorKey } from "@/lib/projects/manual-merge";
@@ -165,17 +166,7 @@ export function applyProjectFieldDenialsToCards(
   if (denials.length === 0) return cards;
   return cards
     .map((card) => stripDeniedFieldsFromProjectCard(card, denials, mergeMap))
-    .filter(
-      (card) =>
-        Boolean(
-          card.name?.trim() ||
-            card.year_hint?.trim() ||
-            card.phase?.trim() ||
-            card.contractor?.trim() ||
-            card.location?.trim() ||
-            card.equipment_mentions?.trim(),
-        ),
-    );
+    .filter((card) => cardPassesNameMintingGate(card));
 }
 
 export async function loadProjectFieldDenials(): Promise<ProjectFieldDenial[]> {

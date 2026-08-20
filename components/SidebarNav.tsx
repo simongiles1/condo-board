@@ -13,6 +13,7 @@ import {
 } from "@/components/nav-icons";
 import { hasMinRole, type UserRole } from "@/lib/auth/roles";
 import {
+  filterSubNavTabs,
   isSidebarSectionActive,
   isSubNavTabActive,
   matchSection,
@@ -151,6 +152,7 @@ export function SidebarNav({
       >
         <SectionList
           sections={primary}
+          role={role}
           collapsed={collapsed}
           pathname={pathname}
           query={searchParams}
@@ -178,6 +180,7 @@ export function SidebarNav({
             </div>
             <SectionList
               sections={admin}
+              role={role}
               collapsed={collapsed}
               pathname={pathname}
               query={searchParams}
@@ -196,6 +199,7 @@ export function SidebarNav({
       {showDrawer && drawerSection ? (
         <HoverDrawer
           section={drawerSection}
+          role={role}
           pathname={pathname}
           query={searchParams}
           onEnter={() => openDrawer(drawerSection.id)}
@@ -211,6 +215,7 @@ type NavSectionIdOrNull = SidebarSection["id"] | null;
 
 function SectionList({
   sections,
+  role,
   collapsed,
   pathname,
   query,
@@ -223,6 +228,7 @@ function SectionList({
   admin = false,
 }: {
   sections: SidebarSection[];
+  role: UserRole | null;
   collapsed: boolean;
   pathname: string;
   query: { get(name: string): string | null };
@@ -320,7 +326,7 @@ function SectionList({
             </button>
             {expanded && section.children ? (
               <TreeLinks
-                items={section.children}
+                items={filterSubNavTabs(section.children, role)}
                 pathname={pathname}
                 query={query}
                 onNavigate={onNavigate}
@@ -392,6 +398,7 @@ function TreeLinks({
 
 function HoverDrawer({
   section,
+  role,
   pathname,
   query,
   onEnter,
@@ -399,6 +406,7 @@ function HoverDrawer({
   onNavigate,
 }: {
   section: SidebarSection;
+  role: UserRole | null;
   pathname: string;
   query: { get(name: string): string | null };
   onEnter: () => void;
@@ -434,7 +442,7 @@ function HoverDrawer({
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
         {section.children ? (
           <DrawerLinks
-            items={section.children}
+            items={filterSubNavTabs(section.children, role)}
             pathname={pathname}
             query={query}
             onNavigate={onNavigate}

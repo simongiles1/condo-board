@@ -288,6 +288,13 @@
       "when": 1785600000000,
       "tag": "0040_organization_field_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1785700000000,
+      "tag": "0041_project_scope",
+      "breakpoints": true
     }
   ]
 }

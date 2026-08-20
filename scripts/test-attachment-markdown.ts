@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { describe, it } from "node:test";
 
+import { attachmentKind } from "../lib/email/attachment-display";
 import {
   classifySizeClass,
   isConvertibleMime,
@@ -131,6 +132,31 @@ describe("canMarkExtractionParsed", () => {
     assert.equal(
       canMarkExtractionParsed({ ...ready, parseStatus: "parsed" }),
       false,
+    );
+  });
+});
+
+describe("attachmentKind", () => {
+  it("classifies OOXML Excel as a sheet, not a Word document", () => {
+    assert.equal(
+      attachmentKind(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ),
+      "sheet",
+    );
+    assert.equal(
+      attachmentKind("application/octet-stream", "budget.xlsx"),
+      "sheet",
+    );
+  });
+
+  it("still classifies PDFs and Word docs", () => {
+    assert.equal(attachmentKind("application/pdf"), "pdf");
+    assert.equal(
+      attachmentKind(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ),
+      "doc",
     );
   });
 });

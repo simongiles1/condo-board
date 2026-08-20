@@ -27,6 +27,7 @@ function project(
     contractor: null,
     location: null,
     equipment_mentions: null,
+    scope: null,
     aliases: [],
     sourceMergeCount: 0,
     sourceEmailCount: 0,

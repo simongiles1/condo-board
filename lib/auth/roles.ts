@@ -36,6 +36,7 @@ export const SUPER_ADMIN_ONLY_PREFIXES = [
  * Covers bulk analysis, concept editing, and internal dev notes.
  */
 export const ADMIN_ONLY_PREFIXES = [
+  "/insights/business-plan",
   "/admin/concepts",
   "/admin/analysis",
   "/admin/notes",

@@ -7,12 +7,18 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  cardPassesNameMintingGate,
   coalesceProjectEntityCards,
+  deriveProjectScopeFromLocation,
   emptyProjectHighlightExtraction,
+  isOrgStyleNameMatch,
   isSpecificProjectLocation,
   parseProjectEntityCard,
   parseProjectHighlightExtraction,
+  parseProjectScope,
+  projectCardDisplayName,
   projectIdentityKey,
+  projectNameCollidesWithContractor,
   uniqueProjectHarvestCount,
   type ProjectEntityCard,
 } from "../lib/email-analysis/project-highlight-shared";
@@ -28,6 +34,7 @@ function card(
     contractor: partial.contractor ?? null,
     location: partial.location ?? null,
     equipment_mentions: partial.equipment_mentions ?? null,
+    scope: partial.scope ?? null,
     aliases: partial.aliases ?? [],
   };
 }
@@ -186,5 +193,138 @@ describe("uniqueProjectHarvestCount", () => {
       locations: ["building"],
     };
     assert.equal(uniqueProjectHarvestCount([], extraction), 1);
+  });
+
+  it("does not count a project_name that is the contractor", () => {
+    const extraction = {
+      ...emptyProjectHighlightExtraction(),
+      project_names: ["Applied System Technology"],
+      contractors: ["Applied System Technology"],
+    };
+    assert.equal(uniqueProjectHarvestCount([], extraction), 0);
+  });
+});
+
+describe("project minting gate", () => {
+  it("drops contractor-only cards at parse", () => {
+    assert.equal(
+      parseProjectEntityCard({
+        name: null,
+        contractor: "Applied System Technology",
+        year_hint: "2026",
+      }),
+      null,
+    );
+  });
+
+  it("drops a card whose name is the contractor", () => {
+    assert.equal(
+      parseProjectEntityCard({
+        name: "Applied System Technology",
+        contractor: "Applied System Technology",
+      }),
+      null,
+    );
+  });
+
+  it("drops a shortened contractor used as the name", () => {
+    assert.equal(
+      projectNameCollidesWithContractor(
+        "Applied",
+        "Applied System Technology",
+      ),
+      true,
+    );
+    assert.equal(
+      cardPassesNameMintingGate(
+        card({
+          name: "Applied",
+          contractor: "Applied System Technology",
+        }),
+      ),
+      false,
+    );
+  });
+
+  it("keeps a real work-name with a contractor", () => {
+    const parsed = parseProjectEntityCard({
+      name: "riser replacement",
+      contractor: "Applied System Technology",
+      year_hint: "2026",
+      location: "units 204 and 304",
+    });
+    assert.ok(parsed);
+    assert.equal(parsed?.name, "riser replacement");
+    assert.equal(parsed?.scope, "multi_unit");
+  });
+
+  it("never displays contractor or location as the title", () => {
+    assert.equal(
+      projectCardDisplayName(
+        card({
+          name: null,
+          contractor: "Applied System Technology",
+          location: "P1",
+        }),
+      ),
+      "Unknown project",
+    );
+  });
+
+  it("drops unnamed cards in coalesce", () => {
+    const coalesced = coalesceProjectEntityCards([
+      card({
+        name: null,
+        contractor: "Applied System Technology",
+        year_hint: "2026",
+      }),
+      card({ name: "Window cleaning", year_hint: "2026" }),
+    ]);
+    assert.equal(coalesced.length, 1);
+    assert.equal(coalesced[0]!.name, "Window cleaning");
+  });
+
+  it("drops cards whose name matches an org identity", () => {
+    const orgKeys = new Set(["applied system technology"]);
+    assert.equal(
+      cardPassesNameMintingGate(
+        card({ name: "Applied System Technology", contractor: null }),
+        orgKeys,
+      ),
+      false,
+    );
+    assert.equal(
+      cardPassesNameMintingGate(
+        card({ name: "riser replacement", contractor: null }),
+        orgKeys,
+      ),
+      true,
+    );
+  });
+
+  it("does not treat short tokens as org prefix matches", () => {
+    assert.equal(isOrgStyleNameMatch("icc", "icc property management"), false);
+    assert.equal(
+      isOrgStyleNameMatch("applied", "applied system technology"),
+      true,
+    );
+  });
+});
+
+describe("project scope", () => {
+  it("parses aliases like building_wide", () => {
+    assert.equal(parseProjectScope("building_wide"), "building");
+    assert.equal(parseProjectScope("unit_specific"), "unit");
+    assert.equal(parseProjectScope("nope"), null);
+  });
+
+  it("derives unit vs multi_unit vs building from location", () => {
+    assert.equal(deriveProjectScopeFromLocation("unit 402"), "unit");
+    assert.equal(
+      deriveProjectScopeFromLocation("units 204 and 304"),
+      "multi_unit",
+    );
+    assert.equal(deriveProjectScopeFromLocation("roof"), "building");
+    assert.equal(deriveProjectScopeFromLocation(null), null);
   });
 });

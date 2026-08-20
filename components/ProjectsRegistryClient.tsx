@@ -9,6 +9,7 @@ import {
   type MergeEntityOption,
 } from "@/components/MergeEntityDialog";
 import { ProjectDuplicatesPanel } from "@/components/ProjectDuplicatesPanel";
+import { ProjectEvidenceSidePanel } from "@/components/ProjectEvidenceSidePanel";
 import type {
   ProjectDuplicateGroup,
   ProjectDuplicateGroupMember,
@@ -17,7 +18,14 @@ import type {
   ProjectFingerprintListStats,
   ProjectFingerprintSummary,
 } from "@/lib/projects/fingerprint-list";
-import type { ProjectDeniableField } from "@/lib/projects/field-denials";
+import {
+  PROJECT_SCOPE_LABELS,
+  PROJECT_SCOPES,
+  preferProjectScope,
+  resolveProjectScope,
+  type ProjectScope,
+} from "@/lib/email-analysis/project-highlight-shared";
+import type { ProjectEvidenceField } from "@/lib/projects/registry-evidence-shared";
 import {
   sortProjectFingerprintSummaries,
   type ProjectFingerprintListSort,
@@ -198,18 +206,32 @@ function FieldRow({
   value,
   disabled,
   onSever,
+  onEvidence,
 }: {
   label: string;
   value: string | null;
   disabled?: boolean;
   onSever?: () => void;
+  onEvidence?: () => void;
 }) {
   const hasValue = Boolean(value?.trim());
   return (
     <div className="grid grid-cols-[7rem_1fr_auto] items-start gap-2 text-sm">
       <dt className="text-slate-500">{label}</dt>
       <dd className="min-w-0 break-words text-slate-900">
-        {hasValue ? value : <span className="text-slate-400">—</span>}
+        {hasValue && onEvidence ? (
+          <button
+            type="button"
+            onClick={onEvidence}
+            className="text-left text-orange-800 underline-offset-2 hover:underline"
+          >
+            {value}
+          </button>
+        ) : hasValue ? (
+          value
+        ) : (
+          <span className="text-slate-400">—</span>
+        )}
       </dd>
       {hasValue && onSever ? (
         <button
@@ -234,11 +256,13 @@ function MultiValueField({
   values,
   disabled,
   onSever,
+  onEvidence,
 }: {
   label: string;
   values: string[];
   disabled?: boolean;
   onSever: (value: string) => void;
+  onEvidence?: (value: string) => void;
 }) {
   if (values.length === 0) {
     return <FieldRow label={label} value={null} disabled={disabled} />;
@@ -253,7 +277,17 @@ function MultiValueField({
               key={`${label}:${value}`}
               className="grid grid-cols-[1fr_auto] items-start gap-2"
             >
-              <span className="break-words text-slate-900">{value}</span>
+              {onEvidence ? (
+                <button
+                  type="button"
+                  onClick={() => onEvidence(value)}
+                  className="min-w-0 break-words text-left text-orange-800 underline-offset-2 hover:underline"
+                >
+                  {value}
+                </button>
+              ) : (
+                <span className="break-words text-slate-900">{value}</span>
+              )}
               <button
                 type="button"
                 title={`Stop associating this ${label.toLowerCase()}`}
@@ -274,6 +308,8 @@ function MultiValueField({
 
 function projectSubtitle(org: ProjectFingerprintSummary): string {
   const parts: string[] = [];
+  const scope = resolveProjectScope(org);
+  if (scope) parts.push(PROJECT_SCOPE_LABELS[scope]);
   if (org.year_hint?.trim()) parts.push(org.year_hint.trim());
   if (org.phase?.trim()) parts.push(org.phase.trim());
   const contractors = splitProjectMultiValue(org.contractor);
@@ -330,6 +366,10 @@ function foldProjectSummariesLocally(
       equipment_mentions: mergeProjectMultiValues(
         folded.equipment_mentions,
         source.equipment_mentions,
+      ),
+      scope: preferProjectScope(
+        resolveProjectScope(folded),
+        resolveProjectScope(source),
       ),
       displayName: foldedNames.name?.trim() || folded.displayName,
       sourceMergeCount: folded.sourceMergeCount + source.sourceMergeCount,
@@ -449,7 +489,14 @@ export function ProjectsRegistryClient({
   const [checkedProjectIds, setCheckedProjectIds] = useState<Set<string>>(new Set());
   const [pendingSever, setPendingSever] = useState<PendingSever | null>(null);
   const [severError, setSeverError] = useState<string | null>(null);
+  const [evidenceTarget, setEvidenceTarget] = useState<{
+    projectId: string;
+    projectName: string;
+    field: ProjectEvidenceField;
+    value: string;
+  } | null>(null);
   const [projectSort, setProjectSort] = useState<ProjectFingerprintListSort>("mentions-desc");
+  const [scopeFilter, setScopeFilter] = useState<ProjectScope | "all">("all");
   const [tab, setTab] = useState<"projects" | "duplicates">(
     "projects",
   );
@@ -470,11 +517,15 @@ export function ProjectsRegistryClient({
 
   const filteredProjects = useMemo(() => {
     const query = listSearch.trim().toLowerCase();
-    if (!query) return sortedProjects;
-    return sortedProjects.filter((org) =>
-      org.displayName.toLowerCase().includes(query),
-    );
-  }, [sortedProjects, listSearch]);
+    return sortedProjects.filter((org) => {
+      if (scopeFilter !== "all") {
+        const scope = resolveProjectScope(org) ?? "unknown";
+        if (scope !== scopeFilter) return false;
+      }
+      if (!query) return true;
+      return org.displayName.toLowerCase().includes(query);
+    });
+  }, [sortedProjects, listSearch, scopeFilter]);
 
   useEffect(() => {
     if (listSearchOpen) listSearchInputRef.current?.focus();
@@ -826,6 +877,32 @@ export function ProjectsRegistryClient({
             <ProjectListSortMenu value={projectSort} onChange={changeProjectSort} />
           ) : null}
           {sortedProjects.length > 0 ? (
+            <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
+              <label className="sr-only" htmlFor="project-scope-filter">
+                Filter by scope
+              </label>
+              <select
+                id="project-scope-filter"
+                value={scopeFilter}
+                onChange={(event) =>
+                  setScopeFilter(
+                    event.target.value === "all"
+                      ? "all"
+                      : (event.target.value as ProjectScope),
+                  )
+                }
+                className="w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 focus:border-orange-600 focus:outline-none focus:ring-1 focus:ring-orange-600"
+              >
+                <option value="all">All scopes</option>
+                {PROJECT_SCOPES.map((scope) => (
+                  <option key={scope} value={scope}>
+                    {PROJECT_SCOPE_LABELS[scope]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+          {sortedProjects.length > 0 ? (
             <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
               <label className="flex min-w-0 items-center gap-2 text-xs text-slate-700">
                 <input
@@ -952,6 +1029,8 @@ export function ProjectsRegistryClient({
                       {org.displayName}
                     </span>
                     <span className="mt-0.5 block text-xs text-slate-500">
+                      {PROJECT_SCOPE_LABELS[resolveProjectScope(org) ?? "unknown"]}
+                      {" · "}
                       {org.phase?.trim() ? org.phase : "No phase"}
                       {org.year_hint?.trim() ? ` · ${org.year_hint}` : ""}
                       {org.sourceEmailCount > 0
@@ -993,9 +1072,26 @@ export function ProjectsRegistryClient({
                 {selected.sourceMergeCount > 0
                   ? `${selected.sourceMergeCount} thread merge${selected.sourceMergeCount === 1 ? "" : "s"}`
                   : "From pass-3 fingerprints (no merge yet)"}
-                {selected.sourceEmailCount > 0
-                  ? ` · ${selected.sourceEmailCount} source email${selected.sourceEmailCount === 1 ? "" : "s"}`
-                  : ""}
+                {selected.sourceEmailCount > 0 ? (
+                  <>
+                    {" · "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEvidenceTarget({
+                          projectId: selected.id,
+                          projectName: selected.displayName,
+                          field: "source_emails",
+                          value: selected.displayName,
+                        });
+                      }}
+                      className="text-orange-800 underline-offset-2 hover:underline"
+                    >
+                      {selected.sourceEmailCount} source email
+                      {selected.sourceEmailCount === 1 ? "" : "s"}
+                    </button>
+                  </>
+                ) : null}
               </p>
 
               <dl className="mt-5 space-y-1.5">
@@ -1003,6 +1099,15 @@ export function ProjectsRegistryClient({
                   label="Name"
                   value={selected.name}
                   disabled={pending}
+                  onEvidence={() => {
+                    if (!selected.name?.trim()) return;
+                    setEvidenceTarget({
+                      projectId: selected.id,
+                      projectName: selected.displayName,
+                      field: "name",
+                      value: selected.name.trim(),
+                    });
+                  }}
                   onSever={() => {
                     if (!selected.name?.trim()) return;
                     setSeverError(null);
@@ -1017,6 +1122,14 @@ export function ProjectsRegistryClient({
                   label="Also known as"
                   values={selected.aliases ?? []}
                   disabled={pending}
+                  onEvidence={(value) => {
+                    setEvidenceTarget({
+                      projectId: selected.id,
+                      projectName: selected.displayName,
+                      field: "name_alias",
+                      value,
+                    });
+                  }}
                   onSever={(value) => {
                     setSeverError(null);
                     setPendingSever({
@@ -1027,9 +1140,24 @@ export function ProjectsRegistryClient({
                   }}
                 />
                 <FieldRow
+                  label="Scope"
+                  value={
+                    PROJECT_SCOPE_LABELS[resolveProjectScope(selected) ?? "unknown"]
+                  }
+                />
+                <FieldRow
                   label="Year"
                   value={selected.year_hint}
                   disabled={pending}
+                  onEvidence={() => {
+                    if (!selected.year_hint?.trim()) return;
+                    setEvidenceTarget({
+                      projectId: selected.id,
+                      projectName: selected.displayName,
+                      field: "year_hint",
+                      value: selected.year_hint.trim(),
+                    });
+                  }}
                   onSever={() => {
                     if (!selected.year_hint?.trim()) return;
                     setSeverError(null);
@@ -1044,6 +1172,15 @@ export function ProjectsRegistryClient({
                   label="Phase"
                   value={selected.phase}
                   disabled={pending}
+                  onEvidence={() => {
+                    if (!selected.phase?.trim()) return;
+                    setEvidenceTarget({
+                      projectId: selected.id,
+                      projectName: selected.displayName,
+                      field: "phase",
+                      value: selected.phase.trim(),
+                    });
+                  }}
                   onSever={() => {
                     if (!selected.phase?.trim()) return;
                     setSeverError(null);
@@ -1058,6 +1195,14 @@ export function ProjectsRegistryClient({
                   label="Contractor"
                   values={splitProjectMultiValue(selected.contractor)}
                   disabled={pending}
+                  onEvidence={(value) => {
+                    setEvidenceTarget({
+                      projectId: selected.id,
+                      projectName: selected.displayName,
+                      field: "contractor",
+                      value,
+                    });
+                  }}
                   onSever={(value) => {
                     setSeverError(null);
                     setPendingSever({
@@ -1071,6 +1216,14 @@ export function ProjectsRegistryClient({
                   label="Location"
                   values={splitProjectMultiValue(selected.location)}
                   disabled={pending}
+                  onEvidence={(value) => {
+                    setEvidenceTarget({
+                      projectId: selected.id,
+                      projectName: selected.displayName,
+                      field: "location",
+                      value,
+                    });
+                  }}
                   onSever={(value) => {
                     setSeverError(null);
                     setPendingSever({
@@ -1084,6 +1237,14 @@ export function ProjectsRegistryClient({
                   label="Equipment"
                   values={splitProjectMultiValue(selected.equipment_mentions)}
                   disabled={pending}
+                  onEvidence={(value) => {
+                    setEvidenceTarget({
+                      projectId: selected.id,
+                      projectName: selected.displayName,
+                      field: "equipment_mentions",
+                      value,
+                    });
+                  }}
                   onSever={(value) => {
                     setSeverError(null);
                     setPendingSever({
@@ -1165,6 +1326,11 @@ export function ProjectsRegistryClient({
           setPendingSever(null);
           setSeverError(null);
         }}
+      />
+
+      <ProjectEvidenceSidePanel
+        target={evidenceTarget}
+        onClose={() => setEvidenceTarget(null)}
       />
     </div>
   );

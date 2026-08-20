@@ -2,10 +2,10 @@ import { asc, desc, eq } from "drizzle-orm";
 
 import type { MaintenanceEvent } from "@/components/EquipmentTimeline";
 import type { BuildingEmailReference } from "@/lib/building/resolve-source-email";
+import { loadBudgetPageData } from "@/lib/budget/load-budgets";
 import { getDb } from "@/lib/db";
 import {
   actionItems,
-  budgetLineItems,
   entityMentions,
   equipmentAssets,
   maintenanceEvents,
@@ -74,14 +74,19 @@ function enrichGroupsWithSourceEmails(
 }
 
 export async function loadBudgetSeries(): Promise<BudgetPoint[]> {
-  const db = getDb();
-  const budgetRows = await db.select().from(budgetLineItems);
-  return budgetRows.map((row) => ({
-    fiscalYear: row.fiscalYear ?? 0,
-    category: row.categoryName ?? "Uncategorized",
-    budgeted: Number(row.budgetedAmount ?? 0),
-    actual: Number(row.actualAmount ?? 0),
-  }));
+  const data = await loadBudgetPageData();
+  const points: BudgetPoint[] = [];
+  for (const line of data.lines) {
+    for (const [yearStr, amounts] of Object.entries(line.byYear)) {
+      points.push({
+        fiscalYear: Number(yearStr),
+        category: line.category,
+        budgeted: amounts.budgeted ?? 0,
+        actual: amounts.actual ?? 0,
+      });
+    }
+  }
+  return points;
 }
 
 export async function loadMaintenanceEventsWithSources(): Promise<

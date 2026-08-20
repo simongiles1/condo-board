@@ -14,6 +14,12 @@ import {
   loadProjectMergeMap,
   resolveProjectSurvivorKey,
 } from "@/lib/projects/manual-merge";
+import {
+  parseProjectScope,
+  preferProjectScope,
+  resolveProjectScope,
+  type ProjectScope,
+} from "@/lib/email-analysis/project-highlight-shared";
 import { mergeProjectMultiValues } from "@/lib/projects/project-multi-values";
 
 export type ProjectEntityRow = {
@@ -25,6 +31,7 @@ export type ProjectEntityRow = {
   contractor: string | null;
   location: string | null;
   equipmentMentions: string | null;
+  scope: ProjectScope | null;
   status: "active" | "merged";
   mergedIntoId: string | null;
 };
@@ -52,6 +59,7 @@ export async function loadActiveProjectEntities(): Promise<ProjectEntityRow[]> {
     contractor: row.contractor,
     location: row.location,
     equipmentMentions: row.equipmentMentions,
+    scope: parseProjectScope(row.scope),
     status: row.status as "active" | "merged",
     mergedIntoId: row.mergedIntoId,
   }));
@@ -147,6 +155,7 @@ export async function upsertProjectEntitiesFromSummaries(
         contractor: summary.contractor,
         location: summary.location,
         equipmentMentions: summary.equipment_mentions,
+        scope: resolveProjectScope(summary),
         status: "active",
         mergedIntoId: null,
         createdAt: nowIso,
@@ -162,6 +171,7 @@ export async function upsertProjectEntitiesFromSummaries(
         contractor: summary.contractor,
         location: summary.location,
         equipmentMentions: summary.equipment_mentions,
+        scope: resolveProjectScope(summary),
         status: "active",
         mergedIntoId: null,
       });
@@ -178,6 +188,10 @@ export async function upsertProjectEntitiesFromSummaries(
         prior.equipmentMentions,
         summary.equipment_mentions,
       ),
+      scope: preferProjectScope(
+        parseProjectScope(prior.scope),
+        resolveProjectScope(summary),
+      ),
     };
     const changed =
       next.name !== prior.name ||
@@ -186,6 +200,7 @@ export async function upsertProjectEntitiesFromSummaries(
       next.contractor !== prior.contractor ||
       next.location !== prior.location ||
       next.equipmentMentions !== prior.equipmentMentions ||
+      next.scope !== parseProjectScope(prior.scope) ||
       prior.status !== "active";
 
     if (changed) {
@@ -210,6 +225,7 @@ export async function upsertProjectEntitiesFromSummaries(
       contractor: next.contractor,
       location: next.location,
       equipmentMentions: next.equipmentMentions,
+      scope: next.scope,
       status: "active",
       mergedIntoId: null,
     });

@@ -20,23 +20,33 @@ export function formatAttachmentSize(sizeBytes: number | null): string | null {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function attachmentKind(mimeType: string): "image" | "pdf" | "doc" | "sheet" | "file" {
+export function attachmentKind(
+  mimeType: string,
+  filename = "",
+): "image" | "pdf" | "doc" | "sheet" | "file" {
   const mime = mimeType.toLowerCase();
-  if (mime.startsWith("image/")) return "image";
-  if (mime === "application/pdf") return "pdf";
-  if (
-    mime.includes("word") ||
-    mime.includes("document") ||
-    mime.endsWith(".document")
-  ) {
-    return "doc";
+  const name = filename.toLowerCase();
+  if (mime.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/.test(name)) {
+    return "image";
   }
+  if (mime === "application/pdf" || name.endsWith(".pdf")) return "pdf";
+  // Spreadsheets before Word: OOXML Excel MIME contains "document"
+  // (`...openxmlformats-officedocument.spreadsheetml.sheet`).
   if (
-    mime.includes("sheet") ||
+    mime.includes("spreadsheet") ||
     mime.includes("excel") ||
-    mime.includes("spreadsheet")
+    mime.includes("sheet") ||
+    /\.(xlsx?|xlsm|csv)$/.test(name)
   ) {
     return "sheet";
+  }
+  if (
+    mime.includes("wordprocessingml") ||
+    mime.includes("msword") ||
+    mime.includes("word") ||
+    /\.docx?$/.test(name)
+  ) {
+    return "doc";
   }
   return "file";
 }

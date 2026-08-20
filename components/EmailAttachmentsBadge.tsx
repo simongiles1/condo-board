@@ -159,7 +159,7 @@ function AttachmentThumbnailContent({
 }: {
   attachment: EmailAttachmentSummary;
 }) {
-  const kind = attachmentKind(attachment.mimeType);
+  const kind = attachmentKind(attachment.mimeType, attachment.filename);
   const url = emailAttachmentApiUrl(attachment.id);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [imageError, setImageError] = useState(false);
@@ -255,7 +255,7 @@ function AttachmentIconWithThumbnail({
   onSelect: (attachment: EmailAttachmentSummary) => void;
   onHoverChange: (hovered: boolean) => void;
 }) {
-  const kind = attachmentKind(attachment.mimeType);
+  const kind = attachmentKind(attachment.mimeType, attachment.filename);
   const iconRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);

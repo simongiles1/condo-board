@@ -687,6 +687,9 @@ export const projectEntities = pgTable(
     contractor: text("contractor"),
     location: text("location"),
     equipmentMentions: text("equipment_mentions"),
+    scope: text("scope", {
+      enum: ["building", "multi_unit", "unit", "unknown"],
+    }),
     status: text("status", {
       enum: ["active", "merged"],
     })

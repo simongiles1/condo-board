@@ -1,4 +1,4 @@
-import type { UserRole } from "@/lib/auth/roles";
+import { hasMinRole, type UserRole } from "@/lib/auth/roles";
 
 export const NAV_COLLAPSED_COOKIE = "condo-nav-collapsed";
 
@@ -13,6 +13,7 @@ export type NavLink = {
 export type SubNavTab = {
   href: string;
   label: string;
+  minRole?: UserRole;
   children?: SubNavTab[];
 };
 
@@ -138,6 +139,11 @@ export const INSIGHTS_SUBNAV: SubNavTab[] = [
   { href: "/insights/queue", label: "Extraction Review Queue" },
   { href: "/insights/analytics", label: "Operational Analytics" },
   { href: "/insights/audit", label: "Source Audits" },
+  {
+    href: "/insights/business-plan",
+    label: "Business Plan",
+    minRole: "admin",
+  },
 ];
 
 export const DEV_TOOLS_SUBNAV: SubNavTab[] = [
@@ -239,6 +245,19 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     children: SYSTEM_ADMIN_SUBNAV,
   },
 ];
+
+export function filterSubNavTabs(
+  tabs: SubNavTab[],
+  role: UserRole | null,
+): SubNavTab[] {
+  return tabs
+    .filter((tab) => role && hasMinRole(role, tab.minRole ?? "user"))
+    .map((tab) =>
+      tab.children
+        ? { ...tab, children: filterSubNavTabs(tab.children, role) }
+        : tab,
+    );
+}
 
 export function parseEntityKindTab(value: unknown): EntityKindTab {
   if (

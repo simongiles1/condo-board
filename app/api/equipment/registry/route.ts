@@ -4,6 +4,10 @@ import { NextResponse } from "next/server";
 
 import { isErrorResponse, requireSession } from "@/lib/auth/authorize";
 import {
+  parseEntityListLimit,
+  parseEntityListOffset,
+} from "@/lib/entities/registry-page";
+import {
   loadEquipmentRegistry,
   manualMergeEquipment,
 } from "@/lib/equipment/registry";
@@ -13,13 +17,14 @@ export async function GET(request: Request) {
   if (isErrorResponse(auth)) return auth;
 
   const url = new URL(request.url);
-  const limit = Math.min(
-    2000,
-    Math.max(1, Number(url.searchParams.get("limit") ?? 500) || 500),
-  );
+  const limit = parseEntityListLimit(url.searchParams.get("limit"));
+  const offset = parseEntityListOffset(url.searchParams.get("offset"));
 
   try {
-    const { equipment, stats } = await loadEquipmentRegistry({ limit });
+    const { equipment, stats } = await loadEquipmentRegistry({
+      limit,
+      offset,
+    });
     return NextResponse.json({ equipment, stats });
   } catch (error) {
     const message =

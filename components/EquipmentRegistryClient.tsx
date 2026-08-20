@@ -1,12 +1,17 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 
+import { EntityListPagination } from "@/components/EntityListPagination";
 import {
   MergeEntityDialog,
   MergeIcon,
   type MergeEntityOption,
 } from "@/components/MergeEntityDialog";
+import {
+  clampEntityListPage,
+  sliceEntityListPage,
+} from "@/lib/entities/registry-page";
 import type {
   EquipmentRegistryStats,
   EquipmentRegistrySummary,
@@ -75,6 +80,16 @@ export function EquipmentRegistryClient({
   const [mergeSource, setMergeSource] =
     useState<EquipmentRegistrySummary | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
+  const [listPage, setListPage] = useState(1);
+
+  const pagedEquipment = useMemo(
+    () => sliceEntityListPage(equipment, listPage),
+    [equipment, listPage],
+  );
+
+  useEffect(() => {
+    setListPage((page) => clampEntityListPage(page, equipment.length));
+  }, [equipment.length]);
 
   const selected = useMemo(
     () => equipment.find((item) => item.id === selectedId) ?? null,
@@ -87,7 +102,7 @@ export function EquipmentRegistryClient({
   );
 
   async function refreshData(): Promise<EquipmentRegistrySummary[] | null> {
-    const res = await fetch("/api/equipment/registry?limit=500");
+    const res = await fetch("/api/equipment/registry");
     const json = (await res.json()) as {
       equipment?: EquipmentRegistrySummary[];
       stats?: EquipmentRegistryStats;
@@ -183,14 +198,15 @@ export function EquipmentRegistryClient({
       </header>
 
       <div className="grid gap-6 md:grid-cols-[minmax(0,18rem)_1fr]">
-        <ul className="max-h-[70vh] overflow-y-auto border border-slate-200 bg-white">
+        <div className="flex max-h-[70vh] flex-col overflow-hidden border border-slate-200 bg-white">
+        <ul className="overflow-y-auto">
           {equipment.length === 0 ? (
             <li className="p-4 text-sm text-slate-500">
               No equipment yet. Run email analysis that extracts equipment /
               maintenance events.
             </li>
           ) : (
-            equipment.map((item) => (
+            pagedEquipment.map((item) => (
               <li key={item.id}>
                 <div
                   className={
@@ -233,6 +249,14 @@ export function EquipmentRegistryClient({
             ))
           )}
         </ul>
+          <EntityListPagination
+            total={equipment.length}
+            page={listPage}
+            pending={pending}
+            onPageChange={setListPage}
+            ariaLabel="Equipment list pagination"
+          />
+        </div>
 
         <section className="border border-slate-200 bg-white p-4">
           {!selected ? (

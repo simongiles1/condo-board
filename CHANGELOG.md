@@ -6,7 +6,29 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Projects list metadata badges** — Scope, phase, and year on Entities → Projects
+  render as subtle tinted badges (sky for scope, amber for phase, violet for year)
+  so each dimension is easy to scan without loud color.
+
+- **Projects list filter popover** — Project filters open in a dropdown from the
+  toolbar filter icon (same interaction model as sort) instead of expanding an
+  inline panel that steals vertical space from the list.
+
 ### Added
+
+- **Entities list pagination** — Organizations, Projects, and Equipment on
+  Entities Registry paginate at 100 rows, same as Contacts → People. The
+  header counts are the true unique totals, not a sliced list length.
+  Duplicates, mention charts, and fingerprint sync no longer stop at 500
+  or 2000 rows.
+
+- **Project merge-QA filters** — Entities → Projects can sort by mentions,
+  name, year, phase, or metadata completeness, and filter by scope, year,
+  phase, contractor / location / equipment presence, and incomplete vs
+  complete cards. Search also matches aliases, contractor, location, and
+  equipment.
 
 - **Business plan grounded in this building** — The super-admin Business
   Plan still sells the multi-building thesis, but ROI dollars now come

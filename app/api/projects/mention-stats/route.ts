@@ -11,7 +11,7 @@ export async function GET() {
   if (isErrorResponse(auth)) return auth;
 
   try {
-    const data = await loadProjectMentionChartData(2000);
+    const data = await loadProjectMentionChartData();
     return NextResponse.json(data);
   } catch (error) {
     const message =

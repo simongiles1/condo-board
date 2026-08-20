@@ -23,10 +23,8 @@ function kindForLabel(
  * (height ≈ distinct source emails for that org). Fingerprint bars = one bar
  * per coalesced org (height = max member surface count).
  */
-export async function loadOrganizationMentionChartData(
-  limit = 2000,
-): Promise<MentionChartPayload> {
-  const { organizations } = await loadOrgFingerprintSummaries({ limit });
+export async function loadOrganizationMentionChartData(): Promise<MentionChartPayload> {
+  const { organizations } = await loadOrgFingerprintSummaries();
 
   if (organizations.length === 0) {
     const empty = seriesFrom([], 0);

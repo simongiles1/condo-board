@@ -1,16 +1,28 @@
 /** Client-safe project list sort helpers (no DB imports). */
 
+import { projectMetadataFillCount } from "@/lib/projects/project-list-filter";
+
 export type ProjectFingerprintListSort =
   | "mentions-desc"
   | "mentions-asc"
   | "name-asc"
-  | "name-desc";
+  | "name-desc"
+  | "year-desc"
+  | "year-asc"
+  | "phase-asc"
+  | "completeness-asc"
+  | "completeness-desc";
 
 const PROJECT_FINGERPRINT_LIST_SORTS = new Set<ProjectFingerprintListSort>([
   "mentions-desc",
   "mentions-asc",
   "name-asc",
   "name-desc",
+  "year-desc",
+  "year-asc",
+  "phase-asc",
+  "completeness-asc",
+  "completeness-desc",
 ]);
 
 export function parseProjectFingerprintListSort(
@@ -28,7 +40,30 @@ export function parseProjectFingerprintListSort(
 type ProjectSortable = {
   displayName: string;
   sourceEmailCount: number;
+  year_hint?: string | null;
+  phase?: string | null;
+  contractor?: string | null;
+  location?: string | null;
+  equipment_mentions?: string | null;
 };
+
+function firstYearValue(raw: string | null | undefined): number | null {
+  const match = raw?.match(/\d{4}/);
+  if (!match) return null;
+  const year = Number(match[0]);
+  return Number.isFinite(year) ? year : null;
+}
+
+function compareMissingLast(
+  a: number | null,
+  b: number | null,
+  direction: "asc" | "desc",
+): number | null {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return direction === "asc" ? a - b : b - a;
+}
 
 export function compareProjectFingerprintSummaries<T extends ProjectSortable>(
   a: T,
@@ -50,6 +85,37 @@ export function compareProjectFingerprintSummaries<T extends ProjectSortable>(
       const nameCmp = b.displayName.localeCompare(a.displayName);
       if (nameCmp !== 0) return nameCmp;
       return b.sourceEmailCount - a.sourceEmailCount;
+    }
+    case "year-asc":
+    case "year-desc": {
+      const yearCmp = compareMissingLast(
+        firstYearValue(a.year_hint),
+        firstYearValue(b.year_hint),
+        sort === "year-asc" ? "asc" : "desc",
+      );
+      if (yearCmp) return yearCmp;
+      return a.displayName.localeCompare(b.displayName);
+    }
+    case "phase-asc": {
+      const aPhase = a.phase?.trim() || "";
+      const bPhase = b.phase?.trim() || "";
+      if (!aPhase && bPhase) return 1;
+      if (aPhase && !bPhase) return -1;
+      const phaseCmp = aPhase.localeCompare(bPhase);
+      if (phaseCmp !== 0) return phaseCmp;
+      return a.displayName.localeCompare(b.displayName);
+    }
+    case "completeness-asc":
+    case "completeness-desc": {
+      const aFill = projectMetadataFillCount(a);
+      const bFill = projectMetadataFillCount(b);
+      if (aFill !== bFill) {
+        return sort === "completeness-asc" ? aFill - bFill : bFill - aFill;
+      }
+      if (b.sourceEmailCount !== a.sourceEmailCount) {
+        return b.sourceEmailCount - a.sourceEmailCount;
+      }
+      return a.displayName.localeCompare(b.displayName);
     }
     case "mentions-desc":
     default:

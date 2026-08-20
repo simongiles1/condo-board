@@ -360,22 +360,22 @@ export async function listProjectEvidenceCandidateEmailIds(
  */
 export async function loadProjectFingerprintSummaries(params?: {
   limit?: number;
+  offset?: number;
   sort?: ProjectFingerprintListSort;
 }): Promise<{
   projects: ProjectFingerprintSummary[];
   stats: ProjectFingerprintListStats;
 }> {
-  const limit = params?.limit ?? 500;
   const sort = params?.sort ?? "mentions-desc";
+  const offset = Math.max(0, params?.offset ?? 0);
   const payload = await getProjectFingerprintPayload();
-  const projects = sortProjectFingerprintSummaries(payload.projects, sort).slice(
-    0,
-    limit,
-  );
+  const sorted = sortProjectFingerprintSummaries(payload.projects, sort);
+  const projects =
+    params?.limit == null ? sorted.slice(offset) : sorted.slice(offset, offset + params.limit);
   return {
     projects,
     stats: {
-      projectCount: projects.length,
+      projectCount: payload.projects.length,
       mergeCount: payload.mergeCount,
       emailCount: payload.emailCount,
     },
@@ -583,7 +583,6 @@ export async function loadProjectDuplicateGroups(): Promise<
   ProjectDuplicateGroup[]
 > {
   const { projects } = await loadProjectFingerprintSummaries({
-    limit: 2000,
     sort: "mentions-desc",
   });
   return buildProjectDuplicateGroups(projects);

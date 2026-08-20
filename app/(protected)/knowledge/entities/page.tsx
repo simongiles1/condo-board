@@ -71,13 +71,13 @@ export default async function EntitiesPage({
       ? loadContactMergeActivity(100)
       : Promise.resolve([]),
     initialTab === "organizations"
-      ? loadOrgFingerprintSummaries({ limit: 500 })
+      ? loadOrgFingerprintSummaries()
       : Promise.resolve(null),
     initialTab === "projects"
-      ? loadProjectFingerprintSummaries({ limit: 500 })
+      ? loadProjectFingerprintSummaries()
       : Promise.resolve(null),
     initialTab === "equipment"
-      ? loadEquipmentRegistry({ limit: 500 })
+      ? loadEquipmentRegistry()
       : Promise.resolve(null),
     initialTab === "mailboxes"
       ? loadSharedMailboxes()

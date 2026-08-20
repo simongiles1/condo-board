@@ -114,7 +114,7 @@ export async function syncProjectEntitiesFromFingerprints(params?: {
   updated: number;
 }> {
   const { projects: summaries } = await loadProjectFingerprintSummaries({
-    limit: params?.limit ?? 2000,
+    limit: params?.limit,
   });
   return upsertProjectEntitiesFromSummaries(summaries);
 }

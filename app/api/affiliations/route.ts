@@ -47,7 +47,7 @@ export async function GET(request: Request) {
     }
 
     if (view === "organizations") {
-      await syncOrganizationEntitiesFromFingerprints({ limit: 2000 });
+      await syncOrganizationEntitiesFromFingerprints();
       const organizations = await loadActiveOrganizationEntities();
       return NextResponse.json({
         view: "organizations",

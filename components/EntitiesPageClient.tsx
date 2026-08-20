@@ -174,7 +174,7 @@ export function EntitiesPageClient({
         return;
       }
       if (tab === "organizations") {
-        const res = await fetch("/api/organizations/registry?limit=500");
+        const res = await fetch("/api/organizations/registry");
         const json = (await res.json()) as {
           organizations?: OrgFingerprintSummary[];
           stats?: OrgFingerprintListStats;
@@ -186,7 +186,7 @@ export function EntitiesPageClient({
         return;
       }
       if (tab === "projects") {
-        const res = await fetch("/api/projects/registry?limit=500");
+        const res = await fetch("/api/projects/registry");
         const json = (await res.json()) as {
           projects?: ProjectFingerprintSummary[];
           stats?: ProjectFingerprintListStats;
@@ -198,7 +198,7 @@ export function EntitiesPageClient({
         return;
       }
       if (tab === "equipment") {
-        const res = await fetch("/api/equipment/registry?limit=500");
+        const res = await fetch("/api/equipment/registry");
         const json = (await res.json()) as {
           equipment?: EquipmentRegistrySummary[];
           stats?: EquipmentRegistryStats;

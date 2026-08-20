@@ -540,22 +540,22 @@ async function getOrgFingerprintPayload(): Promise<OrgFingerprintCachePayload> {
  */
 export async function loadOrgFingerprintSummaries(params?: {
   limit?: number;
+  offset?: number;
   sort?: OrgFingerprintListSort;
 }): Promise<{
   organizations: OrgFingerprintSummary[];
   stats: OrgFingerprintListStats;
 }> {
-  const limit = params?.limit ?? 500;
   const sort = params?.sort ?? "mentions-desc";
+  const offset = Math.max(0, params?.offset ?? 0);
   const payload = await getOrgFingerprintPayload();
-  const organizations = sortOrgFingerprintSummaries(
-    payload.organizations,
-    sort,
-  ).slice(0, limit);
+  const sorted = sortOrgFingerprintSummaries(payload.organizations, sort);
+  const organizations =
+    params?.limit == null ? sorted.slice(offset) : sorted.slice(offset, offset + params.limit);
   return {
     organizations,
     stats: {
-      organizationCount: organizations.length,
+      organizationCount: payload.organizations.length,
       mergeCount: payload.mergeCount,
       emailCount: payload.emailCount,
     },
@@ -760,7 +760,6 @@ async function computeAllOrgFingerprintSummaries(): Promise<OrgFingerprintCacheP
 /** Fuzzy-name duplicate clusters for the Organizations → Duplicates tab. */
 export async function loadOrgDuplicateGroups(): Promise<OrgDuplicateGroup[]> {
   const { organizations } = await loadOrgFingerprintSummaries({
-    limit: 2000,
     sort: "mentions-desc",
   });
   return buildOrgDuplicateGroups(organizations);

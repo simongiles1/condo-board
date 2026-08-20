@@ -140,7 +140,7 @@ async function loadProjectSourceEmailEvidence(params: {
 }): Promise<ProjectEvidencePayload> {
   const { projectId, page, pageSize } = params;
   const [{ projects }, attributedIds, candidateIds] = await Promise.all([
-    loadProjectFingerprintSummaries({ limit: 2000 }),
+    loadProjectFingerprintSummaries(),
     listProjectSourceEmailIds(projectId),
     listProjectEvidenceCandidateEmailIds(projectId),
   ]);

@@ -19,7 +19,7 @@ const sample = [
 
 describe("parseProjectFingerprintListSort", () => {
   it("accepts known values and defaults to mentions-desc", () => {
-    assert.equal(parseProjectFingerprintListSort("name-asc"), "name-asc");
+    assert.equal(parseProjectFingerprintListSort("completeness-asc"), "completeness-asc");
     assert.equal(parseProjectFingerprintListSort("bad"), "mentions-desc");
     assert.equal(parseProjectFingerprintListSort(null), "mentions-desc");
   });
@@ -39,6 +39,34 @@ describe("sortProjectFingerprintSummaries", () => {
     assert.deepEqual(
       sorted.map((project) => project.displayName),
       ["Maglock 2024", "EV charging", "Boiler replacement"],
+    );
+  });
+
+  it("sorts incomplete metadata first", () => {
+    const rows = [
+      {
+        displayName: "Complete job",
+        sourceEmailCount: 2,
+        year_hint: "2025",
+        phase: "done",
+        contractor: "Acme",
+        location: "roof",
+        equipment_mentions: "pump",
+      },
+      {
+        displayName: "Sparse job",
+        sourceEmailCount: 9,
+        year_hint: null,
+        phase: null,
+        contractor: null,
+        location: null,
+        equipment_mentions: null,
+      },
+    ];
+    const sorted = sortProjectFingerprintSummaries(rows, "completeness-asc");
+    assert.deepEqual(
+      sorted.map((project) => project.displayName),
+      ["Sparse job", "Complete job"],
     );
   });
 });

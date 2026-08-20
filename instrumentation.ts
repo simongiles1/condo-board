@@ -23,7 +23,7 @@ export async function register() {
 
       void import("@/lib/organizations/fingerprint-list")
         .then(({ loadOrgFingerprintSummaries }) =>
-          loadOrgFingerprintSummaries({ limit: 500 }),
+          loadOrgFingerprintSummaries(),
         )
         .then((result) => {
           console.info("[instrumentation] Warmed org fingerprints", {

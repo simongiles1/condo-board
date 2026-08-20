@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { EntityListPagination } from "@/components/EntityListPagination";
 import {
   MergeEntityDialog,
   MergeIcon,
@@ -14,6 +15,10 @@ import {
   personDisplayName,
   type ContactRegistryPersonSummary,
 } from "@/lib/contacts/registry-shared";
+import {
+  clampEntityListPage,
+  sliceEntityListPage,
+} from "@/lib/entities/registry-page";
 import type {
   OrgDuplicateGroup,
   OrgDuplicateGroupMember,
@@ -619,6 +624,7 @@ export function OrganizationsRegistryClient({
   const [duplicatesError, setDuplicatesError] = useState<string | null>(null);
   const [listSearchOpen, setListSearchOpen] = useState(false);
   const [listSearch, setListSearch] = useState("");
+  const [listPage, setListPage] = useState(1);
   const listSearchInputRef = useRef<HTMLInputElement>(null);
 
   const sortedOrganizations = useMemo(
@@ -633,6 +639,15 @@ export function OrganizationsRegistryClient({
       org.displayName.toLowerCase().includes(query),
     );
   }, [sortedOrganizations, listSearch]);
+
+  const pagedOrganizations = useMemo(
+    () => sliceEntityListPage(filteredOrganizations, listPage),
+    [filteredOrganizations, listPage],
+  );
+
+  useEffect(() => {
+    setListPage((page) => clampEntityListPage(page, filteredOrganizations.length));
+  }, [filteredOrganizations.length]);
 
   useEffect(() => {
     if (listSearchOpen) listSearchInputRef.current?.focus();
@@ -666,8 +681,8 @@ export function OrganizationsRegistryClient({
 
   const checkedCount = checkedOrgIds.size;
   const allVisibleSelected =
-    filteredOrganizations.length > 0 &&
-    filteredOrganizations.every((org) => checkedOrgIds.has(org.id));
+    pagedOrganizations.length > 0 &&
+    pagedOrganizations.every((org) => checkedOrgIds.has(org.id));
 
   const selected = useMemo(
     () => organizations.find((org) => org.id === selectedId) ?? null,
@@ -687,9 +702,9 @@ export function OrganizationsRegistryClient({
     setCheckedOrgIds((prev) => {
       const next = new Set(prev);
       if (allVisibleSelected) {
-        for (const org of filteredOrganizations) next.delete(org.id);
+        for (const org of pagedOrganizations) next.delete(org.id);
       } else {
-        for (const org of filteredOrganizations) next.add(org.id);
+        for (const org of pagedOrganizations) next.add(org.id);
       }
       return next;
     });
@@ -704,7 +719,7 @@ export function OrganizationsRegistryClient({
   }
 
   async function refreshData(): Promise<OrgFingerprintSummary[] | null> {
-    const res = await fetch("/api/organizations/registry?limit=500", {
+    const res = await fetch("/api/organizations/registry", {
       cache: "no-store",
     });
     const json = (await res.json()) as {
@@ -799,6 +814,7 @@ export function OrganizationsRegistryClient({
     if (next === orgSort) return;
     setOrgSort(next);
     setCheckedOrgIds(new Set());
+    setListPage(1);
   }
 
   function runMerge(
@@ -1198,7 +1214,10 @@ export function OrganizationsRegistryClient({
                 ref={listSearchInputRef}
                 type="search"
                 value={listSearch}
-                onChange={(event) => setListSearch(event.target.value)}
+                onChange={(event) => {
+                  setListSearch(event.target.value);
+                  setListPage(1);
+                }}
                 placeholder="Filter by name…"
                 aria-label="Filter organizations by name"
                 className="w-full rounded border border-slate-200 px-2 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-fuchsia-600 focus:outline-none focus:ring-1 focus:ring-fuchsia-600"
@@ -1219,7 +1238,7 @@ export function OrganizationsRegistryClient({
               No organizations match your search.
             </li>
           ) : (
-            filteredOrganizations.map((org) => (
+            pagedOrganizations.map((org) => (
               <li key={org.id}>
                 <div
                   className={
@@ -1280,6 +1299,13 @@ export function OrganizationsRegistryClient({
             ))
           )}
           </ul>
+          <EntityListPagination
+            total={filteredOrganizations.length}
+            page={listPage}
+            pending={pending}
+            onPageChange={setListPage}
+            ariaLabel="Organizations list pagination"
+          />
         </div>
 
         <section className="border border-slate-200 bg-white p-4">

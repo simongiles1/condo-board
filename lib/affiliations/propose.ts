@@ -51,9 +51,7 @@ async function loadOrgMatchTargets(
   orgs: OrganizationEntityRow[],
 ): Promise<OrgMatchTarget[]> {
   // Aliases live on fingerprints, not the thin registry — attach for name match.
-  const { organizations: fingerprints } = await loadOrgFingerprintSummaries({
-    limit: 2000,
-  });
+  const { organizations: fingerprints } = await loadOrgFingerprintSummaries();
   const aliasesByKey = new Map<string, string[]>();
   for (const fp of fingerprints) {
     aliasesByKey.set(fp.id, fp.aliases ?? []);

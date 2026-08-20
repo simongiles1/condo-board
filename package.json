@@ -34,6 +34,8 @@
     "test:project-identity": "npx tsx --test scripts/test-project-identity.ts",
     "test:project-duplicate-groups": "npx tsx --test scripts/test-project-duplicate-groups.ts",
     "test:project-list-sort": "npx tsx --test scripts/test-project-list-sort.ts",
+    "test:project-list-filter": "npx tsx --test scripts/test-project-list-filter.ts",
+    "test:registry-page": "npx tsx --test scripts/test-registry-page.ts",
     "test:extract-artifacts-storage": "npx tsx --test scripts/test-extract-artifacts-storage.ts",
     "test:attachment-markdown": "npx tsx --test scripts/test-attachment-markdown.ts",
     "test:page-profile": "npx tsx --test scripts/test-page-profile.ts",

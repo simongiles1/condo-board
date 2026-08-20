@@ -4,6 +4,10 @@ import { NextResponse } from "next/server";
 
 import { isErrorResponse, requireSession } from "@/lib/auth/authorize";
 import {
+  parseEntityListLimit,
+  parseEntityListOffset,
+} from "@/lib/entities/registry-page";
+import {
   moveOrganizationField,
   moveOrganizationFieldToPerson,
 } from "@/lib/organizations/field-attachments";
@@ -36,15 +40,14 @@ export async function GET(request: Request) {
     }
   }
 
-  const limit = Math.min(
-    2000,
-    Math.max(1, Number(url.searchParams.get("limit") ?? 500) || 500),
-  );
+  const limit = parseEntityListLimit(url.searchParams.get("limit"));
+  const offset = parseEntityListOffset(url.searchParams.get("offset"));
   const sort = parseOrgFingerprintListSort(url.searchParams.get("sort"));
 
   try {
     const { organizations, stats } = await loadOrgFingerprintSummaries({
       limit,
+      offset,
       sort,
     });
     return NextResponse.json({ organizations, stats });

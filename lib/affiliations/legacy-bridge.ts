@@ -48,9 +48,7 @@ export async function bridgeLegacyLinkedOrganizationNames(params?: {
   skippedNoOrg: number;
   skippedExisting: number;
 }> {
-  const orgSync = await syncOrganizationEntitiesFromFingerprints({
-    limit: 2000,
-  });
+  const orgSync = await syncOrganizationEntitiesFromFingerprints();
   const orgs = orgSync.organizations;
   const db = getDb();
   const limit = params?.limit ?? 2000;

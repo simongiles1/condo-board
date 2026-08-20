@@ -106,7 +106,7 @@ export async function syncOrganizationEntitiesFromFingerprints(params?: {
   updated: number;
 }> {
   const { organizations: summaries } = await loadOrgFingerprintSummaries({
-    limit: params?.limit ?? 2000,
+    limit: params?.limit,
   });
   return upsertOrganizationEntitiesFromSummaries(summaries);
 }

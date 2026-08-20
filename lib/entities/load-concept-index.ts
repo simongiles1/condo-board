@@ -91,7 +91,7 @@ export async function loadConceptIndex(): Promise<LinkedConcept[]> {
         skipVerifiedMentions: true,
       }),
       loadActiveOrganizationEntities(),
-      loadOrgFingerprintSummaries({ limit: 2000 }),
+      loadOrgFingerprintSummaries(),
       db
         .select({
           id: equipmentAssets.id,

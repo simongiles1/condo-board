@@ -10,6 +10,11 @@ const globalForDb = globalThis as unknown as {
 };
 
 function resolveDatabaseUrl(): string {
+  // CONCERN: Local `npm run dev` still uses Docker Postgres (localhost:5433)
+  // via DATABASE_URL. Production Coolify uses COND_BOARD_POSTGRES_URL → the
+  // Supabase project. Harvest / backfill must not run twice (cost + time);
+  // local should share that Supabase URI. Cutover is not done yet — do not
+  // re-run corpus extracts against Docker.
   const connectionString =
     process.env.COND_BOARD_POSTGRES_URL?.trim() ||
     process.env.DATABASE_URL?.trim();

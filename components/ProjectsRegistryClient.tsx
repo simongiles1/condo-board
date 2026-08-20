@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { EntityListPagination } from "@/components/EntityListPagination";
 import {
   MergeEntityDialog,
   MergeIcon,
@@ -19,6 +20,10 @@ import type {
   ProjectFingerprintSummary,
 } from "@/lib/projects/fingerprint-list";
 import {
+  clampEntityListPage,
+  sliceEntityListPage,
+} from "@/lib/entities/registry-page";
+import {
   PROJECT_SCOPE_LABELS,
   PROJECT_SCOPES,
   preferProjectScope,
@@ -26,6 +31,15 @@ import {
   type ProjectScope,
 } from "@/lib/email-analysis/project-highlight-shared";
 import type { ProjectEvidenceField } from "@/lib/projects/registry-evidence-shared";
+import {
+  collectProjectFilterOptions,
+  EMPTY_PROJECT_LIST_FILTERS,
+  hasActiveProjectListFilters,
+  matchesProjectListFilters,
+  projectMatchesListSearch,
+  type PresenceFilter,
+  type ProjectListFilters,
+} from "@/lib/projects/project-list-filter";
 import {
   sortProjectFingerprintSummaries,
   type ProjectFingerprintListSort,
@@ -44,6 +58,11 @@ const PROJECT_LIST_SORT_OPTIONS: Array<{
   { value: "mentions-asc", label: "Mentions (low → high)" },
   { value: "name-asc", label: "Name (A → Z)" },
   { value: "name-desc", label: "Name (Z → A)" },
+  { value: "year-desc", label: "Year (newest)" },
+  { value: "year-asc", label: "Year (oldest)" },
+  { value: "phase-asc", label: "Phase (A → Z)" },
+  { value: "completeness-asc", label: "Least complete first" },
+  { value: "completeness-desc", label: "Most complete first" },
 ];
 
 function ProjectListSortMenu({
@@ -186,6 +205,249 @@ function ListSearchIcon({ className }: { className?: string }) {
   );
 }
 
+function FilterIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.75}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3 4.5h18M6 12h12M10 19.5h4"
+      />
+    </svg>
+  );
+}
+
+const PRESENCE_OPTIONS: Array<{ value: PresenceFilter; label: string }> = [
+  { value: "any", label: "Any" },
+  { value: "set", label: "Has value" },
+  { value: "missing", label: "Missing" },
+];
+
+function FilterSelect({
+  id,
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <label
+        htmlFor={id}
+        className="block text-[11px] font-medium uppercase tracking-wide text-slate-500"
+      >
+        {label}
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 focus:border-orange-600 focus:outline-none focus:ring-1 focus:ring-orange-600"
+      >
+        {children}
+      </select>
+    </div>
+  );
+}
+
+function ProjectListFilterMenu({
+  filters,
+  years,
+  phases,
+  onChange,
+}: {
+  filters: ProjectListFilters;
+  years: string[];
+  phases: string[];
+  onChange: (next: ProjectListFilters) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const active = hasActiveProjectListFilters(filters);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function onPointerDown(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        title="Filter projects"
+        aria-label="Filter projects"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className={
+          open || active
+            ? "relative rounded p-1.5 text-orange-700 bg-orange-50"
+            : "rounded p-1.5 text-slate-500 hover:bg-orange-50 hover:text-orange-700"
+        }
+      >
+        <FilterIcon className="h-4 w-4" />
+        {active ? (
+          <span
+            aria-hidden
+            className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-orange-600"
+          />
+        ) : null}
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label="Project filters"
+          className="absolute right-0 top-full z-20 w-64 border border-slate-200 bg-white px-3 py-2 shadow-lg"
+        >
+          <div className="space-y-2">
+            <FilterSelect
+              id="project-scope-filter"
+              label="Scope"
+              value={filters.scope}
+              onChange={(value) =>
+                onChange({
+                  ...filters,
+                  scope: value === "all" ? "all" : (value as ProjectScope),
+                })
+              }
+            >
+              <option value="all">All scopes</option>
+              {PROJECT_SCOPES.map((scope) => (
+                <option key={scope} value={scope}>
+                  {PROJECT_SCOPE_LABELS[scope]}
+                </option>
+              ))}
+            </FilterSelect>
+            <FilterSelect
+              id="project-completeness-filter"
+              label="Metadata"
+              value={filters.completeness}
+              onChange={(value) =>
+                onChange({
+                  ...filters,
+                  completeness: value as ProjectListFilters["completeness"],
+                })
+              }
+            >
+              <option value="all">All</option>
+              <option value="incomplete">Incomplete</option>
+              <option value="complete">Complete</option>
+            </FilterSelect>
+            <FilterSelect
+              id="project-year-filter"
+              label="Year"
+              value={filters.year}
+              onChange={(value) => onChange({ ...filters, year: value })}
+            >
+              <option value="all">All years</option>
+              <option value="missing">Missing year</option>
+              {years.map((year) => (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              ))}
+            </FilterSelect>
+            <FilterSelect
+              id="project-phase-filter"
+              label="Phase"
+              value={filters.phase}
+              onChange={(value) => onChange({ ...filters, phase: value })}
+            >
+              <option value="all">All phases</option>
+              <option value="missing">Missing phase</option>
+              {phases.map((phase) => (
+                <option key={phase} value={phase}>
+                  {phase}
+                </option>
+              ))}
+            </FilterSelect>
+            <FilterSelect
+              id="project-contractor-filter"
+              label="Contractor"
+              value={filters.contractor}
+              onChange={(value) =>
+                onChange({ ...filters, contractor: value as PresenceFilter })
+              }
+            >
+              {PRESENCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </FilterSelect>
+            <FilterSelect
+              id="project-location-filter"
+              label="Location"
+              value={filters.location}
+              onChange={(value) =>
+                onChange({ ...filters, location: value as PresenceFilter })
+              }
+            >
+              {PRESENCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </FilterSelect>
+            <FilterSelect
+              id="project-equipment-filter"
+              label="Equipment"
+              value={filters.equipment}
+              onChange={(value) =>
+                onChange({ ...filters, equipment: value as PresenceFilter })
+              }
+            >
+              {PRESENCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </FilterSelect>
+            {active ? (
+              <button
+                type="button"
+                onClick={() => onChange(EMPTY_PROJECT_LIST_FILTERS)}
+                className="w-full rounded px-2 py-1 text-xs font-medium text-orange-800 hover:bg-orange-50"
+              >
+                Clear filters
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SeverIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -303,6 +565,32 @@ function MultiValueField({
         </ul>
       </dd>
     </div>
+  );
+}
+
+function ProjectScopeBadge({ scope }: { scope: ProjectScope | null | undefined }) {
+  const label = PROJECT_SCOPE_LABELS[scope ?? "unknown"];
+  return (
+    <span className="inline-flex rounded bg-sky-50 px-1.5 py-px text-[11px] font-medium text-sky-800 ring-1 ring-sky-200/90">
+      {label}
+    </span>
+  );
+}
+
+function ProjectPhaseBadge({ phase }: { phase: string | null | undefined }) {
+  const label = phase?.trim() ? phase.trim() : "No phase";
+  return (
+    <span className="inline-flex rounded bg-amber-50 px-1.5 py-px text-[11px] font-medium text-amber-900 ring-1 ring-amber-200/90">
+      {label}
+    </span>
+  );
+}
+
+function ProjectYearBadge({ year }: { year: string }) {
+  return (
+    <span className="inline-flex rounded bg-violet-50 px-1.5 py-px text-[11px] font-medium tabular-nums text-violet-800 ring-1 ring-violet-200/90">
+      {year}
+    </span>
   );
 }
 
@@ -496,7 +784,9 @@ export function ProjectsRegistryClient({
     value: string;
   } | null>(null);
   const [projectSort, setProjectSort] = useState<ProjectFingerprintListSort>("mentions-desc");
-  const [scopeFilter, setScopeFilter] = useState<ProjectScope | "all">("all");
+  const [listFilters, setListFilters] = useState<ProjectListFilters>(
+    EMPTY_PROJECT_LIST_FILTERS,
+  );
   const [tab, setTab] = useState<"projects" | "duplicates">(
     "projects",
   );
@@ -508,6 +798,7 @@ export function ProjectsRegistryClient({
   const [duplicatesError, setDuplicatesError] = useState<string | null>(null);
   const [listSearchOpen, setListSearchOpen] = useState(false);
   const [listSearch, setListSearch] = useState("");
+  const [listPage, setListPage] = useState(1);
   const listSearchInputRef = useRef<HTMLInputElement>(null);
 
   const sortedProjects = useMemo(
@@ -515,17 +806,26 @@ export function ProjectsRegistryClient({
     [projects, projectSort],
   );
 
+  const filterOptions = useMemo(
+    () => collectProjectFilterOptions(projects),
+    [projects],
+  );
+
   const filteredProjects = useMemo(() => {
-    const query = listSearch.trim().toLowerCase();
-    return sortedProjects.filter((org) => {
-      if (scopeFilter !== "all") {
-        const scope = resolveProjectScope(org) ?? "unknown";
-        if (scope !== scopeFilter) return false;
-      }
-      if (!query) return true;
-      return org.displayName.toLowerCase().includes(query);
+    return sortedProjects.filter((project) => {
+      if (!matchesProjectListFilters(project, listFilters)) return false;
+      return projectMatchesListSearch(project, listSearch);
     });
-  }, [sortedProjects, listSearch, scopeFilter]);
+  }, [sortedProjects, listSearch, listFilters]);
+
+  const pagedProjects = useMemo(
+    () => sliceEntityListPage(filteredProjects, listPage),
+    [filteredProjects, listPage],
+  );
+
+  useEffect(() => {
+    setListPage((page) => clampEntityListPage(page, filteredProjects.length));
+  }, [filteredProjects.length]);
 
   useEffect(() => {
     if (listSearchOpen) listSearchInputRef.current?.focus();
@@ -533,8 +833,8 @@ export function ProjectsRegistryClient({
 
   const checkedCount = checkedProjectIds.size;
   const allVisibleSelected =
-    filteredProjects.length > 0 &&
-    filteredProjects.every((org) => checkedProjectIds.has(org.id));
+    pagedProjects.length > 0 &&
+    pagedProjects.every((org) => checkedProjectIds.has(org.id));
 
   const selected = useMemo(
     () => projects.find((org) => org.id === selectedId) ?? null,
@@ -554,9 +854,9 @@ export function ProjectsRegistryClient({
     setCheckedProjectIds((prev) => {
       const next = new Set(prev);
       if (allVisibleSelected) {
-        for (const org of filteredProjects) next.delete(org.id);
+        for (const org of pagedProjects) next.delete(org.id);
       } else {
-        for (const org of filteredProjects) next.add(org.id);
+        for (const org of pagedProjects) next.add(org.id);
       }
       return next;
     });
@@ -571,7 +871,7 @@ export function ProjectsRegistryClient({
   }
 
   async function refreshData(): Promise<ProjectFingerprintSummary[] | null> {
-    const res = await fetch("/api/projects/registry?limit=500", {
+    const res = await fetch("/api/projects/registry", {
       cache: "no-store",
     });
     const json = (await res.json()) as {
@@ -666,6 +966,12 @@ export function ProjectsRegistryClient({
     if (next === projectSort) return;
     setProjectSort(next);
     setCheckedProjectIds(new Set());
+    setListPage(1);
+  }
+
+  function changeListFilters(next: ProjectListFilters) {
+    setListFilters(next);
+    setListPage(1);
   }
 
   function runMerge(
@@ -877,32 +1183,6 @@ export function ProjectsRegistryClient({
             <ProjectListSortMenu value={projectSort} onChange={changeProjectSort} />
           ) : null}
           {sortedProjects.length > 0 ? (
-            <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
-              <label className="sr-only" htmlFor="project-scope-filter">
-                Filter by scope
-              </label>
-              <select
-                id="project-scope-filter"
-                value={scopeFilter}
-                onChange={(event) =>
-                  setScopeFilter(
-                    event.target.value === "all"
-                      ? "all"
-                      : (event.target.value as ProjectScope),
-                  )
-                }
-                className="w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 focus:border-orange-600 focus:outline-none focus:ring-1 focus:ring-orange-600"
-              >
-                <option value="all">All scopes</option>
-                {PROJECT_SCOPES.map((scope) => (
-                  <option key={scope} value={scope}>
-                    {PROJECT_SCOPE_LABELS[scope]}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
-          {sortedProjects.length > 0 ? (
             <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
               <label className="flex min-w-0 items-center gap-2 text-xs text-slate-700">
                 <input
@@ -952,6 +1232,12 @@ export function ProjectsRegistryClient({
                     </button>
                   </>
                 ) : null}
+                <ProjectListFilterMenu
+                  filters={listFilters}
+                  years={filterOptions.years}
+                  phases={filterOptions.phases}
+                  onChange={changeListFilters}
+                />
                 <button
                   type="button"
                   onClick={() => setListSearchOpen((prev) => !prev)}
@@ -975,9 +1261,12 @@ export function ProjectsRegistryClient({
                 ref={listSearchInputRef}
                 type="search"
                 value={listSearch}
-                onChange={(event) => setListSearch(event.target.value)}
-                placeholder="Filter by name…"
-                aria-label="Filter projects by name"
+                onChange={(event) => {
+                  setListSearch(event.target.value);
+                  setListPage(1);
+                }}
+                placeholder="Filter by name, year, phase, contractor…"
+                aria-label="Filter projects by name or metadata"
                 className="w-full rounded border border-slate-200 px-2 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-orange-600 focus:outline-none focus:ring-1 focus:ring-orange-600"
               />
             </div>
@@ -993,10 +1282,10 @@ export function ProjectsRegistryClient({
             </li>
           ) : filteredProjects.length === 0 ? (
             <li className="p-4 text-sm text-slate-500">
-              No projects match your search.
+              No projects match these filters.
             </li>
           ) : (
-            filteredProjects.map((org) => (
+            pagedProjects.map((org) => (
               <li key={org.id}>
                 <div
                   className={
@@ -1028,14 +1317,18 @@ export function ProjectsRegistryClient({
                     <span className="block text-sm font-medium text-slate-900">
                       {org.displayName}
                     </span>
-                    <span className="mt-0.5 block text-xs text-slate-500">
-                      {PROJECT_SCOPE_LABELS[resolveProjectScope(org) ?? "unknown"]}
-                      {" · "}
-                      {org.phase?.trim() ? org.phase : "No phase"}
-                      {org.year_hint?.trim() ? ` · ${org.year_hint}` : ""}
-                      {org.sourceEmailCount > 0
-                        ? ` · ${org.sourceEmailCount} email${org.sourceEmailCount === 1 ? "" : "s"}`
-                        : ""}
+                    <span className="mt-0.5 flex flex-wrap items-center gap-1 text-xs text-slate-500">
+                      <ProjectScopeBadge scope={resolveProjectScope(org)} />
+                      <ProjectPhaseBadge phase={org.phase} />
+                      {org.year_hint?.trim() ? (
+                        <ProjectYearBadge year={org.year_hint.trim()} />
+                      ) : null}
+                      {org.sourceEmailCount > 0 ? (
+                        <span>
+                          · {org.sourceEmailCount} email
+                          {org.sourceEmailCount === 1 ? "" : "s"}
+                        </span>
+                      ) : null}
                     </span>
                   </button>
                   <button
@@ -1058,6 +1351,13 @@ export function ProjectsRegistryClient({
             ))
           )}
           </ul>
+          <EntityListPagination
+            total={filteredProjects.length}
+            page={listPage}
+            pending={pending}
+            onPageChange={setListPage}
+            ariaLabel="Projects list pagination"
+          />
         </div>
 
         <section className="border border-slate-200 bg-white p-4">

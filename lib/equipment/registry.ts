@@ -33,14 +33,15 @@ function preferString(a: string | null, b: string | null): string | null {
 
 export async function loadEquipmentRegistry(params?: {
   limit?: number;
+  offset?: number;
 }): Promise<{
   equipment: EquipmentRegistrySummary[];
   stats: EquipmentRegistryStats;
 }> {
-  const limit = params?.limit ?? 500;
   const db = getDb();
+  const offset = Math.max(0, params?.offset ?? 0);
 
-  const rows = await db
+  const baseQuery = db
     .select({
       id: equipmentAssets.id,
       name: equipmentAssets.name,
@@ -53,8 +54,18 @@ export async function loadEquipmentRegistry(params?: {
     })
     .from(equipmentAssets)
     .where(isNull(equipmentAssets.canonicalId))
-    .orderBy(asc(equipmentAssets.name))
-    .limit(limit);
+    .orderBy(asc(equipmentAssets.name));
+
+  const [rows, [{ equipmentCount }], [{ totalEvents }]] = await Promise.all([
+    params?.limit == null
+      ? baseQuery
+      : baseQuery.limit(params.limit).offset(offset),
+    db
+      .select({ equipmentCount: count() })
+      .from(equipmentAssets)
+      .where(isNull(equipmentAssets.canonicalId)),
+    db.select({ totalEvents: count() }).from(maintenanceEvents),
+  ]);
 
   const ids = rows.map((row) => row.id);
   const eventCounts = new Map<string, number>();
@@ -72,10 +83,6 @@ export async function loadEquipmentRegistry(params?: {
     }
   }
 
-  const [{ totalEvents }] = await db
-    .select({ totalEvents: count() })
-    .from(maintenanceEvents);
-
   const equipment: EquipmentRegistrySummary[] = rows.map((row) => ({
     id: row.id,
     displayName: row.name,
@@ -92,7 +99,7 @@ export async function loadEquipmentRegistry(params?: {
   return {
     equipment,
     stats: {
-      equipmentCount: equipment.length,
+      equipmentCount: Number(equipmentCount ?? 0),
       eventCount: Number(totalEvents ?? 0),
     },
   };

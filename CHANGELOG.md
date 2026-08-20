@@ -8,6 +8,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **One Postgres for local and production** — `npm run dev` now uses the same
+  Supabase session-pooler URI Coolify uses. Compose Postgres on
+  `localhost:5433` is rollback-only so merges, harvest, and field moves
+  cannot split across two databases again.
+
 - **Projects list metadata badges** — Scope, phase, and year on Entities → Projects
   render as subtle tinted badges (sky for scope, amber for phase, violet for year)
   so each dimension is easy to scan without loud color.
@@ -118,6 +123,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   location (named units vs building common elements).
 
 ### Fixed
+
+- **Merged org cards forking on rebuild** — After a manual merge, stripping
+  denied fields recomputed `email:…` identity keys and resurrected absorbed
+  harvest aliases (two Studio Richmond rows sharing the same mention count).
+  Rebuild now resolves through the merge map and keeps merge survivors on
+  their surviving key.
 
 - **Project “source emails” panel crashed** — Clicking the source-email count
   hit an in-memory project list built before that index existed and showed

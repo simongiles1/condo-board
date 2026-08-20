@@ -10,17 +10,15 @@ const globalForDb = globalThis as unknown as {
 };
 
 function resolveDatabaseUrl(): string {
-  // CONCERN: Local `npm run dev` still uses Docker Postgres (localhost:5433)
-  // via DATABASE_URL. Production Coolify uses COND_BOARD_POSTGRES_URL → the
-  // Supabase project. Harvest / backfill must not run twice (cost + time);
-  // local should share that Supabase URI. Cutover is not done yet — do not
-  // re-run corpus extracts against Docker.
+  // Local `npm run dev` and Coolify both use the same Supabase URI
+  // (DATABASE_URL / COND_BOARD_POSTGRES_URL). Compose Postgres on
+  // localhost:5433 is rollback-only — do not point app data at it.
   const connectionString =
     process.env.COND_BOARD_POSTGRES_URL?.trim() ||
     process.env.DATABASE_URL?.trim();
   if (!connectionString) {
     throw new Error(
-      "DATABASE_URL is required (e.g. postgresql://condo:condo@localhost:5433/condo_board)",
+      "DATABASE_URL is required (Supabase URI with sslmode=require, same as Coolify).",
     );
   }
   if (connectionString.startsWith("file:")) {
@@ -29,6 +27,34 @@ function resolveDatabaseUrl(): string {
     );
   }
   return connectionString;
+}
+
+/**
+ * Windows TLS inspection treats the pooler's cert as a self-signed chain,
+ * and node-pg 8 aliases sslmode=require to verify-full. Strip sslmode and
+ * relax verification only on win32 → Supabase. Coolify Linux keeps URI SSL.
+ */
+export function postgresPoolOptions(connectionString: string): {
+  connectionString: string;
+  ssl?: { rejectUnauthorized: boolean };
+} {
+  const isSupabase =
+    /supabase\.(co|com)|pooler\.supabase\.com/i.test(connectionString);
+  if (!(isSupabase && process.platform === "win32")) {
+    return { connectionString };
+  }
+  let stripped = connectionString;
+  try {
+    const parsed = new URL(connectionString);
+    parsed.searchParams.delete("sslmode");
+    stripped = parsed.toString();
+  } catch {
+    stripped = connectionString.replace(/[?&]sslmode=[^&]+/gi, "");
+  }
+  return {
+    connectionString: stripped,
+    ssl: { rejectUnauthorized: false },
+  };
 }
 
 function getPool(): Pool {
@@ -41,10 +67,10 @@ function getPool(): Pool {
   if (!globalForDb.pool) {
     // Fail fast on a dead peer instead of waiting ~30s for TCP timeout.
     globalForDb.pool = new Pool({
-      connectionString,
+      ...postgresPoolOptions(connectionString),
       max: 10,
       idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 8_000,
+      connectionTimeoutMillis: 20_000,
     });
     globalForDb.databaseUrl = connectionString;
   }

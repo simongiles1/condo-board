@@ -72,7 +72,9 @@ export function formatAuthDbError(
       dbUrl.includes("localhost") ||
       dbUrl.includes("127.0.0.1");
     if (isLocalDev) {
-      return "Database connection failed. Start Postgres with `docker compose up db -d`, then run `npm run db:migrate`.";
+      return dbUrl.includes("supabase")
+        ? "Database connection failed. Check DATABASE_URL points at the same Supabase URI Coolify uses."
+        : "Database connection failed. Start Postgres with `docker compose up db -d`, then run `npm run db:migrate`.";
     }
     return "Database connection failed. Remove DATABASE_URL from Coolify env vars and redeploy.";
   }

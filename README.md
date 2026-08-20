@@ -22,13 +22,13 @@ Fill values:
 
 ```bash
 GEMINI_API_KEY=
-DATABASE_URL=postgresql://condo:condo@localhost:5433/condo_board
+DATABASE_URL=postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres?sslmode=require
 # Optional overrides
 GEMINI_MODEL_MINUTES=gemini-2.0-flash
 GEMINI_MODEL_TODOS=gemini-2.0-flash
 ```
 
-Create dirs, start Postgres (`docker compose up db -d`), and apply migrations:
+Create dirs and apply migrations against that same Supabase URI:
 
 ```bash
 mkdir uploads

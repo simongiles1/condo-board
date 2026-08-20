@@ -56,6 +56,26 @@ function getConnectionString() {
   return connectionString;
 }
 
+function postgresPoolOptions(connectionString) {
+  const isSupabase =
+    /supabase\.(co|com)|pooler\.supabase\.com/i.test(connectionString);
+  if (!(isSupabase && process.platform === "win32")) {
+    return { connectionString };
+  }
+  let stripped = connectionString;
+  try {
+    const parsed = new URL(connectionString);
+    parsed.searchParams.delete("sslmode");
+    stripped = parsed.toString();
+  } catch {
+    stripped = connectionString.replace(/[?&]sslmode=[^&]+/gi, "");
+  }
+  return {
+    connectionString: stripped,
+    ssl: { rejectUnauthorized: false },
+  };
+}
+
 function logConnectionTarget() {
   try {
     const { hostname, port, pathname } = new URL(getConnectionString());
@@ -274,8 +294,8 @@ async function main() {
   logConnectionTarget();
 
   const pool = new Pool({
-    connectionString: getConnectionString(),
-    connectionTimeoutMillis: 5000,
+    ...postgresPoolOptions(getConnectionString()),
+    connectionTimeoutMillis: 20000,
   });
 
   const client = await pool.connect();

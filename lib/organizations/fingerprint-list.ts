@@ -23,6 +23,7 @@ import {
   loadOrganizationFieldDenials,
   normalizeOrgNameKey,
   orgIdentityKey,
+  rebuildOrgIdentityKeyAfterDenials,
   stripDeniedFieldsFromOrgCard,
   type OrgFieldDenial,
 } from "@/lib/organizations/field-denials";
@@ -208,7 +209,11 @@ function applyFieldDenialsToSummaries(
       ...org,
       ...stripped,
       aliases: [...(stripped.aliases ?? [])],
-      id: orgIdentityKey(stripped),
+      id: rebuildOrgIdentityKeyAfterDenials({
+        originalKey: org.id,
+        strippedCard: stripped,
+        mergeMap,
+      }),
       displayName: entityCardDisplayName(stripped),
       emailIds: new Set(org.emailIds),
     });

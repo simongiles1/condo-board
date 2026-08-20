@@ -11,6 +11,7 @@ import {
   applyOrgFieldDenialsToCards,
   orgCardMatchesFieldDenial,
   orgIdentityKey,
+  rebuildOrgIdentityKeyAfterDenials,
   type OrgFieldDenial,
 } from "../lib/organizations/field-denials";
 import {
@@ -172,5 +173,63 @@ describe("applyResidualEmailsFromMovedIdentityBuckets", () => {
       harvestCards,
     });
     assert.equal(next[0]!.email, "jstatham@icc.test");
+  });
+});
+
+describe("rebuildOrgIdentityKeyAfterDenials", () => {
+  const tsccKey = "name:tscc # 2517";
+  const michaelKey = "email:michael@studiorichmond.ca";
+  const domainKey = "email:studiorichmond.ca";
+  const mergeMap = new Map([
+    [michaelKey, tsccKey],
+    [domainKey, tsccKey],
+  ]);
+
+  it("rekeys an unmerged identity-email move onto the name key", () => {
+    const next = rebuildOrgIdentityKeyAfterDenials({
+      originalKey: `email:${studioEmail}`,
+      strippedCard: {
+        name: studioName,
+        organization_role: "Property Management Company",
+        email: null,
+        phone: null,
+        website: null,
+        aliases: [],
+      },
+      mergeMap: new Map(),
+    });
+    assert.equal(next, `name:${studioName.toLowerCase()}`);
+  });
+
+  it("keeps a merge survivor instead of forking onto a remaining harvest email", () => {
+    const next = rebuildOrgIdentityKeyAfterDenials({
+      originalKey: tsccKey,
+      strippedCard: {
+        name: "TSCC # 2517",
+        organization_role: null,
+        email: "michael@studiorichmond.ca",
+        phone: null,
+        website: null,
+        aliases: ["Studio Richmond"],
+      },
+      mergeMap,
+    });
+    assert.equal(next, tsccKey);
+  });
+
+  it("resolves a rebuilt absorbed email key back to the survivor", () => {
+    const next = rebuildOrgIdentityKeyAfterDenials({
+      originalKey: michaelKey,
+      strippedCard: {
+        name: "Studio Richmond",
+        organization_role: null,
+        email: "michael@studiorichmond.ca",
+        phone: null,
+        website: null,
+        aliases: [],
+      },
+      mergeMap,
+    });
+    assert.equal(next, tsccKey);
   });
 });

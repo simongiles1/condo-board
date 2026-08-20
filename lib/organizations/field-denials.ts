@@ -78,6 +78,43 @@ export function orgIdentityKey(card: OrgEntityCard): string {
   return `empty:${entityCardDisplayName(card)}`;
 }
 
+function isMergeSurvivorKey(
+  key: string,
+  mergeMap: Map<string, string>,
+): boolean {
+  if (resolveOrgSurvivorKey(key, mergeMap) !== key) return false;
+  for (const survivor of mergeMap.values()) {
+    if (resolveOrgSurvivorKey(survivor, mergeMap) === key) return true;
+  }
+  return false;
+}
+
+/**
+ * Identity key after stripping denied fields.
+ * Resolve through the merge map so a rebuilt `email:…` key that was already
+ * absorbed stays on the survivor. Keep merge survivors on their surviving
+ * key even when remaining harvest emails would mint a new identity — that
+ * is how `email:michael@…` and `email:studiorichmond.ca` fork after a merge.
+ */
+export function rebuildOrgIdentityKeyAfterDenials(params: {
+  originalKey: string;
+  strippedCard: OrgEntityCard;
+  mergeMap: Map<string, string>;
+}): string {
+  const rebuilt = orgIdentityKey(params.strippedCard);
+  const rebuiltSurvivor = resolveOrgSurvivorKey(rebuilt, params.mergeMap);
+  if (rebuiltSurvivor !== rebuilt) return rebuiltSurvivor;
+
+  if (
+    isMergeSurvivorKey(params.originalKey, params.mergeMap) &&
+    rebuilt !== params.originalKey
+  ) {
+    return params.originalKey;
+  }
+
+  return rebuilt;
+}
+
 function fieldValueMatchesDenial(
   card: OrgEntityCard,
   denial: OrgFieldDenial,

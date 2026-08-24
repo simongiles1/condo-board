@@ -19,7 +19,7 @@ services:
   inngest:
     image: inngest/inngest:latest
     ports:
-      - "8288:8288"
+      - "14288:8288"
     volumes:
       - inngest_data:/var/lib/inngest
     environment:

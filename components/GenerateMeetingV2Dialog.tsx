@@ -239,7 +239,7 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
             </div>
 
             <BoardPackagePageSelector
-              inputName="boardPackage"
+              label="Board package *"
               onSelectionChange={handleBoardPackageChange}
             />
 

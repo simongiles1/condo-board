@@ -21,11 +21,13 @@ export type { BoardPackageSelection };
 
 type Props = {
   disabled?: boolean;
+  label?: string;
   onSelectionChange: (value: BoardPackageSelection | null) => void;
 };
 
 export function BoardPackagePageSelector({
   disabled = false,
+  label = "Board package / management report *",
   onSelectionChange,
 }: Props) {
   const inputId = useId();
@@ -170,7 +172,7 @@ export function BoardPackagePageSelector({
   return (
     <div className="flex flex-col gap-2 md:col-span-3">
       <span className="text-sm font-medium text-slate-800">
-        Board package / management report *
+        {label}
       </span>
 
       {!sourceFile ? (

@@ -86,7 +86,7 @@ export function BusinessPlanClient({
   const [view, setView] = useState<ViewId>("value");
   const [scenario, setScenario] = useState<ScenarioId>("full");
   const [units, setUnits] = useState(THIS_BUILDING_UNITS);
-  const [priceUsd, setPriceUsd] = useState(PRICING.lowUsd);
+  const [priceUsd, setPriceUsd] = useState<number>(PRICING.lowUsd);
   const [openCategory, setOpenCategory] = useState<string>("equipment");
 
   const annualValue = useMemo(

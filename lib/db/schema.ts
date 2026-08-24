@@ -1733,3 +1733,5 @@ export const extractionSourcesRelations = relations(
     }),
   }),
 );
+
+export * from "./schema-v2";

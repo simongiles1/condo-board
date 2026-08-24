@@ -23,6 +23,7 @@ import type {
   ProjectFingerprintListStats,
   ProjectFingerprintSummary,
 } from "@/lib/projects/fingerprint-list";
+import type { ProjectDeniableField } from "@/lib/projects/field-denials";
 import {
   clampEntityListPage,
   sliceEntityListPage,

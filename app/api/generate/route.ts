@@ -22,7 +22,8 @@ import {
   validateTodosOutput,
 } from "@/lib/gemini/parse-output";
 import { getDb } from "@/lib/db";
-import { meetings } from "@/lib/db/schema";
+import { meetings, meetingsV2 } from "@/lib/db/schema";
+import { inngest } from "@/lib/inngest/client";
 import {
   isMinutesV2TooSparse,
   shouldRetryForRestrictedAddendum,
@@ -185,7 +186,10 @@ export async function POST(req: Request) {
   const titleRaw = formData.get("title");
   const meetingDateRaw = formData.get("meetingDate");
   const transcriptFile = formData.get("transcript");
-  const pdfFile = formData.get("referencePdf");
+  let pdfFile = formData.get("referencePdf");
+  if (pdfFile && typeof pdfFile === "object" && "size" in pdfFile && (pdfFile as File).size === 0) {
+    pdfFile = null;
+  }
   const boardPackageFile = formData.get("boardPackage");
 
   if (
@@ -206,8 +210,8 @@ export async function POST(req: Request) {
     );
   }
 
-  if (!assertFile(pdfFile)) {
-    return NextResponse.json({ error: "Reference PDF is required." }, {
+  if (pdfFile && !assertFile(pdfFile)) {
+    return NextResponse.json({ error: "Reference PDF is invalid." }, {
       status: 400,
     });
   }
@@ -219,13 +223,15 @@ export async function POST(req: Request) {
     );
   }
 
+  const referencePdfFile = assertFile(pdfFile) ? pdfFile : null;
+
   if (!transcriptFile.name.toLowerCase().endsWith(".vtt")) {
     return NextResponse.json({ error: "Transcript must be a .vtt file." }, {
       status: 400,
     });
   }
 
-  if (!pdfFile.name.toLowerCase().endsWith(".pdf")) {
+  if (referencePdfFile && !referencePdfFile.name.toLowerCase().endsWith(".pdf")) {
     return NextResponse.json({ error: "Reference must be a .pdf file." }, {
       status: 400,
     });
@@ -241,7 +247,7 @@ export async function POST(req: Request) {
   const meetingId = randomUUID();
 
   const vttBuffer = Buffer.from(await transcriptFile.arrayBuffer());
-  const pdfBuffer = Buffer.from(await pdfFile.arrayBuffer());
+  const pdfBuffer = referencePdfFile ? Buffer.from(await referencePdfFile.arrayBuffer()) : null;
   const boardPackageBuffer = Buffer.from(await boardPackageFile.arrayBuffer());
 
   let transcriptReadable: string;
@@ -261,28 +267,30 @@ export async function POST(req: Request) {
     );
   }
 
-  let referenceStyle: string;
-  try {
-    referenceStyle = await extractPdfText(pdfBuffer);
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json(
-      {
-        error:
-          "Could not extract text from the PDF — ensure text is selectable (not scanned).",
-      },
-      { status: 400 },
-    );
-  }
+  let referenceStyle = "No reference style provided.";
+  if (pdfBuffer) {
+    try {
+      referenceStyle = await extractPdfText(pdfBuffer);
+    } catch (error) {
+      console.error(error);
+      return NextResponse.json(
+        {
+          error:
+            "Could not extract text from the PDF — ensure text is selectable (not scanned).",
+        },
+        { status: 400 },
+      );
+    }
 
-  if (!referenceStyle.trim()) {
-    return NextResponse.json(
-      {
-        error:
-          "Reference PDF yielded no selectable text — try exporting again from Acrobat.",
-      },
-      { status: 400 },
-    );
+    if (!referenceStyle.trim()) {
+      return NextResponse.json(
+        {
+          error:
+            "Reference PDF yielded no selectable text — try exporting again from Acrobat.",
+        },
+        { status: 400 },
+      );
+    }
   }
 
   let boardPackageText: string;
@@ -514,7 +522,9 @@ export async function POST(req: Request) {
     const boardPackageAbsolute = path.join(uploadRoot, "board-package.pdf");
 
     await writeFile(vttAbsolute, vttBuffer);
-    await writeFile(pdfAbsolute, pdfBuffer);
+    if (pdfBuffer) {
+      await writeFile(pdfAbsolute, pdfBuffer);
+    }
     await writeFile(boardPackageAbsolute, boardPackageBuffer);
 
     const db = getDb();
@@ -536,14 +546,34 @@ export async function POST(req: Request) {
       vttFilePath: path
         .relative(process.cwd(), vttAbsolute)
         .replace(/\\/g, "/"),
-      pdfFilePath: path
+      pdfFilePath: pdfBuffer ? path
         .relative(process.cwd(), pdfAbsolute)
-        .replace(/\\/g, "/"),
+        .replace(/\\/g, "/") : "",
       boardPackageFilePath: path
         .relative(process.cwd(), boardPackageAbsolute)
         .replace(/\\/g, "/"),
       createdAt,
       aiUsageJson: serializeAiUsage({ runs: [initialUsageRun] }),
+    });
+
+    // Also insert a shadow copy for the new V2 asynchronous pipeline
+    await db.insert(meetingsV2).values({
+      id: meetingId,
+      sourceKey: meetingId,
+      title: titleRaw.trim(),
+      meetingDate: meetingDateRaw,
+      pipelineState: "created",
+      currentStep: "Ready to start",
+      progressPercent: 0,
+      lastError: null,
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    // Trigger the background V2 extraction pipeline
+    await inngest.send({
+      name: "meeting-v2/pipeline.start",
+      data: { meetingId },
     });
 
     const allMinuteWarnings = [...minuteStructuralWarnings];

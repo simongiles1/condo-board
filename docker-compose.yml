@@ -16,6 +16,15 @@ services:
     ports:
       - "${DB_PORT_BINDING:-127.0.0.1:5433:5432}"
 
+  inngest:
+    image: inngest/inngest:latest
+    ports:
+      - "8288:8288"
+    volumes:
+      - inngest_data:/var/lib/inngest
+    environment:
+      - INNGEST_DEV=1
+
   app:
     build:
       context: .
@@ -28,6 +37,7 @@ services:
         required: false
     environment:
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      INNGEST_DEV: 1
     volumes:
       - uploads_data:/app/uploads
       - note_screenshots_data:/app/data/note-screenshots
@@ -41,3 +51,4 @@ volumes:
   uploads_data:
   note_screenshots_data:
   email_attachments_data:
+  inngest_data:

@@ -134,7 +134,9 @@ export function AnchoredMenuPortal({
       menu && typeof ResizeObserver !== "undefined"
         ? new ResizeObserver(updatePosition)
         : null;
-    resizeObserver?.observe(menu);
+    if (resizeObserver && menu) {
+      resizeObserver.observe(menu);
+    }
 
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);

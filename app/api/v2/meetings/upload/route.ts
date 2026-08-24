@@ -64,6 +64,14 @@ export async function POST(req: Request) {
   const uploadRoot = path.join(process.cwd(), "uploads", meetingId);
 
   try {
+    console.info("[meetings:v2:upload] received", {
+      meetingId,
+      title: titleRaw.trim(),
+      meetingDate: meetingDateRaw,
+      transcriptName: transcriptFile.name,
+      boardPackageName: boardPackageFile.name,
+    });
+
     const vttBuffer = Buffer.from(await transcriptFile.arrayBuffer());
     const boardPackageBuffer = Buffer.from(await boardPackageFile.arrayBuffer());
 
@@ -108,9 +116,16 @@ export async function POST(req: Request) {
       updatedAt: createdAt,
     });
 
+    console.info("[meetings:v2:upload] rows created", { meetingId });
+
     await inngest.send({
       name: "meeting-v2/pipeline.start",
       data: { meetingId },
+    });
+
+    console.info("[meetings:v2:upload] event sent", {
+      meetingId,
+      event: "meeting-v2/pipeline.start",
     });
 
     return NextResponse.json({ id: meetingId });

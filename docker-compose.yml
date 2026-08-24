@@ -18,7 +18,17 @@ services:
 
   inngest:
     image: inngest/inngest:latest
-    command: ["inngest", "start", "--sqlite-dir", "/var/lib/inngest"]
+    command:
+      [
+        "inngest",
+        "start",
+        "--sqlite-dir",
+        "/var/lib/inngest",
+        "--sdk-url",
+        "http://app:3000/api/inngest",
+        "--poll-interval",
+        "60",
+      ]
     restart: unless-stopped
     ports:
       - "14288:8288"

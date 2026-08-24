@@ -26,7 +26,7 @@ ENV NODE_ENV=production
 
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs \
-  && mkdir -p /app/uploads /app/data/note-screenshots /app/scripts \
+  && mkdir -p /app/uploads /app/data/note-screenshots /app/data/email-attachments /app/scripts \
   && chown -R nextjs:nodejs /app
 
 COPY --from=builder /app/public ./public
@@ -38,7 +38,6 @@ COPY --chown=nextjs:nodejs scripts/wait-for-postgres.cjs ./scripts/wait-for-post
 COPY --chown=nextjs:nodejs docker-entrypoint.sh ./docker-entrypoint.sh
 RUN sed -i 's/\r$//' ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
 
-USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0

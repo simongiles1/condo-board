@@ -1,7 +1,17 @@
 #!/bin/sh
 
+set -e
+
 export COND_BOARD_POSTGRES_URL="${COND_BOARD_POSTGRES_URL:-postgresql://condo:condo@db:5432/condo_board}"
 export DATABASE_URL="$COND_BOARD_POSTGRES_URL"
+
+for dir in /app/uploads /app/data/note-screenshots /app/data/email-attachments; do
+  mkdir -p "$dir"
+done
+
+if [ "$(id -u)" = "0" ]; then
+  chown -R nextjs:nodejs /app/uploads /app/data/note-screenshots /app/data/email-attachments
+fi
 
 echo "[startup] Database URL host: $(node -e "try { console.log(new URL(process.env.COND_BOARD_POSTGRES_URL).host) } catch { console.log('invalid') }")"
 
@@ -33,4 +43,8 @@ case "$existing_node_options" in
   *dns-result-order*) ;;
   *) export NODE_OPTIONS="${existing_node_options} --dns-result-order=ipv4first" ;;
 esac
+if [ "$(id -u)" = "0" ]; then
+  exec su -s /bin/sh nextjs -c "node server.js"
+fi
+
 exec node server.js

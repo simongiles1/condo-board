@@ -22,6 +22,10 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
     .from(meetings)
     .orderBy(desc(meetings.meetingDate));
 
+  const visibleMeetingRows = meetingRows.filter(
+    (meeting) => meeting.minutesContent.trim().length > 0,
+  );
+
   const meetingV2Rows = await db
     .select()
     .from(meetingsV2)
@@ -55,13 +59,13 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
       </div>
 
       {!isV2 ? (
-        meetingRows.length === 0 ? (
+        visibleMeetingRows.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
             Nothing saved yet — drop in a Teams VTT plus your reference PDF to
             generate the first workbook.
           </div>
         ) : (
-          <MeetingsGrid meetings={meetingRows} />
+          <MeetingsGrid meetings={visibleMeetingRows} />
         )
       ) : (
         <div className="px-4">

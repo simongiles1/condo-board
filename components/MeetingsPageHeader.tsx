@@ -3,8 +3,9 @@
 import { useState } from "react";
 
 import { GenerateMeetingDialog } from "@/components/GenerateMeetingDialog";
+import { GenerateMeetingV2Dialog } from "@/components/GenerateMeetingV2Dialog";
 
-export function MeetingsPageHeader() {
+export function MeetingsPageHeader({ isV2 = false }: { isV2?: boolean }) {
   const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
@@ -23,13 +24,20 @@ export function MeetingsPageHeader() {
           onClick={() => setDialogOpen(true)}
           className="text-sm font-semibold text-teal-700 hover:text-teal-900"
         >
-          + New upload
+          {isV2 ? "+ New V2 upload" : "+ New upload"}
         </button>
       </div>
-      <GenerateMeetingDialog
-        open={dialogOpen}
-        onClose={() => setDialogOpen(false)}
-      />
+      {isV2 ? (
+        <GenerateMeetingV2Dialog
+          open={dialogOpen}
+          onClose={() => setDialogOpen(false)}
+        />
+      ) : (
+        <GenerateMeetingDialog
+          open={dialogOpen}
+          onClose={() => setDialogOpen(false)}
+        />
+      )}
     </>
   );
 }

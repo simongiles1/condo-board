@@ -30,7 +30,7 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
   return (
     <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-6">
       <div className="flex flex-col space-y-4">
-        <MeetingsPageHeader />
+        <MeetingsPageHeader isV2={isV2} />
         
         <div className="flex">
           <div className="flex space-x-1 rounded-lg bg-slate-100 p-1">

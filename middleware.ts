@@ -20,6 +20,7 @@ const PUBLIC_PATHS = [
   "/api/auth/signup",
   "/api/auth/forgot-password",
   "/api/auth/reset-password",
+  "/api/health",
   "/api/email/oauth/start",
   "/api/email/oauth/callback",
   "/api/email/oauth/config",

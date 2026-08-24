@@ -18,12 +18,21 @@ services:
 
   inngest:
     image: inngest/inngest:latest
+    command: ["inngest", "start", "--sqlite-dir", "/var/lib/inngest"]
+    restart: unless-stopped
     ports:
       - "14288:8288"
     volumes:
       - inngest_data:/var/lib/inngest
     environment:
-      - INNGEST_DEV=1
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789}
+    healthcheck:
+      test: ["CMD", "inngest", "alpha", "doctor", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   app:
     build:
@@ -49,13 +58,18 @@ services:
         required: false
     environment:
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
-      INNGEST_DEV: 1
+      INNGEST_DEV: 0
+      INNGEST_BASE_URL: http://inngest:8288
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789}
     volumes:
       - uploads_data:/app/uploads
       - note_screenshots_data:/app/data/note-screenshots
       - email_attachments_data:/app/data/email-attachments
     depends_on:
       db:
+        condition: service_healthy
+      inngest:
         condition: service_healthy
 
 volumes:

@@ -93,10 +93,14 @@ export function renderMotionLines(motion: MotionV2): RenderedMotionLines {
 }
 
 export function renderActionLine(action: ActionItemV2): string {
-  return `**Action: ${action.assignee.trim()} ${action.taskDescription.trim()}**`.replace(
-    /\s+/g,
-    " ",
-  );
+  const assignee = action.assignee.trim();
+  let desc = action.taskDescription.trim();
+  
+  if (assignee && desc.toLowerCase().startsWith(assignee.toLowerCase())) {
+    desc = desc.substring(assignee.length).trim();
+  }
+  
+  return `**Action: ${assignee} ${desc}**`.replace(/\s+/g, " ");
 }
 
 /** Status values suppressed entirely from the rendered document. */

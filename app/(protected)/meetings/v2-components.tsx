@@ -290,7 +290,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     item.validation.some((validation) => validation.severity === "error" || validation.severity === "warning"),
   ).length;
   const readyCount = reviewableItems.filter(
-    (item) => item.openQuestions.length === 0 && item.validation.length === 0,
+    (item) => item.openQuestions.length === 0 && !item.validation.some(v => v.severity === "error" || v.severity === "warning"),
   ).length;
 
   return (
@@ -658,7 +658,7 @@ function AgendaReviewPanel({
       <div className="space-y-4">
         {status.items.map((item) => {
           const isOpen = openItemId === item.id;
-          const hasFlags = item.validation.length > 0;
+          const hasFlags = item.validation.some(v => v.severity === "error" || v.severity === "warning");
           return (
             <div
               key={item.id}
@@ -688,7 +688,7 @@ function AgendaReviewPanel({
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                   <span>{item.openQuestions.length} open</span>
-                  <span>{item.validation.length} flags</span>
+                  <span>{item.validation.filter(v => v.severity === "error" || v.severity === "warning").length} flags</span>
                   <span>{isOpen ? "Collapse" : "Expand"}</span>
                 </div>
               </button>

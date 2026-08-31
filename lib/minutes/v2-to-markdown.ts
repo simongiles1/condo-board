@@ -190,6 +190,11 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
           `The Chair asked for any errors or omissions in the minutes of the Board meeting of ${prevDate} that were circulated previously for review. Several amendments were agreed to and incorporated into a clean copy of the minutes.`,
         );
         lines.push("");
+      } else {
+        lines.push(
+          `The Chair asked for any errors or omissions in the minutes of the Board meeting of ${prevDate} that were circulated previously for review. There being none, the minutes were accepted as presented.`,
+        );
+        lines.push("");
       }
       if (approval.motion) {
         lines.push(...renderMotionLines(approval.motion).lines);

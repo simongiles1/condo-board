@@ -47,7 +47,7 @@ Important rules:
     2. Populate the formal motion object:
        - moved_by: The specific director named, or default to Board President / Chair among attending voting directors (format: F. LastName).
        - seconded_by: The specific director named, or default to secondary attending voting Director (format: F. LastName).
-       - resolution_text: Formal resolution starting with "THAT the minutes of the Board meeting dated [Date] be approved [as amended]."
+       - resolution_text: Formal resolution starting with "THAT the minutes of the Board meeting dated [Date] be approved [as amended]." (If the exact date is unknown, use "THAT the minutes of the previous Board meeting be approved [as amended].")
        - result: "CARRIED"
        - status: "Motion carried."
   - REGULAR APPROVALS & MOTIONS:

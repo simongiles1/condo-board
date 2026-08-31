@@ -70,6 +70,7 @@ Important rules:
 - Use the transcript to enrich existing package topics and to add extraTopics only when they are genuinely separate.
 - If a person, contractor, or role is only partially known, preserve the partial wording in aliases or notes instead of inventing a full name or title.
 - Do not create topics from meeting administration lines such as call to order, ratification of agenda, next meeting scheduling, or adjournment.
+- EXCEPTION: You MUST extract "Approval of Previous Minutes" as a discrete topic. You MUST include the date of the previous meeting in the title if it is known (e.g. "Approval of Previous Minutes: May 19, 2026").
 - Do not create topics from attachment-only boilerplate such as quotation validity, payment terms, warranties, limitation of liability, generic email sign-offs, gym rules, or record-request instructions unless they clearly define a separate board matter.
 - Do not invent motions, outcomes, or minutes wording.
 - Return strict JSON only. No markdown fences. No commentary.`;
@@ -181,9 +182,7 @@ Transcript rules:
 - Preserve early guest-presentation topics when the transcript clearly shows a contractor, engineer, or presenter leading a distinct opening discussion block.
 - If the transcript clearly reveals a planned or structured meeting matter that belongs in the main agenda but is missing from documentTopics, add it to documentTopics rather than extraTopics.
 - Use extraTopics only for genuinely additional matters that do not behave like an official agenda topic.
-- Add extraTopics only when the transcript clearly discusses a separate matter.
-- Every transcript-only new matter must use itemType "extra_topic". Do not invent custom itemType values for extraTopics.
-- Do not create an extra topic just because speakers mention implementation details, jokes, repeated recap, or side comments about an existing topic.
+- Every transcript-only new matter must use itemType "extra_topic". EXCEPTION: If the transcript introduces the approval of previous minutes, add it to documentTopics with itemType "approval_of_previous_minutes" and ensure the title includes the previous meeting date if mentioned (e.g. "Approval of Previous Minutes: May 19, 2026"). Do not invent custom itemType values for extraTopics.
 - If the transcript uses shorthand, partial names, or abbreviated project references, attach them to the matching existing topic through aliases or notes whenever reasonably possible.
 - Do not merge a transcript matter into an existing topic unless they are clearly the same business issue. Shared words, contractor names, or building-area overlap alone are not enough.
 - If the transcript gives a more specific unit number, room name, incident, or records issue than the package topic list, preserve that specific matter instead of flattening it into a broader nearby topic.

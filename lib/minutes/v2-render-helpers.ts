@@ -27,7 +27,8 @@ export function romanMarker(index: number): string {
 }
 
 /** ISO or display date → "Monday, March 23, 2026". */
-export function formatMeetingDateDisplay(dateStr: string): string {
+export function formatMeetingDateDisplay(dateStr: string | undefined): string {
+  if (!dateStr) return "";
   const trimmed = dateStr.trim();
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
   if (iso) {
@@ -71,7 +72,8 @@ export function meetingMediumFromMetadata(platform?: string): string {
   return platform?.trim() || "virtually";
 }
 
-export function formatMeetingTimeClause(time: string): string {
+export function formatMeetingTimeClause(time: string | undefined): string {
+  if (!time) return "";
   const trimmed = time.trim().replace(/\.+$/, "");
   return trimmed ? ` at ${trimmed}.` : "";
 }

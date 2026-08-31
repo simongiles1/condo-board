@@ -119,13 +119,13 @@ type IndexedAgendaEntry = {
 };
 
 function indexAgendaItems(
-  items: AgendaItemV2[],
+  items: AgendaItemV2[] | undefined,
   bucket: AgendaBucket,
   restricted: boolean,
 ): IndexedAgendaEntry[] {
   const entries: IndexedAgendaEntry[] = [];
   let displayIndex = 0;
-  items.forEach((item, index) => {
+  (items || []).forEach((item, index) => {
     const isRestricted = Boolean(item.restricted);
     if (restricted ? isRestricted : !isRestricted) {
       entries.push({
@@ -271,7 +271,7 @@ function ActionItemsEditor({
 }) {
   return (
     <div className="minutes-action-items">
-      {item.actionItems.map((action, actionIndex) => (
+      {(item.actionItems || []).map((action, actionIndex) => (
         <div key={actionIndex} className="minutes-action-row">
           <span className="minutes-action-label">Action:</span>
           <input
@@ -453,7 +453,7 @@ function AgendaItemEditor({
           onRemove={() => onDocChange(updateMotion(doc, path, undefined))}
         />
 
-        {item.subItems.map((sub, subIdx) => (
+        {(item.subItems || []).map((sub, subIdx) => (
           <AgendaItemEditor
             key={subIdx}
             doc={doc}
@@ -574,10 +574,10 @@ function AttendanceSection({
   doc: MinutesDocumentV2;
   onOpenAttendeesDialog: () => void;
 }) {
-  const medium = meetingMediumFromMetadata(doc.metadata.meetingPlatform);
-  const dateDisplay = formatMeetingDateDisplay(doc.metadata.meetingDate);
-  const corp = doc.metadata.corporationName.trim();
-  const timeClause = formatMeetingTimeClause(doc.metadata.meetingTime);
+  const medium = meetingMediumFromMetadata((doc.metadata || {}).meetingPlatform);
+  const dateDisplay = formatMeetingDateDisplay((doc.metadata || {}).meetingDate);
+  const corp = (doc.metadata || {}).corporationName?.trim() || "";
+  const timeClause = formatMeetingTimeClause((doc.metadata || {}).meetingTime);
 
   return (
     <section className="minutes-structured-section">
@@ -598,10 +598,10 @@ function AttendanceSection({
       </div>
       {(
         [
-          ["Present:", doc.attendance.present],
-          ["By Invitation:", doc.attendance.byInvitation],
-          ["Guests:", doc.attendance.guests],
-          ["Regrets:", doc.attendance.regrets],
+          ["Present:", doc?.attendance?.present || []],
+          ["By Invitation:", doc?.attendance?.byInvitation || []],
+          ["Guests:", doc?.attendance?.guests || []],
+          ["Regrets:", doc?.attendance?.regrets || []],
         ] as const
       ).map(([label, people]) =>
         people.length > 0 ? (
@@ -676,7 +676,7 @@ function RestrictedAddendumSection({
 }) {
   if (!hasAnyRestrictedItem(doc)) return null;
 
-  const mr = doc.managementReport;
+  const mr = doc.managementReport || {};
   const finPub = indexAgendaItems(doc.financialMatters, "financialMatters", false);
   const finRest = indexAgendaItems(doc.financialMatters, "financialMatters", true);
   const ratPub = indexAgendaItems(
@@ -822,7 +822,7 @@ function RestrictedAddendumSection({
         </>
       ) : null}
 
-      {doc.postTerminationSections.map((section, sectionIdx) => {
+      {(doc.postTerminationSections || []).map((section, sectionIdx) => {
         const pub = indexPostTerminationItems(sectionIdx, section.items, false);
         const rest = indexPostTerminationItems(sectionIdx, section.items, true);
         if (!rest.length) return null;
@@ -853,7 +853,7 @@ export function MinutesStructuredEditor({
   onDocChange,
   onOpenAttendeesDialog,
 }: Props) {
-  const mr = doc.managementReport;
+  const mr = doc.managementReport || {};
 
   const finPub = indexAgendaItems(doc.financialMatters, "financialMatters", false);
   const ratPub = indexAgendaItems(
@@ -951,7 +951,7 @@ export function MinutesStructuredEditor({
             Add approval entry
           </button>
         </div>
-        {doc.approvalOfPreviousMinutes.map((approval, idx) => (
+        {(doc.approvalOfPreviousMinutes || []).map((approval, idx) => (
           <div key={idx} className="minutes-approval-entry">
             <label className="block text-xs font-medium text-slate-500">
               Previous meeting date
@@ -1202,14 +1202,14 @@ export function MinutesStructuredEditor({
       </section>
 
       {/* Post-termination sections */}
-      {doc.postTerminationSections.map((section, sectionIdx) => {
+      {(doc.postTerminationSections || []).map((section, sectionIdx) => {
         const pub = indexPostTerminationItems(sectionIdx, section.items, false);
-        if (!pub.length && !section.title.trim()) return null;
+        if (!pub.length && !(section.title || "").trim()) return null;
         return (
           <section key={sectionIdx} className="minutes-structured-section">
             <SectionHeading
               number={String(8 + sectionIdx)}
-              title={section.title.toUpperCase() || "Section"}
+              title={(section.title || "").toUpperCase() || "Section"}
             />
             <AgendaItemsList
               doc={doc}

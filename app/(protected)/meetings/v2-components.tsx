@@ -1,7 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useRef, type ReactNode } from "react";
+import { MinutesStructuredEditor } from "@/components/MinutesStructuredEditor";
+import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
+import { serializeMinutesDoc } from "@/lib/minutes/doc-v2-edits";
+import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
 
 type MeetingCard = {
   id: string;
@@ -73,6 +77,7 @@ type MeetingV2Status = {
     id: string;
     title: string;
     contentMarkdown: string;
+    json: string | null;
     format: string;
     createdAt: string;
     updatedAt: string;
@@ -898,13 +903,32 @@ function DraftWorkspacePanel({
   meetingId: string;
   draft: MeetingV2Status["latestDraft"] | null;
 }) {
+  const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
   return (
     <SectionCard
       eyebrow="Draft"
-      title="Minutes draft preview"
-      description="The latest generated draft appears here in the same workspace so the meeting review and document review stay connected."
+      title={
+        <div className="flex items-center justify-between">
+          <span>Minutes draft</span>
+          <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+            <button
+              onClick={() => setEditorMode("edit")}
+              className={`px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${editorMode === "edit" ? "bg-teal-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+            >
+              Editor
+            </button>
+            <button
+              onClick={() => setEditorMode("preview")}
+              className={`border-l border-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${editorMode === "preview" ? "bg-teal-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+            >
+              PDF Preview
+            </button>
+          </div>
+        </div>
+      }
+      description="Edit the generated minutes directly, or toggle to the PDF preview to see the final layout."
     >
-      <DraftPreviewBody meetingId={meetingId} draft={draft} heightClassName="h-[70dvh] min-h-[42rem]" />
+      <DraftPreviewBody meetingId={meetingId} draft={draft} mode={editorMode} heightClassName="h-[70dvh] min-h-[42rem]" />
     </SectionCard>
   );
 }
@@ -912,12 +936,45 @@ function DraftWorkspacePanel({
 function DraftPreviewBody({
   meetingId,
   draft,
+  mode,
   heightClassName,
 }: {
   meetingId: string;
   draft: MeetingV2Status["latestDraft"] | null;
+  mode: "edit" | "preview";
   heightClassName: string;
 }) {
+  const [doc, setDoc] = useState<MinutesDocumentV2 | null>(null);
+  const saveTimeout = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (draft?.json) {
+      try {
+        const parsed = JSON.parse(draft.json);
+        const actualDoc = parsed.minutesV2?.data || parsed.data || parsed;
+        setDoc(actualDoc);
+      } catch (e) {
+        console.error("Failed to parse draft JSON", e);
+      }
+    }
+  }, [draft?.id]); // only re-run when a NEW draft is generated
+
+  function handleDocChange(updated: MinutesDocumentV2) {
+    setDoc(updated);
+    if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    
+    saveTimeout.current = setTimeout(() => {
+      const summaryJson = serializeMinutesDoc(updated);
+      const contentMarkdown = v2ToMarkdown(updated);
+      
+      fetch(`/api/v2/meetings/${meetingId}/draft/save`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draftId: draft!.id, summaryJson, contentMarkdown }),
+      }).catch(console.error);
+    }, 1000); // 1s debounce
+  }
+
   if (!draft) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-sm text-slate-600">
@@ -932,14 +989,27 @@ function DraftPreviewBody({
         <div className="text-sm font-semibold text-slate-950">{draft.title}</div>
         <div className="mt-1 text-sm text-slate-500">Updated {formatDateTime(draft.updatedAt)}</div>
       </div>
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-        <iframe
-          key={draft.id}
-          title={`${draft.title} PDF preview`}
-          src={`/api/v2/meetings/${meetingId}/draft/file`}
-          className={`${heightClassName} w-full bg-white`}
-        />
-      </div>
+      
+      {mode === "edit" && doc ? (
+        <div className="rounded-2xl border border-slate-200 bg-white">
+          <MinutesStructuredEditor
+            doc={doc}
+            onDocChange={handleDocChange}
+            onOpenAttendeesDialog={() => alert("Attendees editor coming soon to V2!")}
+          />
+        </div>
+      ) : null}
+
+      {mode === "preview" ? (
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+          <iframe
+            key={draft.id + doc?.metadata.meetingDate} // force refresh if needed
+            title={`${draft.title} PDF preview`}
+            src={`/api/v2/meetings/${meetingId}/draft/file`}
+            className={`${heightClassName} w-full bg-white`}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

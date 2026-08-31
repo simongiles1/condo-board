@@ -2594,6 +2594,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         id: drafts[0].id,
         title: drafts[0].title,
         contentMarkdown: drafts[0].contentMarkdown,
+        json: drafts[0].summaryJson,
         format: drafts[0].format,
         createdAt: drafts[0].createdAt,
         updatedAt: drafts[0].updatedAt,

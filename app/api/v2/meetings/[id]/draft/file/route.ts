@@ -48,11 +48,12 @@ export async function GET(
   } catch {
     return new Response("Draft metadata is invalid.", { status: 500 });
   }
-  if (!isRecord(parsedSummary) || !isRecord(parsedSummary.minutesV2)) {
+  if (!isRecord(parsedSummary)) {
     return new Response("This draft does not contain structured v2 minutes.", { status: 400 });
   }
 
-  const validated = validateMinutesV2(parsedSummary.minutesV2.data ?? parsedSummary.minutesV2);
+  const docData = parsedSummary.minutesV2?.data || parsedSummary.minutesV2 || parsedSummary.data || parsedSummary;
+  const validated = validateMinutesV2(docData);
   if (!validated.value) {
     return new Response(
       `Saved v2 minutes are invalid: ${validated.errors.join(" ")}`,

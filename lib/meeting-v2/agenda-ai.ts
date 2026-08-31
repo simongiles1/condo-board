@@ -121,7 +121,7 @@ Package chunk rules:
 - If a package section contains numbered sub-items like 1., 2., 3. under one heading, create separate topics for those numbered items.
 - If a discussion section contains lettered sub-items like a., b., c., create separate topics for those lettered items.
 - If an agenda line says to refer to supporting pages, email correspondence, appendix pages, or attachment pages, include those referenced page numbers in sourcePages for that topic in addition to the agenda page itself.
-- For ratification blocks, prefer one topic per ratified line item rather than one umbrella ratification topic.
+- For ratification blocks, you MUST create one discrete agenda topic per ratified line item (e.g., 6.1(a), 6.1(b), etc.). Never collapse multiple quotes or email approvals into a single generic "email approvals ratified" umbrella topic. Extract contractor name, quote amount, and date into notes for each topic.
 - If the chunk only shows a bucket label like "ratification of email decisions", "review and approval of projects", "items completed", or "items for discussion" but does not yet list the underlying matters, do not create a placeholder topic for that bucket. Wait for the child matters unless the bucket itself is clearly the real business matter.
 - If the chunk is mainly an attachment or support page, use it to enrich an existing topic instead of creating new ones.
 - If a support page clearly continues a numbered or lettered agenda list already in progress, you may add or complete that agenda topic using the support page wording.

@@ -25,7 +25,7 @@ import {
 import { AGENDA_ITEM_INVESTIGATION_PROMPT } from "@/lib/meeting-v2/investigation-prompts";
 import { AGENDA_ITEM_VALIDATION_PROMPT } from "@/lib/meeting-v2/validation-prompts";
 import { extractAgendaItemsWithAi } from "@/lib/meeting-v2/agenda-ai";
-import { buildMeetingV2DraftArtifact } from "@/lib/meeting-v2/draft-builder";
+import { buildMeetingV2DraftArtifact, buildMeetingFrame } from "@/lib/meeting-v2/draft-builder";
 import { chunkDocumentPages, chunkTranscriptSegments } from "@/lib/meeting-v2/chunking";
 import {
   loadInvestigationToolRuntime,
@@ -2176,7 +2176,7 @@ export async function investigateAgendaItems(
       )
     : eq(meetingsV2AgendaItems.meetingV2Id, meetingId);
 
-  const [agendaItems, contexts, evidenceRows, existingInvestigations] = await Promise.all([
+    const [agendaItems, contexts, evidenceRows, existingInvestigations, meetingRec, pages, chunks] = await Promise.all([
     db.select().from(meetingsV2AgendaItems).where(filters).orderBy(asc(meetingsV2AgendaItems.sortOrder)),
     db.select().from(meetingsV2AgendaItemContexts).where(
       agendaItemId
@@ -2202,6 +2202,9 @@ export async function investigateAgendaItems(
           )
         : eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId),
     ),
+    db.query.meetingsV2.findFirst({ where: eq(meetingsV2.id, meetingId) }),
+    db.select().from(meetingsV2DocumentPages).where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
+    db.select().from(meetingsV2DocumentChunks).where(eq(meetingsV2DocumentChunks.meetingV2Id, meetingId)),
   ]);
 
   if (agendaItemId) {
@@ -2224,6 +2227,15 @@ export async function investigateAgendaItems(
   let completedCount = agendaItems.length - pendingItems.length;
   const runtime = await loadInvestigationToolRuntime({ meetingId });
 
+  let directorsPromptLines: string[] = [];
+  if (meetingRec) {
+    const frame = buildMeetingFrame(meetingRec, pages, chunks);
+    const directors = frame.attendanceCandidates.present;
+    if (directors.length > 0) {
+      directorsPromptLines = directors.map(d => `- ${d.name} (${d.title_or_role})`);
+    }
+  }
+
   for (const item of pendingItems) {
     const context = contexts.find((entry) => entry.agendaItemId === item.id);
     const evidenceForItem = evidenceRows.filter((entry) => entry.agendaItemId === item.id);
@@ -2234,6 +2246,9 @@ export async function investigateAgendaItems(
       `Agenda item title: ${item.title}`,
       `Section label: ${item.sectionLabel ?? "Unknown"}`,
       `Board package source text: ${item.sourceText ?? "None"}`,
+      "",
+      "Attending Voting Directors:",
+      ...directorsPromptLines,
       "",
       "Prepared context JSON",
       context?.contextJson ?? "{}",

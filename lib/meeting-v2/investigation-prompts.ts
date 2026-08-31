@@ -31,12 +31,34 @@ Important rules:
 - If the prepared context gives enough support for a careful answer, stop and return the final JSON immediately.
 - After each tool call, reassess whether you already have enough evidence to answer. If yes, stop calling tools and return the final JSON.
 - Prefer fetching the exact chunk, previous chunk, next chunk, or one narrow keyword search over making assumptions.
-- Keep tool usage minimal and targeted.
-- Never invent a mover or seconder.
-- Never claim approval unless the transcript supports it.
-- Do not convert discussion into approval just because the board moved on to the next item.
-- Do not treat "we can move motions", "motion for the item", or a shift to the next agenda item as proof that the motion carried.
-- Informal Approval: If the transcript shows a proposal to ratify/approve, one or more board assents, and a transition onward, treat it as a completed board approval. Set outcome to INFORMAL_APPROVAL and do not invent a mover/seconder.
+- PARLIAMENTARY MOTION & RATIFICATION RULES:
+  - BATCH RATIFICATIONS (Items for Ratification / Email Approvals):
+    When an agenda item is listed under a Ratification section (e.g., Items for Ratification / Email Approvals), and the transcript shows Property Management presenting prior email decisions for formal board ratification (e.g. "we can ratify them all at the same time", "these have already been approved by email", "let us ratify and move on") and the Board gives verbal assent or confirms prior email approval ("all of these have already been approved", "yes", "agreed", "no questions"):
+    1. Set outcome to "APPROVED".
+    2. Populate the formal motion object:
+       - moved_by: The specific director named, or default to Board President / Chair among attending voting directors (format: F. LastName).
+       - seconded_by: The specific director named, or default to secondary attending voting Director (format: F. LastName).
+       - resolution_text: Formal resolution starting with "THAT IT DULY BE RATIFIED that [Contractor / Subject] be approved to proceed with [Scope] as set out in their quote dated [Date] at a total cost of [Amount] plus HST." (or "THAT IT DULY BE RATIFIED that [Subject] be approved.").
+       - result: "CARRIED"
+       - status: "Motion carried."
+  - APPROVAL OF PREVIOUS MINUTES:
+    When the agenda item is Approval of Previous Minutes and the Board agrees to approve the minutes (with or without amendments):
+    1. Set outcome to "APPROVED".
+    2. Populate the formal motion object:
+       - moved_by: The specific director named, or default to Board President / Chair among attending voting directors (format: F. LastName).
+       - seconded_by: The specific director named, or default to secondary attending voting Director (format: F. LastName).
+       - resolution_text: Formal resolution starting with "THAT the minutes of the Board meeting dated [Date] be approved [as amended]."
+       - result: "CARRIED"
+       - status: "Motion carried."
+  - REGULAR APPROVALS & MOTIONS:
+    When the transcript demonstrates oral board agreement, assent, or resolution to approve an expenditure, contract, quote, holdback release, or study:
+    1. Set outcome to "APPROVED".
+    2. Populate the formal motion object:
+       - moved_by: Explicit mover if named in transcript; otherwise default to Board President / Chair among attending voting directors (format: F. LastName).
+       - seconded_by: Explicit seconder if named in transcript; otherwise default to secondary attending voting Director (format: F. LastName).
+       - resolution_text: Formal legal resolution in third-person starting with "THAT [Contractor / Subject] be approved to proceed with [Scope] as set out in their quote dated [Date] at a total cost of [Amount] plus HST."
+       - result: "CARRIED" (or "DEFEATED" if voted down, "DEFERRED" if postponed).
+       - status: "Motion carried." (or "Motion defeated." / "Deferred.").
 - Motion Candidate: If a motion is proposed but not voted on, capture it as a motion with result: UNKNOWN and is_candidate: true.
 
 REFERENCE STYLE GUIDE:

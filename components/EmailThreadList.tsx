@@ -7,6 +7,7 @@ import { flushSync } from "react-dom";
 
 import { DateTimeDisplay } from "@/components/DateTimeDisplay";
 import { ContactExtractCostBadge } from "@/components/ContactExtractCostBadge";
+import { HarvestRunNotice } from "@/components/HarvestRunNotice";
 import { EmailAttachmentsBadge } from "@/components/EmailAttachmentsBadge";
 import {
   ExtractionSidePanel,
@@ -21,12 +22,14 @@ import { TodoExtractCostBadge } from "@/components/TodoExtractCostBadge";
 import { OrgExtractCostBadge } from "@/components/OrgExtractCostBadge";
 import { ProjectExtractCostBadge } from "@/components/ProjectExtractCostBadge";
 import { ProcessedCostBadge } from "@/components/ProcessedCostBadge";
+import { HoverPopoverRowProvider } from "@/lib/ui/use-hover-popover";
 import {
   ThreadHarvestSidePanel,
   type ThreadHarvestPanelTarget,
 } from "@/components/ThreadHarvestSidePanel";
 import {
   CONTACT_HIGHLIGHT_MODELS,
+  DEFAULT_CONTACT_HIGHLIGHT_MODEL,
   formatContactHighlightModelOptionLabel,
   getContactHighlightModelMeta,
   type ContactHighlightModelId,
@@ -36,6 +39,12 @@ import {
   contactExtractSummaryFromApiRuns,
   type ContactExtractSummary,
 } from "@/lib/email-analysis/contact-highlight-run-display";
+import {
+  buildExtractRunNotice,
+  warningsFromExtractPostResponse,
+  type ExtractRunNotice,
+  type ExtractRunWarning,
+} from "@/lib/email-analysis/extract-run-warnings";
 import {
   eventExtractSummaryFromApiRuns,
   type EventExtractSummary,
@@ -976,6 +985,7 @@ export function EmailThreadList({
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkNotice, setBulkNotice] = useState<ExtractRunNotice | null>(null);
   const [contactExtractMenuOpen, setContactExtractMenuOpen] = useState(false);
   const [orgExtractMenuOpen, setOrgExtractMenuOpen] = useState(false);
   const [projectExtractMenuOpen, setProjectExtractMenuOpen] = useState(false);
@@ -1391,7 +1401,7 @@ export function EmailThreadList({
     items: PreparedExtractItem[];
     model: string;
     pass: ContactHighlightPass | OrgHighlightPass;
-  }) {
+  }): Promise<ExtractRunWarning[]> {
     const endpoint =
       params.kind === "organizations"
         ? "/api/analysis/extract-organizations"
@@ -1411,7 +1421,16 @@ export function EmailThreadList({
         pass: params.pass,
       }),
     });
-    const data = (await response.json()) as { error?: string };
+    const data = (await response.json()) as {
+      error?: string;
+      results?: Array<{
+        emailId?: string;
+        error?: string;
+        skipped?: boolean;
+        entityCards?: unknown[];
+      }>;
+      fourthPass?: { error?: string | null };
+    };
     if (!response.ok) {
       const label =
         params.kind === "organizations"
@@ -1427,13 +1446,18 @@ export function EmailThreadList({
         data.error ?? `${label} extraction pass ${params.pass} failed.`,
       );
     }
+    return warningsFromExtractPostResponse(
+      params.kind,
+      params.pass,
+      data,
+    );
   }
 
   async function runExtractionForTarget(
     kind: ExtractKind,
     target: ExtractTarget,
     modelId: string,
-  ) {
+  ): Promise<ExtractRunWarning[]> {
     setExtractProgressForTarget(kind, target, {
       pass: 1,
       current: 0,
@@ -1452,6 +1476,7 @@ export function EmailThreadList({
         : items.map((item) => item.emailId);
 
     const passes = isSinglePassKind(kind) ? ([1] as const) : ([1, 2, 3] as const);
+    const warnings: ExtractRunWarning[] = [];
 
     for (const pass of passes) {
       for (let index = 0; index < items.length; index += 1) {
@@ -1461,12 +1486,14 @@ export function EmailThreadList({
           total: items.length,
           status: "running",
         });
-        await runExtractPass({
-          kind,
-          items: [items[index]!],
-          model: modelId,
-          pass,
-        });
+        warnings.push(
+          ...(await runExtractPass({
+            kind,
+            items: [items[index]!],
+            model: modelId,
+            pass,
+          })),
+        );
       }
     }
 
@@ -1477,12 +1504,14 @@ export function EmailThreadList({
         total: 1,
         status: "running",
       });
-      await runExtractPass({
-        kind,
-        items,
-        model: modelId,
-        pass: 4,
-      });
+      warnings.push(
+        ...(await runExtractPass({
+          kind,
+          items,
+          model: modelId,
+          pass: 4,
+        })),
+      );
     }
 
     const summaryEndpoint =
@@ -1595,6 +1624,7 @@ export function EmailThreadList({
     }
 
     setExtractProgressForTarget(kind, target, null);
+    return warnings;
   }
 
   async function runExtractionSelected(
@@ -1662,6 +1692,7 @@ export function EmailThreadList({
 
     setBulkExtractKind(kind);
     setBulkError(null);
+    setBulkNotice(null);
 
     const setProgress =
       kind === "organizations"
@@ -1687,10 +1718,15 @@ export function EmailThreadList({
     });
 
     try {
+      const allWarnings: ExtractRunWarning[] = [];
+      let hadHardFailure = false;
       for (const target of targets) {
         try {
-          await runExtractionForTarget(kind, target, modelId);
+          allWarnings.push(
+            ...(await runExtractionForTarget(kind, target, modelId)),
+          );
         } catch (err) {
+          hadHardFailure = true;
           const message =
             err instanceof Error
               ? err.message
@@ -1716,8 +1752,85 @@ export function EmailThreadList({
         }
       }
 
+      const kindLabel =
+        kind === "organizations"
+          ? "Organization extraction"
+          : kind === "projects"
+            ? "Project extraction"
+            : kind === "events"
+              ? "Event harvest"
+              : kind === "todos"
+                ? "To-do harvest"
+                : "Contact extraction";
+      if (!hadHardFailure) {
+        setBulkNotice(
+          buildExtractRunNotice({
+            warnings: allWarnings,
+            successTitle: `${kindLabel} finished.`,
+            successDetail:
+              kind === "projects" || kind === "contacts"
+                ? "Check Entities → Mentions if you were testing mention resolution."
+                : undefined,
+            problemTitle: `${kindLabel} finished with problems.`,
+          }),
+        );
+      }
+
       clearSelection();
       router.refresh();
+    } finally {
+      setBulkExtractKind(null);
+    }
+  }
+
+  async function reharvestContactsAndProjects() {
+    const targets = resolveExtractTargets();
+    if (targets.length === 0) {
+      setBulkError("No threads or emails selected for re-harvest.");
+      return;
+    }
+    const emailCount = resolveEmailIdsForSelection().length;
+    const unitLabel =
+      view === "threads"
+        ? `${targets.length} thread${targets.length === 1 ? "" : "s"}`
+        : `${targets.length} group${targets.length === 1 ? "" : "s"}`;
+    const confirmed = window.confirm(
+      `Re-harvest contacts and projects (passes 1–4) on ${unitLabel} (${emailCount} email${emailCount === 1 ? "" : "s"})?\n\nThis re-runs both pipelines on historical mail so mention resolution can be tested in the browser.`,
+    );
+    if (!confirmed) return;
+
+    setBulkError(null);
+    setBulkNotice(null);
+    const modelId = DEFAULT_CONTACT_HIGHLIGHT_MODEL;
+    try {
+      const allWarnings: ExtractRunWarning[] = [];
+      setBulkExtractKind("contacts");
+      for (const target of targets) {
+        allWarnings.push(
+          ...(await runExtractionForTarget("contacts", target, modelId)),
+        );
+      }
+      setBulkExtractKind("projects");
+      for (const target of targets) {
+        allWarnings.push(
+          ...(await runExtractionForTarget("projects", target, modelId)),
+        );
+      }
+      setBulkNotice(
+        buildExtractRunNotice({
+          warnings: allWarnings,
+          successTitle: `Re-harvest C+P finished on ${unitLabel}.`,
+          successDetail:
+            "Check Entities → Projects or Contacts → Mentions. Refresh that tab if counts look stale.",
+          problemTitle: `Re-harvest C+P finished with problems on ${unitLabel}.`,
+        }),
+      );
+      clearSelection();
+      router.refresh();
+    } catch (err) {
+      setBulkError(
+        err instanceof Error ? err.message : "Re-harvest failed.",
+      );
     } finally {
       setBulkExtractKind(null);
     }
@@ -1786,8 +1899,15 @@ export function EmailThreadList({
       />
 
       {bulkError ? (
-        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{bulkError}</p>
+        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+          {bulkError}
+        </p>
       ) : null}
+
+      <HarvestRunNotice
+        notice={bulkNotice}
+        onDismiss={() => setBulkNotice(null)}
+      />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50 px-4 py-1.5">
@@ -1823,6 +1943,16 @@ export function EmailThreadList({
                 className="shrink-0 rounded bg-teal-700 px-2 py-0.5 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50"
               >
                 {bulkRunning ? "Analyzing…" : "Analyze selected"}
+              </button>
+              <button
+                type="button"
+                disabled={busyBulk}
+                onClick={() => void reharvestContactsAndProjects()}
+                className="shrink-0 rounded border border-orange-300 bg-orange-50 px-2 py-0.5 text-xs font-medium text-orange-950 hover:bg-orange-100 disabled:opacity-50"
+              >
+                {bulkExtractKind === "contacts" || bulkExtractKind === "projects"
+                  ? "Re-harvesting…"
+                  : "Re-harvest C+P"}
               </button>
               <div ref={contactExtractMenuRef} className="relative shrink-0">
                 <button
@@ -2087,6 +2217,7 @@ export function EmailThreadList({
                   key={message.id}
                   className={inboxRowClassName(extractionRowHighlighted)}
                 >
+                  <HoverPopoverRowProvider rowId={message.id}>
                   <label className="flex cursor-pointer pl-4">
                     <input
                       type="checkbox"
@@ -2242,6 +2373,7 @@ export function EmailThreadList({
                     value={message.receivedAt}
                     className="py-4 pr-2 text-right text-sm text-slate-600 md:pr-4"
                   />
+                  </HoverPopoverRowProvider>
                 </li>
                 );
               })
@@ -2268,6 +2400,7 @@ export function EmailThreadList({
                     key={thread.id}
                     className={inboxRowClassName(extractionRowHighlighted)}
                   >
+                    <HoverPopoverRowProvider rowId={thread.id}>
                     <label className="flex cursor-pointer pl-4">
                       <input
                         type="checkbox"
@@ -2354,6 +2487,7 @@ export function EmailThreadList({
                       value={thread.lastMessageAt}
                       className="py-4 pr-2 text-right text-sm text-slate-600 md:pr-4"
                     />
+                    </HoverPopoverRowProvider>
                   </li>
                 );
               })}

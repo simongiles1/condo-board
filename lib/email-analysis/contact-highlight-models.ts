@@ -1,6 +1,13 @@
 /** Client-safe contact-highlight model catalog (no provider SDK imports). */
 
+import {
+  billedPricingForModel,
+  formatUsdPerMillion,
+} from "@/lib/gemini/pricing";
+
+
 export const CONTACT_HIGHLIGHT_MODELS = [
+  "gemini-3.7-flash",
   "gemini-3.6-flash",
   "gemini-3.1-pro-preview",
   "deepseek-v4-flash",
@@ -15,7 +22,7 @@ export type ContactHighlightModelId =
 export type ContactHighlightPass = 1 | 2 | 3 | 4;
 
 export const DEFAULT_CONTACT_HIGHLIGHT_MODEL: ContactHighlightModelId =
-  "gemini-3.6-flash";
+  "gemini-3.7-flash";
 
 export type ContactHighlightPassConfig = {
   /** Provider API model id (may differ from catalog id for thinking variants). */
@@ -75,6 +82,21 @@ const CONTACT_HIGHLIGHT_MODEL_META: Record<
   ContactHighlightModelId,
   ContactHighlightModelMeta
 > = {
+  "gemini-3.7-flash": {
+    label: "Gemini 3.7 Flash",
+    secondPassLabel: "2nd pass",
+    thirdPassLabel: "3rd pass · fingerprints",
+    fourthPassLabel: "4th pass · merge",
+    provider: "gemini",
+    inputPerMillion: 1.5,
+    outputPerMillion: 7.5,
+    chunking: null,
+    ...samePassConfig({
+      apiModelName: "gemini-3.7-flash",
+      thinking: false,
+      maxOutputTokens: 4096,
+    }),
+  },
   "gemini-3.6-flash": {
     label: "Gemini 3.6 Flash",
     secondPassLabel: "2nd pass",
@@ -202,7 +224,14 @@ export function resolveContactHighlightModel(
 }
 
 export function getContactHighlightModelMeta(modelId: ContactHighlightModelId) {
-  return CONTACT_HIGHLIGHT_MODEL_META[modelId];
+  const meta = CONTACT_HIGHLIGHT_MODEL_META[modelId];
+  const billed = billedPricingForModel(modelId);
+  if (!billed) return meta;
+  return {
+    ...meta,
+    inputPerMillion: billed.input,
+    outputPerMillion: billed.output,
+  };
 }
 
 export function getContactHighlightPassConfig(
@@ -219,8 +248,8 @@ export function getContactHighlightPassConfig(
 export function formatContactHighlightModelOptionLabel(
   modelId: ContactHighlightModelId,
 ): string {
-  const meta = CONTACT_HIGHLIGHT_MODEL_META[modelId];
-  return `${meta.label} ($${meta.inputPerMillion.toFixed(2)}/$${meta.outputPerMillion.toFixed(2)} per 1M tokens)`;
+  const meta = getContactHighlightModelMeta(modelId);
+  return `${meta.label} ($${formatUsdPerMillion(meta.inputPerMillion)}/$${formatUsdPerMillion(meta.outputPerMillion)} per 1M tokens)`;
 }
 
 export function contactHighlightModelProvider(

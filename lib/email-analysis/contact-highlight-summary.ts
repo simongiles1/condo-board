@@ -72,16 +72,11 @@ export async function loadContactExtractSummariesForGroups(
   );
   if (entries.length === 0) return {};
 
-  const results = await Promise.all(
-    entries.map(async ([groupId, emailIds]) => {
-      const runs = await loadContactHighlightRuns(emailIds);
-      const summary = contactExtractSummaryFromRuns(runs);
-      return [groupId, summary] as const;
-    }),
-  );
-
+  // Sequential: parallel per-thread loads exhaust Supabase session pool (15 conn).
   const out: Record<string, ContactExtractSummary> = {};
-  for (const [groupId, summary] of results) {
+  for (const [groupId, emailIds] of entries) {
+    const runs = await loadContactHighlightRuns(emailIds);
+    const summary = contactExtractSummaryFromRuns(runs);
     if (summary) out[groupId] = summary;
   }
   return out;

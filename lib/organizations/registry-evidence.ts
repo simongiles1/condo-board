@@ -146,6 +146,8 @@ export async function loadOrgFieldEvidence(params: {
   value: string;
   page?: number;
   pageSize?: number;
+  /** Extra name strings (distinctive aliases) to union into the match set. */
+  alsoMatchValues?: string[];
 }): Promise<OrgEvidencePayload | null> {
   if (!isOrgEvidenceField(params.field)) return null;
   const field = params.field;
@@ -162,13 +164,53 @@ export async function loadOrgFieldEvidence(params: {
     ),
   );
   const page = Math.max(1, Math.floor(params.page ?? 1) || 1);
-  const needles = splitOrgEvidenceNeedles(field, value);
-  const ilikeNeedle = escapeIlikeNeedle(needles[0] ?? value);
-  if (!ilikeNeedle) return null;
+  const extraValues = [...new Set(
+    (params.alsoMatchValues ?? [])
+      .map((item) => item.trim())
+      .filter(
+        (item) =>
+          item.length > 0 && item.toLowerCase() !== value.toLowerCase(),
+      ),
+  )];
+  const needles = [
+    ...splitOrgEvidenceNeedles(field, value),
+    ...extraValues,
+  ];
+  const likeNeedles = [
+    ...new Set(
+      needles
+        .map((needle) => escapeIlikeNeedle(needle))
+        .filter((needle) => needle.length > 0),
+    ),
+  ];
+  if (likeNeedles.length === 0) return null;
+
+  function cardMatchesValue(card: Parameters<typeof orgCardMatchesEvidenceValue>[0]) {
+    if (orgCardMatchesEvidenceValue(card, field, value)) return true;
+    return extraValues.some((extra) =>
+      orgCardMatchesEvidenceValue(card, "name_alias", extra),
+    );
+  }
+
+  function highlightMatchesValue(
+    extraction: Parameters<typeof orgHighlightMatchesEvidenceValue>[0],
+  ) {
+    if (orgHighlightMatchesEvidenceValue(extraction, field, value)) return true;
+    return extraValues.some((extra) =>
+      orgHighlightMatchesEvidenceValue(extraction, "name_alias", extra),
+    );
+  }
 
   const db = getDb();
   const byEmail = new Map<string, Set<OrgEvidenceMatchReason>>();
-  const like = `%${ilikeNeedle}%`;
+  const likeClauses = likeNeedles.flatMap((needle) => {
+    const like = `%${needle}%`;
+    return [
+      ilike(organizationHighlightExtractions.thirdPassExtractionJson, like),
+      ilike(organizationHighlightExtractions.extractionJson, like),
+      ilike(organizationHighlightExtractions.secondPassExtractionJson, like),
+    ];
+  });
 
   const extractionRows = await db
     .select({
@@ -180,35 +222,19 @@ export async function loadOrgFieldEvidence(params: {
         organizationHighlightExtractions.thirdPassExtractionJson,
     })
     .from(organizationHighlightExtractions)
-    .where(
-      or(
-        ilike(organizationHighlightExtractions.thirdPassExtractionJson, like),
-        ilike(organizationHighlightExtractions.extractionJson, like),
-        ilike(
-          organizationHighlightExtractions.secondPassExtractionJson,
-          like,
-        ),
-      ),
-    )
+    .where(or(...likeClauses))
     .limit(MAX_CANDIDATE_EMAILS);
 
   for (const row of extractionRows) {
     if (row.thirdPassExtractionJson) {
       const parsed = parseOrgFingerprintJson(row.thirdPassExtractionJson);
-      if (
-        parsed.entity_cards.some((card) =>
-          orgCardMatchesEvidenceValue(card, field, value),
-        )
-      ) {
+      if (parsed.entity_cards.some((card) => cardMatchesValue(card))) {
         addReasons(byEmail, row.emailId, ["fingerprint"]);
       }
     }
     const first = parseOrgHighlightJson(row.extractionJson ?? "");
     const second = parseOrgHighlightJson(row.secondPassExtractionJson ?? "");
-    if (
-      orgHighlightMatchesEvidenceValue(first, field, value) ||
-      orgHighlightMatchesEvidenceValue(second, field, value)
-    ) {
+    if (highlightMatchesValue(first) || highlightMatchesValue(second)) {
       addReasons(byEmail, row.emailId, ["highlight"]);
     }
   }

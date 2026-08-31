@@ -21,6 +21,24 @@ import {
   type ProjectHighlightModelId,
 } from "@/lib/email-analysis/project-highlight-models";
 
+async function resolveMentionsForSourceEmails(
+  emailIds: string[],
+): Promise<void> {
+  const ids = [...new Set(emailIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) return;
+  try {
+    const { resolveProjectMentions } = await import(
+      "@/lib/projects/mention-resolve"
+    );
+    await resolveProjectMentions({ emailIds: ids });
+  } catch (error) {
+    console.error("[project-mentions] resolve after persist failed", {
+      error:
+        error instanceof Error ? error.message : "Project mention resolve failed",
+    });
+  }
+}
+
 export function buildProjectFingerprintEmailIdsKey(emailIds: string[]): string {
   return [
     ...new Set(emailIds.map((id) => id.trim()).filter(Boolean)),
@@ -157,6 +175,7 @@ type SaveSecondPassItem = {
 type SaveThirdPassItem = {
   emailId: string;
   entityCards: ProjectEntityCard[];
+  mentionCards?: ProjectEntityCard[];
   skipped?: boolean;
   error?: string;
   usage?: {
@@ -637,12 +656,36 @@ export async function saveProjectHighlightThirdPass(
         thirdPassUpdatedAt: now,
       })
       .where(eq(projectHighlightExtractions.id, existing[0].id));
+
+    const { upsertProjectMentionsForEmail } = await import(
+      "@/lib/projects/mention-persist"
+    );
+    await upsertProjectMentionsForEmail({
+      sourceEmailId: emailId,
+      entityCards: item.mentionCards ?? item.entityCards ?? [],
+      modelId,
+    });
+    const { upsertPaintedOrgMentionSurfacesForEmail } = await import(
+      "@/lib/organizations/mention-persist"
+    );
+    await upsertPaintedOrgMentionSurfacesForEmail(emailId);
   }
 
   await deleteProjectFingerprintMergesForEmails(
     modelId,
     items.map((item) => item.emailId),
   );
+
+  // Match against current project_entities only. A full fingerprint rebuild
+  // here (every pass-3 email × the whole registry) is what stuck Inbox
+  // Re-harvest C+P on a 25-thread selection. Mint new entities with
+  // Process pending project merges.
+  const emailIds = items.map((item) => item.emailId);
+  await resolveMentionsForSourceEmails(emailIds);
+  const { resolveOrgMentions } = await import(
+    "@/lib/organizations/mention-resolve"
+  );
+  await resolveOrgMentions({ emailIds });
 }
 
 export async function saveProjectFingerprintMerge(params: {
@@ -729,6 +772,12 @@ export async function saveProjectFingerprintMerge(params: {
       ...values,
     });
   }
+
+  await resolveMentionsForSourceEmails(params.emailIds);
+  const { markProjectFingerprintSummariesStale } = await import(
+    "@/lib/projects/fingerprint-list"
+  );
+  markProjectFingerprintSummariesStale();
 
   return {
     mergeId,

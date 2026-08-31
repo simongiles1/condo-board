@@ -1,13 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { EmailAttachmentPreviewRow } from "@/components/EmailAttachmentPreviewRow";
 import {
   EmailThreadMessages,
   type ThreadMessage,
 } from "@/components/EmailThreadMessages";
+import { ReHarvestThreadButton, type HarvestRunMessage } from "@/components/ReHarvestThreadButton";
+import { harvestMessageClassName } from "@/components/HarvestRunNotice";
 import { filterVisibleAttachments } from "@/lib/email/attachment-visibility";
+import {
+  emptyTodoHighlightExtraction,
+  mergeTodoHighlightExtractions,
+  type TodoHighlightExtraction,
+} from "@/lib/email-analysis/todo-highlight-shared";
+import {
+  flattenTodoHighlightExtraction,
+  type TodoExtractListItem,
+} from "@/lib/email-analysis/todo-highlight-run-display";
 import { formatDateTime } from "@/lib/format/datetime";
 import { useAttachmentVisibilitySettings } from "@/lib/settings/attachment-visibility-settings";
 
@@ -16,6 +27,7 @@ type Props = {
   onClose: () => void;
   threadId?: string | null;
   highlightQuote?: string | null;
+  verifyLabel?: string | null;
 };
 
 type EmailResponse = {
@@ -29,13 +41,38 @@ type ThreadResponse = {
   error?: string;
 };
 
+type TodoRun = {
+  extractions?: Record<string, TodoHighlightExtraction>;
+};
+
+function todosByEmailFromRuns(
+  runs: Record<string, TodoRun>,
+  emailIds: string[],
+): Record<string, TodoExtractListItem[]> {
+  const out: Record<string, TodoExtractListItem[]> = {};
+  for (const emailId of emailIds) {
+    const parts: TodoHighlightExtraction[] = [];
+    for (const run of Object.values(runs)) {
+      if (run.extractions?.[emailId]) parts.push(run.extractions[emailId]!);
+    }
+    const merged =
+      parts.length > 0
+        ? mergeTodoHighlightExtractions(parts)
+        : emptyTodoHighlightExtraction();
+    out[emailId] = flattenTodoHighlightExtraction(emailId, merged);
+  }
+  return out;
+}
+
 export function EmailSidePanel({
   emailId,
   onClose,
   threadId = null,
   highlightQuote = null,
+  verifyLabel = null,
 }: Props) {
   const visibilitySettings = useAttachmentVisibilitySettings();
+  const scrollRootRef = useRef<HTMLDivElement>(null);
   const [message, setMessage] = useState<ThreadMessage | null>(null);
   const [threadMessages, setThreadMessages] = useState<ThreadMessage[] | null>(
     null,
@@ -43,6 +80,13 @@ export function EmailSidePanel({
   const [threadSubject, setThreadSubject] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [todosByEmailId, setTodosByEmailId] = useState<Record<
+    string,
+    TodoExtractListItem[]
+  > | null>(null);
+  const [harvestMessage, setHarvestMessage] = useState<HarvestRunMessage | null>(
+    null,
+  );
 
   const open = Boolean(emailId || threadId);
 
@@ -62,6 +106,8 @@ export function EmailSidePanel({
       setMessage(null);
       setThreadMessages(null);
       setThreadSubject(null);
+      setTodosByEmailId(null);
+      setHarvestMessage(null);
       setError(null);
       return;
     }
@@ -72,6 +118,7 @@ export function EmailSidePanel({
     setMessage(null);
     setThreadMessages(null);
     setThreadSubject(null);
+    setTodosByEmailId(null);
 
     async function loadMessage(id: string): Promise<ThreadMessage> {
       const response = await fetch(`/api/email/messages/${id}`);
@@ -131,6 +178,35 @@ export function EmailSidePanel({
     };
   }, [emailId, threadId, open]);
 
+  useEffect(() => {
+    const ids =
+      threadMessages?.map((item) => item.id) ??
+      (message ? [message.id] : []);
+    if (!open || ids.length === 0) return;
+
+    let cancelled = false;
+    fetch(
+      `/api/analysis/extract-todos?emailIds=${encodeURIComponent(ids.join(","))}`,
+    )
+      .then(async (response) => {
+        const data = (await response.json()) as {
+          runs?: Record<string, TodoRun>;
+        };
+        if (!response.ok) return {};
+        return data.runs ?? {};
+      })
+      .then((runs) => {
+        if (!cancelled) setTodosByEmailId(todosByEmailFromRuns(runs, ids));
+      })
+      .catch(() => {
+        if (!cancelled) setTodosByEmailId({});
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [message, open, threadMessages]);
+
   if (!open) return null;
 
   const threadMode = Boolean(threadId);
@@ -174,18 +250,48 @@ export function EmailSidePanel({
                   : `From ${headerMessage.fromAddress} · Received ${formatDateTime(headerMessage.receivedAt)}`}
               </p>
             ) : null}
+            {verifyLabel?.trim() ? (
+              <p className="mt-2 text-sm leading-snug text-slate-800">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                  Verifying{" "}
+                </span>
+                {verifyLabel.trim()}
+              </p>
+            ) : null}
+            {harvestMessage ? (
+              <p
+                className={`mt-2 ${harvestMessageClassName(harvestMessage.tone)}`}
+                role={harvestMessage.tone === "error" ? "alert" : "status"}
+              >
+                {harvestMessage.text}
+              </p>
+            ) : null}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-            aria-label="Close"
-          >
-            ✕
-          </button>
+          <div className="flex shrink-0 items-start gap-2">
+            <ReHarvestThreadButton
+              threadId={threadId}
+              emailIds={
+                threadMessages?.map((item) => item.id) ??
+                (message ? [message.id] : emailId ? [emailId] : [])
+              }
+              disabled={loading}
+              onMessage={setHarvestMessage}
+            />
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        <div
+          ref={scrollRootRef}
+          className="min-h-0 flex-1 overflow-y-auto px-5 py-4"
+        >
           {loading ? (
             <div className="space-y-3">
               <div className="h-4 w-2/3 animate-pulse rounded bg-slate-100" />
@@ -205,6 +311,8 @@ export function EmailSidePanel({
               hideAttachments
               focusEmailId={emailId}
               highlightQuote={highlightQuote}
+              todosByEmailId={todosByEmailId}
+              scrollRootRef={scrollRootRef}
             />
           ) : null}
 
@@ -221,6 +329,8 @@ export function EmailSidePanel({
                 messages={[message]}
                 hideAttachments
                 highlightQuote={highlightQuote}
+                todosByEmailId={todosByEmailId}
+                scrollRootRef={scrollRootRef}
               />
             </>
           ) : null}

@@ -5,6 +5,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { AuthNavActions } from "@/components/AuthNavActions";
+import { EntityProfileProvider } from "@/components/EntityProfileProvider";
 import { CloseIcon, MenuIcon } from "@/components/nav-icons";
 import { SidebarNav } from "@/components/SidebarNav";
 import type { UserRole } from "@/lib/auth/roles";
@@ -99,6 +100,7 @@ export function AppShell({
   };
 
   return (
+    <EntityProfileProvider>
     <div className="flex min-h-0 flex-1">
       <aside
         className={`relative z-30 hidden shrink-0 flex-col border-r border-slate-200 bg-white transition-[width] duration-200 md:flex ${
@@ -190,6 +192,7 @@ export function AppShell({
         </>
       ) : null}
     </div>
+    </EntityProfileProvider>
   );
 }
 

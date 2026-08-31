@@ -60,6 +60,17 @@ describe("projectIdentityKey", () => {
       projectIdentityKey(card({ name: "Maglock", year_hint: "2024" })),
     );
   });
+
+  it("keeps a spanning range distinct from a single year", () => {
+    assert.equal(
+      projectIdentityKey(card({ name: "Maglock", year_hint: "2024-2026" })),
+      "name:maglock|year:2024-2026",
+    );
+    assert.notEqual(
+      projectIdentityKey(card({ name: "Maglock", year_hint: "2024-2026" })),
+      projectIdentityKey(card({ name: "Maglock", year_hint: "2024" })),
+    );
+  });
 });
 
 describe("coalesceProjectEntityCards", () => {
@@ -156,6 +167,28 @@ describe("parseProjectEntityCard location", () => {
       location: "unit 201",
     });
     assert.equal(specific?.location, "unit 201");
+  });
+});
+
+describe("parseProjectEntityCard phase and years", () => {
+  it("maps extractor prose onto canonical phase and year range", () => {
+    const parsed = parseProjectEntityCard({
+      name: "maglock",
+      phase: "QUOTE",
+      year_hint: "this year",
+    });
+    assert.equal(parsed?.phase, "awarded");
+    assert.equal(parsed?.year_hint, String(new Date().getFullYear()));
+  });
+
+  it("drops durations and work-package labels", () => {
+    const parsed = parseProjectEntityCard({
+      name: "envelope repair",
+      phase: "Phase 1",
+      year_hint: "3-year",
+    });
+    assert.equal(parsed?.phase, null);
+    assert.equal(parsed?.year_hint, null);
   });
 });
 

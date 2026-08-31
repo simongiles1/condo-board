@@ -106,9 +106,37 @@ describe("matchesProjectListFilters", () => {
       true,
     );
     assert.equal(
+      matchesProjectListFilters(garage, {
+        ...EMPTY_PROJECT_LIST_FILTERS,
+        phase: "awarded",
+      }),
+      true,
+    );
+    assert.equal(
       matchesProjectListFilters(incomplete, {
         ...EMPTY_PROJECT_LIST_FILTERS,
         contractor: "set",
+      }),
+      false,
+    );
+  });
+
+  it("lets a single-year filter hit a spanning project", () => {
+    const span = {
+      ...garage,
+      year_hint: "2024–2026",
+    };
+    assert.equal(
+      matchesProjectListFilters(span, {
+        ...EMPTY_PROJECT_LIST_FILTERS,
+        year: "2025",
+      }),
+      true,
+    );
+    assert.equal(
+      matchesProjectListFilters(span, {
+        ...EMPTY_PROJECT_LIST_FILTERS,
+        year: "2027",
       }),
       false,
     );
@@ -123,10 +151,38 @@ describe("projectMatchesListSearch", () => {
   });
 });
 
+describe("board report filter", () => {
+  it("keeps only cards that appeared in a management report", () => {
+    const mentioned = { ...garage, boardReportCount: 4 };
+    const emailOnly = { ...incomplete, boardReportCount: 0 };
+    assert.equal(
+      matchesProjectListFilters(mentioned, {
+        ...EMPTY_PROJECT_LIST_FILTERS,
+        board: "mentioned",
+      }),
+      true,
+    );
+    assert.equal(
+      matchesProjectListFilters(emailOnly, {
+        ...EMPTY_PROJECT_LIST_FILTERS,
+        board: "mentioned",
+      }),
+      false,
+    );
+    assert.equal(
+      matchesProjectListFilters(emailOnly, {
+        ...EMPTY_PROJECT_LIST_FILTERS,
+        board: "not_mentioned",
+      }),
+      true,
+    );
+  });
+});
+
 describe("collectProjectFilterOptions", () => {
   it("collects unique years newest-first and phases A→Z", () => {
     const options = collectProjectFilterOptions([garage, incomplete]);
     assert.deepEqual(options.years, ["2025"]);
-    assert.deepEqual(options.phases, ["completed", "contract signing"]);
+    assert.deepEqual(options.phases, ["awarded", "complete"]);
   });
 });

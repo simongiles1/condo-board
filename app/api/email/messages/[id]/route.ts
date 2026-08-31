@@ -13,6 +13,7 @@ import { emailAttachments, emails } from "@/lib/db/schema";
 import { deleteEmailMessage } from "@/lib/email/delete-message";
 import { formatEmailBodyForDisplay } from "@/lib/email/format-body-display";
 import { computeThreadUniqueBodies } from "@/lib/email/thread-unique-content";
+import { loadHarvestMentionsForEmail } from "@/lib/organizations/mention-evidence";
 
 export async function GET(
   _req: Request,
@@ -79,6 +80,11 @@ export async function GET(
     }
 
     const resolvedUnique = resolveMentionUniqueBody(message, liveUnique);
+    const { ensurePaintedOrgMentionSurfacesForEmail } = await import(
+      "@/lib/organizations/mention-persist"
+    );
+    await ensurePaintedOrgMentionSurfacesForEmail(message.id);
+    const mentions = await loadHarvestMentionsForEmail(message.id);
 
     return NextResponse.json({
       message: {
@@ -97,6 +103,7 @@ export async function GET(
           : null,
         processedAt: message.processedAt,
         attachments,
+        mentions,
       },
     });
   } catch (error) {

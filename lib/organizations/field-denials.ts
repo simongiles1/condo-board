@@ -13,10 +13,13 @@ import {
 import { resolveOrgSurvivorKey } from "@/lib/organizations/manual-merge";
 import {
   mergeOrgAliasLists,
+  normalizeOrgNameKey,
   orgMultiValueContains,
   primaryOrgMultiValue,
   removeOrgMultiValue,
 } from "@/lib/organizations/org-multi-values";
+
+export { normalizeOrgNameKey };
 
 export const ORG_DENIABLE_FIELDS = [
   "name",
@@ -40,15 +43,6 @@ export type OrgFieldDenial = {
 
 export function isOrgDeniableField(value: string): value is OrgDeniableField {
   return (ORG_DENIABLE_FIELDS as readonly string[]).includes(value);
-}
-
-export function normalizeOrgNameKey(name: string | null | undefined): string {
-  return (name ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 export function normalizeOrgDeniedValue(

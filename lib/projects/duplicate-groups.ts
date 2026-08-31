@@ -1,10 +1,16 @@
 /**
  * Build project duplicate clusters for the Entities → Projects →
- * Duplicates UI. Fuzzy whole-name matching (with legal-suffix stripping);
- * no auto-merge decisions.
+ * Duplicates UI. Fuzzy whole-name matching (with legal-suffix stripping)
+ * plus AI identity-review proposals. No auto-merge decisions here.
  */
 
 import type { ProjectFingerprintSummary } from "@/lib/projects/fingerprint-list";
+import {
+  planIdentityReviewDecision,
+  type IdentityReviewConfidence,
+  type IdentityReviewDecisionKind,
+  type IdentityReviewProposalForGroups,
+} from "@/lib/projects/identity-review-shared";
 import {
   PROJECT_NAME_FUZZY_THRESHOLD,
   projectFuzzyBlockingKeys,
@@ -18,13 +24,16 @@ export type ProjectDuplicateGroupMember = ProjectFingerprintSummary & {
 
 export type ProjectDuplicateGroup = {
   id: string;
-  kind: "fuzzy_name";
+  kind: "fuzzy_name" | "ai_review";
   /** Lowest pairwise score that linked any two members in the cluster (≥ threshold). */
   minLinkScore: number;
   label: string;
   memberCount: number;
   namelessCount: number;
   members: ProjectDuplicateGroupMember[];
+  confidence?: IdentityReviewConfidence;
+  rationale?: string;
+  decisionKind?: IdentityReviewDecisionKind;
 };
 
 function hasText(value: string | null | undefined): boolean {
@@ -216,4 +225,113 @@ export function buildProjectDuplicateGroups(
   );
 
   return groups;
+}
+
+/**
+ * Medium/low identity-review decisions as Duplicates groups. Members that
+ * no longer exist in the registry (already merged) are dropped.
+ */
+export function buildAiReviewDuplicateGroups(
+  projects: ProjectFingerprintSummary[],
+  proposals: IdentityReviewProposalForGroups[],
+): ProjectDuplicateGroup[] {
+  const byId = new Map(projects.map((project) => [project.id, project]));
+  const groups: ProjectDuplicateGroup[] = [];
+
+  for (const proposal of proposals) {
+    const liveMembers = proposal.memberIds
+      .map((id) => byId.get(id))
+      .filter((row): row is ProjectFingerprintSummary => Boolean(row))
+      .map(toMember);
+    if (liveMembers.length < 2) continue;
+
+    const plan = planIdentityReviewDecision({
+      clusterLabel: proposal.clusterLabel,
+      clusterMemberIds: liveMembers.map((member) => member.id),
+      members: liveMembers.map((member) => ({
+        id: member.id,
+        name: member.name,
+        displayName: member.displayName,
+        yearHint: member.year_hint,
+        sourceEmailCount: member.sourceEmailCount,
+        aliases: member.aliases ?? [],
+      })),
+      decision: proposal.decision,
+    });
+
+    const slices =
+      plan.proposedGroups.length > 0
+        ? plan.proposedGroups
+        : [
+            {
+              label: proposal.clusterLabel,
+              memberIds: liveMembers.map((m) => m.id),
+              rationale: proposal.decision.rationale,
+              confidence: proposal.decision.confidence,
+              decisionKind: proposal.decision.kind,
+            },
+          ];
+
+    for (const [index, slice] of slices.entries()) {
+      const members = sortMembers(
+        slice.memberIds
+          .map((id) => byId.get(id))
+          .filter((row): row is ProjectFingerprintSummary => Boolean(row))
+          .map(toMember),
+      );
+      if (members.length < 2) continue;
+      const sortedIds = [...members.map((m) => m.id)].sort();
+      groups.push({
+        id: `ai:${proposal.decisionId}:${index}:${sortedIds.join("|")}`,
+        kind: "ai_review",
+        minLinkScore: 1,
+        label: slice.label || pickGroupLabel(members),
+        memberCount: members.length,
+        namelessCount: members.filter((m) => m.nameless).length,
+        members,
+        confidence: slice.confidence,
+        rationale: slice.rationale,
+        decisionKind: slice.decisionKind,
+      });
+    }
+  }
+
+  groups.sort(
+    (a, b) =>
+      confidenceRank(a.confidence) - confidenceRank(b.confidence) ||
+      b.memberCount - a.memberCount ||
+      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+  );
+  return groups;
+}
+
+function confidenceRank(value: IdentityReviewConfidence | undefined): number {
+  if (value === "medium") return 0;
+  if (value === "low") return 1;
+  return 2;
+}
+
+/** Why AI review / Refresh are disabled. Null = they can run. */
+export function projectDuplicatesWaitReason(input: {
+  groupsLoading: boolean;
+  reviewStatusLoading: boolean;
+  reviewRunning: boolean;
+  startingReview: boolean;
+  cancellingReview: boolean;
+  pagePending: boolean;
+  pageMessage: string | null;
+}): string | null {
+  if (input.cancellingReview) return "Cancelling identity review…";
+  if (input.startingReview) return "Starting identity review…";
+  if (input.groupsLoading) {
+    return "Loading duplicate groups from the project registry. If harvests are being rebuilt into the project list, this can take several minutes.";
+  }
+  if (input.reviewStatusLoading) return "Loading identity-review status…";
+  if (input.reviewRunning) return null;
+  if (input.pagePending) {
+    const message = input.pageMessage?.trim();
+    if (message) return message.endsWith("…") ? message : `${message}…`;
+    return "Waiting for another Projects action to finish…";
+  }
+  return null;
 }

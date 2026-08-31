@@ -65,10 +65,11 @@ function getPool(): Pool {
     globalForDb.db = undefined;
   }
   if (!globalForDb.pool) {
-    // Fail fast on a dead peer instead of waiting ~30s for TCP timeout.
+    // Supabase session pooler caps at pool_size (often 15). Keep headroom for
+    // concurrent page/API work alongside the app's single shared pool.
     globalForDb.pool = new Pool({
       ...postgresPoolOptions(connectionString),
-      max: 10,
+      max: 8,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 20_000,
     });

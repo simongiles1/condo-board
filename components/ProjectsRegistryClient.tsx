@@ -15,14 +15,24 @@ import {
 } from "@/components/MergeEntityDialog";
 import { ProjectDuplicatesPanel } from "@/components/ProjectDuplicatesPanel";
 import { ProjectEvidenceSidePanel } from "@/components/ProjectEvidenceSidePanel";
-import type {
-  ProjectDuplicateGroup,
-  ProjectDuplicateGroupMember,
+import { ProjectMentionsPanel } from "@/components/ProjectMentionsPanel";
+import { useEntityProfile } from "@/components/EntityProfileProvider";
+import {
+  projectDuplicatesWaitReason,
+  type ProjectDuplicateGroup,
+  type ProjectDuplicateGroupMember,
 } from "@/lib/projects/duplicate-groups";
+import type { IdentityReviewRunRecord } from "@/lib/projects/identity-review-shared";
+import {
+  BOARD_REPORT_MATCHING_STATUS,
+  type BoardReportRunRecord,
+  type BoardReportScanReview,
+} from "@/lib/projects/board-report-shared";
 import type {
   ProjectFingerprintListStats,
   ProjectFingerprintSummary,
 } from "@/lib/projects/fingerprint-list";
+import type { ProjectMentionStats } from "@/lib/projects/mention-queue-shared";
 import {
   clampEntityListPage,
   sliceEntityListPage,
@@ -34,6 +44,16 @@ import {
   resolveProjectScope,
   type ProjectScope,
 } from "@/lib/email-analysis/project-highlight-shared";
+import {
+  PROJECT_PHASE_LABELS,
+  PROJECT_PHASES,
+  normalizeProjectPhase,
+  preferProjectPhase,
+} from "@/lib/projects/project-phase";
+import {
+  normalizeProjectYearHint,
+  preferProjectYearHint,
+} from "@/lib/projects/project-year-range";
 import type { ProjectEvidenceField } from "@/lib/projects/registry-evidence-shared";
 import {
   collectProjectFilterOptions,
@@ -62,11 +82,13 @@ const PROJECT_LIST_SORT_OPTIONS: Array<{
   { value: "mentions-asc", label: "Mentions (low → high)" },
   { value: "name-asc", label: "Name (A → Z)" },
   { value: "name-desc", label: "Name (Z → A)" },
-  { value: "year-desc", label: "Year (newest)" },
-  { value: "year-asc", label: "Year (oldest)" },
-  { value: "phase-asc", label: "Phase (A → Z)" },
+  { value: "year-desc", label: "Years (newest)" },
+  { value: "year-asc", label: "Years (oldest)" },
+  { value: "phase-asc", label: "Phase (lifecycle)" },
   { value: "completeness-asc", label: "Least complete first" },
   { value: "completeness-desc", label: "Most complete first" },
+  { value: "board-desc", label: "Board reports (high → low)" },
+  { value: "board-asc", label: "Board reports (low → high)" },
 ];
 
 function ProjectListSortMenu({
@@ -277,12 +299,10 @@ function FilterSelect({
 function ProjectListFilterMenu({
   filters,
   years,
-  phases,
   onChange,
 }: {
   filters: ProjectListFilters;
   years: string[];
-  phases: string[];
   onChange: (next: ProjectListFilters) => void;
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -360,12 +380,12 @@ function ProjectListFilterMenu({
           </FilterSelect>
           <FilterSelect
             id="project-year-filter"
-            label="Year"
+            label="Years"
             value={filters.year}
             onChange={(value) => onChange({ ...filters, year: value })}
           >
             <option value="all">All years</option>
-            <option value="missing">Missing year</option>
+            <option value="missing">Missing years</option>
             {years.map((year) => (
               <option key={year} value={year}>
                 {year}
@@ -380,9 +400,9 @@ function ProjectListFilterMenu({
           >
             <option value="all">All phases</option>
             <option value="missing">Missing phase</option>
-            {phases.map((phase) => (
+            {PROJECT_PHASES.map((phase) => (
               <option key={phase} value={phase}>
-                {phase}
+                {PROJECT_PHASE_LABELS[phase]}
               </option>
             ))}
           </FilterSelect>
@@ -428,6 +448,21 @@ function ProjectListFilterMenu({
               </option>
             ))}
           </FilterSelect>
+          <FilterSelect
+            id="project-board-filter"
+            label="Board reports"
+            value={filters.board}
+            onChange={(value) =>
+              onChange({
+                ...filters,
+                board: value as ProjectListFilters["board"],
+              })
+            }
+          >
+            <option value="all">All</option>
+            <option value="mentioned">In a management report</option>
+            <option value="not_mentioned">Not in a report</option>
+          </FilterSelect>
           {active ? (
             <button
               type="button"
@@ -460,13 +495,7 @@ function ProjectBadgeLegendSection({
   );
 }
 
-function ProjectListBadgeLegendMenu({
-  years,
-  phases,
-}: {
-  years: string[];
-  phases: string[];
-}) {
+function ProjectListBadgeLegendMenu({ years }: { years: string[] }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -502,7 +531,7 @@ function ProjectListBadgeLegendMenu({
         <div role="menu" aria-label="Project badge legend">
           <p className="text-xs font-medium text-slate-800">Badge legend</p>
           <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
-            List rows use color to group scope, phase, and year.
+            List rows use color to group scope, phase, years, and board reports.
           </p>
           <div className="mt-3 max-h-64 space-y-3 overflow-y-auto pr-0.5">
             <ProjectBadgeLegendSection title="Scope">
@@ -512,16 +541,19 @@ function ProjectListBadgeLegendMenu({
             </ProjectBadgeLegendSection>
             <ProjectBadgeLegendSection title="Phase">
               <ProjectPhaseBadge phase={null} />
-              {phases.map((phase) => (
+              {PROJECT_PHASES.map((phase) => (
                 <ProjectPhaseBadge key={phase} phase={phase} />
               ))}
             </ProjectBadgeLegendSection>
-            <ProjectBadgeLegendSection title="Year">
+            <ProjectBadgeLegendSection title="Years">
               {years.length > 0 ? (
                 years.map((year) => <ProjectYearBadge key={year} year={year} />)
               ) : (
                 <span className="text-[11px] text-slate-400">No years yet</span>
               )}
+            </ProjectBadgeLegendSection>
+            <ProjectBadgeLegendSection title="Board">
+              <ProjectBoardBadge count={3} />
             </ProjectBadgeLegendSection>
           </div>
         </div>
@@ -660,7 +692,8 @@ function ProjectScopeBadge({ scope }: { scope: ProjectScope | null | undefined }
 }
 
 function ProjectPhaseBadge({ phase }: { phase: string | null | undefined }) {
-  const label = phase?.trim() ? phase.trim() : "No phase";
+  const canonical = normalizeProjectPhase(phase);
+  const label = canonical ? PROJECT_PHASE_LABELS[canonical] : "No phase";
   return (
     <span className="inline-flex rounded bg-amber-50 px-1.5 py-px text-[11px] font-medium text-amber-900 ring-1 ring-amber-200/90">
       {label}
@@ -669,19 +702,58 @@ function ProjectPhaseBadge({ phase }: { phase: string | null | undefined }) {
 }
 
 function ProjectYearBadge({ year }: { year: string }) {
+  const label = normalizeProjectYearHint(year) ?? year;
   return (
     <span className="inline-flex rounded bg-violet-50 px-1.5 py-px text-[11px] font-medium tabular-nums text-violet-800 ring-1 ring-violet-200/90">
-      {year}
+      {label}
     </span>
   );
+}
+
+function ProjectBoardBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="inline-flex rounded bg-emerald-50 px-1.5 py-px text-[11px] font-medium tabular-nums text-emerald-900 ring-1 ring-emerald-200/90">
+      Board · {count}
+    </span>
+  );
+}
+
+function formatBoardParseStatus(status: string | null | undefined): string {
+  if (!status) return "not converted";
+  if (status === "pending") return "pending conversion";
+  if (status === "needs_ocr") return "needs OCR";
+  if (status === "parsing") return "converting";
+  return status.replace(/_/g, " ");
+}
+
+function boardScanHeadline(run: BoardReportRunRecord): string {
+  if (run.status === "running") {
+    if (run.lastError === BOARD_REPORT_MATCHING_STATUS) {
+      return "Matching report topics to projects…";
+    }
+    return `Scanning reports · ${run.reportCompleted} / ${run.reportTotal}`;
+  }
+  if (run.status === "completed") return "Report scan complete";
+  if (run.status === "cancelled") return "Report scan cancelled";
+  if (run.status === "failed") {
+    return run.lastError
+      ? `Report scan failed: ${run.lastError}`
+      : "Report scan failed";
+  }
+  return "Report scan";
 }
 
 function projectSubtitle(org: ProjectFingerprintSummary): string {
   const parts: string[] = [];
   const scope = resolveProjectScope(org);
   if (scope) parts.push(PROJECT_SCOPE_LABELS[scope]);
-  if (org.year_hint?.trim()) parts.push(org.year_hint.trim());
-  if (org.phase?.trim()) parts.push(org.phase.trim());
+  if (org.year_hint?.trim()) {
+    const years = normalizeProjectYearHint(org.year_hint);
+    if (years) parts.push(years);
+  }
+  const phase = normalizeProjectPhase(org.phase);
+  if (phase) parts.push(PROJECT_PHASE_LABELS[phase]);
   const contractors = splitProjectMultiValue(org.contractor);
   if (contractors[0]) parts.push(contractors[0]);
   const locations = splitProjectMultiValue(org.location);
@@ -729,8 +801,8 @@ function foldProjectSummariesLocally(
       ...folded,
       name: foldedNames.name,
       aliases: foldedNames.aliases,
-      year_hint: folded.year_hint?.trim() || source.year_hint?.trim() || null,
-      phase: folded.phase?.trim() || source.phase?.trim() || null,
+      year_hint: preferProjectYearHint(folded.year_hint, source.year_hint),
+      phase: preferProjectPhase(folded.phase, source.phase),
       contractor: mergeProjectMultiValues(folded.contractor, source.contractor),
       location: mergeProjectMultiValues(folded.location, source.location),
       equipment_mentions: mergeProjectMultiValues(
@@ -745,6 +817,15 @@ function foldProjectSummariesLocally(
       sourceMergeCount: folded.sourceMergeCount + source.sourceMergeCount,
       sourceEmailCount: folded.sourceEmailCount + source.sourceEmailCount,
       modelIds: [...new Set([...folded.modelIds, ...source.modelIds])],
+      boardReportCount:
+        (folded.boardReportCount ?? 0) + (source.boardReportCount ?? 0),
+      boardLastReportAt: (() => {
+        const left = folded.boardLastReportAt;
+        const right = source.boardLastReportAt;
+        if (!left) return right ?? null;
+        if (!right) return left;
+        return right > left ? right : left;
+      })(),
     };
   }
   return folded;
@@ -840,9 +921,11 @@ type PendingSever = {
 export function ProjectsRegistryClient({
   initialProjects,
   initialStats,
+  initialMentionStats = null,
 }: {
   initialProjects: ProjectFingerprintSummary[];
   initialStats: ProjectFingerprintListStats;
+  initialMentionStats?: ProjectMentionStats | null;
 }) {
   const [projects, setProjects] = useState(initialProjects);
   const [stats, setStats] = useState(initialStats);
@@ -851,6 +934,7 @@ export function ProjectsRegistryClient({
   );
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const { openProfile } = useEntityProfile();
   const [mergeSources, setMergeSources] = useState<ProjectFingerprintSummary[]>([]);
   const [mergeCandidatePool, setMergeCandidatePool] = useState<
     ProjectFingerprintSummary[]
@@ -869,8 +953,17 @@ export function ProjectsRegistryClient({
   const [listFilters, setListFilters] = useState<ProjectListFilters>(
     EMPTY_PROJECT_LIST_FILTERS,
   );
-  const [tab, setTab] = useState<"projects" | "duplicates">(
+  const [tab, setTab] = useState<"projects" | "mentions" | "duplicates">(
     "projects",
+  );
+  const [mentionStats, setMentionStats] = useState({
+    mentionUnresolvedCount: initialMentionStats?.unresolved ?? 0,
+    mentionProvisionalCount: initialMentionStats?.provisional ?? 0,
+    mentionConfirmedCount: initialMentionStats?.confirmed ?? 0,
+    mentionTotalCount: initialMentionStats?.total ?? 0,
+  });
+  const [mentionStatsKnown, setMentionStatsKnown] = useState(
+    initialMentionStats != null,
   );
   const duplicatesLoaded = useRef(false);
   const [duplicateGroups, setDuplicateGroups] = useState<ProjectDuplicateGroup[]>(
@@ -878,6 +971,23 @@ export function ProjectsRegistryClient({
   );
   const [duplicatesLoading, setDuplicatesLoading] = useState(false);
   const [duplicatesError, setDuplicatesError] = useState<string | null>(null);
+  const [reviewStatusLoading, setReviewStatusLoading] = useState(false);
+  const [reviewAction, setReviewAction] = useState<"start" | "cancel" | null>(
+    null,
+  );
+  const [reviewRun, setReviewRun] = useState<IdentityReviewRunRecord | null>(
+    null,
+  );
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [boardScanRun, setBoardScanRun] = useState<BoardReportRunRecord | null>(
+    null,
+  );
+  const [boardScanError, setBoardScanError] = useState<string | null>(null);
+  const [boardScanReview, setBoardScanReview] =
+    useState<BoardReportScanReview | null>(null);
+  const [boardScanPanel, setBoardScanPanel] = useState<
+    "unmatched" | "waiting" | null
+  >(null);
   const [listSearchOpen, setListSearchOpen] = useState(false);
   const [listSearch, setListSearch] = useState("");
   const [listPage, setListPage] = useState(1);
@@ -923,6 +1033,27 @@ export function ProjectsRegistryClient({
     [projects, selectedId],
   );
 
+  const duplicatesWaitReason = useMemo(
+    () =>
+      projectDuplicatesWaitReason({
+        groupsLoading: duplicatesLoading,
+        reviewStatusLoading,
+        reviewRunning: reviewRun?.status === "running",
+        startingReview: reviewAction === "start",
+        cancellingReview: reviewAction === "cancel",
+        pagePending: pending,
+        pageMessage: message,
+      }),
+    [
+      duplicatesLoading,
+      reviewStatusLoading,
+      reviewRun?.status,
+      reviewAction,
+      pending,
+      message,
+    ],
+  );
+
   function toggleProjectChecked(orgId: string, checked: boolean) {
     setCheckedProjectIds((prev) => {
       const next = new Set(prev);
@@ -959,6 +1090,7 @@ export function ProjectsRegistryClient({
     const json = (await res.json()) as {
       projects?: ProjectFingerprintSummary[];
       stats?: ProjectFingerprintListStats;
+      mentionStats?: ProjectMentionStats | null;
       error?: string;
     };
     if (!res.ok) {
@@ -968,11 +1100,47 @@ export function ProjectsRegistryClient({
     const next = json.projects ?? [];
     setProjects(next);
     if (json.stats) setStats(json.stats);
+    if (json.mentionStats) {
+      setMentionStats({
+        mentionUnresolvedCount: json.mentionStats.unresolved,
+        mentionProvisionalCount: json.mentionStats.provisional,
+        mentionConfirmedCount: json.mentionStats.confirmed,
+        mentionTotalCount: json.mentionStats.total,
+      });
+      setMentionStatsKnown(true);
+    }
     setSelectedId((prev) => {
       if (prev && next.some((org) => org.id === prev)) return prev;
       return next[0]?.id ?? null;
     });
+    if (!json.mentionStats) await loadMentionStats();
     return next;
+  }
+
+  async function loadMentionStats(): Promise<void> {
+    try {
+      const res = await fetch("/api/projects/registry?view=mention_stats", {
+        cache: "no-store",
+      });
+      const json = (await res.json()) as {
+        mentionStats?: {
+          unresolved: number;
+          provisional: number;
+          confirmed: number;
+          total: number;
+        };
+      };
+      if (!res.ok || !json.mentionStats) return;
+      setMentionStats({
+        mentionUnresolvedCount: json.mentionStats.unresolved,
+        mentionProvisionalCount: json.mentionStats.provisional,
+        mentionConfirmedCount: json.mentionStats.confirmed,
+        mentionTotalCount: json.mentionStats.total,
+      });
+      setMentionStatsKnown(true);
+    } catch {
+      // Header counts stay at last known values.
+    }
   }
 
   async function loadDuplicates(): Promise<void> {
@@ -1001,13 +1169,316 @@ export function ProjectsRegistryClient({
     }
   }
 
+  async function loadIdentityReview(options?: {
+    silent?: boolean;
+  }): Promise<IdentityReviewRunRecord | null> {
+    if (!options?.silent) setReviewStatusLoading(true);
+    try {
+      const res = await fetch("/api/projects/identity-review", {
+        cache: "no-store",
+      });
+      const json = (await res.json()) as {
+        run?: IdentityReviewRunRecord | null;
+        error?: string;
+      };
+      if (!res.ok) {
+        if (!options?.silent) {
+          setReviewError(json.error ?? "Could not load identity review status.");
+        }
+        return null;
+      }
+      setReviewError(null);
+      setReviewRun(json.run ?? null);
+      return json.run ?? null;
+    } catch {
+      setReviewError("Could not load identity review status.");
+      return null;
+    } finally {
+      if (!options?.silent) setReviewStatusLoading(false);
+    }
+  }
+
+  async function loadBoardScan(options?: {
+    details?: boolean;
+  }): Promise<BoardReportRunRecord | null> {
+    try {
+      const qs = options?.details ? "?details=1" : "";
+      const res = await fetch(`/api/projects/board-reports${qs}`, {
+        cache: "no-store",
+      });
+      const json = (await res.json()) as {
+        run?: BoardReportRunRecord | null;
+        unmatchedTopics?: BoardReportScanReview["unmatchedTopics"];
+        waitingOnMarkdown?: BoardReportScanReview["waitingOnMarkdown"];
+        error?: string;
+      };
+      if (!res.ok) {
+        setBoardScanError(
+          json.error ?? "Could not load management-report scan status.",
+        );
+        return null;
+      }
+      setBoardScanRun(json.run ?? null);
+      if (options?.details) {
+        setBoardScanReview({
+          unmatchedTopics: json.unmatchedTopics ?? [],
+          waitingOnMarkdown: json.waitingOnMarkdown ?? [],
+        });
+      }
+      return json.run ?? null;
+    } catch {
+      setBoardScanError("Could not load management-report scan status.");
+      return null;
+    }
+  }
+
+  function openMentionsTab() {
+    setTab("mentions");
+  }
+
+  function openLinkedProject(identityKey: string) {
+    const key = identityKey.trim();
+    if (!key) return;
+    setTab("projects");
+    setSelectedId(key);
+  }
+
+  function processPendingProjectMerges() {
+    startTransition(async () => {
+      setMessage("Syncing project registry and resolving mentions…");
+      try {
+        const res = await fetch("/api/projects/registry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "resolve_mentions" }),
+        });
+        const json = (await res.json()) as {
+          ok?: boolean;
+          scanned?: number;
+          confirmed?: number;
+          provisional?: number;
+          unresolved?: number;
+          retracted?: number;
+          error?: string;
+        };
+        if (!res.ok || !json.ok) {
+          setMessage(json.error ?? "Could not resolve project mentions.");
+          return;
+        }
+        setMessage(
+          `Resolved ${json.scanned ?? 0} mention${json.scanned === 1 ? "" : "s"} → ${json.confirmed ?? 0} confirmed, ${json.provisional ?? 0} provisional, ${json.unresolved ?? 0} still unresolved${json.retracted ? `, ${json.retracted} retracted` : ""}.`,
+        );
+        await refreshData();
+      } catch {
+        setMessage("Could not resolve project mentions.");
+      }
+    });
+  }
+
   function openDuplicatesTab() {
     setTab("duplicates");
     if (!duplicatesLoaded.current) {
-      startTransition(async () => {
+      void (async () => {
         await loadDuplicates();
-      });
+        await loadIdentityReview();
+      })();
+      return;
     }
+    void loadIdentityReview();
+  }
+
+  useEffect(() => {
+    void loadBoardScan({ details: true });
+    void loadMentionStats();
+  }, []);
+
+  useEffect(() => {
+    if (boardScanRun?.status !== "running") return;
+    let inFlight = false;
+    const timer = window.setInterval(() => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      void (async () => {
+        try {
+          const next = await loadBoardScan();
+          if (next && next.status !== "running") {
+            await refreshData();
+            await loadBoardScan({ details: true });
+          }
+        } finally {
+          inFlight = false;
+        }
+      })();
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [boardScanRun?.status, boardScanRun?.id]);
+
+  useEffect(() => {
+    if (tab !== "duplicates") return;
+    if (reviewRun?.status !== "running") return;
+    let inFlight = false;
+    const timer = window.setInterval(() => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      void (async () => {
+        try {
+          const next = await loadIdentityReview({ silent: true });
+          if (next && next.status !== "running") {
+            await loadDuplicates();
+            await refreshData();
+          }
+        } finally {
+          inFlight = false;
+        }
+      })();
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [tab, reviewRun?.status, reviewRun?.id]);
+
+  function startIdentityReview() {
+    setReviewError(null);
+    setReviewAction("start");
+    void (async () => {
+      try {
+        const res = await fetch("/api/projects/identity-review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "start" }),
+        });
+        const json = (await res.json()) as {
+          run?: IdentityReviewRunRecord | null;
+          error?: string;
+        };
+        if (!res.ok) {
+          setReviewError(json.error ?? "Could not start identity review.");
+          return;
+        }
+        setReviewRun(json.run ?? null);
+      } catch {
+        setReviewError("Could not start identity review.");
+      } finally {
+        setReviewAction(null);
+      }
+    })();
+  }
+
+  function cancelIdentityReview() {
+    setReviewAction("cancel");
+    void (async () => {
+      try {
+        const res = await fetch("/api/projects/identity-review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "cancel" }),
+        });
+        const json = (await res.json()) as {
+          error?: string;
+        };
+        if (!res.ok) {
+          setReviewError(json.error ?? "Could not cancel identity review.");
+          return;
+        }
+        await loadIdentityReview({ silent: true });
+      } catch {
+        setReviewError("Could not cancel identity review.");
+      } finally {
+        setReviewAction(null);
+      }
+    })();
+  }
+
+  const boardScanRunning = boardScanRun?.status === "running";
+  const boardScanMatching =
+    boardScanRunning &&
+    boardScanRun?.lastError === BOARD_REPORT_MATCHING_STATUS;
+
+  function startBoardScan() {
+    setBoardScanError(null);
+    startTransition(async () => {
+      try {
+        const res = await fetch("/api/projects/board-reports", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "start" }),
+        });
+        const json = (await res.json()) as {
+          run?: BoardReportRunRecord | null;
+          error?: string;
+        };
+        if (!res.ok) {
+          setBoardScanError(
+            json.error ?? "Could not start management-report scan.",
+          );
+          return;
+        }
+        setBoardScanRun(json.run ?? null);
+      } catch {
+        setBoardScanError("Could not start management-report scan.");
+      }
+    });
+  }
+
+  function cancelBoardScan() {
+    startTransition(async () => {
+      try {
+        const res = await fetch("/api/projects/board-reports", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "cancel" }),
+        });
+        const json = (await res.json()) as { error?: string };
+        if (!res.ok) {
+          setBoardScanError(
+            json.error ?? "Could not cancel management-report scan.",
+          );
+          return;
+        }
+        await loadBoardScan();
+      } catch {
+        setBoardScanError("Could not cancel management-report scan.");
+      }
+    });
+  }
+
+  function rematchBoardScan() {
+    setBoardScanError(null);
+    setBoardScanPanel("unmatched");
+    startTransition(async () => {
+      try {
+        const res = await fetch("/api/projects/board-reports", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "rematch" }),
+        });
+        const json = (await res.json()) as {
+          run?: BoardReportRunRecord | null;
+          error?: string;
+        };
+        if (!res.ok) {
+          setBoardScanError(
+            json.error ?? "Could not re-match management-report topics.",
+          );
+          return;
+        }
+        setBoardScanRun(json.run ?? null);
+      } catch {
+        setBoardScanError("Could not re-match management-report topics.");
+      }
+    });
+  }
+
+  function openBoardScanPanel(panel: "unmatched" | "waiting") {
+    setBoardScanPanel((prev) => (prev === panel ? null : panel));
+    if (!boardScanReview) {
+      void loadBoardScan({ details: true });
+    }
+  }
+
+  function searchProjectsForTopic(name: string) {
+    setTab("projects");
+    setListSearchOpen(true);
+    setListSearch(name);
+    setListPage(1);
   }
 
   function refresh() {
@@ -1185,17 +1656,58 @@ export function ProjectsRegistryClient({
             <dt className="text-slate-500">Source emails</dt>
             <dd className="font-semibold">{stats.emailCount}</dd>
           </div>
+          <div>
+            <dt className="text-slate-500">In board reports</dt>
+            <dd className="font-semibold">{stats.boardMentionedCount ?? 0}</dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">Mentions unresolved</dt>
+            <dd className="font-semibold">
+              {mentionStats.mentionUnresolvedCount.toLocaleString()}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">Provisional</dt>
+            <dd className="font-semibold">
+              {mentionStats.mentionProvisionalCount.toLocaleString()}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">Confirmed</dt>
+            <dd className="font-semibold">
+              {mentionStats.mentionConfirmedCount.toLocaleString()}
+            </dd>
+          </div>
         </dl>
         <p className="mt-3 text-sm text-slate-600">
           Unique projects from extraction pass 4 (thread merges),
           coalesced across threads by name and year. Use the merge icon to
           fold duplicates by hand — the absorbed name is kept as an alias, and
           contractors / locations / equipment mentions are combined. Different
-          years stay separate until you merge them. Use × on a field to sever a
+          years stay separate until you merge them or AI review marks a
+          capital job as one spanning initiative. Use × on a field to sever a
           wrong association; the system remembers not to reattach it. Check the
-          Duplicates tab for fuzzy name matches.
+          Duplicates tab for AI review and fuzzy name matches. Mentions shows
+          unresolved / provisional / confirmed project observations — Process
+          pending project merges re-syncs the registry and re-runs the
+          matcher. Scan management
+          reports to tag the jobs the PM actually briefed the Board on — filter
+          “In a management report” for the curated list. Click unmatched topics
+          or waiting-on-markdown counts to inspect them; re-match with AI uses
+          each card’s name and metadata, not fuzzy spelling.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={pending}
+            onClick={processPendingProjectMerges}
+            className="rounded-md bg-orange-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-800 disabled:opacity-50"
+          >
+            Process pending project merges
+            {mentionStats.mentionUnresolvedCount > 0
+              ? ` (${mentionStats.mentionUnresolvedCount.toLocaleString()})`
+              : ""}
+          </button>
           <button
             type="button"
             disabled={pending}
@@ -1204,7 +1716,168 @@ export function ProjectsRegistryClient({
           >
             Refresh
           </button>
+          <button
+            type="button"
+            disabled={pending || boardScanRunning}
+            onClick={startBoardScan}
+            className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-950 hover:bg-emerald-100 disabled:opacity-50"
+          >
+            {boardScanMatching
+              ? "Matching topics…"
+              : boardScanRunning
+                ? "Scanning reports…"
+                : "Scan management reports"}
+          </button>
+          {boardScanRun && !boardScanRunning ? (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={rematchBoardScan}
+              className="rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-sm font-medium text-emerald-950 hover:bg-emerald-50 disabled:opacity-50"
+            >
+              Re-match topics with AI
+            </button>
+          ) : null}
+          {boardScanRunning ? (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={cancelBoardScan}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Cancel scan
+            </button>
+          ) : null}
         </div>
+        {boardScanRun ? (
+          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            <p>
+              {boardScanHeadline(boardScanRun)}
+              {" · "}
+              <span className="tabular-nums">
+                {boardScanRun.matchedProjectCount} board-mentioned
+              </span>
+              {boardScanRun.skippedUnparsed > 0 ? (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    onClick={() => openBoardScanPanel("waiting")}
+                    className={
+                      boardScanPanel === "waiting"
+                        ? "tabular-nums font-medium text-orange-800 underline"
+                        : "tabular-nums text-orange-800 underline decoration-orange-300 hover:decoration-orange-800"
+                    }
+                  >
+                    {boardScanRun.skippedUnparsed} waiting on markdown
+                  </button>
+                </>
+              ) : null}
+              {boardScanRun.unmatchedTopicCount > 0 ? (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    onClick={() => openBoardScanPanel("unmatched")}
+                    className={
+                      boardScanPanel === "unmatched"
+                        ? "tabular-nums font-medium text-orange-800 underline"
+                        : "tabular-nums text-orange-800 underline decoration-orange-300 hover:decoration-orange-800"
+                    }
+                  >
+                    {boardScanRun.unmatchedTopicCount} unmatched topics
+                  </button>
+                </>
+              ) : null}
+              {boardScanRun.totalCostUsd > 0
+                ? ` · ~$${boardScanRun.totalCostUsd.toFixed(3)}`
+                : ""}
+            </p>
+            {boardScanPanel === "waiting" ? (
+              <ul className="mt-2 max-h-64 overflow-y-auto border-t border-slate-200 pt-2 text-xs">
+                {(boardScanReview?.waitingOnMarkdown ?? []).length === 0 ? (
+                  <li className="text-slate-500">
+                    Loading skipped packages…
+                  </li>
+                ) : (
+                  (boardScanReview?.waitingOnMarkdown ?? []).map((doc) => (
+                    <li
+                      key={doc.id}
+                      className="border-b border-slate-100 py-1.5 last:border-b-0"
+                    >
+                      {doc.emailId ? (
+                        <a
+                          href={`/knowledge/emails/${doc.emailId}`}
+                          className="font-medium text-slate-900 hover:text-orange-800"
+                        >
+                          {doc.filename}
+                        </a>
+                      ) : (
+                        <span className="font-medium text-slate-900">
+                          {doc.filename}
+                        </span>
+                      )}
+                      <span className="mt-0.5 block text-slate-500">
+                        {doc.kind === "board_package"
+                          ? "Board package"
+                          : "Management report"}
+                        {doc.reportDate ? ` · ${doc.reportDate}` : ""}
+                        {doc.pageCount != null
+                          ? ` · ${doc.pageCount} pages`
+                          : ""}
+                        {` · ${formatBoardParseStatus(doc.parseStatus)}`}
+                        {doc.error ? ` · ${doc.error}` : ""}
+                      </span>
+                    </li>
+                  ))
+                )}
+              </ul>
+            ) : null}
+            {boardScanPanel === "unmatched" ? (
+              <ul className="mt-2 max-h-64 overflow-y-auto border-t border-slate-200 pt-2 text-xs">
+                {(boardScanReview?.unmatchedTopics ?? []).length === 0 ? (
+                  <li className="text-slate-500">
+                    Loading unmatched topics… After they load, use Re-match
+                    topics with AI to map Maglock / electromagnetic-lock
+                    synonyms onto registry cards.
+                  </li>
+                ) : (
+                  (boardScanReview?.unmatchedTopics ?? []).map((topic) => (
+                    <li
+                      key={topic.canonical}
+                      className="border-b border-slate-100 py-1.5 last:border-b-0"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => searchProjectsForTopic(topic.name)}
+                        className="text-left font-medium text-slate-900 hover:text-orange-800"
+                      >
+                        {topic.name}
+                      </button>
+                      <span className="mt-0.5 block text-slate-500">
+                        {topic.mentionCount} mention
+                        {topic.mentionCount === 1 ? "" : "s"} in{" "}
+                        {topic.reportCount} report
+                        {topic.reportCount === 1 ? "" : "s"}
+                        {topic.section !== "other" ? ` · ${topic.section}` : ""}
+                        {topic.yearHint ? ` · ${topic.yearHint}` : ""}
+                        {topic.contractor ? ` · ${topic.contractor}` : ""}
+                        {topic.reports[0]
+                          ? ` · e.g. ${topic.reports[0].filename}`
+                          : ""}
+                      </span>
+                    </li>
+                  ))
+                )}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+        {boardScanError ? (
+          <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            {boardScanError}
+          </p>
+        ) : null}
         {message ? (
           <p className="mt-3 text-sm text-slate-600" role="status">
             {message}
@@ -1216,19 +1889,23 @@ export function ProjectsRegistryClient({
         {(
           [
             ["projects", "Projects"],
+            ["mentions", "Mentions"],
             ["duplicates", "Duplicates"],
           ] as const
         ).map(([id, label]) => {
           const count =
             id === "projects"
               ? stats.projectCount
-              : duplicateGroups.length;
+              : id === "mentions"
+                ? mentionStats.mentionUnresolvedCount
+                : duplicateGroups.length;
           return (
             <button
               key={id}
               type="button"
               onClick={() => {
                 if (id === "duplicates") openDuplicatesTab();
+                else if (id === "mentions") openMentionsTab();
                 else setTab(id);
               }}
               className={
@@ -1238,7 +1915,7 @@ export function ProjectsRegistryClient({
               }
             >
               {label}
-              {count > 0 ? ` (${count})` : ""}
+              {count > 0 ? ` (${count.toLocaleString()})` : ""}
             </button>
           );
         })}
@@ -1250,13 +1927,36 @@ export function ProjectsRegistryClient({
           loading={duplicatesLoading}
           error={duplicatesError}
           pending={pending}
+          waitReason={duplicatesWaitReason}
+          reviewRun={reviewRun}
+          reviewError={reviewError}
+          reviewPending={reviewAction != null}
           onRefresh={() => {
-            startTransition(async () => {
+            void (async () => {
               await loadDuplicates();
-            });
+              await loadIdentityReview();
+            })();
           }}
           onOpenMerge={openDuplicateMerge}
           onMergeAllInto={mergeAllDuplicatesInto}
+          onStartReview={startIdentityReview}
+          onCancelReview={cancelIdentityReview}
+        />
+      ) : tab === "mentions" ? (
+        <ProjectMentionsPanel
+          stats={mentionStats}
+          statsKnown={mentionStatsKnown}
+          pending={pending}
+          onStats={(next) => {
+            setMentionStats(next);
+            setMentionStatsKnown(true);
+          }}
+          onChanged={() => {
+            startTransition(async () => {
+              await refreshData();
+            });
+          }}
+          onOpenProject={openLinkedProject}
         />
       ) : (
       <div className="grid gap-6 md:grid-cols-[minmax(0,18rem)_1fr]">
@@ -1317,13 +2017,9 @@ export function ProjectsRegistryClient({
                 <ProjectListFilterMenu
                   filters={listFilters}
                   years={filterOptions.years}
-                  phases={filterOptions.phases}
                   onChange={changeListFilters}
                 />
-                <ProjectListBadgeLegendMenu
-                  years={filterOptions.years}
-                  phases={filterOptions.phases}
-                />
+                <ProjectListBadgeLegendMenu years={filterOptions.years} />
                 <button
                   type="button"
                   onClick={() => setListSearchOpen((prev) => !prev)}
@@ -1406,9 +2102,10 @@ export function ProjectsRegistryClient({
                     <span className="mt-0.5 flex flex-wrap items-center gap-1 text-xs text-slate-500">
                       <ProjectScopeBadge scope={resolveProjectScope(org)} />
                       <ProjectPhaseBadge phase={org.phase} />
-                      {org.year_hint?.trim() ? (
-                        <ProjectYearBadge year={org.year_hint.trim()} />
+                      {normalizeProjectYearHint(org.year_hint) ? (
+                        <ProjectYearBadge year={org.year_hint!.trim()} />
                       ) : null}
+                      <ProjectBoardBadge count={org.boardReportCount ?? 0} />
                       {org.sourceEmailCount > 0 ? (
                         <span>
                           · {org.sourceEmailCount} email
@@ -1451,9 +2148,21 @@ export function ProjectsRegistryClient({
             <p className="text-sm text-slate-500">Select a project.</p>
           ) : (
             <>
-              <h2 className="text-lg font-semibold text-slate-900">
-                {selected.displayName}
-              </h2>
+              <button
+                type="button"
+                onClick={() =>
+                  openProfile({
+                    kind: "project",
+                    id: selected.id,
+                    displayName: selected.displayName,
+                  })
+                }
+                className="text-left"
+              >
+                <h2 className="text-lg font-semibold text-orange-800 underline-offset-2 hover:underline">
+                  {selected.displayName}
+                </h2>
+              </button>
               <p className="mt-1 text-xs text-slate-500">
                 {selected.sourceMergeCount > 0
                   ? `${selected.sourceMergeCount} thread merge${selected.sourceMergeCount === 1 ? "" : "s"}`
@@ -1532,48 +2241,56 @@ export function ProjectsRegistryClient({
                   }
                 />
                 <FieldRow
-                  label="Year"
-                  value={selected.year_hint}
+                  label="Years"
+                  value={normalizeProjectYearHint(selected.year_hint)}
                   disabled={pending}
                   onEvidence={() => {
-                    if (!selected.year_hint?.trim()) return;
+                    const years = normalizeProjectYearHint(selected.year_hint);
+                    if (!years) return;
                     setEvidenceTarget({
                       projectId: selected.id,
                       projectName: selected.displayName,
                       field: "year_hint",
-                      value: selected.year_hint.trim(),
+                      value: years,
                     });
                   }}
                   onSever={() => {
-                    if (!selected.year_hint?.trim()) return;
+                    const years = normalizeProjectYearHint(selected.year_hint);
+                    if (!years) return;
                     setSeverError(null);
                     setPendingSever({
                       field: "year_hint",
-                      label: "Year",
-                      value: selected.year_hint.trim(),
+                      label: "Years",
+                      value: years,
                     });
                   }}
                 />
                 <FieldRow
                   label="Phase"
-                  value={selected.phase}
+                  value={
+                    normalizeProjectPhase(selected.phase)
+                      ? PROJECT_PHASE_LABELS[normalizeProjectPhase(selected.phase)!]
+                      : null
+                  }
                   disabled={pending}
                   onEvidence={() => {
-                    if (!selected.phase?.trim()) return;
+                    const phase = normalizeProjectPhase(selected.phase);
+                    if (!phase) return;
                     setEvidenceTarget({
                       projectId: selected.id,
                       projectName: selected.displayName,
                       field: "phase",
-                      value: selected.phase.trim(),
+                      value: phase,
                     });
                   }}
                   onSever={() => {
-                    if (!selected.phase?.trim()) return;
+                    const phase = normalizeProjectPhase(selected.phase);
+                    if (!phase) return;
                     setSeverError(null);
                     setPendingSever({
                       field: "phase",
                       label: "Phase",
-                      value: selected.phase.trim(),
+                      value: phase,
                     });
                   }}
                 />

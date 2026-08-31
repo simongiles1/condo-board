@@ -4,6 +4,7 @@ import {
   index,
   integer,
   pgTable,
+  real,
   text,
   uniqueIndex,
   type AnyPgColumn,
@@ -443,6 +444,8 @@ export const organizationHighlightExtractions = pgTable(
     thirdPassCostUsd: text("third_pass_cost_usd"),
     thirdPassApiModelName: text("third_pass_api_model_name"),
     thirdPassUpdatedAt: text("third_pass_updated_at"),
+    /** Set when pass-3 cards were replayed but none appear in this email. */
+    orgMentionsBackfilledAt: text("org_mentions_backfilled_at"),
   },
 );
 
@@ -565,6 +568,60 @@ export const organizationEntities = pgTable(
   }),
 );
 
+/**
+ * Per-email organization observations from pass-3 cards.
+ * Resolution attaches to organization_entities; this table does not mint orgs.
+ */
+export const organizationMentions = pgTable(
+  "organization_mentions",
+  {
+    id: text("id").primaryKey(),
+    sourceEmailId: text("source_email_id").references(() => emails.id, {
+      onDelete: "cascade",
+    }),
+    fingerprintMergeId: text("fingerprint_merge_id").references(
+      () => organizationFingerprintMerges.id,
+      { onDelete: "set null" },
+    ),
+    modelId: text("model_id"),
+    rawName: text("raw_name").notNull(),
+    nameKey: text("name_key"),
+    email: text("email"),
+    phone: text("phone"),
+    website: text("website"),
+    fingerprint: text("fingerprint").notNull(),
+    resolutionStatus: text("resolution_status", {
+      enum: ["unresolved", "provisional", "confirmed"],
+    })
+      .notNull()
+      .default("unresolved"),
+    resolvedOrganizationId: text("resolved_organization_id").references(
+      () => organizationEntities.id,
+      { onDelete: "set null" },
+    ),
+    resolutionReason: text("resolution_reason"),
+    candidateOrganizationIdsJson: text("candidate_organization_ids_json")
+      .notNull()
+      .default("[]"),
+    startOffset: integer("start_offset"),
+    endOffset: integer("end_offset"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    emailFingerprintUnique: uniqueIndex(
+      "organization_mentions_email_fingerprint_unique",
+    ).on(table.sourceEmailId, table.fingerprint),
+    statusIdx: index("organization_mentions_status_idx").on(
+      table.resolutionStatus,
+    ),
+    nameKeyIdx: index("organization_mentions_name_key_idx").on(table.nameKey),
+    resolvedOrgIdx: index("organization_mentions_resolved_org_idx").on(
+      table.resolvedOrganizationId,
+    ),
+  }),
+);
+
 /** Per-email project highlight extraction (names, years, phases, contractors). */
 export const projectHighlightExtractions = pgTable(
   "project_highlight_extractions",
@@ -674,7 +731,8 @@ export const projectFieldDenials = pgTable(
 /**
  * Thin durable project registry (materialized from fingerprint keys).
  * identity_key is name:… or name:…|year:… — human merge decides if years
- * are the same initiative. Never slugify-only.
+ * are the same initiative. Never slugify-only. aliases_json is the search
+ * document's variant names (not a merge key).
  */
 export const projectEntities = pgTable(
   "project_entities",
@@ -682,11 +740,15 @@ export const projectEntities = pgTable(
     id: text("id").primaryKey(),
     identityKey: text("identity_key").notNull().unique(),
     name: text("name"),
+    /** Canonical year or inclusive range: "2024" or "2024–2026". */
     yearHint: text("year_hint"),
+    /** Canonical lifecycle: planning | tender | awarded | in progress | complete | on hold | cancelled. */
     phase: text("phase"),
     contractor: text("contractor"),
     location: text("location"),
     equipmentMentions: text("equipment_mentions"),
+    /** JSON string[] of variant work names from fingerprint coalesce / identity review. */
+    aliasesJson: text("aliases_json").notNull().default("[]"),
     scope: text("scope", {
       enum: ["building", "multi_unit", "unit", "unknown"],
     }),
@@ -701,6 +763,228 @@ export const projectEntities = pgTable(
   },
   (table) => ({
     statusIdx: index("project_entities_status_idx").on(table.status),
+  }),
+);
+
+/**
+ * Per-email project observations. Minted cards may resolve to project_entities;
+ * sparse / failed-gate cards stay unresolved until a later strong identity.
+ */
+export const projectMentions = pgTable(
+  "project_mentions",
+  {
+    id: text("id").primaryKey(),
+    sourceEmailId: text("source_email_id").references(() => emails.id, {
+      onDelete: "cascade",
+    }),
+    fingerprintMergeId: text("fingerprint_merge_id").references(
+      () => projectFingerprintMerges.id,
+      { onDelete: "set null" },
+    ),
+    modelId: text("model_id"),
+    rawName: text("raw_name").notNull(),
+    contractor: text("contractor"),
+    yearHint: text("year_hint"),
+    phase: text("phase"),
+    location: text("location"),
+    nameKey: text("name_key"),
+    identityKey: text("identity_key"),
+    fingerprint: text("fingerprint").notNull(),
+    minted: boolean("minted").notNull().default(false),
+    resolutionStatus: text("resolution_status", {
+      enum: ["unresolved", "provisional", "confirmed"],
+    })
+      .notNull()
+      .default("unresolved"),
+    resolvedProjectId: text("resolved_project_id").references(
+      () => projectEntities.id,
+      { onDelete: "set null" },
+    ),
+    resolutionReason: text("resolution_reason"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    emailFingerprintUnique: uniqueIndex(
+      "project_mentions_email_fingerprint_unique",
+    ).on(table.sourceEmailId, table.fingerprint),
+    statusIdx: index("project_mentions_status_idx").on(table.resolutionStatus),
+    nameKeyIdx: index("project_mentions_name_key_idx").on(table.nameKey),
+    identityKeyIdx: index("project_mentions_identity_key_idx").on(
+      table.identityKey,
+    ),
+    resolvedProjectIdx: index("project_mentions_resolved_project_idx").on(
+      table.resolvedProjectId,
+    ),
+  }),
+);
+
+/**
+ * Two-pass AI identity review over the project registry (work-type cluster,
+ * then email-context decision). One run at a time in the UI.
+ */
+export const projectIdentityReviewRuns = pgTable(
+  "project_identity_review_runs",
+  {
+    id: text("id").primaryKey(),
+    modelId: text("model_id").notNull(),
+    status: text("status", {
+      enum: ["running", "completed", "failed", "cancelled"],
+    }).notNull(),
+    currentPass: integer("current_pass"),
+    clusterTotal: integer("cluster_total").notNull().default(0),
+    clusterCompleted: integer("cluster_completed").notNull().default(0),
+    projectCount: integer("project_count").notNull().default(0),
+    highApplied: integer("high_applied").notNull().default(0),
+    proposedCount: integer("proposed_count").notNull().default(0),
+    totalCostUsd: text("total_cost_usd"),
+    lastError: text("last_error"),
+    startedAt: text("started_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    finishedAt: text("finished_at"),
+  },
+);
+
+export const projectIdentityReviewClusters = pgTable(
+  "project_identity_review_clusters",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => projectIdentityReviewRuns.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    memberIdsJson: text("member_ids_json").notNull(),
+    sortIndex: integer("sort_index").notNull(),
+  },
+  (table) => ({
+    runIdx: index("project_identity_review_clusters_run_idx").on(table.runId),
+  }),
+);
+
+export const projectIdentityReviewDecisions = pgTable(
+  "project_identity_review_decisions",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => projectIdentityReviewRuns.id, { onDelete: "cascade" }),
+    clusterId: text("cluster_id")
+      .notNull()
+      .references(() => projectIdentityReviewClusters.id, {
+        onDelete: "cascade",
+      }),
+    kind: text("kind").notNull(),
+    confidence: text("confidence").notNull(),
+    rationale: text("rationale").notNull(),
+    workLabel: text("work_label"),
+    decisionJson: text("decision_json").notNull(),
+    status: text("status", {
+      enum: ["applied", "proposed", "skipped", "failed"],
+    }).notNull(),
+    appliedAt: text("applied_at"),
+    error: text("error"),
+  },
+  (table) => ({
+    runIdx: index("project_identity_review_decisions_run_idx").on(table.runId),
+  }),
+);
+
+/**
+ * Going-forward match memory from identity review. Fingerprint coalesce
+ * remaps new harvest cards onto survivor_key using work_label + aliases.
+ */
+export const projectIdentityPolicies = pgTable(
+  "project_identity_policies",
+  {
+    id: text("id").primaryKey(),
+    survivorKey: text("survivor_key").notNull().unique(),
+    workLabel: text("work_label").notNull(),
+    policy: text("policy", {
+      enum: ["span", "recurring_year"],
+    }).notNull(),
+    aliasesJson: text("aliases_json").notNull().default("[]"),
+    yearHint: text("year_hint"),
+    reviewRunId: text("review_run_id"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    workLabelIdx: index("project_identity_policies_work_label_idx").on(
+      table.workLabel,
+    ),
+  }),
+);
+
+/**
+ * Scan of monthly management reports / board packages to tag which
+ * registry projects the PM actually briefed the Board on.
+ */
+export const projectBoardReportRuns = pgTable("project_board_report_runs", {
+  id: text("id").primaryKey(),
+  modelId: text("model_id").notNull(),
+  status: text("status", {
+    enum: ["running", "completed", "failed", "cancelled"],
+  }).notNull(),
+  reportTotal: integer("report_total").notNull().default(0),
+  reportCompleted: integer("report_completed").notNull().default(0),
+  skippedUnparsed: integer("skipped_unparsed").notNull().default(0),
+  matchedProjectCount: integer("matched_project_count").notNull().default(0),
+  unmatchedTopicCount: integer("unmatched_topic_count").notNull().default(0),
+  totalCostUsd: text("total_cost_usd"),
+  lastError: text("last_error"),
+  startedAt: text("started_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  finishedAt: text("finished_at"),
+});
+
+export const projectBoardReports = pgTable(
+  "project_board_reports",
+  {
+    id: text("id").primaryKey(),
+    contentHash: text("content_hash").notNull().unique(),
+    filename: text("filename").notNull(),
+    emailId: text("email_id").references(() => emails.id, {
+      onDelete: "set null",
+    }),
+    kind: text("kind", {
+      enum: ["management_report", "board_package"],
+    }).notNull(),
+    reportDate: text("report_date"),
+    receivedAt: text("received_at"),
+    pageCount: integer("page_count"),
+    parseStatus: text("parse_status"),
+    topicsJson: text("topics_json").notNull().default("[]"),
+    extractionJson: text("extraction_json"),
+    error: text("error"),
+    runId: text("run_id").references(() => projectBoardReportRuns.id, {
+      onDelete: "set null",
+    }),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    runIdx: index("project_board_reports_run_idx").on(table.runId),
+  }),
+);
+
+export const projectBoardMentions = pgTable(
+  "project_board_mentions",
+  {
+    id: text("id").primaryKey(),
+    projectKey: text("project_key").notNull(),
+    reportId: text("report_id")
+      .notNull()
+      .references(() => projectBoardReports.id, { onDelete: "cascade" }),
+    topicName: text("topic_name").notNull(),
+    confidence: text("confidence").notNull(),
+    score: text("score").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    projectReportUnique: uniqueIndex(
+      "project_board_mentions_project_report_unique",
+    ).on(table.projectKey, table.reportId),
+    projectKeyIdx: index("project_board_mentions_project_key_idx").on(
+      table.projectKey,
+    ),
   }),
 );
 
@@ -1142,6 +1426,8 @@ export const contactMentions = pgTable(
     email: text("email"),
     phone: text("phone"),
     jobTitle: text("job_title"),
+    /** Canonical short role when job_title maps (solicitor, property manager). */
+    rolePhrase: text("role_phrase"),
     rawCompany: text("raw_company"),
     mentionKind: text("mention_kind", {
       enum: ["participant", "referred", "unknown"],
@@ -1166,6 +1452,11 @@ export const contactMentions = pgTable(
       { onDelete: "set null" },
     ),
     resolutionReason: text("resolution_reason"),
+    candidatePersonIdsJson: text("candidate_person_ids_json")
+      .notNull()
+      .default("[]"),
+    startOffset: integer("start_offset"),
+    endOffset: integer("end_offset"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
@@ -1316,7 +1607,7 @@ export const analysisSettings = pgTable("analysis_settings", {
   id: text("id").primaryKey(),
   analysisModel: text("analysis_model")
     .notNull()
-    .default("gemini-2.5-flash"),
+    .default("gemini-3.7-flash"),
   mergeModel: text("merge_model"),
   maxOutputTokens: integer("max_output_tokens").notNull().default(65536),
   extractionVersion: integer("extraction_version").notNull().default(1),
@@ -1422,6 +1713,111 @@ export const discoveredFacts = pgTable("discovered_facts", {
   dedupKey: text("dedup_key"),
   createdAt: text("created_at").notNull(),
 });
+
+export const FLOOR_PLAN_SETTINGS_ID = "default";
+
+export const floorPlanSettings = pgTable("floor_plan_settings", {
+  id: text("id").primaryKey(),
+  registrationLabel: text("registration_label").notNull().default(""),
+  /** Building pin in the registration plan's original-PDF coordinates. */
+  pinXPt: real("pin_x_pt"),
+  pinYPt: real("pin_y_pt"),
+  /** First drawing that placed the building pin. */
+  registrationPlanId: text("registration_plan_id"),
+  /** Floor whose building pin + reference anchor define the pin offset. */
+  pinReferencePlanId: text("pin_reference_plan_id"),
+  /** Labeled stroke-color presets for wall markup (JSON array). */
+  drawColorPresetsJson: text("draw_color_presets_json"),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const floorPlanFamilies = pgTable("floor_plan_families", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  /** architectural = single-sheet floors; mechanical = east/west pair until merged. */
+  kind: text("kind").notNull().default("architectural"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  cropWidthPt: real("crop_width_pt"),
+  cropHeightPt: real("crop_height_pt"),
+  /** Architectural scale denominator, e.g. 150 for a 1:150 drawing. */
+  scaleDenominator: real("scale_denominator"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const floorPlans = pgTable(
+  "floor_plans",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id")
+      .notNull()
+      .references(() => floorPlanFamilies.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    notes: text("notes").notNull().default(""),
+    /** Building level this sheet belongs to; drives list and compare order. */
+    floorNumber: integer("floor_number").notNull().default(0),
+    sortOrder: integer("sort_order").notNull().default(0),
+    /** Merged or single-sheet PDF. Null while an east/west pair is still unmerged. */
+    originalFilePath: text("original_file_path"),
+    croppedFilePath: text("cropped_file_path"),
+    westFilePath: text("west_file_path"),
+    eastFilePath: text("east_file_path"),
+    westPageWidthPt: real("west_page_width_pt"),
+    westPageHeightPt: real("west_page_height_pt"),
+    eastPageWidthPt: real("east_page_width_pt"),
+    eastPageHeightPt: real("east_page_height_pt"),
+    /** East-sheet origin relative to the west-sheet origin (PDF space, Y up). */
+    eastOffsetXPt: real("east_offset_x_pt"),
+    eastOffsetYPt: real("east_offset_y_pt"),
+    /** Keep-region on the west sheet (visual PDF space) before merge. */
+    westCropXPt: real("west_crop_x_pt"),
+    westCropYPt: real("west_crop_y_pt"),
+    westCropWidthPt: real("west_crop_width_pt"),
+    westCropHeightPt: real("west_crop_height_pt"),
+    /** Keep-region on the east sheet (visual PDF space) before merge. */
+    eastCropXPt: real("east_crop_x_pt"),
+    eastCropYPt: real("east_crop_y_pt"),
+    eastCropWidthPt: real("east_crop_width_pt"),
+    eastCropHeightPt: real("east_crop_height_pt"),
+    originalPageWidthPt: real("original_page_width_pt").notNull(),
+    originalPageHeightPt: real("original_page_height_pt").notNull(),
+    cropXPt: real("crop_x_pt"),
+    cropYPt: real("crop_y_pt"),
+    pinXPt: real("pin_x_pt"),
+    pinYPt: real("pin_y_pt"),
+    /** Structural feature used to calibrate the building pin on other floors. */
+    referenceAnchorXPt: real("reference_anchor_x_pt"),
+    referenceAnchorYPt: real("reference_anchor_y_pt"),
+    /** Saved line/rectangle markup on the original PDF (JSON array). */
+    annotationsJson: text("annotations_json").notNull().default("[]"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    familyIdx: index("floor_plans_family_idx").on(table.familyId),
+    familySortIdx: index("floor_plans_family_sort_idx").on(
+      table.familyId,
+      table.sortOrder,
+    ),
+    familyFloorIdx: index("floor_plans_family_floor_idx").on(
+      table.familyId,
+      table.floorNumber,
+    ),
+  }),
+);
+
+export const floorPlanFamiliesRelations = relations(
+  floorPlanFamilies,
+  ({ many }) => ({
+    plans: many(floorPlans),
+  }),
+);
+
+export const floorPlansRelations = relations(floorPlans, ({ one }) => ({
+  family: one(floorPlanFamilies, {
+    fields: [floorPlans.familyId],
+    references: [floorPlanFamilies.id],
+  }),
+}));
 
 export const buildingEquipmentRegistry = pgTable("building_equipment_registry", {
   id: text("id").primaryKey(),

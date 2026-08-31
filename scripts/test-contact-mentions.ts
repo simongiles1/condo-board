@@ -10,9 +10,11 @@ import {
   buildMentionBlockingKeys,
   contactMentionFingerprint,
   inferRawCompanyFromHighlights,
+  inferRolePhrase,
   mentionFirstOrgKey,
   mentionMatchingFirstNameKey,
   personMeetsProvisionalPrior,
+  strongIdentityBoundFromCards,
 } from "../lib/contacts/mention-shared";
 import {
   decideContactMentionResolution,
@@ -337,6 +339,49 @@ describe("personMeetsProvisionalPrior", () => {
     );
     assert.equal(
       personMeetsProvisionalPrior({ sourceEmailCount: 2, mentionWeight: 2 }),
+      false,
+    );
+  });
+});
+
+describe("inferRolePhrase", () => {
+  it("maps legal titles to solicitor", () => {
+    assert.equal(inferRolePhrase("Legal Counsel"), "solicitor");
+    assert.equal(inferRolePhrase("our solicitor"), "solicitor");
+  });
+
+  it("maps property-manager titles", () => {
+    assert.equal(inferRolePhrase("Assistant Property Manager"), "property manager");
+  });
+
+  it("does not invent a role from an empty title", () => {
+    assert.equal(inferRolePhrase(null), null);
+    assert.equal(inferRolePhrase("  "), null);
+  });
+
+  it("keeps an unrecognized short title as lowercase text", () => {
+    assert.equal(inferRolePhrase("Concierge"), "concierge");
+  });
+});
+
+describe("strongIdentityBoundFromCards", () => {
+  it("collects first+org and email keys without using first name alone", () => {
+    const bound = strongIdentityBoundFromCards([
+      {
+        first_name: "Joseph",
+        raw_company: "Stern & Partners",
+        email: "jsmith@sternlaw.com",
+      },
+      {
+        first_name: "Joseph",
+        raw_company: null,
+        email: null,
+      },
+    ]);
+    assert.deepEqual(bound.firstOrgKeys, ["joseph|stern partners"]);
+    assert.ok(bound.emails.includes("jsmith@sternlaw.com"));
+    assert.equal(
+      bound.firstOrgKeys.some((key) => key === "joseph"),
       false,
     );
   });

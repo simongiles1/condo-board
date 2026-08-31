@@ -2,7 +2,6 @@
 
 import { createPortal } from "react-dom";
 import {
-  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -13,14 +12,10 @@ import {
   formatCostUsd,
   formatTokenCount,
 } from "@/lib/gemini/usage";
-import {
-  claimHoverPopover,
-  closeActiveHoverPopover,
-  releaseHoverPopover,
-} from "@/lib/ui/hover-popover-group";
+import { closeActiveHoverPopover } from "@/lib/ui/hover-popover-group";
+import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 
 const VIEWPORT_MARGIN = 8;
-const POPOVER_HIDE_DELAY_MS = 500;
 
 function computePopoverPosition(
   triggerRect: DOMRect,
@@ -80,56 +75,15 @@ type Props = {
 export function PageVisionCostBadge({ summary }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const popoverInstanceId = useRef(Symbol("page-vision-cost-badge")).current;
-  const triggerHoveredRef = useRef(false);
-  const popoverHoveredRef = useRef(false);
-  const [open, setOpen] = useState(false);
+  const hover = useHoverPopover();
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
     zIndex: 50,
   });
 
-  function cancelHide() {
-    if (hideTimeoutRef.current) {
-      clearTimeout(hideTimeoutRef.current);
-      hideTimeoutRef.current = null;
-    }
-  }
-
-  function forceClose() {
-    cancelHide();
-    triggerHoveredRef.current = false;
-    popoverHoveredRef.current = false;
-    setOpen(false);
-    releaseHoverPopover(popoverInstanceId);
-  }
-
-  function scheduleHide() {
-    cancelHide();
-    hideTimeoutRef.current = setTimeout(() => {
-      if (!triggerHoveredRef.current && !popoverHoveredRef.current) {
-        forceClose();
-      }
-    }, POPOVER_HIDE_DELAY_MS);
-  }
-
-  function showPopover() {
-    claimHoverPopover(popoverInstanceId, forceClose);
-    cancelHide();
-    setOpen(true);
-  }
-
-  useEffect(() => {
-    return () => {
-      cancelHide();
-      releaseHoverPopover(popoverInstanceId);
-    };
-  }, [popoverInstanceId]);
-
   useLayoutEffect(() => {
-    if (!open || !rootRef.current || !popoverRef.current) return;
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
 
     const triggerRect = rootRef.current.getBoundingClientRect();
     const popoverRect = popoverRef.current.getBoundingClientRect();
@@ -141,33 +95,7 @@ export function PageVisionCostBadge({ summary }: Props) {
       ),
       visibility: "visible",
     });
-  }, [open, summary]);
-
-  useEffect(() => {
-    if (!open) return;
-
-    function updatePosition() {
-      const triggerRect = rootRef.current?.getBoundingClientRect();
-      const popover = popoverRef.current;
-      if (!triggerRect || !popover) return;
-
-      setPopoverStyle({
-        ...computePopoverPosition(
-          triggerRect,
-          popover.offsetWidth,
-          popover.offsetHeight,
-        ),
-        visibility: "visible",
-      });
-    }
-
-    window.addEventListener("scroll", updatePosition, true);
-    window.addEventListener("resize", updatePosition);
-    return () => {
-      window.removeEventListener("scroll", updatePosition, true);
-      window.removeEventListener("resize", updatePosition);
-    };
-  }, [open, summary]);
+  }, [hover.open, summary]);
 
   const costLabel = formatCostUsd(summary.costUsd);
   const modelLabel =
@@ -182,16 +110,10 @@ export function PageVisionCostBadge({ summary }: Props) {
       <div
         ref={rootRef}
         className="inline-flex max-w-full"
-        onMouseEnter={() => {
-          triggerHoveredRef.current = true;
-          showPopover();
-        }}
-        onMouseLeave={() => {
-          triggerHoveredRef.current = false;
-          scheduleHide();
-        }}
-        onFocus={() => showPopover()}
-        onBlur={() => scheduleHide()}
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onFocus={hover.onTriggerFocus}
+        onBlur={hover.onTriggerBlur}
         onClick={(event) => event.preventDefault()}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
@@ -201,7 +123,7 @@ export function PageVisionCostBadge({ summary }: Props) {
       >
         <span
           tabIndex={0}
-          title={`Page vision ${costLabel} — hover for tokens and model`}
+          aria-label={`Page vision ${costLabel}`}
           className="inline-flex max-w-full cursor-default items-center gap-1 truncate rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium tabular-nums text-teal-900 ring-1 ring-teal-200"
         >
           Vision
@@ -209,7 +131,7 @@ export function PageVisionCostBadge({ summary }: Props) {
         </span>
       </div>
 
-      {open && typeof document !== "undefined"
+      {hover.open && typeof document !== "undefined"
         ? createPortal(
             <div
               ref={popoverRef}
@@ -218,14 +140,7 @@ export function PageVisionCostBadge({ summary }: Props) {
               className="w-max min-w-[14rem] max-w-[min(24rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
               onClick={(event) => event.stopPropagation()}
               onMouseDown={(event) => event.stopPropagation()}
-              onMouseEnter={() => {
-                popoverHoveredRef.current = true;
-                cancelHide();
-              }}
-              onMouseLeave={() => {
-                popoverHoveredRef.current = false;
-                scheduleHide();
-              }}
+              {...hover.popoverProps}
             >
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Page vision

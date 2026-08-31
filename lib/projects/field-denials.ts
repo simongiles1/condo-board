@@ -12,13 +12,17 @@ import {
   type ProjectEntityCard,
 } from "@/lib/email-analysis/project-highlight-shared";
 import { resolveProjectSurvivorKey } from "@/lib/projects/manual-merge";
+import { normalizeProjectPhase } from "@/lib/projects/project-phase";
 import {
   mergeProjectAliasLists,
   normalizeProjectNameKey,
-  normalizeProjectYearHint,
   projectMultiValueContains,
   removeProjectMultiValue,
 } from "@/lib/projects/project-multi-values";
+import {
+  normalizeProjectYearHint,
+  yearsMatch,
+} from "@/lib/projects/project-year-range";
 
 export { projectIdentityKey };
 
@@ -57,6 +61,9 @@ export function normalizeProjectDeniedValue(
   if (field === "year_hint") {
     return normalizeProjectYearHint(trimmed) ?? trimmed.toLowerCase();
   }
+  if (field === "phase") {
+    return normalizeProjectPhase(trimmed) ?? trimmed.toLowerCase();
+  }
   if (
     field === "contractor" ||
     field === "location" ||
@@ -88,9 +95,7 @@ function fieldValueMatchesDenial(
     return projectMultiValueContains(card[denial.field], denial.deniedValue);
   }
   if (denial.field === "year_hint") {
-    const cardYear = normalizeProjectYearHint(card.year_hint);
-    if (!cardYear) return false;
-    return cardYear === denial.deniedValue;
+    return yearsMatch(card.year_hint, denial.deniedValue);
   }
   const raw = card[denial.field];
   if (!raw?.trim()) return false;

@@ -135,10 +135,14 @@ async function persistProjectMergeEdges(
 
 /**
  * Manual UI merge: absorb each source into `targetProjectId` (target survives).
+ * Identity-review batch applies pass `refreshRegistry: false` and rebuild
+ * once at end of run — a full fingerprint+mention refresh is minutes.
  */
 export async function manualMergeManyProjects(params: {
   sourceProjectIds: string[];
   targetProjectId: string;
+  /** Default true for interactive merges. */
+  refreshRegistry?: boolean;
 }): Promise<
   | { ok: true; survivorKey: string; merged: number }
   | { ok: false; error: string }
@@ -191,6 +195,21 @@ export async function manualMergeManyProjects(params: {
       });
     }),
   );
+
+  if (params.refreshRegistry !== false) {
+    try {
+      const { refreshProjectEntitiesAndResolveMentions } = await import(
+        "@/lib/projects/mention-resolve"
+      );
+      await refreshProjectEntitiesAndResolveMentions();
+    } catch (error) {
+      console.error("[project-mentions] resolve after manual merge failed", {
+        survivorKey,
+        error:
+          error instanceof Error ? error.message : "Project mention resolve failed",
+      });
+    }
+  }
 
   return { ok: true, survivorKey, merged: edges.length };
 }

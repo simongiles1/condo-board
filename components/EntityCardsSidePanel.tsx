@@ -2,6 +2,8 @@
 
 import { useEffect } from "react";
 
+import { RolePhraseBadge } from "@/components/EntityMentionBadges";
+import { inferRolePhrase } from "@/lib/contacts/mention-shared";
 import {
   entityCardDisplayName as contactCardDisplayName,
   type ContactEntityCard,
@@ -100,6 +102,14 @@ function ContactCardView({
         <FieldRow label="Email" value={card.email} />
         <FieldRow label="Phone" value={card.phone} />
         <FieldRow label="Job title" value={card.job_title} />
+        {inferRolePhrase(card.job_title) ? (
+          <div className="grid grid-cols-[7rem_1fr] gap-2 text-sm">
+            <dt className="text-slate-500">Role</dt>
+            <dd className="min-w-0">
+              <RolePhraseBadge jobTitle={card.job_title} />
+            </dd>
+          </div>
+        ) : null}
       </dl>
     </article>
   );

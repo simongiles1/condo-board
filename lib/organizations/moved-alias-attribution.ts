@@ -1,4 +1,12 @@
-/** Re-bucket org source-email counts when an alias was moved to another card. */
+/**
+ * Fallback fingerprint email bucketing when mention rows are missing.
+ *
+ * Displayed registry counts, Wikipedia emails, and harvest marks use
+ * `organization_mentions`. This module only re-buckets pass-3 harvest names
+ * onto fingerprint cards (moved aliases, and orgs with no mention overlay).
+ * Short unique aliases (TCG) count when they are not a prefix of another
+ * org’s primary name; colliding stems (Trace) do not.
+ */
 
 import type { OrgEntityCard } from "@/lib/email-analysis/org-highlight-shared";
 import {
@@ -10,6 +18,7 @@ import {
   normalizeOrgNameKey,
   orgIdentityKey,
 } from "@/lib/organizations/field-denials";
+import { orgSurfaceCollidesOnRoster } from "@/lib/organizations/mention-shared";
 
 export type OrgNameSighting = {
   emailId: string;
@@ -99,10 +108,19 @@ export function rebuildOrgEmailIdsFromSightings<T extends OrgEmailBucket>(params
 }): T[] {
   const mergeMap = params.mergeMap ?? new Map();
   const byNameKey = movedAliasTargetByNameKey(params.attachments, mergeMap);
+  const roster = params.organizations.map((org) => ({
+    name: org.name,
+    aliases: org.aliases,
+  }));
 
   return params.organizations.map((org) => {
     const ids = new Set<string>();
     const primaryKey = normalizeOrgNameKey(org.name);
+    const aliasKeys = new Set<string>();
+    for (const alias of org.aliases ?? []) {
+      if (orgSurfaceCollidesOnRoster(alias, org.name, roster)) continue;
+      for (const key of harvestNameKeys(alias)) aliasKeys.add(key);
+    }
 
     for (const row of params.nameSightings) {
       const aliasTarget = targetForHarvestName(row.name, byNameKey);
@@ -114,7 +132,13 @@ export function rebuildOrgEmailIdsFromSightings<T extends OrgEmailBucket>(params
         continue;
       }
 
-      if (primaryKey && rowKey === primaryKey && !aliasTarget) {
+      if (aliasTarget) continue;
+
+      const rowKeys = harvestNameKeys(row.name);
+      if (
+        (primaryKey && rowKey === primaryKey) ||
+        rowKeys.some((key) => aliasKeys.has(key))
+      ) {
         ids.add(row.emailId);
       }
     }

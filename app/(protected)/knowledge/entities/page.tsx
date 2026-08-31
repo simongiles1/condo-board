@@ -16,7 +16,9 @@ import {
 import { loadEquipmentRegistry } from "@/lib/equipment/registry";
 import { parseEntityKindTab } from "@/lib/nav/structure";
 import { loadOrgFingerprintSummaries } from "@/lib/organizations/fingerprint-list";
-import { loadProjectFingerprintSummaries } from "@/lib/projects/fingerprint-list";
+import { peekProjectFingerprintSummaries } from "@/lib/projects/fingerprint-list";
+import { getProjectMentionStats } from "@/lib/projects/mention-queue";
+import type { ProjectMentionStats } from "@/lib/projects/mention-queue-shared";
 
 export default async function EntitiesPage({
   searchParams,
@@ -32,15 +34,18 @@ export default async function EntitiesPage({
   const started = Date.now();
   // Only the visible tab is loaded on the server. The other tabs fetch on
   // first click so Contacts / Todos / nav is not blocked by org rebuilds.
+  // Projects peek the in-memory cache and never wait on a fingerprint rebuild.
+  const projectPeek =
+    initialTab === "projects" ? peekProjectFingerprintSummaries() : null;
   const [
     persons,
     emails,
     stats,
     activity,
     orgList,
-    projectList,
     equipmentList,
     mailboxList,
+    projectMentionStats,
   ] = await Promise.all([
     initialTab === "contacts"
       ? loadContactRegistryPersons({
@@ -73,14 +78,21 @@ export default async function EntitiesPage({
     initialTab === "organizations"
       ? loadOrgFingerprintSummaries()
       : Promise.resolve(null),
-    initialTab === "projects"
-      ? loadProjectFingerprintSummaries()
-      : Promise.resolve(null),
     initialTab === "equipment"
       ? loadEquipmentRegistry()
       : Promise.resolve(null),
     initialTab === "mailboxes"
       ? loadSharedMailboxes()
+      : Promise.resolve(null),
+    initialTab === "projects"
+      ? getProjectMentionStats().catch(
+          (): ProjectMentionStats => ({
+            total: 0,
+            confirmed: 0,
+            provisional: 0,
+            unresolved: 0,
+          }),
+        )
       : Promise.resolve(null),
   ]);
   console.info("[entities:page]", {
@@ -106,14 +118,17 @@ export default async function EntitiesPage({
           emailCount: 0,
         }
       }
-      initialProjects={projectList?.projects ?? []}
+      initialProjects={projectPeek?.projects ?? []}
       initialProjectStats={
-        projectList?.stats ?? {
+        projectPeek?.stats ?? {
           projectCount: 0,
           mergeCount: 0,
           emailCount: 0,
+          boardMentionedCount: 0,
         }
       }
+      initialProjectsPending={initialTab === "projects" && projectPeek == null}
+      initialProjectMentionStats={projectMentionStats}
       initialEquipment={equipmentList?.equipment ?? []}
       initialEquipmentStats={
         equipmentList?.stats ?? {

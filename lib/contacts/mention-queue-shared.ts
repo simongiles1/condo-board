@@ -53,6 +53,7 @@ export type MentionQueueRow = {
   phone: string | null;
   rawCompany: string | null;
   jobTitle: string | null;
+  rolePhrase: string | null;
   mentionKind: ContactMentionKind;
   firstNameKey: string | null;
   firstOrgKey: string | null;
@@ -85,6 +86,8 @@ export type MentionQueueSample = {
   phone: string | null;
   rawCompany: string | null;
   jobTitle: string | null;
+  rolePhrase: string | null;
+  resolutionReason: string | null;
   resolvedPersonId: string | null;
   resolvedPersonName?: string | null;
   contextSnippet: string | null;
@@ -359,6 +362,8 @@ function toSample(row: MentionQueueRow): MentionQueueSample {
     phone: row.phone,
     rawCompany: row.rawCompany,
     jobTitle: row.jobTitle,
+    rolePhrase: row.rolePhrase,
+    resolutionReason: row.resolutionReason,
     resolvedPersonId: row.resolvedPersonId,
     resolvedPersonName: null,
     contextSnippet: row.contextSnippet,

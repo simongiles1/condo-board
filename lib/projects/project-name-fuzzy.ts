@@ -112,11 +112,16 @@ function editSimilarity(a: string, b: string): number {
 /**
  * Similarity of two already-canonicalized project name strings in [0, 1].
  * Uses the best of token Jaccard, character trigram Jaccard, and edit ratio.
+ *
+ * Skip Levenshtein when token and trigram overlap are both empty on longer
+ * strings — allocating a DP matrix per pair was the project-fingerprint
+ * 5-minute stall (thousands of merge cards × identity policies).
  */
 export function projectCanonicalNameSimilarity(a: string, b: string): number {
   if (!a || !b) return 0;
   if (a === b) return 1;
   const tokenScore = jaccard(tokenSet(a), tokenSet(b));
+  if (tokenScore === 1) return 1;
   const aGrams = trigrams(a);
   const bGrams = trigrams(b);
   let inter = 0;
@@ -125,8 +130,18 @@ export function projectCanonicalNameSimilarity(a: string, b: string): number {
   }
   const union = aGrams.size + bGrams.size - inter;
   const trigramScore = union > 0 ? inter / union : 0;
-  const editScore = editSimilarity(a.replace(/\s+/g, ""), b.replace(/\s+/g, ""));
-  return Math.max(tokenScore, trigramScore, editScore);
+  const bestSoFar = Math.max(tokenScore, trigramScore);
+  const aCompact = a.replace(/\s+/g, "");
+  const bCompact = b.replace(/\s+/g, "");
+  if (
+    bestSoFar === 0 &&
+    aCompact.length > 8 &&
+    bCompact.length > 8
+  ) {
+    return 0;
+  }
+  const editScore = editSimilarity(aCompact, bCompact);
+  return Math.max(bestSoFar, editScore);
 }
 
 /** Similarity of two raw project names after canonicalization. */

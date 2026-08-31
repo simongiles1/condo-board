@@ -131,6 +131,7 @@ export const KNOWLEDGE_SUBNAV: SubNavTab[] = [
 
 export const BUILDING_SUBNAV: SubNavTab[] = [
   { href: "/building/overview", label: "Asset Overview & 3D" },
+  { href: "/building/floor-plans", label: "Floor plans" },
   { href: "/building/maintenance", label: "Maintenance History" },
   { href: "/building/budget", label: "Budget & Financials" },
 ];

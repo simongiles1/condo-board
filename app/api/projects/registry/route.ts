@@ -1,4 +1,5 @@
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 
@@ -15,6 +16,11 @@ import {
   parseProjectFingerprintListSort,
 } from "@/lib/projects/fingerprint-list";
 import { manualMergeManyProjects } from "@/lib/projects/manual-merge";
+import {
+  getProjectMentionStats,
+  loadProjectMentionQueueGroups,
+} from "@/lib/projects/mention-queue";
+import { refreshProjectEntitiesAndResolveMentions } from "@/lib/projects/mention-resolve";
 
 export async function GET(request: Request) {
   const auth = await requireSession();
@@ -36,17 +42,67 @@ export async function GET(request: Request) {
     }
   }
 
+  if (view === "mention_stats") {
+    try {
+      const mentionStats = await getProjectMentionStats();
+      return NextResponse.json({ view: "mention_stats", mentionStats });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not load project mention stats.";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
+
+  if (view === "mentions") {
+    const mentionView = url.searchParams.get("mentionView");
+    const started = Date.now();
+    console.info("[projects:registry] mentions start", { mentionView });
+    try {
+      const queue = await loadProjectMentionQueueGroups({
+        view: mentionView,
+      });
+      console.info("[projects:registry] mentions done", {
+        mentionView: queue.view,
+        groups: queue.groups.length,
+        ms: Date.now() - started,
+      });
+      return NextResponse.json({
+        view: "mentions",
+        mentionView: queue.view,
+        groups: queue.groups,
+        mentionStats: queue.stats,
+        groupCount: queue.groups.length,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not load project mentions.";
+      console.error("[projects:registry] mentions failed", {
+        mentionView,
+        ms: Date.now() - started,
+        error: message,
+      });
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
+
   const limit = parseEntityListLimit(url.searchParams.get("limit"));
   const offset = parseEntityListOffset(url.searchParams.get("offset"));
   const sort = parseProjectFingerprintListSort(url.searchParams.get("sort"));
 
   try {
-    const { projects, stats } = await loadProjectFingerprintSummaries({
-      limit,
-      offset,
-      sort,
-    });
-    return NextResponse.json({ projects, stats });
+    const [{ projects, stats }, mentionStats] = await Promise.all([
+      loadProjectFingerprintSummaries({
+        limit,
+        offset,
+        sort,
+      }),
+      getProjectMentionStats().catch(() => null),
+    ]);
+    return NextResponse.json({ projects, stats, mentionStats });
   } catch (error) {
     const message =
       error instanceof Error
@@ -69,6 +125,7 @@ export async function POST(request: Request) {
     field?: string;
     value?: string;
     projectName?: string | null;
+    limit?: number;
   } = {};
   try {
     body = (await request.json()) as typeof body;
@@ -90,11 +147,26 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, denial: result.denial });
   }
 
+  if (body.action === "resolve_mentions") {
+    try {
+      const result = await refreshProjectEntitiesAndResolveMentions({
+        limit: body.limit ?? 8000,
+      });
+      return NextResponse.json({ ok: true, ...result });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not resolve project mentions.";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
+
   if (body.action !== "merge") {
     return NextResponse.json(
       {
         error:
-          'Unsupported action. Use action: "merge" or action: "deny_field".',
+          'Unsupported action. Use action: "merge", "deny_field", or "resolve_mentions".',
       },
       { status: 400 },
     );

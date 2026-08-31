@@ -22,14 +22,10 @@ import {
   formatOutputTokensPerSecond,
   formatTokenCount,
 } from "@/lib/gemini/usage";
-import {
-  claimHoverPopover,
-  closeActiveHoverPopover,
-  releaseHoverPopover,
-} from "@/lib/ui/hover-popover-group";
+import { HOVER_POPOVER_ATTR } from "@/lib/ui/hover-popover-group";
+import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 
 const VIEWPORT_MARGIN = 8;
-const POPOVER_HIDE_DELAY_MS = 500;
 
 function computePopoverPosition(
   triggerRect: DOMRect,
@@ -236,6 +232,7 @@ function PopoverPanel({
       className="w-max min-w-[42rem] max-w-[min(48rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
       onClick={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
+      {...{ [HOVER_POPOVER_ATTR]: "" }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
@@ -261,58 +258,16 @@ export function ProcessedCostBadge({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const popoverInstanceId = useRef(Symbol("processed-cost-badge")).current;
-  const triggerHoveredRef = useRef(false);
-  const popoverHoveredRef = useRef(false);
-  const [open, setOpen] = useState(false);
+  const hasPopover = entries.length > 0;
+  const hover = useHoverPopover({ enabled: hasPopover });
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
     zIndex: 50,
   });
 
-  const hasPopover = entries.length > 0;
-
-  function cancelHide() {
-    if (hideTimeoutRef.current) {
-      clearTimeout(hideTimeoutRef.current);
-      hideTimeoutRef.current = null;
-    }
-  }
-
-  function forceClose() {
-    cancelHide();
-    triggerHoveredRef.current = false;
-    popoverHoveredRef.current = false;
-    setOpen(false);
-    releaseHoverPopover(popoverInstanceId);
-  }
-
-  function scheduleHide() {
-    cancelHide();
-    hideTimeoutRef.current = setTimeout(() => {
-      if (!triggerHoveredRef.current && !popoverHoveredRef.current) {
-        forceClose();
-      }
-    }, POPOVER_HIDE_DELAY_MS);
-  }
-
-  function showPopover() {
-    claimHoverPopover(popoverInstanceId, forceClose);
-    cancelHide();
-    if (hasPopover) setOpen(true);
-  }
-
-  useEffect(() => {
-    return () => {
-      cancelHide();
-      releaseHoverPopover(popoverInstanceId);
-    };
-  }, [popoverInstanceId]);
-
   useLayoutEffect(() => {
-    if (!open || !rootRef.current || !popoverRef.current) return;
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
 
     function updatePosition() {
       const triggerRect = rootRef.current?.getBoundingClientRect();
@@ -330,10 +285,10 @@ export function ProcessedCostBadge({
     }
 
     updatePosition();
-  }, [open, entries]);
+  }, [hover.open, entries]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!hover.open) return;
 
     function updatePosition() {
       const triggerRect = rootRef.current?.getBoundingClientRect();
@@ -350,14 +305,9 @@ export function ProcessedCostBadge({
       });
     }
 
-    window.addEventListener("scroll", updatePosition, true);
     window.addEventListener("resize", updatePosition);
-
-    return () => {
-      window.removeEventListener("scroll", updatePosition, true);
-      window.removeEventListener("resize", updatePosition);
-    };
-  }, [open, entries]);
+    return () => window.removeEventListener("resize", updatePosition);
+  }, [hover.open, entries]);
 
   const popoverTitle =
     entries.length === 1
@@ -374,25 +324,18 @@ export function ProcessedCostBadge({
         tabIndex={hasPopover || onOpenDetails ? 0 : undefined}
         role={onOpenDetails ? "button" : undefined}
         className={`${badgeClassName} ${interactiveClassName}`}
-        onMouseEnter={() => {
-          triggerHoveredRef.current = true;
-          showPopover();
-        }}
-        onMouseLeave={() => {
-          triggerHoveredRef.current = false;
-          scheduleHide();
-        }}
-        onFocus={() => showPopover()}
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onFocus={hover.onTriggerFocus}
         onBlur={(event) => {
           if (!rootRef.current?.contains(event.relatedTarget as Node)) {
-            scheduleHide();
+            hover.onTriggerBlur();
           }
         }}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          closeActiveHoverPopover();
-          forceClose();
+          hover.forceClose();
           if (onOpenDetails) {
             onOpenDetails();
           }
@@ -408,20 +351,14 @@ export function ProcessedCostBadge({
         {children}
       </span>
 
-      {open && hasPopover && typeof document !== "undefined"
+      {hover.open && hasPopover && typeof document !== "undefined"
         ? createPortal(
             <PopoverPanel
               panelRef={popoverRef}
               title={popoverTitle}
               style={popoverStyle}
-              onMouseEnter={() => {
-                popoverHoveredRef.current = true;
-                cancelHide();
-              }}
-              onMouseLeave={() => {
-                popoverHoveredRef.current = false;
-                scheduleHide();
-              }}
+              onMouseEnter={hover.onPopoverEnter}
+              onMouseLeave={hover.onPopoverLeave}
             >
               <ProcessingStatsTable entries={entries} />
             </PopoverPanel>,

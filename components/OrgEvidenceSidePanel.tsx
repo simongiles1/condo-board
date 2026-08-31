@@ -56,17 +56,23 @@ function MarkedBody({
   text,
   needle,
   field,
+  compact = false,
 }: {
   text: string;
   needle: string;
   field: OrgEvidenceField;
+  compact?: boolean;
 }): ReactNode {
   if (!text.trim()) {
-    return <p className="text-sm text-slate-500">(No plain-text body)</p>;
+    return compact ? null : (
+      <p className="text-sm text-slate-500">(No plain-text body)</p>
+    );
   }
   const ranges = findCaseInsensitiveRanges(text, needle);
   if (ranges.length === 0) {
-    return (
+    return compact ? (
+      text
+    ) : (
       <div className="prose prose-sm max-w-none whitespace-pre-wrap">{text}</div>
     );
   }
@@ -89,6 +95,7 @@ function MarkedBody({
   if (cursor < text.length) {
     parts.push(<span key="tail">{text.slice(cursor)}</span>);
   }
+  if (compact) return <>{parts}</>;
   return (
     <div className="prose prose-sm max-w-none whitespace-pre-wrap">{parts}</div>
   );
@@ -191,7 +198,9 @@ function EvidenceEmailRow({
         </p>
         <MatchReasonChips reasons={matchReasons} />
         {preview.trim() ? (
-          <p className="mt-1 line-clamp-2 text-xs text-slate-600">{preview}</p>
+          <p className="mt-1 line-clamp-2 text-xs text-slate-600">
+            <MarkedBody text={preview} needle={needle} field={field} compact />
+          </p>
         ) : null}
       </button>
       {open ? (

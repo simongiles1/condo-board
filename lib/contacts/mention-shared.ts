@@ -34,14 +34,68 @@ export type ContactMentionKind = (typeof CONTACT_MENTION_KINDS)[number];
 /** Unique first+org attaches provisionally only when the person is well-known. */
 export const CONTACT_MENTION_PROVISIONAL_MIN_SOURCE_EMAILS = 8;
 
+/** Unique-body locator needle: first+last, else first. */
+export function contactMentionSurfaceNeedle(card: {
+  first_name?: string | null;
+  last_name?: string | null;
+}): string {
+  return [card.first_name, card.last_name]
+    .map((part) => part?.trim() ?? "")
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
 export type ContactMentionCard = {
   first_name: string | null;
   last_name: string | null;
   email: string | null;
   phone: string | null;
   job_title: string | null;
+  /** Canonical short role derived from job_title (solicitor, property manager). */
+  role_phrase?: string | null;
   raw_company: string | null;
 };
+
+const ROLE_PHRASE_PATTERNS: Array<{ phrase: string; pattern: RegExp }> = [
+  {
+    phrase: "solicitor",
+    pattern: /\b(solicitor|lawyer|attorney|legal counsel)\b/i,
+  },
+  {
+    phrase: "property manager",
+    pattern:
+      /\b(property manager|condo(?:minium)? manager|assistant (?:property )?manager)\b/i,
+  },
+  {
+    phrase: "engineer",
+    pattern: /\b(engineer|engineering)\b/i,
+  },
+  {
+    phrase: "auditor",
+    pattern: /\b(auditor|accountant)\b/i,
+  },
+  {
+    phrase: "insurance broker",
+    pattern: /\b(insurance broker|broker)\b/i,
+  },
+];
+
+/**
+ * Map a free-text job title onto a short role phrase for mention accumulation.
+ * Does not invent a role when the title is empty.
+ */
+export function inferRolePhrase(
+  jobTitle: string | null | undefined,
+): string | null {
+  const raw = jobTitle?.replace(/\s+/g, " ").trim() || null;
+  if (!raw) return null;
+  for (const { phrase, pattern } of ROLE_PHRASE_PATTERNS) {
+    if (pattern.test(raw)) return phrase;
+  }
+  const compact = raw.toLowerCase();
+  return compact.length <= 48 ? compact : `${compact.slice(0, 48).trimEnd()}`;
+}
 
 export function normalizeCompanyKey(name: string | null | undefined): string {
   return (name ?? "")
@@ -183,16 +237,53 @@ export function cardToMentionCard(
   card: ContactEntityCard | ContactRegistryIncomingCard,
   extraction?: ContactHighlightExtraction | null,
 ): ContactMentionCard {
+  const jobTitle = card.job_title?.trim() || null;
   return {
     first_name: card.first_name?.trim() || null,
     last_name: card.last_name?.trim() || null,
     email: card.email?.trim() || null,
     phone: card.phone?.trim() || null,
-    job_title: card.job_title?.trim() || null,
+    job_title: jobTitle,
+    role_phrase: inferRolePhrase(jobTitle),
     raw_company: inferRawCompanyFromHighlights(
       { raw_company: card.raw_company ?? null },
       extraction,
     ),
+  };
+}
+
+export type StrongIdentityMentionBound = {
+  firstOrgKeys: string[];
+  emails: string[];
+};
+
+/** Typed keys a newly minted/enriched person can use to re-resolve sparse mentions. */
+export function strongIdentityBoundFromCards(
+  cards: Array<{
+    first_name?: string | null;
+    email?: string | null;
+    raw_company?: string | null;
+  }>,
+): StrongIdentityMentionBound {
+  const firstOrgKeys = new Set<string>();
+  const emails = new Set<string>();
+  for (const card of cards) {
+    const orgKey = mentionFirstOrgKey({
+      firstName: card.first_name,
+      rawCompany: card.raw_company,
+    });
+    if (orgKey) firstOrgKeys.add(orgKey);
+    const rawEmail = card.email?.trim() || "";
+    if (rawEmail) {
+      emails.add(rawEmail);
+      emails.add(rawEmail.toLowerCase());
+      const normalized = normalizeContactRegistryEmail(rawEmail);
+      if (normalized) emails.add(normalized);
+    }
+  }
+  return {
+    firstOrgKeys: [...firstOrgKeys],
+    emails: [...emails],
   };
 }
 

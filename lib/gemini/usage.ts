@@ -1,5 +1,10 @@
 import type { UsageMetadata } from "@google/generative-ai";
 
+import {
+  billedPricingForModel,
+  type ModelTokenPricing,
+} from "@/lib/gemini/pricing";
+
 export type TokenUsage = {
   inputTokens: number;
   outputTokens: number;
@@ -35,68 +40,6 @@ export type AiUsageLog = {
 
 const DEFAULT_INPUT_PRICE_PER_MILLION = 1.5;
 const DEFAULT_OUTPUT_PRICE_PER_MILLION = 9;
-
-const MODEL_PRICING_USD_PER_MILLION: Record<
-  string,
-  { input: number; output: number }
-> = {
-  "gemini-2.0-flash": { input: 0.1, output: 0.4 },
-  "gemini-2.0-flash-lite": { input: 0.075, output: 0.3 },
-  "gemini-2.5-flash": { input: 0.3, output: 2.5 },
-  "gemini-2.5-pro": { input: 1.25, output: 10 },
-  "gemini-3.1-flash-lite": { input: 0.25, output: 1.5 },
-  "gemini-3.1-flash-live-preview": { input: 0.75, output: 4.5 },
-  "gemini-3.1-pro-preview": { input: 2, output: 12 },
-  "gemini-3.5-flash": { input: 1.5, output: 9 },
-  "gemini-3.6-flash": { input: 1.5, output: 7.5 },
-  "deepseek-v4-flash": { input: 0.14, output: 0.28 },
-};
-
-const MODEL_PRICING_ALIASES: Array<{
-  match: RegExp;
-  pricing: { input: number; output: number };
-}> = [
-  {
-    match: /gemini-3\.6-flash/i,
-    pricing: MODEL_PRICING_USD_PER_MILLION["gemini-3.6-flash"],
-  },
-  {
-    match: /gemini-3\.5-flash/i,
-    pricing: MODEL_PRICING_USD_PER_MILLION["gemini-3.5-flash"],
-  },
-  {
-    match: /gemini-3\.1-pro/i,
-    pricing: MODEL_PRICING_USD_PER_MILLION["gemini-3.1-pro-preview"],
-  },
-  {
-    match: /gemini-3\.1-flash-live-preview/i,
-    pricing: MODEL_PRICING_USD_PER_MILLION["gemini-3.1-flash-live-preview"],
-  },
-  {
-    match: /gemini-3\.1-flash-lite/i,
-    pricing: MODEL_PRICING_USD_PER_MILLION["gemini-3.1-flash-lite"],
-  },
-  {
-    match: /gemini-2\.5-flash/i,
-    pricing: MODEL_PRICING_USD_PER_MILLION["gemini-2.5-flash"],
-  },
-  {
-    match: /gemini-2\.0-flash-lite/i,
-    pricing: MODEL_PRICING_USD_PER_MILLION["gemini-2.0-flash-lite"],
-  },
-  {
-    match: /gemini-2\.0-flash/i,
-    pricing: MODEL_PRICING_USD_PER_MILLION["gemini-2.0-flash"],
-  },
-  {
-    match: /gemini-2\.5-pro/i,
-    pricing: MODEL_PRICING_USD_PER_MILLION["gemini-2.5-pro"],
-  },
-  {
-    match: /deepseek-v4-flash/i,
-    pricing: MODEL_PRICING_USD_PER_MILLION["deepseek-v4-flash"],
-  },
-];
 
 type UsageMetadataLike = Pick<
   UsageMetadata,
@@ -159,24 +102,16 @@ export type CostBreakdown = {
   pricing: ModelPricing;
 };
 
-function pricingForModel(modelName: string): ModelPricing {
-  const normalized = modelName.trim().toLowerCase();
-  const direct = MODEL_PRICING_USD_PER_MILLION[normalized];
-  if (direct) {
-    return {
-      inputPerMillion: direct.input,
-      outputPerMillion: direct.output,
-    };
-  }
+function toModelPricing(pricing: ModelTokenPricing): ModelPricing {
+  return {
+    inputPerMillion: pricing.input,
+    outputPerMillion: pricing.output,
+  };
+}
 
-  for (const alias of MODEL_PRICING_ALIASES) {
-    if (alias.match.test(normalized)) {
-      return {
-        inputPerMillion: alias.pricing.input,
-        outputPerMillion: alias.pricing.output,
-      };
-    }
-  }
+function pricingForModel(modelName: string, nowMs = Date.now()): ModelPricing {
+  const billed = billedPricingForModel(modelName, nowMs);
+  if (billed) return toModelPricing(billed);
 
   const inputOverride = Number(process.env.GEMINI_PRICE_INPUT_PER_MILLION);
   const outputOverride = Number(process.env.GEMINI_PRICE_OUTPUT_PER_MILLION);
@@ -191,15 +126,16 @@ function pricingForModel(modelName: string): ModelPricing {
   };
 }
 
-export function getModelPricing(modelName: string): ModelPricing {
-  return pricingForModel(modelName);
+export function getModelPricing(modelName: string, nowMs?: number): ModelPricing {
+  return pricingForModel(modelName, nowMs);
 }
 
 export function estimateCostBreakdown(
   modelName: string,
   usage: Pick<TokenUsage, "inputTokens" | "outputTokens">,
+  nowMs?: number,
 ): CostBreakdown {
-  const pricing = pricingForModel(modelName);
+  const pricing = pricingForModel(modelName, nowMs);
   const inputCostUsd =
     (usage.inputTokens / 1_000_000) * pricing.inputPerMillion;
   const outputCostUsd =
@@ -216,8 +152,9 @@ export function estimateCostBreakdown(
 export function estimateCostUsd(
   modelName: string,
   usage: Pick<TokenUsage, "inputTokens" | "outputTokens">,
+  nowMs?: number,
 ): number {
-  return estimateCostBreakdown(modelName, usage).totalCostUsd;
+  return estimateCostBreakdown(modelName, usage, nowMs).totalCostUsd;
 }
 
 export function estimateCostUsdForCalls(calls: GeminiUsageCall[]): number {
@@ -237,7 +174,7 @@ function primaryModelName(calls: GeminiUsageCall[]): string {
     return (
       process.env.GEMINI_MODEL_MINUTES?.trim() ||
       process.env.GEMINI_MODEL_TODOS?.trim() ||
-      "gemini-2.5-flash"
+      "gemini-3.7-flash"
     );
   }
 

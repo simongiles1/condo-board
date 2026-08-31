@@ -231,9 +231,7 @@ export function scoreProjectCard(
       score += 9;
     }
   }
-  if (card.contractor && containsEither(collapseNeedle(card.contractor), n)) {
-    score += 8;
-  }
+  // Contractor is a vendor firm, not project identity — same rule as mention resolve.
   if (card.location && containsEither(collapseNeedle(card.location), n)) {
     score += 8;
   }

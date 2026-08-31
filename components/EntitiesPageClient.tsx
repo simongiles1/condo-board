@@ -33,6 +33,7 @@ import type {
   ProjectFingerprintListStats,
   ProjectFingerprintSummary,
 } from "@/lib/projects/fingerprint-list";
+import type { ProjectMentionStats } from "@/lib/projects/mention-queue-shared";
 import type {
   SharedMailboxStats,
   SharedMailboxSummary,
@@ -87,7 +88,10 @@ export function EntitiesPageClient({
     projectCount: 0,
     mergeCount: 0,
     emailCount: 0,
+    boardMentionedCount: 0,
   },
+  initialProjectsPending = false,
+  initialProjectMentionStats = null,
   initialEquipment = [],
   initialEquipmentStats = {
     equipmentCount: 0,
@@ -108,6 +112,8 @@ export function EntitiesPageClient({
   initialOrgStats?: OrgFingerprintListStats;
   initialProjects?: ProjectFingerprintSummary[];
   initialProjectStats?: ProjectFingerprintListStats;
+  initialProjectsPending?: boolean;
+  initialProjectMentionStats?: ProjectMentionStats | null;
   initialEquipment?: EquipmentRegistrySummary[];
   initialEquipmentStats?: EquipmentRegistryStats;
   initialMailboxes?: SharedMailboxSummary[];
@@ -125,13 +131,22 @@ export function EntitiesPageClient({
   const [orgStats, setOrgStats] = useState(initialOrgStats);
   const [projects, setProjects] = useState(initialProjects);
   const [projectStats, setProjectStats] = useState(initialProjectStats);
+  const [projectMentionStats, setProjectMentionStats] = useState(
+    initialProjectMentionStats,
+  );
   const [equipment, setEquipment] = useState(initialEquipment);
   const [equipmentStats, setEquipmentStats] = useState(initialEquipmentStats);
   const [mailboxes, setMailboxes] = useState(initialMailboxes);
   const [mailboxStats, setMailboxStats] = useState(initialMailboxStats);
 
-  const loadedTabs = useRef(new Set<EntityKindTab>([resolvedTab]));
-  const [loadingTab, setLoadingTab] = useState<EntityKindTab | null>(null);
+  const loadedTabs = useRef(
+    new Set<EntityKindTab>(
+      initialProjectsPending && resolvedTab === "projects" ? [] : [resolvedTab],
+    ),
+  );
+  const [loadingTab, setLoadingTab] = useState<EntityKindTab | null>(
+    initialProjectsPending && resolvedTab === "projects" ? "projects" : null,
+  );
 
   useEffect(() => {
     setEntityTab(resolvedTab);
@@ -190,10 +205,12 @@ export function EntitiesPageClient({
         const json = (await res.json()) as {
           projects?: ProjectFingerprintSummary[];
           stats?: ProjectFingerprintListStats;
+          mentionStats?: ProjectMentionStats | null;
         };
         if (cancelled) return;
         setProjects(json.projects ?? []);
         if (json.stats) setProjectStats(json.stats);
+        if (json.mentionStats) setProjectMentionStats(json.mentionStats);
         loadedTabs.current.add(tab);
         return;
       }
@@ -298,6 +315,7 @@ export function EntitiesPageClient({
           key={`projects-${projects.length}-${projectStats.projectCount}`}
           initialProjects={projects}
           initialStats={projectStats}
+          initialMentionStats={projectMentionStats}
         />
       ) : entityTab === "mailboxes" ? (
         <SharedMailboxesClient

@@ -13,7 +13,7 @@ import {
   type TokenUsage,
 } from "@/lib/gemini/usage";
 
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+const DEFAULT_GEMINI_MODEL = "gemini-3.7-flash";
 
 function requireApiKey(): string {
   const key = process.env.GEMINI_API_KEY;

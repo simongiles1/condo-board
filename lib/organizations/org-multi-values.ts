@@ -103,8 +103,8 @@ export function orgMultiValueContains(
   );
 }
 
-function normalizeOrgAliasKey(name: string): string {
-  return name
+export function normalizeOrgNameKey(name: string | null | undefined): string {
+  return (name ?? "")
     .trim()
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
@@ -117,7 +117,7 @@ export function mergeOrgAliasLists(
   primaryName: string | null | undefined,
   ...lists: Array<string[] | null | undefined>
 ): string[] {
-  const primaryKey = normalizeOrgAliasKey(primaryName ?? "");
+  const primaryKey = normalizeOrgNameKey(primaryName ?? "");
   const seen = new Set<string>();
   const out: string[] = [];
   for (const list of lists) {
@@ -125,7 +125,7 @@ export function mergeOrgAliasLists(
     for (const alias of list) {
       const trimmed = alias.trim();
       if (!trimmed) continue;
-      const key = normalizeOrgAliasKey(trimmed);
+      const key = normalizeOrgNameKey(trimmed);
       if (!key || (primaryKey && key === primaryKey) || seen.has(key)) continue;
       seen.add(key);
       out.push(trimmed);
@@ -150,7 +150,7 @@ export function foldOrgNames(params: {
   const aliasFromOther =
     preferred &&
     other &&
-    normalizeOrgAliasKey(preferred) !== normalizeOrgAliasKey(other)
+    normalizeOrgNameKey(preferred) !== normalizeOrgNameKey(other)
       ? [other]
       : [];
   return {

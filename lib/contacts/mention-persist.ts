@@ -9,6 +9,7 @@ import { and, eq, inArray, isNotNull } from "drizzle-orm";
 
 import {
   mentionCardAppearsInEmail,
+  mentionSearchBody,
   parseAddressList,
   type MentionPresenceCard,
   type MentionPresenceEmail,
@@ -17,6 +18,7 @@ import {
   buildMentionBlockingKeys,
   cardToMentionCard,
   contactMentionFingerprint,
+  contactMentionSurfaceNeedle,
   mentionCardHasIdentity,
   mentionFirstNameKey,
   mentionFirstOrgKey,
@@ -24,6 +26,7 @@ import {
   type ContactMentionKind,
 } from "@/lib/contacts/mention-shared";
 import { getDb } from "@/lib/db";
+import { locateUniqueSurfaceSpan } from "@/lib/organizations/mention-shared";
 import { contactHighlightExtractions, contactMentions, emails } from "@/lib/db/schema";
 import {
   extractMailboxEmail,
@@ -279,6 +282,10 @@ export async function upsertContactMentionsForEmail(params: {
       rawCompany: card.raw_company,
     });
     const blockingKeysJson = JSON.stringify(buildMentionBlockingKeys(card));
+    const span = locateUniqueSurfaceSpan(
+      mentionSearchBody(presence),
+      contactMentionSurfaceNeedle(card),
+    );
 
     const [existing] = await db
       .select({
@@ -306,6 +313,7 @@ export async function upsertContactMentionsForEmail(params: {
           email: card.email,
           phone: card.phone,
           jobTitle: card.job_title,
+          rolePhrase: card.role_phrase ?? null,
           rawCompany: card.raw_company,
           mentionKind,
           firstNameKey,
@@ -313,6 +321,8 @@ export async function upsertContactMentionsForEmail(params: {
           blockingKeysJson,
           modelId: params.modelId ?? null,
           fingerprintMergeId: params.fingerprintMergeId ?? null,
+          startOffset: span?.start ?? null,
+          endOffset: span?.end ?? null,
           updatedAt: now,
         })
         .where(eq(contactMentions.id, existing.id));
@@ -330,6 +340,7 @@ export async function upsertContactMentionsForEmail(params: {
       email: card.email,
       phone: card.phone,
       jobTitle: card.job_title,
+      rolePhrase: card.role_phrase ?? null,
       rawCompany: card.raw_company,
       mentionKind,
       fingerprint,
@@ -337,6 +348,9 @@ export async function upsertContactMentionsForEmail(params: {
       firstOrgKey,
       blockingKeysJson,
       resolutionStatus: "unresolved",
+      candidatePersonIdsJson: "[]",
+      startOffset: span?.start ?? null,
+      endOffset: span?.end ?? null,
       resolvedPersonId: null,
       resolvedOrganizationId: null,
       resolutionReason: null,

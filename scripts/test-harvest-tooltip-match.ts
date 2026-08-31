@@ -9,9 +9,11 @@ import { describe, it } from "node:test";
 import {
   pickBestContactCard,
   pickBestOrgCard,
+  pickBestProjectCard,
   resolveHarvestTooltipContent,
   scoreContactCard,
   scoreOrgCard,
+  scoreProjectCard,
 } from "../lib/email-analysis/harvest-tooltip-match";
 import type { HarvestMarkNode } from "../lib/email-analysis/harvest-highlight-spans";
 
@@ -272,5 +274,81 @@ describe("resolveHarvestTooltipContent", () => {
       "Send the AGM package to owners",
     );
     assert.equal(content.todos[0]?.event?.detail, "Management");
+  });
+
+  it("treats a contractor-only mark as organization, not a project card", () => {
+    const text = "Please go ahead with the proposal you presented from trace";
+    const start = text.toLowerCase().indexOf("trace");
+    const node: HarvestMarkNode = {
+      start,
+      end: start + 5,
+      layers: [
+        {
+          group: "organization",
+          type: "organization_name",
+          start,
+          end: start + 5,
+          title: "Organization: trace",
+          unresolved: true,
+          mentionId: "m1",
+          candidates: [
+            { id: "consulting", name: "Trace Consulting Group" },
+            { id: "fire", name: "Trace Fire" },
+          ],
+        },
+      ],
+      children: [],
+    };
+    const content = resolveHarvestTooltipContent({
+      node,
+      highlightedText: "trace",
+      bodyText: text,
+      contactCards: [],
+      orgCards: [
+        {
+          name: "Trace Consulting Group",
+          organization_role: "Consultant",
+          email: null,
+          phone: null,
+          website: null,
+          aliases: ["Trace"],
+        },
+      ],
+      projectCards: [
+        {
+          name: "Generator drawings",
+          year_hint: null,
+          phase: "tender",
+          contractor: "trace",
+          location: null,
+          equipment_mentions: null,
+          scope: null,
+          aliases: [],
+        },
+      ],
+      events: [],
+    });
+    assert.equal(content.primaryGroup, "organization");
+    assert.equal(content.project, null);
+    assert.equal(content.organization?.card?.name, "Trace Consulting Group");
+    assert.equal(content.organization?.layers[0]?.unresolved, true);
+  });
+});
+
+describe("scoreProjectCard", () => {
+  it("does not attach a project from a vendor/contractor needle", () => {
+    const card = {
+      name: "Generator drawings",
+      year_hint: null,
+      phase: "tender",
+      contractor: "trace",
+      location: null,
+      equipment_mentions: null,
+      scope: null,
+      aliases: [],
+    };
+    assert.equal(scoreProjectCard(card, "trace"), 0);
+    assert.equal(pickBestProjectCard([card], "trace"), null);
+    assert.ok(scoreProjectCard(card, "Generator drawings") >= 12);
   });
 });

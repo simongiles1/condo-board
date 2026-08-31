@@ -19,6 +19,10 @@ import {
   invalidateOrgFingerprintSummariesCache,
 } from "@/lib/organizations/fingerprint-list";
 import { manualMergeManyOrganizations } from "@/lib/organizations/manual-merge";
+import {
+  backfillOrgMentionsFromHarvest,
+  previewOrgMentionBackfill,
+} from "@/lib/organizations/mention-backfill";
 
 export async function GET(request: Request) {
   const auth = await requireSession();
@@ -36,6 +40,19 @@ export async function GET(request: Request) {
         error instanceof Error
           ? error.message
           : "Could not load organization duplicate groups.";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
+
+  if (view === "mention_backfill") {
+    try {
+      const preview = await previewOrgMentionBackfill();
+      return NextResponse.json({ ok: true, view: "mention_backfill", ...preview });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not load organization mention backfill status.";
       return NextResponse.json({ error: message }, { status: 500 });
     }
   }
@@ -76,11 +93,64 @@ export async function POST(request: Request) {
     sourceOrganizationName?: string | null;
     targetOrganizationName?: string | null;
     targetPersonId?: string;
+    dryRun?: boolean;
+    force?: boolean;
+    harvestLimit?: number;
   } = {};
   try {
     body = (await request.json()) as typeof body;
   } catch {
     body = {};
+  }
+
+  if (body.action === "preview_mention_backfill") {
+    try {
+      const preview = await previewOrgMentionBackfill();
+      return NextResponse.json({ ok: true, ...preview });
+    } catch (error) {
+      console.error("[organizations:preview_mention_backfill]", error);
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not preview organization mention backfill.",
+        },
+        { status: 500 },
+      );
+    }
+  }
+
+  if (body.action === "backfill_mentions") {
+    try {
+      const result = await backfillOrgMentionsFromHarvest({
+        dryRun: body.dryRun === true,
+        force: body.force === true,
+        harvestLimit:
+          typeof body.harvestLimit === "number" && body.harvestLimit > 0
+            ? Math.min(200, body.harvestLimit)
+            : undefined,
+      });
+      if (!result.dryRun) {
+        invalidateOrgFingerprintSummariesCache();
+      }
+      return NextResponse.json({
+        ok: true,
+        ...result,
+        details: result.details.slice(0, 40),
+      });
+    } catch (error) {
+      console.error("[organizations:backfill_mentions]", error);
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not backfill organization mentions.",
+        },
+        { status: 500 },
+      );
+    }
   }
 
   if (body.action === "deny_field") {

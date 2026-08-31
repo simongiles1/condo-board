@@ -40,7 +40,7 @@ export type BuildoutSequenceStep = {
   relatedIds: string[];
 };
 
-export const BUILDOUT_REVIEWED_ON = "2026-08-17";
+export const BUILDOUT_REVIEWED_ON = "2026-08-22";
 
 /**
  * Corpus snapshot for the playbook header. Not queried live — refresh when
@@ -73,7 +73,6 @@ export const BUILDOUT_STAGES: BuildoutItem[] = [
       "Person highlight harvest, fingerprints, registry, merge, and mention chart. Inbox and bulk extract run on email bodies.",
     remaining: [
       "Harvest still skips attachment text (Docling markdown is stored, not mined).",
-      "Hover cards exist; click-through to a full person profile is not wired.",
       "Lifetime mention counts are a cleanup sort (get 90% of the roster clean), not the product ranking. Default view and AI assignment weight should be recency / trend so a new project manager outranks a historically-mentioned person who is fading.",
       "Merge duplicates and zero-mention stubs (e.g. “admin”) as they show up.",
     ],
@@ -124,8 +123,7 @@ export const BUILDOUT_STAGES: BuildoutItem[] = [
     summary:
       "Dedicated harvest writes extracted_action_items. Body bulk finished (7,331 emails, then drip catch-up). Global To-Dos is the working list (last 120 days open; Archive for older). Meeting merge and manual adds share that list.",
     remaining: [
-      "Source-quote highlight must land on the extracting sentence, not the whole email. No yellow = you cannot tell if the task is real. Fix that before any summary-first (NotebookLM) reading UX.",
-      "Rows are not clickable into a task — filter / view email / mark complete only. Detail workspace is a later card.",
+      "Sentence highlight + Working-list click-in shipped 2026-08-20 on existing harvests. Confirm a few real rows paint yellow on the extracting sentence, not the unique body.",
       "related_event_id is still a stub — AGM prep should hang off the AGM event without becoming calendar rows.",
       "Assignee text is not resolved to contact registry IDs (after 2B).",
       "QA auto-close: a later ping in the thread can mark an ask Done when the work was not actually delivered.",
@@ -139,7 +137,7 @@ export const BUILDOUT_STAGES: BuildoutItem[] = [
     title: "Projects",
     status: "in_progress",
     summary:
-      "Named building jobs (maglock, EV chargers, envelope work) are a first-class entity with a four-pass body harvest, fingerprint registry, and human merge. Identity is name plus year when present — 2024 and 2026 jobs stay separate until you merge them. Pipeline is built; the corpus pass has not been run. Not added to harvest-after-sync until that bulk finishes.",
+      "Named building jobs (maglock, EV chargers, envelope work) are a first-class entity with a four-pass body harvest, fingerprint registry, and human merge. Identity is name plus year when present — 2024 and 2026 jobs stay separate until you merge them. Pipeline is built; roster quality is a month-long lab, not the critical path. Not added to harvest-after-sync until a bulk you trust finishes.",
     remaining: [
       "Bulk-extract projects on email bodies (inbox Extract Projects or bulk extract).",
       "Merge duplicate mentions on Entities → Projects as they land. Do not auto-merge by name alone.",
@@ -236,26 +234,27 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     id: "entity-profiles",
     stage: null,
     title: "Wikipedia graph + entity profiles",
-    status: "not_started",
+    status: "in_progress",
     summary:
-      "Hover marks already show people, orgs, equipment, and dated events. Only calendar event cards link through. Goal is Wikipedia-on-steroids: every mention is visually marked, clickable, and opens a side panel of associated emails, projects, and roles. Wait until the project harvest has a roster worth opening.",
+      "Click a harvest mark, Global To-Dos mention, or registry name to open a shared letterhead side panel (emails when linked). Hover stays preview-only. Unique fingerprint → registry resolve on harvest clicks; ambiguous mentions stay unlinked.",
     remaining: [
-      "Click a harvest mark or to-do mention → person / org / project / equipment card, not just a hover.",
-      "Side panel: all emails for that entity, plus “what projects is this org on” / “what is this person CEO of”.",
-      "Hang AGM-style to-dos off calendar events via related_event_id (same slice).",
+      "Side panel still lacks “what projects is this org on” / “what is this person CEO of” (affiliations parked).",
+      "Hang AGM-style to-dos off calendar events via related_event_id.",
+      "Christmas-tree control: layer toggles (contacts / orgs / events / to-dos / projects), fade non-theme layers, keep the page’s current entity full-chroma.",
+      "Calendar / source-panel highlights besides inbox harvest and Global To-Dos.",
     ],
   },
   {
     id: "who-is-who",
     stage: null,
     title: "Who's-who involvement cards",
-    status: "not_started",
+    status: "in_progress",
     summary:
-      "From the 2026-08-17 review: each important contact gets a letterhead-style card (photo, name, title, phone) plus a short “get me involved when” prompt. History should seed those prompts (when people reached out to Paul / Bonnie about what). Used as context for to-do assignment, suggestions, and later email drafts — not a dump of every mention.",
+      "Person profile letterhead (initials, name, title, phone, email) plus a role-based “get me involved when” prompt from the job title. Not history-seeded yet.",
     remaining: [
-      "Generate a mini-prompt per high-mention / high-trend contact from email history.",
-      "Surface on the profile: when to involve them, with one-line examples (complaint filed, contract change, etc.).",
-      "Feed those prompts into to-do suggestions and email drafts. Do not wait for Stage 2B to start the card itself.",
+      "Replace the job-title heuristic with a mini-prompt from that person’s email history.",
+      "Photos on the letterhead.",
+      "Feed those prompts into to-do suggestions and email drafts.",
     ],
   },
   {
@@ -280,8 +279,8 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     summary:
       "The working list is a filterable harvest inbox, not a management tool. ClickUp is overkill as a product to copy, but the missing primitives are known: click-in detail, dependencies / blockers, subtasks, comments, artifacts, assignments, due dates, categories, and reminders. Build these on Working (last 120 days), not Archive.",
     remaining: [
-      "Click a row → detail panel (description, source email with sentence highlight, comments, attachments).",
-      "Dependencies, blockers, subtasks, assignees, due dates, categories.",
+      "Click-in for email harvests is live (row → source email + sentence highlight; Mark complete stays on the row). Meeting-sourced rows still have no detail panel.",
+      "Dependencies, blockers, subtasks, comments, artifacts, assignees, due dates, categories.",
       "Comment timeline (who said what, when) and multiple reminders / notifications.",
       "Filters that already matter for the board: mine vs all, board vs management. Steal UX from existing task products; do not clone ClickUp.",
     ],
@@ -354,28 +353,28 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
  */
 export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
   {
-    id: "seq-projects",
+    id: "seq-todo-highlight",
     kind: "now",
-    title: "Bulk-extract projects on email bodies",
+    title: "Verify to-do sentence highlights + Working-list click-in",
     detail:
-      "Pipeline is built (four-pass harvest, Entities → Projects, merge). Run the corpus pass the same way as contacts/orgs. Maglock 2024 and Maglock 2026 stay separate until you merge them. Leave harvest-after-sync alone until this bulk finishes.",
+      "Display-time clip on existing harvests: yellow on the extracting sentence, not the unique body. Click a Working row to open the source email with that mark; Mark complete stays on the row. Spot-check a handful of real tasks before treating this as done. Summary-first (NotebookLM) reading UX still waits until yellow is trusted.",
+    relatedIds: ["todos", "todo-workspace"],
+  },
+  {
+    id: "seq-projects",
+    kind: "parallel",
+    title: "Project extract + identity merge (ongoing lab)",
+    detail:
+      "Keep tweaking harvest and merge over the next month. Do not sequence other board-ops work behind a clean roster. Maglock 2024 and Maglock 2026 stay separate until you merge them. Leave harvest-after-sync alone until a bulk you trust finishes.",
     relatedIds: ["projects"],
   },
   {
     id: "seq-project-merge",
     kind: "parallel",
-    title: "Merge duplicate project mentions",
+    title: "Merge duplicate project mentions as they land",
     detail:
-      "As cards land, fold obvious duplicates on Entities → Projects. Same name + different years stay split on purpose. Skip 2B — linking people/orgs onto projects can wait.",
+      "Fold obvious duplicates on Entities → Projects when you are in the lab. Same name + different years stay split on purpose. Skip 2B — linking people/orgs onto projects can wait.",
     relatedIds: ["projects"],
-  },
-  {
-    id: "seq-todo-highlight",
-    kind: "parallel",
-    title: "Fix to-do source-quote highlights",
-    detail:
-      "Demo showed the whole email highlighted and no yellow on the extracting sentence. That is the trust gate: you cannot tell a real task from a hallucination until the quote is visible. Do this on existing harvests; do not wait for a new extract. Summary-first (NotebookLM) reading UX comes after this is reliable.",
-    relatedIds: ["todos"],
   },
   {
     id: "seq-project-drip",
@@ -390,7 +389,7 @@ export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
     kind: "after",
     title: "Wikipedia click-through and who's-who cards",
     detail:
-      "Hover already marks entities. Next is click → profile + side panel of associated emails and projects. On the same slice: involvement prompts for the people who actually matter (history-seeded “get me involved when”), and switch the default Entities sort / AI weight from lifetime mentions to trend.",
+      "Click-through to a letterhead profile is live on harvest marks, Global To-Dos mentions, and registry names. Hover stays preview. “Get me involved when” is role-based from job title, not email history. Remaining: Christmas-tree layer toggles, related_event_id, history-seeded prompts, photos.",
     relatedIds: ["entity-profiles", "who-is-who", "contacts"],
   },
   {

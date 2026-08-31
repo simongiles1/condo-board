@@ -60,6 +60,7 @@ type ResultItem = {
 type FingerprintResultItem = {
   emailId: string;
   entityCards: ProjectEntityCard[];
+  mentionCards?: ProjectEntityCard[];
   skipped?: boolean;
   error?: string;
   usage?: {
@@ -337,7 +338,8 @@ export async function POST(request: Request) {
           modelName,
         });
 
-        // No registry ingest for projects yet — merge save only.
+        // Registry ingest: fingerprint merge syncs project_entities (with aliases)
+        // and re-runs mention resolution against the full register.
         return NextResponse.json({
           results: [
             {
@@ -405,7 +407,7 @@ export async function POST(request: Request) {
           }
 
           try {
-            const { entityCards, usage, costUsd, modelName } =
+            const { entityCards, mentionCards, usage, costUsd, modelName } =
               await extractProjectFingerprints(
                 {
                   subject: item.subject,
@@ -420,6 +422,7 @@ export async function POST(request: Request) {
             return {
               emailId: item.emailId,
               entityCards,
+              mentionCards,
               usage,
               costUsd,
               modelName,

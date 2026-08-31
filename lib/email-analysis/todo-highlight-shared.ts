@@ -96,7 +96,7 @@ Return ONLY valid JSON with this exact shape:
 }
 
 Rules:
-- Include source_quote with a brief verbatim excerpt for each fact when possible.
+- Include source_quote as ONE verbatim sentence copied from the body (typically 8–40 words). Never the whole paragraph, never the whole email, never a paraphrase of the task field. That sentence is how a human verifies the task is real.
 - Use ISO dates (YYYY-MM-DD) when a firm due date is stated.
 - Empty arrays are required when there are no relevant to-dos.
 - Do NOT emit contacts, organizations, calendar events, meetings, cancellations, reschedules, hard regulatory deadlines, inspections, maintenance, or equipment. This pass is to-dos only.

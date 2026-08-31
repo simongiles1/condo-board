@@ -1,19 +1,18 @@
 ---
-description: Hover popover pattern — single active popover with 500ms hide delay
+description: Hover popover pattern — delayed open, short close, skip-delay, close on scroll
 globs: **/*.{tsx,ts}
 alwaysApply: false
 ---
 
 # Hover popovers
 
-When adding a popover that opens on icon/badge hover:
+When adding a popover that opens on icon/badge hover, use `useHoverPopover` from `@/lib/ui/use-hover-popover`. Do not copy the old immediate-open / 500ms-hide pattern.
 
-1. **500ms hide delay** — use `POPOVER_HIDE_DELAY_MS = 500` so the pointer can reach the popover.
-2. **Track hover on trigger + popover** — refs for each; `scheduleHide` on leave; close only when both are unhovered after the delay.
-3. **One popover at a time** — import from `@/lib/ui/hover-popover-group`:
-   - `claimHoverPopover(instanceId, forceClose)` when opening (closes any other popover immediately)
-   - `releaseHoverPopover(instanceId)` in `forceClose` and on unmount
-   - `closeActiveHoverPopover()` before click actions that open panels/dialogs
-4. **`forceClose`** must cancel the hide timeout, reset hover refs, `setOpen(false)`, and release the group slot.
+1. **300ms open delay** — accidental flyovers and scroll-under-cursor never open. Keyboard focus still opens immediately.
+2. **100ms close delay** — enough to cross the gap from trigger → panel; not sticky.
+3. **Skip-delay within a row** — while one popover is open in the same row, or within 400ms of the last close in that row, the next trigger in that row opens immediately. Different rows always use the full open delay. Wrap list rows in `HoverPopoverRowProvider`.
+4. **Close on scroll** — page wheel/scroll dismisses immediately and suppresses new hover-opens for 150ms. Mark the panel with `hover.popoverProps` (includes `data-hover-popover`) so scrolling *inside* the panel does not dismiss.
+5. **One popover at a time** — the hook claims `@/lib/ui/hover-popover-group`. Nested previews (thumbnails, field lists) pass `{ group: false, openDelayMs: 0 }` and `setHoldOpen` on the parent.
+6. **Click stays the primary action** — hover is preview only. Click still opens the side panel / harvest inspector. Call `hover.forceClose()` (or `closeActiveHoverPopover()`) before that action.
 
-Copy the pattern from `ProcessedCostBadge` or `InsightSourceEmailsBadge`. Do not implement standalone hover popovers without the group — multiple triggers on one page will stack.
+Copy `ProcessedCostBadge` or `ContactExtractCostBadge`. Do not implement standalone hover popovers without the group — multiple triggers on one page will stack.

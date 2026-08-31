@@ -15,14 +15,10 @@ import {
   type InboxExtractionSummary,
 } from "@/lib/email/extraction-display";
 import { formatDateTime } from "@/lib/format/datetime";
-import {
-  claimHoverPopover,
-  releaseHoverPopover,
-} from "@/lib/ui/hover-popover-group";
+import { HOVER_POPOVER_ATTR } from "@/lib/ui/hover-popover-group";
+import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 
 const VIEWPORT_MARGIN = 8;
-const POPOVER_HIDE_DELAY_MS = 500;
-const SUB_POPOVER_HIDE_DELAY_MS = 500;
 const SUB_POPOVER_Z_INDEX = 60;
 
 function SparklesIcon() {
@@ -163,10 +159,7 @@ function FieldCountBadge({
 }) {
   const badgeRef = useRef<HTMLSpanElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const badgeHoveredRef = useRef(false);
-  const popoverHoveredRef = useRef(false);
-  const [open, setOpen] = useState(false);
+  const hover = useHoverPopover({ group: false, openDelayMs: 0 });
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
@@ -175,41 +168,15 @@ function FieldCountBadge({
 
   const label = formatExtractionFieldLabel(fieldKey);
   const hasItems = items.length > 0;
-
-  function cancelHide() {
-    if (hideTimeoutRef.current) {
-      clearTimeout(hideTimeoutRef.current);
-      hideTimeoutRef.current = null;
-    }
-  }
-
-  function setHovered(hovered: boolean) {
-    onHoverChange?.(hovered);
-  }
-
-  function scheduleHide() {
-    cancelHide();
-    hideTimeoutRef.current = setTimeout(() => {
-      if (!badgeHoveredRef.current && !popoverHoveredRef.current) {
-        setOpen(false);
-        setHovered(false);
-      }
-    }, SUB_POPOVER_HIDE_DELAY_MS);
-  }
-
-  function showSubPopover() {
-    if (!hasItems) return;
-    cancelHide();
-    setOpen(true);
-    setHovered(true);
-  }
+  const onHoverChangeRef = useRef(onHoverChange);
+  onHoverChangeRef.current = onHoverChange;
 
   useEffect(() => {
-    return () => cancelHide();
-  }, []);
+    onHoverChangeRef.current?.(hover.open);
+  }, [hover.open]);
 
   useLayoutEffect(() => {
-    if (!open || !badgeRef.current || !popoverRef.current) return;
+    if (!hover.open || !badgeRef.current || !popoverRef.current) return;
 
     function updatePosition() {
       const anchorRect = badgeRef.current?.getBoundingClientRect();
@@ -227,10 +194,10 @@ function FieldCountBadge({
     }
 
     updatePosition();
-  }, [open, fieldKey, items]);
+  }, [hover.open, fieldKey, items]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!hover.open) return;
 
     function updatePosition() {
       const anchorRect = badgeRef.current?.getBoundingClientRect();
@@ -247,14 +214,12 @@ function FieldCountBadge({
       });
     }
 
-    window.addEventListener("scroll", updatePosition, true);
     window.addEventListener("resize", updatePosition);
 
     return () => {
-      window.removeEventListener("scroll", updatePosition, true);
       window.removeEventListener("resize", updatePosition);
     };
-  }, [open, fieldKey, items]);
+  }, [hover.open, fieldKey, items]);
 
   if (!hasItems) {
     return (
@@ -271,24 +236,15 @@ function FieldCountBadge({
         role="button"
         tabIndex={0}
         className="cursor-default rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-200/80"
-        onMouseEnter={() => {
-          badgeHoveredRef.current = true;
-          showSubPopover();
-        }}
-        onMouseLeave={() => {
-          badgeHoveredRef.current = false;
-          scheduleHide();
-        }}
-        onFocus={showSubPopover}
-        onBlur={() => {
-          badgeHoveredRef.current = false;
-          scheduleHide();
-        }}
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onFocus={hover.onTriggerFocus}
+        onBlur={hover.onTriggerBlur}
       >
         {label}: {count}
       </span>
 
-      {open && typeof document !== "undefined"
+      {hover.open && typeof document !== "undefined"
         ? createPortal(
             <div
               ref={popoverRef}
@@ -297,15 +253,7 @@ function FieldCountBadge({
               className="w-max min-w-[12rem] max-w-[min(24rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
               onClick={(event) => event.stopPropagation()}
               onMouseDown={(event) => event.stopPropagation()}
-              onMouseEnter={() => {
-                popoverHoveredRef.current = true;
-                cancelHide();
-                setHovered(true);
-              }}
-              onMouseLeave={() => {
-                popoverHoveredRef.current = false;
-                scheduleHide();
-              }}
+              {...hover.popoverProps}
             >
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 {label}
@@ -348,6 +296,7 @@ function PopoverPanel({
       className="w-max min-w-[16rem] max-w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
       onClick={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
+      {...{ [HOVER_POPOVER_ATTR]: "" }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
@@ -491,12 +440,7 @@ export function EmailExtractionBadge({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const popoverInstanceId = useRef(Symbol("email-extraction-badge")).current;
-  const triggerHoveredRef = useRef(false);
-  const popoverHoveredRef = useRef(false);
-  const subPopoverHoveredRef = useRef(false);
-  const [open, setOpen] = useState(false);
+  const hover = useHoverPopover();
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
@@ -509,59 +453,12 @@ export function EmailExtractionBadge({
       ? `Extracted metadata across ${summary.emails.length} emails`
       : "Extracted metadata";
 
-  function cancelHide() {
-    if (hideTimeoutRef.current) {
-      clearTimeout(hideTimeoutRef.current);
-      hideTimeoutRef.current = null;
-    }
-  }
-
-  function forceClose() {
-    cancelHide();
-    triggerHoveredRef.current = false;
-    popoverHoveredRef.current = false;
-    subPopoverHoveredRef.current = false;
-    setOpen(false);
-    releaseHoverPopover(popoverInstanceId);
-  }
-
-  function scheduleHide() {
-    cancelHide();
-    hideTimeoutRef.current = setTimeout(() => {
-      if (
-        !triggerHoveredRef.current &&
-        !popoverHoveredRef.current &&
-        !subPopoverHoveredRef.current
-      ) {
-        forceClose();
-      }
-    }, POPOVER_HIDE_DELAY_MS);
-  }
-
   function handleSubPopoverHoverChange(hovered: boolean) {
-    subPopoverHoveredRef.current = hovered;
-    if (hovered) {
-      cancelHide();
-    } else {
-      scheduleHide();
-    }
+    hover.setHoldOpen(hovered);
   }
-
-  function showPopover() {
-    claimHoverPopover(popoverInstanceId, forceClose);
-    cancelHide();
-    setOpen(true);
-  }
-
-  useEffect(() => {
-    return () => {
-      cancelHide();
-      releaseHoverPopover(popoverInstanceId);
-    };
-  }, [popoverInstanceId]);
 
   useLayoutEffect(() => {
-    if (!open || !rootRef.current || !popoverRef.current) return;
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
 
     function updatePosition() {
       const triggerRect = rootRef.current?.getBoundingClientRect();
@@ -579,10 +476,10 @@ export function EmailExtractionBadge({
     }
 
     updatePosition();
-  }, [open, summary]);
+  }, [hover.open, summary]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!hover.open) return;
 
     function updatePosition() {
       const triggerRect = rootRef.current?.getBoundingClientRect();
@@ -599,14 +496,12 @@ export function EmailExtractionBadge({
       });
     }
 
-    window.addEventListener("scroll", updatePosition, true);
     window.addEventListener("resize", updatePosition);
 
     return () => {
-      window.removeEventListener("scroll", updatePosition, true);
       window.removeEventListener("resize", updatePosition);
     };
-  }, [open, summary]);
+  }, [hover.open, summary]);
 
   if (!hasSummary || !summary) {
     return null;
@@ -618,18 +513,12 @@ export function EmailExtractionBadge({
         type="button"
         aria-label={`${summary.totalFacts} extracted fact${summary.totalFacts === 1 ? "" : "s"}`}
         className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium tabular-nums text-violet-800 ring-1 ring-violet-200 transition hover:bg-violet-100/80"
-        onMouseEnter={() => {
-          triggerHoveredRef.current = true;
-          showPopover();
-        }}
-        onMouseLeave={() => {
-          triggerHoveredRef.current = false;
-          scheduleHide();
-        }}
-        onFocus={showPopover}
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onFocus={hover.onTriggerFocus}
         onBlur={(event) => {
           if (!rootRef.current?.contains(event.relatedTarget as Node)) {
-            scheduleHide();
+            hover.onTriggerBlur();
           }
         }}
         onClick={(event) => {
@@ -641,20 +530,14 @@ export function EmailExtractionBadge({
         <span>{summary.totalFacts}</span>
       </button>
 
-      {open && typeof document !== "undefined"
+      {hover.open && typeof document !== "undefined"
         ? createPortal(
             <PopoverPanel
               panelRef={popoverRef}
               title={title}
               style={popoverStyle}
-              onMouseEnter={() => {
-                popoverHoveredRef.current = true;
-                cancelHide();
-              }}
-              onMouseLeave={() => {
-                popoverHoveredRef.current = false;
-                scheduleHide();
-              }}
+              onMouseEnter={hover.onPopoverEnter}
+              onMouseLeave={hover.onPopoverLeave}
             >
               {multiEmail ? (
                 <ThreadExtractionContent

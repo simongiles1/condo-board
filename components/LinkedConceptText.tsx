@@ -26,18 +26,15 @@ import {
 } from "@/lib/entities/concept-links";
 import { calendarEventTypeLabel } from "@/lib/calendar/event-types";
 import { calendarHref } from "@/lib/calendar/grid";
+import { useEntityProfile } from "@/components/EntityProfileProvider";
 import {
   EVENT_HARVEST_ICONS,
   HARVEST_GROUP_MARK_CLASS,
   type HarvestIconId,
 } from "@/lib/email-analysis/harvest-highlight-theme";
-import {
-  claimHoverPopover,
-  releaseHoverPopover,
-} from "@/lib/ui/hover-popover-group";
+import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 
 const VIEWPORT_MARGIN = 8;
-const POPOVER_HIDE_DELAY_MS = 500;
 
 const KIND_LABEL: Record<LinkedConceptKind, string> = {
   person: "Person",
@@ -159,10 +156,16 @@ function FieldRow({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-function ConceptCard({ concept }: { concept: LinkedConcept }) {
+function ConceptCard({
+  concept,
+  onOpen,
+}: {
+  concept: LinkedConcept;
+  onOpen: (concept: LinkedConcept) => void;
+}) {
   const eventDay = concept.event?.startAt.slice(0, 10) ?? null;
   return (
-    <section>
+    <section className="cursor-pointer" onClick={() => onOpen(concept)}>
       <header
         className={`flex items-start gap-2 border-b px-3 py-2 ${KIND_HEADER_CLASS[concept.kind]}`}
       >
@@ -242,6 +245,7 @@ function ConceptCard({ concept }: { concept: LinkedConcept }) {
                 <a
                   href={calendarHref("month", eventDay)}
                   className="text-xs font-medium text-sky-800 underline decoration-sky-300 underline-offset-2 hover:text-sky-950"
+                  onClick={(event) => event.stopPropagation()}
                 >
                   View on calendar
                 </a>
@@ -265,62 +269,30 @@ function LinkedConceptMark({
 }) {
   const markRef = useRef<HTMLElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const popoverInstanceId = useRef(Symbol("linked-concept-popover")).current;
-  const triggerHoveredRef = useRef(false);
-  const popoverHoveredRef = useRef(false);
-  const [open, setOpen] = useState(false);
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
     zIndex: 70,
   });
+  const { openProfile } = useEntityProfile();
 
   const concepts = useMemo(
     () => getConceptsForSpan(span, matcher),
     [span, matcher],
   );
+  const hover = useHoverPopover({ enabled: concepts.length > 0 });
 
-  function cancelHide() {
-    if (hideTimeoutRef.current) {
-      clearTimeout(hideTimeoutRef.current);
-      hideTimeoutRef.current = null;
-    }
+  function openConcept(concept: LinkedConcept) {
+    hover.forceClose();
+    openProfile({
+      kind: concept.kind,
+      id: concept.id,
+      displayName: concept.displayName,
+    });
   }
-
-  function forceClose() {
-    cancelHide();
-    triggerHoveredRef.current = false;
-    popoverHoveredRef.current = false;
-    setOpen(false);
-    releaseHoverPopover(popoverInstanceId);
-  }
-
-  function scheduleHide() {
-    cancelHide();
-    hideTimeoutRef.current = setTimeout(() => {
-      if (!triggerHoveredRef.current && !popoverHoveredRef.current) {
-        forceClose();
-      }
-    }, POPOVER_HIDE_DELAY_MS);
-  }
-
-  function showPopover() {
-    if (concepts.length === 0) return;
-    claimHoverPopover(popoverInstanceId, forceClose);
-    cancelHide();
-    setOpen(true);
-  }
-
-  useEffect(() => {
-    return () => {
-      cancelHide();
-      releaseHoverPopover(popoverInstanceId);
-    };
-  }, [popoverInstanceId]);
 
   useLayoutEffect(() => {
-    if (!open || !markRef.current || !popoverRef.current) return;
+    if (!hover.open || !markRef.current || !popoverRef.current) return;
     const triggerRect = markRef.current.getBoundingClientRect();
     const popover = popoverRef.current;
     setPopoverStyle({
@@ -331,10 +303,10 @@ function LinkedConceptMark({
       ),
       visibility: "visible",
     });
-  }, [open, concepts]);
+  }, [hover.open, concepts]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!hover.open) return;
 
     function updatePosition() {
       const triggerRect = markRef.current?.getBoundingClientRect();
@@ -350,49 +322,42 @@ function LinkedConceptMark({
       });
     }
 
-    window.addEventListener("scroll", updatePosition, true);
     window.addEventListener("resize", updatePosition);
-    return () => {
-      window.removeEventListener("scroll", updatePosition, true);
-      window.removeEventListener("resize", updatePosition);
-    };
-  }, [open]);
+    return () => window.removeEventListener("resize", updatePosition);
+  }, [hover.open]);
 
   return (
     <>
       <mark
         ref={markRef}
-        className={`${markClassForConcepts(span, concepts)} cursor-help`}
-        onMouseEnter={() => {
-          triggerHoveredRef.current = true;
-          showPopover();
-        }}
-        onMouseLeave={() => {
-          triggerHoveredRef.current = false;
-          scheduleHide();
+        className={`${markClassForConcepts(span, concepts)} cursor-pointer`}
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const concept = concepts[0];
+          if (concept) openConcept(concept);
         }}
       >
         {children}
       </mark>
-      {open && concepts.length > 0 && typeof document !== "undefined"
+      {hover.open && concepts.length > 0 && typeof document !== "undefined"
         ? createPortal(
             <div
               ref={popoverRef}
               role="tooltip"
               style={popoverStyle}
               className="w-[20rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
-              onMouseEnter={() => {
-                popoverHoveredRef.current = true;
-                cancelHide();
-              }}
-              onMouseLeave={() => {
-                popoverHoveredRef.current = false;
-                scheduleHide();
-              }}
+              {...hover.popoverProps}
             >
               <div className="max-h-[min(24rem,calc(100vh-2rem))] divide-y divide-slate-200 overflow-y-auto">
                 {concepts.map((concept) => (
-                  <ConceptCard key={concept.id} concept={concept} />
+                  <ConceptCard
+                    key={concept.id}
+                    concept={concept}
+                    onOpen={openConcept}
+                  />
                 ))}
               </div>
             </div>,

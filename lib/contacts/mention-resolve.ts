@@ -4,7 +4,7 @@
  * Also confirms unique first+last and unique full names already in the subject.
  */
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 
 import { companyNameMatchesOrg } from "@/lib/affiliations/matching";
 import {
@@ -13,7 +13,7 @@ import {
   shouldRetractProvisionalMention,
   type MentionResolveCandidate,
 } from "@/lib/contacts/mention-resolve-shared";
-import { mentionMatchingFirstNameKey } from "@/lib/contacts/mention-shared";
+import { mentionMatchingFirstNameKey, strongIdentityBoundFromCards } from "@/lib/contacts/mention-shared";
 import {
   lastNamesCompatible,
   normalizeGivenNameToken,
@@ -165,36 +165,123 @@ function personMatchesFirstOrg(
   return false;
 }
 
+function uniqueCandidateIds(matches: MentionResolveCandidate[]): string[] {
+  return [...new Set(matches.map((row) => row.id))];
+}
+
+function candidatePersonIdsForUnresolved(
+  reason: string,
+  groups: {
+    participantMatches: MentionResolveCandidate[];
+    firstLastMatches: MentionResolveCandidate[];
+    subjectNameMatches: MentionResolveCandidate[];
+    firstOrgMatches: MentionResolveCandidate[];
+    firstNameCanonicalMatches: MentionResolveCandidate[];
+  },
+): string[] {
+  switch (reason) {
+    case "thread_participant_ambiguous":
+      return uniqueCandidateIds(groups.participantMatches);
+    case "first_last_ambiguous":
+      return uniqueCandidateIds(groups.firstLastMatches);
+    case "subject_name_ambiguous":
+      return uniqueCandidateIds(groups.subjectNameMatches);
+    case "first_plus_org_ambiguous":
+      return uniqueCandidateIds(groups.firstOrgMatches);
+    case "first_name_ambiguous":
+      return uniqueCandidateIds(groups.firstNameCanonicalMatches);
+    default:
+      return [];
+  }
+}
+
 /**
- * Resolve unresolved mentions. When `emailIds` is set, only those source emails.
+ * Resolve unresolved mentions. Bounds are OR'd:
+ * - source emails (and, by default, siblings in those threads)
+ * - first_org_key from a newly minted/enriched person
+ * - exact email on the mention
+ * With no bounds, scans the global unresolved queue (backfill).
  */
 export async function resolveContactMentions(params?: {
   emailIds?: string[];
+  firstOrgKeys?: string[];
+  emails?: string[];
+  /** When emailIds are set, also include other messages in those threads. */
+  expandThreads?: boolean;
   limit?: number;
 }): Promise<ResolveContactMentionsResult> {
   const db = getDb();
   const limit = params?.limit ?? 2000;
-  const emailIds = params?.emailIds
-    ?.map((id) => id.trim())
-    .filter(Boolean);
+  const emailIds = [
+    ...new Set(params?.emailIds?.map((id) => id.trim()).filter(Boolean) ?? []),
+  ];
+  const firstOrgKeys = [
+    ...new Set(
+      params?.firstOrgKeys?.map((key) => key.trim()).filter(Boolean) ?? [],
+    ),
+  ];
+  const mentionEmails = [
+    ...new Set(
+      (params?.emails ?? [])
+        .map((value) => normalizeContactRegistryEmail(value))
+        .filter(Boolean),
+    ),
+  ];
+  const expandThreads = params?.expandThreads ?? emailIds.length > 0;
 
-  const mentionRows =
-    emailIds && emailIds.length > 0
-      ? await db
-          .select()
-          .from(contactMentions)
-          .where(
-            and(
-              eq(contactMentions.resolutionStatus, "unresolved"),
-              inArray(contactMentions.sourceEmailId, emailIds),
-            ),
-          )
-          .limit(limit)
-      : await db
-          .select()
-          .from(contactMentions)
-          .where(eq(contactMentions.resolutionStatus, "unresolved"))
-          .limit(limit);
+  let boundEmailIds = [...emailIds];
+  if (expandThreads && emailIds.length > 0) {
+    const threadRows = await db
+      .select({ threadId: emails.threadId })
+      .from(emails)
+      .where(inArray(emails.id, emailIds));
+    const threadIds = [
+      ...new Set(
+        threadRows
+          .map((row) => row.threadId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (threadIds.length > 0) {
+      const siblingRows = await db
+        .select({ id: emails.id })
+        .from(emails)
+        .where(inArray(emails.threadId, threadIds));
+      boundEmailIds = [
+        ...new Set([...boundEmailIds, ...siblingRows.map((row) => row.id)]),
+      ];
+    }
+  }
+
+  const boundClauses = [];
+  if (boundEmailIds.length > 0) {
+    boundClauses.push(inArray(contactMentions.sourceEmailId, boundEmailIds));
+  }
+  if (firstOrgKeys.length > 0) {
+    boundClauses.push(inArray(contactMentions.firstOrgKey, firstOrgKeys));
+  }
+  if (mentionEmails.length > 0) {
+    boundClauses.push(inArray(contactMentions.email, mentionEmails));
+  }
+
+  const unresolved = eq(contactMentions.resolutionStatus, "unresolved");
+  const bound =
+    boundClauses.length === 0
+      ? null
+      : boundClauses.length === 1
+        ? boundClauses[0]!
+        : or(...boundClauses);
+  const mentionRows = bound
+    ? await db
+        .select()
+        .from(contactMentions)
+        .where(and(unresolved, bound))
+        .limit(limit)
+    : await db
+        .select()
+        .from(contactMentions)
+        .where(unresolved)
+        .limit(limit);
 
   const sourceEmailIds = [
     ...new Set(
@@ -335,6 +422,17 @@ export async function resolveContactMentions(params?: {
       resolvedOrganizationId = [...orgIdsForCompany][0] ?? null;
     }
 
+    const candidatePersonIds =
+      decision.status === "unresolved"
+        ? candidatePersonIdsForUnresolved(decision.reason, {
+            participantMatches,
+            firstLastMatches,
+            subjectNameMatches,
+            firstOrgMatches,
+            firstNameCanonicalMatches,
+          })
+        : [];
+
     await db
       .update(contactMentions)
       .set({
@@ -342,6 +440,7 @@ export async function resolveContactMentions(params?: {
         resolvedPersonId: decision.personId,
         resolvedOrganizationId,
         resolutionReason: decision.reason,
+        candidatePersonIdsJson: JSON.stringify(candidatePersonIds),
         updatedAt: now,
       })
       .where(eq(contactMentions.id, mention.id));
@@ -353,6 +452,30 @@ export async function resolveContactMentions(params?: {
 
   result.retracted = (await retractProvisionalMentions()).retracted;
   return result;
+}
+
+/**
+ * After a strong identity lands, re-run the decision function on unresolved
+ * mentions in the same threads, sharing first+org, or sharing email.
+ * Does not bulk-UPDATE by blocking_key — provisionals still retract.
+ */
+export async function resolveContactMentionsForStrongCards(params: {
+  emailIds: string[];
+  cards: Array<{
+    first_name?: string | null;
+    email?: string | null;
+    raw_company?: string | null;
+  }>;
+  limit?: number;
+}): Promise<ResolveContactMentionsResult> {
+  const bound = strongIdentityBoundFromCards(params.cards);
+  return resolveContactMentions({
+    emailIds: params.emailIds,
+    firstOrgKeys: bound.firstOrgKeys,
+    emails: bound.emails,
+    expandThreads: true,
+    limit: params.limit,
+  });
 }
 
 /**

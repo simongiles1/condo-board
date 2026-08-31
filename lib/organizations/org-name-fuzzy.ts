@@ -140,6 +140,21 @@ export function orgNameSimilarity(
   );
 }
 
+/** Keep the first item per canonical legal name (Ltd/Limited collapse). */
+export function uniqueByCanonicalOrgName<T extends { id: string; name: string }>(
+  items: T[],
+): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const item of items) {
+    const key = canonicalizeOrgNameForFuzzyMatch(item.name) || item.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
 /**
  * Best similarity across primary names and aliases for two org cards.
  * Returns 0 when neither side has a usable name.

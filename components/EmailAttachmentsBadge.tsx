@@ -24,14 +24,10 @@ import { filterVisibleAttachments } from "@/lib/email/attachment-visibility";
 import { formatDateTime } from "@/lib/format/datetime";
 import { useAttachmentVisibilitySettings } from "@/lib/settings/attachment-visibility-settings";
 import { renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
-import {
-  claimHoverPopover,
-  releaseHoverPopover,
-} from "@/lib/ui/hover-popover-group";
+import { HOVER_POPOVER_ATTR } from "@/lib/ui/hover-popover-group";
+import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 
 const VIEWPORT_MARGIN = 8;
-const POPOVER_HIDE_DELAY_MS = 500;
-const THUMBNAIL_HIDE_DELAY_MS = 120;
 const THUMBNAIL_MAX_WIDTH = 176;
 const THUMBNAIL_MAX_HEIGHT = 132;
 const PDF_THUMBNAIL_SCALE = 0.35;
@@ -258,49 +254,22 @@ function AttachmentIconWithThumbnail({
   const kind = attachmentKind(attachment.mimeType, attachment.filename);
   const iconRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const iconHoveredRef = useRef(false);
-  const popoverHoveredRef = useRef(false);
-  const [open, setOpen] = useState(false);
+  const hover = useHoverPopover({ group: false, openDelayMs: 0 });
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
     zIndex: 60,
   });
 
-  function cancelHide() {
-    if (hideTimeoutRef.current) {
-      clearTimeout(hideTimeoutRef.current);
-      hideTimeoutRef.current = null;
-    }
-  }
-
-  function setHovered(hovered: boolean) {
-    onHoverChange(hovered);
-  }
-
-  function scheduleHide() {
-    cancelHide();
-    hideTimeoutRef.current = setTimeout(() => {
-      if (!iconHoveredRef.current && !popoverHoveredRef.current) {
-        setOpen(false);
-        setHovered(false);
-      }
-    }, THUMBNAIL_HIDE_DELAY_MS);
-  }
-
-  function showThumbnail() {
-    cancelHide();
-    setOpen(true);
-    setHovered(true);
-  }
+  const onHoverChangeRef = useRef(onHoverChange);
+  onHoverChangeRef.current = onHoverChange;
 
   useEffect(() => {
-    return () => cancelHide();
-  }, []);
+    onHoverChangeRef.current(hover.open);
+  }, [hover.open]);
 
   useLayoutEffect(() => {
-    if (!open || !iconRef.current || !popoverRef.current) return;
+    if (!hover.open || !iconRef.current || !popoverRef.current) return;
 
     const anchorRect = iconRef.current.getBoundingClientRect();
     const popover = popoverRef.current;
@@ -313,7 +282,7 @@ function AttachmentIconWithThumbnail({
       ),
       visibility: "visible",
     });
-  }, [open, attachment.id]);
+  }, [hover.open, attachment.id]);
 
   return (
     <>
@@ -322,19 +291,10 @@ function AttachmentIconWithThumbnail({
         type="button"
         aria-label={`Preview ${attachment.filename}`}
         className="shrink-0 rounded p-0.5 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-        onMouseEnter={() => {
-          iconHoveredRef.current = true;
-          showThumbnail();
-        }}
-        onMouseLeave={() => {
-          iconHoveredRef.current = false;
-          scheduleHide();
-        }}
-        onFocus={showThumbnail}
-        onBlur={() => {
-          iconHoveredRef.current = false;
-          scheduleHide();
-        }}
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onFocus={hover.onTriggerFocus}
+        onBlur={hover.onTriggerBlur}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -344,7 +304,7 @@ function AttachmentIconWithThumbnail({
         <AttachmentKindIcon kind={kind} />
       </button>
 
-      {open && typeof document !== "undefined"
+      {hover.open && typeof document !== "undefined"
         ? createPortal(
             <div
               ref={popoverRef}
@@ -357,15 +317,7 @@ function AttachmentIconWithThumbnail({
                 onSelect(attachment);
               }}
               onMouseDown={(event) => event.stopPropagation()}
-              onMouseEnter={() => {
-                popoverHoveredRef.current = true;
-                cancelHide();
-                setHovered(true);
-              }}
-              onMouseLeave={() => {
-                popoverHoveredRef.current = false;
-                scheduleHide();
-              }}
+              {...hover.popoverProps}
             >
               <AttachmentThumbnailContent attachment={attachment} />
               <p className="mt-1.5 max-w-[176px] truncate text-xs text-slate-600">
@@ -509,6 +461,7 @@ function PopoverPanel({
       className="w-max min-w-[14rem] max-w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
       onClick={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
+      {...{ [HOVER_POPOVER_ATTR]: "" }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
@@ -559,12 +512,7 @@ export function EmailAttachmentsBadge({
 
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const popoverInstanceId = useRef(Symbol("email-attachments-badge")).current;
-  const triggerHoveredRef = useRef(false);
-  const popoverHoveredRef = useRef(false);
-  const thumbnailHoveredRef = useRef(false);
-  const [open, setOpen] = useState(false);
+  const hover = useHoverPopover();
   const [previewAttachment, setPreviewAttachment] =
     useState<EmailAttachmentSummary | null>(null);
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
@@ -573,56 +521,12 @@ export function EmailAttachmentsBadge({
     zIndex: 50,
   });
 
-  function cancelHide() {
-    if (hideTimeoutRef.current) {
-      clearTimeout(hideTimeoutRef.current);
-      hideTimeoutRef.current = null;
-    }
-  }
-
-  function forceClose() {
-    cancelHide();
-    triggerHoveredRef.current = false;
-    popoverHoveredRef.current = false;
-    thumbnailHoveredRef.current = false;
-    setOpen(false);
-    releaseHoverPopover(popoverInstanceId);
-  }
-
-  function scheduleHide() {
-    cancelHide();
-    hideTimeoutRef.current = setTimeout(() => {
-      if (
-        !triggerHoveredRef.current &&
-        !popoverHoveredRef.current &&
-        !thumbnailHoveredRef.current
-      ) {
-        forceClose();
-      }
-    }, POPOVER_HIDE_DELAY_MS);
-  }
-
-  function showPopover() {
-    claimHoverPopover(popoverInstanceId, forceClose);
-    cancelHide();
-    setOpen(true);
-  }
-
   function handleThumbnailHoverChange(hovered: boolean) {
-    thumbnailHoveredRef.current = hovered;
-    if (hovered) cancelHide();
-    else scheduleHide();
+    hover.setHoldOpen(hovered);
   }
-
-  useEffect(() => {
-    return () => {
-      cancelHide();
-      releaseHoverPopover(popoverInstanceId);
-    };
-  }, [popoverInstanceId]);
 
   useLayoutEffect(() => {
-    if (!open || !rootRef.current || !popoverRef.current) return;
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
 
     function updatePosition() {
       const triggerRect = rootRef.current?.getBoundingClientRect();
@@ -640,10 +544,10 @@ export function EmailAttachmentsBadge({
     }
 
     updatePosition();
-  }, [open, visibleAttachments, visibleGroups]);
+  }, [hover.open, visibleAttachments, visibleGroups]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!hover.open) return;
 
     function updatePosition() {
       const triggerRect = rootRef.current?.getBoundingClientRect();
@@ -660,14 +564,12 @@ export function EmailAttachmentsBadge({
       });
     }
 
-    window.addEventListener("scroll", updatePosition, true);
     window.addEventListener("resize", updatePosition);
 
     return () => {
-      window.removeEventListener("scroll", updatePosition, true);
       window.removeEventListener("resize", updatePosition);
     };
-  }, [open, visibleAttachments, visibleGroups]);
+  }, [hover.open, visibleAttachments, visibleGroups]);
 
   if (count === 0) return null;
 
@@ -682,18 +584,12 @@ export function EmailAttachmentsBadge({
         type="button"
         aria-label={title}
         className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium tabular-nums text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-200/80"
-        onMouseEnter={() => {
-          triggerHoveredRef.current = true;
-          showPopover();
-        }}
-        onMouseLeave={() => {
-          triggerHoveredRef.current = false;
-          scheduleHide();
-        }}
-        onFocus={showPopover}
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onFocus={hover.onTriggerFocus}
         onBlur={(event) => {
           if (!rootRef.current?.contains(event.relatedTarget as Node)) {
-            scheduleHide();
+            hover.onTriggerBlur();
           }
         }}
         onClick={(event) => {
@@ -705,20 +601,14 @@ export function EmailAttachmentsBadge({
         <span>{count}</span>
       </button>
 
-      {open && typeof document !== "undefined"
+      {hover.open && typeof document !== "undefined"
         ? createPortal(
             <PopoverPanel
               panelRef={popoverRef}
               title={title}
               style={popoverStyle}
-              onMouseEnter={() => {
-                popoverHoveredRef.current = true;
-                cancelHide();
-              }}
-              onMouseLeave={() => {
-                popoverHoveredRef.current = false;
-                scheduleHide();
-              }}
+              onMouseEnter={hover.onPopoverEnter}
+              onMouseLeave={hover.onPopoverLeave}
             >
               {visibleGroups && visibleGroups.length > 0 ? (
                 <div className="max-h-72 space-y-3 overflow-y-auto pr-1">

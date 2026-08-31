@@ -21,7 +21,7 @@ import {
   loadPass3EntityCardsByEmailId,
 } from "@/lib/contacts/mention-persist";
 import { sourceEmailIdsForMergedCard } from "@/lib/contacts/mention-presence";
-import { resolveContactMentions } from "@/lib/contacts/mention-resolve";
+import { resolveContactMentionsForStrongCards } from "@/lib/contacts/mention-resolve";
 import {
   buildBlockingKeys,
   hasStrongIdentity,
@@ -306,7 +306,10 @@ export async function ingestFingerprintMergeIntoRegistry(params: {
       .where(eq(contactRegistryIngests.id, ingestId));
 
     if ((emailIds?.length ?? 0) > 0) {
-      await resolveContactMentions({ emailIds });
+      await resolveContactMentionsForStrongCards({
+        emailIds,
+        cards: entityCards ?? [],
+      });
     }
 
     return {

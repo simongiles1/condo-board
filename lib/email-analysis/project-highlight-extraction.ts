@@ -54,6 +54,8 @@ type ProjectHighlightCallResult = {
 
 type ProjectFingerprintCallResult = {
   entityCards: ProjectEntityCard[];
+  /** Named pass-3 cards before the minting gate. Absent on merge-pass results. */
+  mentionCards?: ProjectEntityCard[];
   modelName: string;
   usage: {
     inputTokens: number;
@@ -252,6 +254,7 @@ export async function extractProjectFingerprints(
   if (!hasBody && !hasHeaders) {
     return {
       entityCards: [],
+      mentionCards: [],
       modelName: getProjectHighlightPassConfig(resolvedModel, 3).apiModelName,
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       costUsd: 0,
@@ -270,8 +273,12 @@ export async function extractProjectFingerprints(
   const orgNameKeys = await loadOrganizationIdentityNameKeys().catch(
     () => new Set<string>(),
   );
+  const mentionCards = parsed.entity_cards.filter((card) =>
+    Boolean(card.name?.trim()),
+  );
   return {
-    entityCards: filterMintedProjectCards(parsed.entity_cards, orgNameKeys),
+    entityCards: filterMintedProjectCards(mentionCards, orgNameKeys),
+    mentionCards,
     modelName: llm.modelName,
     usage: llm.usage,
     costUsd: llm.costUsd,

@@ -11,6 +11,7 @@ import {
 } from "@/components/MergeEntityDialog";
 import { OrgEvidenceSidePanel } from "@/components/OrgEvidenceSidePanel";
 import { OrganizationDuplicatesPanel } from "@/components/OrganizationDuplicatesPanel";
+import { useEntityProfile } from "@/components/EntityProfileProvider";
 import {
   personDisplayName,
   type ContactRegistryPersonSummary,
@@ -40,6 +41,15 @@ import {
   splitOrgMultiValue,
 } from "@/lib/organizations/org-multi-values";
 import type { OrgEvidenceField } from "@/lib/organizations/registry-evidence-shared";
+import type { PreviewOrgMentionBackfill } from "@/lib/organizations/mention-backfill";
+import {
+  formatAliasMentionEmailCount,
+  mentionEmailCountForAlias,
+  orgMentionNameKey,
+} from "@/lib/organizations/mention-shared";
+
+const ORG_MENTION_BACKFILL_POLL_MS = 3000;
+const ORG_MENTION_BACKFILL_BATCH = 40;
 
 const ORG_LIST_SORT_OPTIONS: Array<{
   value: OrgFingerprintListSort;
@@ -271,6 +281,18 @@ function FieldRow({
   );
 }
 
+function mergeAliasEmailCounts(
+  a?: Record<string, number>,
+  b?: Record<string, number>,
+): Record<string, number> | undefined {
+  if (!a && !b) return undefined;
+  const out = { ...(a ?? {}) };
+  for (const [key, count] of Object.entries(b ?? {})) {
+    out[key] = (out[key] ?? 0) + count;
+  }
+  return out;
+}
+
 function MultiValueField({
   label,
   values,
@@ -278,6 +300,7 @@ function MultiValueField({
   onSever,
   onMove,
   onEvidence,
+  countLabel,
 }: {
   label: string;
   values: string[];
@@ -285,6 +308,7 @@ function MultiValueField({
   onSever: (value: string) => void;
   onMove?: (value: string) => void;
   onEvidence?: (value: string) => void;
+  countLabel?: (value: string) => string;
 }) {
   if (values.length === 0) {
     return <FieldRow label={label} value={null} disabled={disabled} />;
@@ -299,17 +323,25 @@ function MultiValueField({
               key={`${label}:${value}`}
               className="grid grid-cols-[1fr_auto_auto] items-start gap-1"
             >
-              {onEvidence ? (
-                <button
-                  type="button"
-                  onClick={() => onEvidence(value)}
-                  className="min-w-0 break-words text-left text-teal-800 underline-offset-2 hover:underline"
-                >
-                  {value}
-                </button>
-              ) : (
-                <span className="break-words text-slate-900">{value}</span>
-              )}
+              <span className="min-w-0 break-words">
+                {onEvidence ? (
+                  <button
+                    type="button"
+                    onClick={() => onEvidence(value)}
+                    className="text-left text-teal-800 underline-offset-2 hover:underline"
+                  >
+                    {value}
+                  </button>
+                ) : (
+                  <span className="text-slate-900">{value}</span>
+                )}
+                {countLabel ? (
+                  <span className="text-slate-500">
+                    {" "}
+                    · {countLabel(value)}
+                  </span>
+                ) : null}
+              </span>
               {onMove ? (
                 <button
                   type="button"
@@ -420,6 +452,10 @@ function foldOrgSummariesLocally(
       displayName: foldedNames.name?.trim() || folded.displayName,
       sourceMergeCount: folded.sourceMergeCount + source.sourceMergeCount,
       sourceEmailCount: folded.sourceEmailCount + source.sourceEmailCount,
+      aliasEmailCounts: mergeAliasEmailCounts(
+        folded.aliasEmailCounts,
+        source.aliasEmailCounts,
+      ),
       modelIds: [...new Set([...folded.modelIds, ...source.modelIds])],
     };
   }
@@ -454,16 +490,28 @@ function applyOptimisticOrgFieldMove(params: {
 
   if (params.field === "name_alias") {
     const valueKey = value.toLowerCase();
+    const nameKey = orgMentionNameKey(value);
+    const moved = nameKey
+      ? (nextSource.aliasEmailCounts?.[nameKey] ?? 0)
+      : 0;
+    const sourceCounts = { ...(nextSource.aliasEmailCounts ?? {}) };
+    const targetCounts = { ...(nextTarget.aliasEmailCounts ?? {}) };
+    if (nameKey) {
+      delete sourceCounts[nameKey];
+      targetCounts[nameKey] = (targetCounts[nameKey] ?? 0) + moved;
+    }
     nextSource = {
       ...nextSource,
       aliases: mergeOrgAliasLists(
         nextSource.name,
         nextSource.aliases.filter((alias) => alias.trim().toLowerCase() !== valueKey),
       ),
+      aliasEmailCounts: sourceCounts,
     };
     nextTarget = {
       ...nextTarget,
       aliases: mergeOrgAliasLists(nextTarget.name, nextTarget.aliases, [value]),
+      aliasEmailCounts: targetCounts,
     };
   } else {
     nextSource = {
@@ -593,6 +641,7 @@ export function OrganizationsRegistryClient({
   );
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const { openProfile } = useEntityProfile();
   const [mergeSources, setMergeSources] = useState<OrgFingerprintSummary[]>([]);
   const [mergeCandidatePool, setMergeCandidatePool] = useState<
     OrgFingerprintSummary[]
@@ -626,6 +675,17 @@ export function OrganizationsRegistryClient({
   const [listSearch, setListSearch] = useState("");
   const [listPage, setListPage] = useState(1);
   const listSearchInputRef = useRef<HTMLInputElement>(null);
+  const [mentionBackfill, setMentionBackfill] =
+    useState<PreviewOrgMentionBackfill | null>(null);
+  const [mentionBackfillBusy, setMentionBackfillBusy] = useState(false);
+  const [mentionBackfillProgress, setMentionBackfillProgress] = useState<
+    string | null
+  >(null);
+  const [externalBackfillActive, setExternalBackfillActive] = useState(false);
+  const lastPendingRef = useRef<number | null>(null);
+  const lastPendingChangeAtRef = useRef(0);
+  const lastProcessedRef = useRef<number | null>(null);
+  const uiBackfillActiveRef = useRef(false);
 
   const sortedOrganizations = useMemo(
     () => sortOrgFingerprintSummaries(organizations, orgSort),
@@ -741,6 +801,165 @@ export function OrganizationsRegistryClient({
     return next;
   }
 
+  async function loadMentionBackfillStatus(): Promise<PreviewOrgMentionBackfill | null> {
+    try {
+      const res = await fetch(
+        "/api/organizations/registry?view=mention_backfill",
+        { cache: "no-store" },
+      );
+      const json = (await res.json()) as PreviewOrgMentionBackfill & {
+        ok?: boolean;
+        error?: string;
+      };
+      if (!res.ok) return null;
+      const prev = lastPendingRef.current;
+      const prevProcessed = lastProcessedRef.current;
+      if (!uiBackfillActiveRef.current) {
+        if (prev != null && json.pendingHarvestEmails < prev) {
+          setExternalBackfillActive(true);
+          lastPendingChangeAtRef.current = Date.now();
+        } else if (
+          prevProcessed != null &&
+          json.processedHarvestEmails > prevProcessed
+        ) {
+          setExternalBackfillActive(true);
+          lastPendingChangeAtRef.current = Date.now();
+        }
+      }
+      if (
+        externalBackfillActive &&
+        Date.now() - lastPendingChangeAtRef.current > 120_000
+      ) {
+        setExternalBackfillActive(false);
+      }
+      lastPendingRef.current = json.pendingHarvestEmails;
+      lastProcessedRef.current = json.processedHarvestEmails;
+      if (json.pendingHarvestEmails === 0 && !json.harvestNeeded) {
+        setExternalBackfillActive(false);
+      }
+      setMentionBackfill(json);
+      return json;
+    } catch {
+      return null;
+    }
+  }
+
+  async function applyMentionBackfill() {
+    uiBackfillActiveRef.current = true;
+    setExternalBackfillActive(false);
+    setMentionBackfillBusy(true);
+    setMentionBackfillProgress("Starting mention backfill…");
+    setMessage(
+      "Organization mention backfill is running. Keep this page open until it finishes.",
+    );
+    try {
+      let harvestRemaining = mentionBackfill?.pendingHarvestEmails ?? 0;
+      let lastResolve: {
+        scanned?: number;
+        confirmed?: number;
+        provisional?: number;
+        unresolved?: number;
+      } | null = null;
+      do {
+        const total = mentionBackfill?.harvestEmails ?? 0;
+        const done = Math.max(0, total - harvestRemaining);
+        if (harvestRemaining > 0) {
+          setMentionBackfillProgress(
+            `Copying pass-3 org cards into mentions (${done.toLocaleString()} / ${total.toLocaleString()} emails, ${harvestRemaining.toLocaleString()} left)…`,
+          );
+        } else {
+          setMentionBackfillProgress(
+            "Matching unresolved mentions to organizations…",
+          );
+        }
+        const res = await fetch("/api/organizations/registry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "backfill_mentions",
+            dryRun: false,
+            harvestLimit:
+              harvestRemaining > 0 ? ORG_MENTION_BACKFILL_BATCH : undefined,
+          }),
+        });
+        const json = (await res.json()) as {
+          harvestRemaining?: number;
+          resolve?: {
+            scanned?: number;
+            confirmed?: number;
+            provisional?: number;
+            unresolved?: number;
+          } | null;
+          error?: string;
+        };
+        if (!res.ok) {
+          setMessage(json.error ?? "Organization mention backfill failed.");
+          setMentionBackfillProgress(null);
+          return;
+        }
+        harvestRemaining = json.harvestRemaining ?? 0;
+        lastResolve = json.resolve ?? lastResolve;
+        await loadMentionBackfillStatus();
+      } while (harvestRemaining > 0);
+
+      const resolved = lastResolve;
+      setMentionBackfillProgress(null);
+      setMessage(
+        resolved
+          ? `Mention backfill finished. Matcher looked at ${(resolved.scanned ?? 0).toLocaleString()} mention${resolved.scanned === 1 ? "" : "s"}: ${(resolved.confirmed ?? 0).toLocaleString()} confirmed, ${(resolved.provisional ?? 0).toLocaleString()} provisional, ${(resolved.unresolved ?? 0).toLocaleString()} still unresolved.`
+          : "Mention backfill finished.",
+      );
+      await refreshData();
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Organization mention backfill failed.",
+      );
+      setMentionBackfillProgress(null);
+    } finally {
+      uiBackfillActiveRef.current = false;
+      setMentionBackfillBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadMentionBackfillStatus();
+  }, []);
+
+  useEffect(() => {
+    const pending = mentionBackfill?.pendingHarvestEmails ?? 0;
+    if (!mentionBackfillBusy && pending === 0 && !externalBackfillActive) {
+      return;
+    }
+    const id = window.setInterval(() => {
+      void loadMentionBackfillStatus();
+    }, ORG_MENTION_BACKFILL_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [
+    mentionBackfill?.pendingHarvestEmails,
+    mentionBackfillBusy,
+    externalBackfillActive,
+  ]);
+
+  const mentionBackfillTotal = mentionBackfill?.harvestEmails ?? 0;
+  const mentionBackfillDone = mentionBackfill?.processedHarvestEmails ?? 0;
+  const mentionBackfillPending = mentionBackfill?.pendingHarvestEmails ?? 0;
+  const mentionBackfillEmptyPass3 = mentionBackfill?.emptyPass3Emails ?? 0;
+  const mentionBackfillAbsentPass3 = mentionBackfill?.absentPass3Emails ?? 0;
+  const mentionBackfillInvalidPass3 = mentionBackfill?.invalidPass3Emails ?? 0;
+  const mentionBackfillPct =
+    mentionBackfillTotal > 0
+      ? Math.min(
+          100,
+          Math.round((mentionBackfillDone / mentionBackfillTotal) * 100),
+        )
+      : 0;
+  const mentionBackfillActive =
+    mentionBackfillBusy || externalBackfillActive;
+  const mentionBackfillNeeded = mentionBackfill?.harvestNeeded === true;
+  const mentionStatus = mentionBackfill?.mentionStatus;
+
   async function loadDuplicates(): Promise<void> {
     setDuplicatesLoading(true);
     setDuplicatesError(null);
@@ -779,7 +998,7 @@ export function OrganizationsRegistryClient({
   function refresh() {
     startTransition(async () => {
       setMessage(null);
-      await refreshData();
+      await Promise.all([refreshData(), loadMentionBackfillStatus()]);
       if (tab === "duplicates" || duplicatesLoaded.current) {
         await loadDuplicates();
       }
@@ -965,6 +1184,9 @@ export function OrganizationsRegistryClient({
           if (item.id !== org.id) return item;
           if (move.field === "name_alias") {
             const valueKey = move.value.trim().toLowerCase();
+            const nameKey = orgMentionNameKey(move.value);
+            const nextCounts = { ...(item.aliasEmailCounts ?? {}) };
+            if (nameKey) delete nextCounts[nameKey];
             return {
               ...item,
               aliases: mergeOrgAliasLists(
@@ -973,6 +1195,7 @@ export function OrganizationsRegistryClient({
                   (alias) => alias.trim().toLowerCase() !== valueKey,
                 ),
               ),
+              aliasEmailCounts: nextCounts,
             };
           }
           return {
@@ -1061,21 +1284,130 @@ export function OrganizationsRegistryClient({
             <dd className="font-semibold">{stats.emailCount}</dd>
           </div>
         </dl>
+        {mentionBackfill && mentionBackfillTotal > 0 ? (
+          <div
+            className={
+              mentionBackfillActive
+                ? "mt-4 rounded-lg border border-teal-200 bg-teal-50 px-4 py-3"
+                : mentionBackfillNeeded
+                  ? "mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3"
+                  : "mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3"
+            }
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 space-y-1">
+                <p className="text-sm font-medium text-slate-900">
+                  {mentionBackfillActive
+                    ? mentionBackfillBusy
+                      ? "Organization mention backfill running…"
+                      : mentionBackfillPending > 0
+                        ? "Organization mention backfill in progress (terminal or another tab)…"
+                        : "Organization mention matcher running (resolve pass)…"
+                    : mentionBackfillNeeded
+                      ? "Organization mention backfill pending"
+                      : "Organization mention backfill complete"}
+                </p>
+                <p className="text-sm text-slate-700">
+                  {mentionBackfillDone.toLocaleString()} /{" "}
+                  {mentionBackfillTotal.toLocaleString()} pass-3 emails handled
+                  {mentionBackfillPending > 0
+                    ? ` · ${mentionBackfillPending.toLocaleString()} still need org cards copied`
+                    : null}
+                  {mentionBackfillEmptyPass3 > 0
+                    ? ` · ${mentionBackfillEmptyPass3.toLocaleString()} had no org cards`
+                    : null}
+                  {mentionBackfillAbsentPass3 > 0
+                    ? ` · ${mentionBackfillAbsentPass3.toLocaleString()} org cards not in email body`
+                    : null}
+                  {mentionBackfillInvalidPass3 > 0
+                    ? ` · ${mentionBackfillInvalidPass3.toLocaleString()} invalid pass-3 JSON`
+                    : null}
+                  {mentionBackfill?.existingMentions
+                    ? ` · ${mentionBackfill.existingMentions.toLocaleString()} mention rows`
+                    : null}
+                </p>
+                {mentionStatus ? (
+                  <p className="text-xs text-slate-600">
+                    Resolved: {mentionStatus.confirmed.toLocaleString()}{" "}
+                    confirmed · {mentionStatus.provisional.toLocaleString()}{" "}
+                    provisional · {mentionStatus.unresolved.toLocaleString()}{" "}
+                    unresolved
+                  </p>
+                ) : null}
+                {mentionBackfillProgress ? (
+                  <p className="text-sm text-teal-900">{mentionBackfillProgress}</p>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                disabled={pending || mentionBackfillBusy || !mentionBackfillNeeded}
+                onClick={() => void applyMentionBackfill()}
+                className="shrink-0 rounded-md bg-teal-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-50"
+              >
+                {mentionBackfillBusy
+                  ? "Backfilling…"
+                  : mentionBackfillNeeded
+                    ? `Backfill mentions (${mentionBackfillPending.toLocaleString()})`
+                    : "Backfill complete"}
+              </button>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/80">
+              <div
+                className={
+                  mentionBackfillActive
+                    ? "h-full rounded-full bg-teal-600 transition-[width] duration-500"
+                    : mentionBackfillNeeded
+                      ? "h-full rounded-full bg-amber-500 transition-[width] duration-500"
+                      : "h-full rounded-full bg-emerald-600 transition-[width] duration-500"
+                }
+                style={{ width: `${mentionBackfillPct}%` }}
+              />
+            </div>
+            <p className="mt-2 text-xs text-slate-600">
+              {mentionBackfillActive
+                ? mentionBackfillPending > 0
+                  ? "Copy progress updates every few seconds. The bar can pause while the matcher resolves mentions — that does not mean copying stopped."
+                  : "The copy pass is done. The matcher may still be attaching mentions to organizations; confirmed counts will keep rising."
+                : mentionBackfillNeeded
+                  ? `Run Backfill mentions for the ${mentionBackfillPending.toLocaleString()} email${mentionBackfillPending === 1 ? "" : "s"} with org cards. Empty pass-3 (${mentionBackfillEmptyPass3.toLocaleString()}) and absent cards (${mentionBackfillAbsentPass3.toLocaleString()}) are already counted as handled.`
+                  : "Wikipedia evidence and registry mention counts use resolved organization_mentions. Emails with no org cards in pass-3 are skipped."}
+            </p>
+          </div>
+        ) : null}
         <p className="mt-3 text-sm text-slate-600">
           Unique organizations from extraction pass 4 (thread merges),
-          coalesced across threads by email and name. Use the merge icon to
-          fold duplicates by hand — the absorbed name is kept as an alias, and
-          emails / phones / websites are combined. Use the arrow on a field to
+          coalesced across threads by email and name. After mention backfill,
+          the email totals and Also-known-as counts come from confirmed and
+          provisional organization mentions — not Command-F on distinctive
+          aliases. Use the merge icon to fold duplicates by hand — the
+          absorbed name is kept as an alias, and emails / phones / websites
+          are combined. Use the arrow on a field to
           move that value to another organization without merging cards. Moving
           an alias takes the source emails harvested under that name with it
           (including aliases you already moved). Use × to sever a wrong
           association; the system remembers not to reattach it. Check the
-          Duplicates tab for fuzzy name matches (Inc / Ltd / spelling variants).
+          Duplicates tab for fuzzy name matches (Inc / Ltd / spelling variants).{" "}
+          <a
+            href="/knowledge/entities/mention-rules#organizations"
+            className="font-medium text-teal-800 hover:underline"
+          >
+            How organization mentions match
+          </a>
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={pending}
+            disabled={pending || mentionBackfillBusy}
+            onClick={() => void loadMentionBackfillStatus()}
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Refresh mentions status
+          </button>
+          <button
+            type="button"
+            disabled={pending || mentionBackfillBusy}
             onClick={refresh}
             className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
           >
@@ -1313,9 +1645,21 @@ export function OrganizationsRegistryClient({
             <p className="text-sm text-slate-500">Select an organization.</p>
           ) : (
             <>
-              <h2 className="text-lg font-semibold text-slate-900">
-                {selected.displayName}
-              </h2>
+              <button
+                type="button"
+                onClick={() =>
+                  openProfile({
+                    kind: "organization",
+                    id: selected.id,
+                    displayName: selected.displayName,
+                  })
+                }
+                className="text-left"
+              >
+                <h2 className="text-lg font-semibold text-fuchsia-800 underline-offset-2 hover:underline">
+                  {selected.displayName}
+                </h2>
+              </button>
               <p className="mt-1 text-xs text-slate-500">
                 {selected.sourceMergeCount > 0
                   ? `${selected.sourceMergeCount} thread merge${selected.sourceMergeCount === 1 ? "" : "s"}`
@@ -1353,12 +1697,21 @@ export function OrganizationsRegistryClient({
                   label="Also known as"
                   values={selected.aliases ?? []}
                   disabled={pending}
+                  countLabel={(alias) =>
+                    formatAliasMentionEmailCount(
+                      mentionEmailCountForAlias(
+                        selected.aliasEmailCounts,
+                        alias,
+                      ),
+                    )
+                  }
                   onEvidence={(value) => {
-                    setEvidenceTarget({
-                      organizationId: selected.id,
-                      organizationName: selected.displayName,
-                      field: "name_alias",
-                      value,
+                    setEvidenceTarget(null);
+                    openProfile({
+                      kind: "organization",
+                      id: selected.id,
+                      displayName: selected.displayName,
+                      focusedAlias: value,
                     });
                   }}
                   onMove={(value) => {

@@ -21,6 +21,13 @@ export async function register() {
       const { ensureDefaultUsers } = await import("@/lib/auth/session");
       await ensureDefaultUsers();
 
+      if (!backgroundWorkersEnabled()) {
+        console.info(
+          "[instrumentation] Background workers disabled (DISABLE_BACKGROUND_WORKERS=true); Telegram long-poll and fingerprint warmup skipped",
+        );
+        return;
+      }
+
       void import("@/lib/organizations/fingerprint-list")
         .then(({ loadOrgFingerprintSummaries }) =>
           loadOrgFingerprintSummaries(),
@@ -35,12 +42,22 @@ export async function register() {
           console.error("[instrumentation] Org fingerprint warm failed", error);
         });
 
-      if (!backgroundWorkersEnabled()) {
-        console.info(
-          "[instrumentation] Background workers disabled (DISABLE_BACKGROUND_WORKERS=true); Telegram long-poll skipped",
-        );
-        return;
-      }
+      void import("@/lib/projects/fingerprint-list")
+        .then(({ loadProjectFingerprintSummaries }) =>
+          loadProjectFingerprintSummaries(),
+        )
+        .then((result) => {
+          console.info("[instrumentation] Warmed project fingerprints", {
+            projects: result.projects.length,
+            merges: result.stats.mergeCount,
+          });
+        })
+        .catch((error: unknown) => {
+          console.error(
+            "[instrumentation] Project fingerprint warm failed",
+            error,
+          );
+        });
 
       const { startEmailScheduler } = await import("@/lib/email/scheduler");
       const { resumePersonalForwardWorkflow } = await import(
@@ -52,10 +69,18 @@ export async function register() {
       const { resumeDoclingBackfillWorkersOnStartup } = await import(
         "@/lib/email/docling-backfill-worker"
       );
+      const { resumeIdentityReviewWorkersOnStartup } = await import(
+        "@/lib/projects/identity-review-worker"
+      );
+      const { resumeBoardReportScanWorkersOnStartup } = await import(
+        "@/lib/projects/board-report-worker"
+      );
       startEmailScheduler();
       await resumePersonalForwardWorkflow();
       await resumeBulkExtractWorkersOnStartup();
       await resumeDoclingBackfillWorkersOnStartup();
+      await resumeIdentityReviewWorkersOnStartup();
+      await resumeBoardReportScanWorkersOnStartup();
       const { startTelegramRuntime } = await import("@/lib/telegram/polling");
       startTelegramRuntime();
     } catch (error) {

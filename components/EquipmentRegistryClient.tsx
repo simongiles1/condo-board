@@ -12,6 +12,7 @@ import {
   clampEntityListPage,
   sliceEntityListPage,
 } from "@/lib/entities/registry-page";
+import { useEntityProfile } from "@/components/EntityProfileProvider";
 import type {
   EquipmentRegistryStats,
   EquipmentRegistrySummary,
@@ -77,6 +78,7 @@ export function EquipmentRegistryClient({
   );
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const { openProfile } = useEntityProfile();
   const [mergeSource, setMergeSource] =
     useState<EquipmentRegistrySummary | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
@@ -263,9 +265,21 @@ export function EquipmentRegistryClient({
             <p className="text-sm text-slate-500">Select equipment.</p>
           ) : (
             <>
-              <h2 className="text-lg font-semibold text-slate-900">
-                {selected.displayName}
-              </h2>
+              <button
+                type="button"
+                onClick={() =>
+                  openProfile({
+                    kind: "equipment",
+                    id: selected.id,
+                    displayName: selected.displayName,
+                  })
+                }
+                className="text-left"
+              >
+                <h2 className="text-lg font-semibold text-amber-800 underline-offset-2 hover:underline">
+                  {selected.displayName}
+                </h2>
+              </button>
               <p className="mt-1 text-xs text-slate-500">
                 {selected.eventCount > 0
                   ? `${selected.eventCount} maintenance event${selected.eventCount === 1 ? "" : "s"}`

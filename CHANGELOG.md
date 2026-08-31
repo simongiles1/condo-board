@@ -6,7 +6,407 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Floor plan riser connections** — Connection mode (**K**) links two boxes:
+  click the position that continues up, then the lower position. An arrow
+  points from the above box to the lower one, with **ABV** under the above
+  box. Overlaying or adding lines to a higher floor copies unpaired boxes as
+  usual and only the above box from each pair.
+
+- **Mechanical floor plans** — Families can be architectural or mechanical.
+  Mechanical floors upload as overlapping east and west PDFs. Align them with
+  translucent overlay, crop each sheet to building content (dropping title
+  blocks and sheet borders), merge into one sheet, then pin, crop, and draw
+  as usual. Edit and Compare cycle architectural or mechanical drawings
+  separately; compare only includes merged, pinned, and cropped mechanical
+  sheets.
+
 ### Changed
+
+- **Floor plan markup stroke width** — Line and rectangle strokes now render at
+  the chosen screen-pixel width (e.g. 8 px stays 8 px on screen) instead of
+  shrinking with the page layout scale, which had made saved walls look hairline-thin
+  on large architectural sheets.
+
+- **Floor plan drawing tool shortcuts** — **V** selects markup, **L** draws lines,
+  **R** draws rectangles, and **C** cuts segments. Tooltips on the edit ribbon
+  show the keys.
+
+- **Floor plans split drawing name and floor number** — Each sheet now has a
+  drawing name (e.g. `An212`) and a separate integer floor number. Folder
+  view sorts by family drag order, then floor number lowest to highest; with
+  folders off, the list is floor number only. Existing labels like
+  `An212 - Floor 12` are split on migrate.
+
+- **Floor plan crop waits for the pin** — On a new sheet in a family that
+  already has a crop plate, the blue rectangle stays hidden until the
+  registration pin is placed. It then appears using the nearest cropped
+  sibling's pin offset (not the building registration floor). A brand-new
+  family with no plate yet still shows the rectangle immediately so the
+  first crop can be drawn.
+
+- **Floor plan pin is per building** — The first imported drawing places one
+  registration pin on that original PDF. Every other floor marks the same
+  point on its own PDF so all sheets share that pin; cropping stays per
+  family and happens after the pin is set. The previous family-level pin on
+  the cropped plate is gone.
+
+### Fixed
+
+- **Floor plan empty-floor line overlay** — Edit mode no longer paints another
+  floor's saved lines onto a sheet that has no markup of its own. That made
+  podium mechanical floors above the last traced level look fully annotated.
+  **Lines overlay** still shows them when you turn it on; **Add overlay lines**
+  still copies them onto the current floor.
+
+- **Mechanical sheet merge editor** — Aligning east and west sheets
+  re-rasterizes the visible region (plus a pan overscan) when zoom, viewport
+  size, or a large pan changes, not on every pointer move. Dragging CSS-
+  translates the already-loaded clip so the sheet does not flash a pdf.js
+  reload; after the pan settles, the newly visible strip is filled in. Merge
+  stamps each sheet in pdf.js visual space after flattening `/Rotate`, so a
+  90° MediaBox no longer turns the drawing on its side or pulls title-block
+  strips into the crop. If the family already has a crop plate larger than
+  the overlapped sheets, the merged page is padded so opening the crop
+  editor no longer throws `Crop is larger than the PDF page`. Arrow-key
+  nudges move the drawing with the selection outline. Align mode no longer
+  shades crop margins; those stay in Crop so you can see the keep-region
+  against the full sheet. Crop handles show the matching resize cursor on
+  hover.
+
+### Added
+
+- **Floor plan line persistence and overlay** — Lines and rectangles drawn in
+  edit mode are saved per floor. A **Save lines** button appears when markup
+  differs from what is stored. A separate **Lines overlay** control shows saved
+  markup from other floors (pin-aligned), listing only floors that have saved
+  lines.
+
+- **Floor plan family drag-and-drop** — On Building → Floor plans, drag a
+  drawing by its grip handle in the left sidebar onto another family to
+  reassign it. Cropped sheets adopt the target family's plate size when
+  needed; moving the first cropped sheet into an empty family sets that
+  family's crop dimensions.
+
+- **Floor plan family order** — Each family in the left sidebar has Up and
+  Down controls so parking, podium, and tower groups can be reordered
+  without recreating them.
+
+- **Floor plan crop overlay** — Overlay is optional: toggle it, pick which
+  cropped sibling to show from a dropdown, and the rectangle turns violet
+  while overlay is on. Overlay locks W×H to that sibling (move only). With
+  overlay off, later floors keep resize handles like the first crop.
+
+- **Full-screen floor plan pin** — The pin step now has the same Expand
+  control as crop. Full screen lets you zoom (buttons, Fit, and scroll
+  wheel) and pan (drag the sheet; a short click still plants the pin) so
+  the registration mark can be placed on a corner or shaft instead of
+  guessing from the inline overview.
+
+- **Full-screen floor plan crop** — Building → Floor plans has an Expand
+  control at the top right of the crop pane. It opens a full-screen editor
+  with pan (drag the sheet, or Space-drag over the crop rectangle) and zoom
+  (buttons, Fit, and scroll wheel) so the blue crop rectangle can be placed
+  more precisely.
+
+- **Floor plan crop and alignment** — Building → Floor plans uploads one
+  PDF per level into named families (parking vs occupied floors). Crop to
+  the plate (first crop locks size for that family), then mark a shared
+  registration point such as an elevator-shaft corner. Previous / Next
+  open a compare session that preloads cropped sheets in a family; an optional overlay from another
+  family lines up on the pin so different footprints still share an origin.
+  Notes and names stay on each sheet. This is the drawing-prep step before
+  the real 3D massing; it does not replace the proof-of-concept viewer yet.
+
+- **Per-alias organization mention counts** — The Organizations registry
+  detail panel shows distinct confirmed/provisional mention emails next to
+  each “Also known as” row (e.g. `TCG · 12 emails`, or `—` when none). The
+  org total stays a union across surfaces, not a sum of alias rows.
+  Confirming a mention from the harvest tooltip invalidates the cached
+  list so those counts refresh.
+
+- **Organization mentions** — Pass-3 org cards persist to
+  `organization_mentions` (same staging pattern as contacts/projects). A
+  per-email decision confirms only on this message’s unique mailbox,
+  website, distinctive name, short unique alias, or header domain. Bare
+  `Trace` stays unresolved with Consulting / Fire / Maintenance as
+  candidates. Unique body spans paint harvest marks; unresolved org and
+  contact badges use a dashed ring and a hover candidate list (click still
+  opens the panel). `backfill:org-mentions` replays stored pass-3 cards.
+  The Organizations registry shows backfill progress (including CLI runs)
+  with a live bar and resolved mention counts.
+
+- **Entity profile click-through** — Click a harvest mark, a Global To-Dos
+  mention, or a registry name (Contacts / Organizations / Projects /
+  Equipment) to open a shared letterhead side panel. Hover stays a preview.
+  Harvest fingerprints resolve to a registry card only on a unique email,
+  phone, name, or project-year match; otherwise the panel notes the mention
+  is not linked yet. Person cards include a role-based “get me involved
+  when” prompt from the job title (not email history).
+
+- **`backfill:project-mentions`** — One-time CLI copies stored pass-3 project
+  fingerprint cards into `project_mentions` and runs the matcher (no Gemini).
+  Dry-run by default; `--apply` persists. Skips emails that already have
+  mentions unless `--force`. Use when the Mentions tab is empty but pass-3
+  JSON exists from prior harvests.
+
+- **Inbox harvest failure banners** — Re-harvest C+P, bulk extract, and
+  Re-harvest thread now show green / amber / red notices when passes finish,
+  including per-email API errors (e.g. Gemini spending cap) that previously
+  returned HTTP 200 with empty cards.
+
+### Changed
+
+- **Floor plan compare session** — Previous / Next (and Expand) open a
+  full-screen compare view that preloads every cropped sheet in the family.
+  Switching is instant once they are painted; Close drops the canvases and
+  cached PDF bytes so memory does not stay high.
+
+- **Floor plan crop side handles** — The blue crop rectangle has handles in
+  the middle of each side, so you can change only the width or only the
+  height. After placing the left edge you can pan to the right of the sheet
+  and drag the right handle without moving the top or bottom.
+
+- **Floor plan PDF upload** — Building → Floor plans replaces the file
+  picker in the left panel with a dashed drop zone. Drop or click to choose
+  a PDF, then Upload.
+
+- **12-character org alias gate retired** — Profile snippets already paint
+  every registry alias plus stored mention spans. Auto-confirm treats aliases
+  as surfaces (TCG confirms when unique; Trace stays unresolved on prefix
+  collision). Fingerprint harvest-name bucketing is a fallback when an org
+  has no mention overlay, and now uses the same prefix-collision test instead
+  of a 12-character length cutoff. Harvest token-paint for short strings
+  without offsets is unchanged.
+
+- **Entity profile highlights every org alias** — Wikipedia-style org email
+  snippets paint the canonical name and all aliases (including short
+  surfaces such as TCG and Trace) in the subject and body preview. Selecting
+  an alias in the registry or on the profile keeps that surface at full
+  strength and fades sibling aliases in the same violet. The email list
+  still comes from stored mentions, not Command-F / LIKE.
+
+- **Wikipedia org emails use resolved mention ids** — Opening an organization
+  lists emails from confirmed/provisional `organization_mentions`, not
+  distinctive-alias LIKE / Command-F. Snippets paint from stored unique
+  spans. Short unique aliases such as TCG confirm when they are not a
+  prefix of another org’s primary name. Registry source-email counts overlay
+  the same distinct resolved emails once backfill has rows.
+
+- **Gemini 3.7 Flash as the default model** — Harvest, identity review, minutes,
+  to-dos, omissions, email analysis, and page vision now default to
+  `gemini-3.7-flash`. Gemini 3.6 and 3.7 Flash share the same paid rates:
+  50% intro through 2026-12-31 ($0.75 / $3.75 per 1M tokens) then list
+  $1.50 / $7.50 from 2027-01-01.
+  Older Flash and Pro ids stay in the pickers. Stored analysis-settings rows
+  still on 2.5 / 3.5 / 3.6 Flash are migrated. The Profile minutes/to-dos picker
+  resets to 3.7 Flash (new settings key).
+
+- **Projects Duplicates wait reason** — AI review identities no longer sits
+  disabled with no explanation while duplicate groups or identity-review
+  status load (or while another Projects action is in flight). An amber
+  banner names the wait and shows elapsed time after a few seconds.
+
+- **Identity review Pass 2 email packing** — Each cluster reuses the
+  fingerprint source-email snapshot from the start of the run instead of
+  waiting on a full registry rebuild per member. Server logs now print pack
+  vs LLM time per cluster.
+
+- **Identity review no longer rebuilds the registry after every merge** —
+  High-confidence applies still persist merge edges and entity marks
+  immediately. The minutes-long fingerprint+mention refresh runs once when
+  the run completes, fails, or is cancelled (if the in-process worker is
+  already gone). Manual merges from the Projects UI still refresh right
+  away. Pass 2 decisions already used a frozen snapshot, so later clusters
+  do not depend on a live list.
+
+- **Badge hover popovers** — Inbox and harvest badges no longer open a preview
+  the instant the pointer crosses them, and they no longer sit for half a
+  second after you leave. The preview waits ~300ms of dwell (so scrolling
+  past a dense row does nothing), closes in ~100ms, dismisses immediately on
+  scroll, and skips the wait when you move from badge to badge. Click still
+  opens the side panel.
+
+### Fixed
+
+- **Floor plan compare matches the crop rectangle** — Cropping a later
+  floor (or resizing with overlay off) updated the family plate size and
+  the blue overlay, but left already-cropped sibling PDFs at their old
+  size. Compare then showed a narrower sheet than crop mode (stairs cut
+  off on the right). Saving a crop now rewrites any sibling whose PDF
+  drifted, and opening a cropped file regenerates it when it does not
+  match the family plate.
+
+- **Full-screen crop zoom chrome and jump** — The crop rectangle border and
+  corner handles no longer thicken with zoom; they stay a constant screen
+  width so the crop edge can be placed on a line. Wheel zoom no longer
+  flashes a PDF reload and then jumps zoom again: while a sharp clip
+  re-rasterizes, the editor hides that bitmap so a cleared canvas cannot
+  show through the old zoom, then reveals it aligned with the live view.
+
+- **Floor plan crop zoom stays sharp** — Full-screen crop zoom was stretching
+  the overview bitmap, so grid lines and crop-handle corners went blurry.
+  Zoom now re-renders the visible PDF region at screen resolution after the
+  view settles.
+
+- **Floor plan crop hits the visible PDF edge** — Architectural sheets
+  with a 90°/270° `/Rotate` flag were cropped against the unrotated
+  MediaBox, so the blue rectangle stopped short of the drawing (about
+  two-thirds across a landscape sheet). Crop math now follows the page
+  as pdf.js draws it. Collapsing a handle to zero width no longer
+  throws `Crop size must be greater than zero`.
+
+- **Floor plan crop resize crash** — Dragging a crop-handle past the PDF
+  page edge no longer throws `Crop is larger than the PDF page`. The
+  rectangle clamps to the sheet so the opposite corner stays put.
+
+- **Thread harvest subject highlights** — Extraction highlights now paint
+  entity mentions on the email subject line, not only the authored body.
+  Subject-only names such as **Trace** use the same solid / dashed
+  unresolved styling as body marks, including when mention rows have no
+  unique-body span.
+
+- **Bare vendor nicknames painted as projects** — Thread harvest no longer
+  paints a short contractor token such as **trace** as a Project highlight
+  (orange wash, PROJECT header, Contractor chip). Firm names go to the
+  organization group (fuchsia, Organization header and chip). Unresolved
+  org mentions still show their candidate list when one exists. Work names
+  such as “riser replacement” stay in the project group.
+
+- **Unminted contractor org hover missing candidates** — A harvest mark
+  like subject-line **trace** (project contractor, no pass-3 org card) now
+  writes an organization mention and resolves prefix collisions, so the
+  hover shows Trace Consulting / Fire / Maintenance as a pick list instead
+  of a sparse “from this highlight” card with no suggestions. Opening the
+  email self-heals older harvests.
+
+- **Duplicate org names in harvest pick lists** — Unresolved “pick one”
+  lists no longer show the same legal name twice when a leftover
+  `name:…` entity row sits beside the email-keyed survivor the
+  Organizations tab already coalesced.
+
+- **Organizations registry `Can't resolve 'fs'`** — Alias mention counts no
+  longer import server-only `field-denials` / `pg` into the client bundle.
+  Name-key normalization lives in the existing client-safe org helpers.
+
+- **Local app freeze during fingerprint rebuild** — Project identity matching
+  no longer runs Levenshtein against every harvest card × every review policy
+  (that blocked the Node event loop for ~5 minutes, so Contacts, Inbox, and
+  identity-review polls all stalled). Rebuilds yield to the event loop, local
+  `DISABLE_BACKGROUND_WORKERS=true` skips startup warmup, and Duplicates
+  progress polls no longer stack overlapping requests.
+
+- **Duplicates “Unauthorized” banner during AI review** — Progress polling no
+  longer treats a busy database as a logout. Session lookup failures return 503
+  instead of 401, silent polls do not paint a red error, and a recovered poll
+  clears the banner. Previously one stalled `/api/projects/identity-review`
+  request left “Unauthorized” on the tab while the run kept going.
+
+- **Entities → Projects 5-minute hang** — Switching from Inbox/emails onto
+  the Projects registry no longer waits on a full fingerprint rebuild (logs
+  showed 4–6 minutes parsing every pass-3 JSON blob). The page peeks the
+  in-memory cache and renders immediately; harvest writes mark the list stale
+  instead of dropping it; source-email counts come from thread merges like
+  Organizations. A rebuild still runs in the background and on server start.
+
+- **Inbox Re-harvest C+P hang** — Project pass-3/4 persist no longer rebuilds
+  the entire project registry after every email. Mentions resolve against the
+  current `project_entities`; use Process pending project merges when new
+  cards need minting. A 25-thread selection was sitting on “Extracting…” for
+  20+ minutes because each pass-3 save synced all 706 projects.
+
+- **Projects Mentions tab spinner** — Empty `project_mentions` no longer sits on
+  “Loading mentions…” indefinitely. The queue skips the email-body join when the
+  status count is 0, truncates snippet text instead of pulling full bodies, and
+  the browser fetch aborts after 20s. Header counts load with the Projects page.
+
+### Added
+
+- **Project and contact mention dashboards** — Entities → Projects has a
+  Mentions tab (unresolved / provisional / confirmed) with raw name,
+  contractor, year, minted badge, linked project, and resolution-reason
+  codes. Process pending project merges re-syncs `project_entities` and
+  re-runs the matcher from the browser. Contact cards and the Mentions
+  inspection list show `role_phrase` and the stored `resolution_reason`.
+  Re-harvest thread (email panel, mention groups, and Inbox **Re-harvest
+  C+P**) runs contact and project passes 1–4 on historical mail so
+  resolution can be tested without SQL.
+
+- **Project mention staging** — Pass-3 project fingerprint cards are written to
+  `project_mentions` (name, contractor, year, source email) before the minting
+  gate. Cards that fail the gate stay unresolved instead of disappearing;
+  minted cards attach to `project_entities` only when the identity key uniquely
+  matches. Contacts gain a `role_phrase` on mentions (solicitor, property
+  manager, …) derived from job title.
+
+- **Rosetta Stone mention resolve** — When a strong contact identity lands,
+  unresolved mentions are re-run through the existing decision function,
+  bounded by the ingest thread, `first_org_key`, and email. First+org stays
+  provisional and still retracts; there is no bulk `UPDATE` by blocking key.
+
+- **Project mention lexical resolve** — Unresolved project mentions shortlist
+  up to five `project_entities` rows from an in-memory search document (name,
+  aliases, contractor, year, location). `decideProjectMentionResolution`
+  confirms a unique identity key or unique exact/alias name when years overlap,
+  attaches a unique work-name match provisionally, and leaves ambiguous or
+  year-mismatched mentions unresolved. Aliases fold onto `project_entities` at
+  fingerprint sync so “magnet” can hit Maglock. Contractor-as-name cards cannot
+  attach through the contractor field.
+
+- **Working-list click-in** — Click an email-harvested Global To-Do row to open
+  the source thread with the extracting sentence marked in yellow. The panel
+  header repeats the task being verified; **Mark complete** stays on the row.
+
+- **Board-report scan review** — After a management-report scan, the unmatched
+  topic count and “waiting on markdown” count on Entities → Projects are
+  clickable. Unmatched headings group by work name with report counts; skipped
+  packages list filename, date, pages, and conversion status (link to the
+  source email). Re-match topics with AI reuses the already-extracted headings
+  (no PDF re-scan) and maps them onto registry cards by name, aliases, year,
+  contractor, location, and equipment — so Maglock matches “magnet” /
+  electromagnetic locking devices instead of a 0.72 fuzzy threshold.
+
+- **Board-report project salience** — Entities → Projects can scan the monthly
+  management reports (and the management-report section of board packages) the
+  PM sends before meetings. Extracted topics are matched onto the registry;
+  matching cards get an emerald **Board · N** badge, a “In a management report”
+  filter, and a Board-reports sort. Standalone 2021–2023 reports are already
+  converted to markdown; later 100+ page packages are skipped until parsed,
+  then sliced so appendices do not mint every invoice line as a project.
+  Topic matching is exact work-name identity plus an AI pass over card
+  metadata, not fuzzy string similarity.
+
+- **AI project identity review** — Entities → Projects → Duplicates can run a
+  two-pass review over the registry. Pass 1 clusters cards by type of work
+  (MagLock variants together, kitchen-stack years together). Pass 2 reads the
+  attributed emails and decides one spanning capital job vs yearly campaigns vs
+  actually separate. High-confidence decisions auto-merge; medium and low stay
+  as proposed groups. The review also stores a span / recurring-year policy so
+  later harvests attach to the survivor instead of minting another MagLock card.
+
+### Fixed
+
+- **To-do source-quote highlights** — Stored quotes that copied a paragraph or
+  the whole unique body no longer wash the email. Display-time matching clips
+  to the extracting sentence (skipping greetings), focused harvest marks paint
+  amber instead of the group color, and future harvests ask for one verbatim
+  sentence. No re-extract required. Opening a Working row scrolls the source
+  panel to that sentence instead of centering the whole message (which landed
+  in quoted history). Expanding another email in that thread no longer jumps
+  the scroll back to the original quote. Sibling harvested to-dos in the
+  thread paint lime (hover for assignee / task); the clicked one stays amber.
+
+### Changed
+
+- **Project phase and year badges** — Entities → Projects maps extracted
+  phase prose onto seven lifecycle statuses (planning, tender, awarded, in
+  progress, complete, on hold, cancelled) and drops work-package labels like
+  Phase 1. Year is an inclusive calendar range (`2024` or `2024–2026`):
+  “this year” / “next year” resolve to a year, durations like `3-year` are
+  omitted, and project identity uses the range. Existing harvested cards
+  remap on load, so the badge legend stays a closed set instead of every
+  raw extractor string.
 
 - **One Postgres for local and production** — `npm run dev` now uses the same
   Supabase session-pooler URI Coolify uses. Compose Postgres on

@@ -1,6 +1,7 @@
 /** Client-safe project-highlight types and helpers (no DB / Gemini imports). */
 
 import { chunkContactHighlightText } from "@/lib/email-analysis/contact-highlight-shared";
+import { preferProjectPhase, normalizeProjectPhase } from "@/lib/projects/project-phase";
 import {
   foldProjectNames,
   joinProjectMultiValue,
@@ -9,6 +10,11 @@ import {
   normalizeProjectYearHint,
   splitProjectMultiValue,
 } from "@/lib/projects/project-multi-values";
+import {
+  parseProjectYearRange,
+  preferProjectYearHint,
+  projectYearRangeIdentity,
+} from "@/lib/projects/project-year-range";
 
 export { chunkContactHighlightText as chunkProjectHighlightText };
 
@@ -56,7 +62,7 @@ export const PROJECT_HIGHLIGHT_CLASS: Record<ProjectHighlightType, string> = {
 
 export const PROJECT_HIGHLIGHT_LABELS: Record<ProjectHighlightType, string> = {
   project_name: "Project",
-  year_hint: "Year",
+  year_hint: "Years",
   phase: "Phase",
   contractor: "Contractor",
   location: "Location",
@@ -227,8 +233,8 @@ Return ONLY valid JSON with this exact shape:
 Rules:
 - Extract only values that literally appear in the excerpt (copy exact substrings as written).
 - project_names: names of the WORK as written (e.g. "maglock installation", "EV charging", "window cleaning"). Not person names. Not company or contractor names — those go in contractors[] only.
-- year_hints: years or fiscal years tied to a project (e.g. "2024", "FY2025"). Do not emit unrelated dates like a meeting Tuesday.
-- phases: planning, tender, quote, in progress, complete, cancelled, on hold — only if written or clearly implied by those words.
+- year_hints: years or fiscal years tied to a project (e.g. "2024", "FY2025", "2024-2026"). Do not emit unrelated dates like a meeting Tuesday, durations ("3-year"), or seasons with no year.
+- phases: planning, tender, awarded, in progress, complete, cancelled, on hold — only if written or clearly implied. Do not emit work-package labels ("Phase 1").
 - contractors: vendor / contractor firm names attached to the job, as written.
 - locations: specific places for the job as written (unit 201, ninth floor amenity space, P1, front doors, roof, garage). Do not extract generic words (building, property, site, condo, premises, facility) or phrases whose only content is those words ("the building", "throughout the building").
 - Do not invent values. If none for a field, use [].
@@ -585,8 +591,8 @@ export function parseProjectEntityCard(raw: unknown): ProjectEntityCard | null {
   const obj = raw as Record<string, unknown>;
   const card: ProjectEntityCard = {
     name: nullableTrimmedString(obj.name),
-    year_hint: nullableTrimmedString(obj.year_hint),
-    phase: nullableTrimmedString(obj.phase),
+    year_hint: normalizeProjectYearHint(nullableTrimmedString(obj.year_hint)),
+    phase: normalizeProjectPhase(nullableTrimmedString(obj.phase)),
     contractor: nullableTrimmedString(obj.contractor),
     location: filterProjectLocationField(nullableTrimmedString(obj.location)),
     equipment_mentions: nullableTrimmedString(obj.equipment_mentions),
@@ -661,7 +667,8 @@ export function projectEntityCardHasAny(card: ProjectEntityCard): boolean {
  */
 export function projectIdentityKey(card: ProjectEntityCard): string {
   const name = normalizeProjectNameKey(card.name);
-  const year = normalizeProjectYearHint(card.year_hint);
+  const yearRange = parseProjectYearRange(card.year_hint);
+  const year = yearRange ? projectYearRangeIdentity(yearRange) : null;
   if (name && year) return `name:${name}|year:${year}`;
   if (name) return `name:${name}`;
   if (year) return `year:${year}|empty:${projectCardDisplayName(card).toLowerCase()}`;
@@ -674,6 +681,7 @@ export type ProjectFingerprintEmailContext = {
   toAddresses: string[];
   ccAddresses: string[];
   bodyText: string;
+  receivedAt?: string | null;
 };
 
 export function buildProjectFingerprintSystemPrompt(): string {
@@ -705,9 +713,10 @@ Rules:
 - Create one entity card per distinct PROJECT you can identify from this message. name is REQUIRED. It must be the work-name, never a company or person.
 - Do NOT emit a card when the only identity is a contractor/vendor (those are organizations, harvested separately). Leave contractor on a card that already has a work-name.
 - Do NOT emit a card whose name equals or is a shortened form of contractor.
-- If the same named job appears with two different years (e.g. maglock 2024 vs maglock 2026), those are TWO cards. Do not collapse them.
+- If the same named job appears with two non-overlapping years (e.g. maglock 2024 vs maglock 2026), those are TWO cards. Do not collapse them. A spanning range (2024-2026) is ONE card.
 - Other fields may be sparse. Fill only fields supported by evidence; leave others null. name must still be present.
-- year_hint: a year or fiscal year for THAT job when the email ties one. Do not copy a meeting date.
+- year_hint: "2024" or an inclusive range "2024-2026" for THAT job. Resolve "this year" / "next year" / "last year" to calendar years using the email date when present. Never copy a meeting date, a season, or a duration ("3-year").
+- phase: exactly one of planning, tender, awarded, in progress, complete, on hold, cancelled. Map synonyms (quote/quoted/quotes received → awarded; bidding/getting quotes → tender; completed → complete). Leave null for work-package labels ("Phase 1").
 - location: a specific place (unit 201, ninth floor amenity space, P1, roof). Never "building", "property", "site", or other generic words.
 - equipment_mentions: physical systems the job is about (boiler, maglocks), as written. Do not invent registry IDs.
 - scope: building = whole building / common element / amenity / roof / garage; multi_unit = two or more named units; unit = a single unit/suite; unknown if not evidenced. Prefer location evidence over guessing.
@@ -725,11 +734,16 @@ export function buildProjectFingerprintUserPrompt(
   const ccLine =
     email.ccAddresses.length > 0 ? email.ccAddresses.join(", ") : "(none)";
 
+  const dateLine = email.receivedAt?.trim()
+    ? `Date: ${email.receivedAt.trim()}`
+    : "Date: (unknown)";
+
   return `EMAIL HEADERS (this message only)
 From: ${email.fromAddress || "(unknown)"}
 To: ${toLine}
 Cc: ${ccLine}
 Subject: ${email.subject || "(none)"}
+${dateLine}
 
 EMAIL BODY (this message only)
 ---
@@ -782,9 +796,11 @@ Drop: vendor names as projects, noise/vibration complaints with no named job, a 
 
 Other merge rules:
 - Output ONE card per distinct project identity. name is required.
-- Merge when the normalized name matches AND the year matches (including both missing a year).
-- NEVER merge two cards that share a name but have different years (maglock 2024 vs maglock 2026 stay separate). A human will merge them later if they are the same initiative.
+- Merge when the normalized name matches AND the year range matches (including both missing a year).
+- NEVER merge two cards that share a name but have non-overlapping years (maglock 2024 vs maglock 2026 stay separate). A human will merge them later if they are the same initiative. Overlapping ranges of the same name (2024 and 2024-2026) may merge; union the range.
 - When merging, keep non-null fields; prefer the most complete name; keep contractor/location/phase/equipment/scope when any source has it. Do not invent values.
+- year_hint: store "2024" or "2024-2026". Never "this year", "3-year", or a season.
+- phase: planning, tender, awarded, in progress, complete, on hold, or cancelled. Never work-package labels.
 - scope: building / multi_unit / unit / unknown. Prefer a specific value over unknown. Do not invent.
 - If two cards have conflicting non-null values for the same field, prefer the longer/more specific value; never invent a compromise.
 - Drop empty cards and contractor-only cards.
@@ -803,14 +819,6 @@ ${JSON.stringify(cards, null, 2)}
 Merge into a unique entity_cards list as JSON.`;
 }
 
-function preferString(a: string | null, b: string | null): string | null {
-  const left = a?.trim() || null;
-  const right = b?.trim() || null;
-  if (!left) return right;
-  if (!right) return left;
-  return right.length > left.length ? right : left;
-}
-
 function preferRicherProjectEntityCard(
   a: ProjectEntityCard,
   b: ProjectEntityCard,
@@ -826,8 +834,8 @@ function preferRicherProjectEntityCard(
   });
   return {
     name: folded.name,
-    year_hint: preferString(a.year_hint, b.year_hint),
-    phase: preferString(a.phase, b.phase),
+    year_hint: preferProjectYearHint(a.year_hint, b.year_hint),
+    phase: preferProjectPhase(a.phase, b.phase),
     contractor: mergeProjectMultiValues(a.contractor, b.contractor),
     location: filterProjectLocationField(
       mergeProjectMultiValues(a.location, b.location),
@@ -846,17 +854,19 @@ function preferRicherProjectEntityCard(
 
 /**
  * Guarantee at most one card per identity key (name + year when present).
- * Same name with different years stay separate.
+ * Same name with different years stay separate unless `identityKeyFn` remaps
+ * them (identity-review span / recurring-year policies).
  */
 export function coalesceProjectEntityCards(
   cards: ProjectEntityCard[],
   orgNameKeys: ReadonlySet<string> = new Set(),
+  identityKeyFn: (card: ProjectEntityCard) => string = projectIdentityKey,
 ): ProjectEntityCard[] {
   const byKey = new Map<string, ProjectEntityCard>();
 
   for (const card of cards) {
     if (!cardPassesNameMintingGate(card, orgNameKeys)) continue;
-    const key = projectIdentityKey(card);
+    const key = identityKeyFn(card);
     if (key.startsWith("empty:")) continue;
     const existing = byKey.get(key);
     if (!existing) {

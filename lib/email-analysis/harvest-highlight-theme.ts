@@ -40,6 +40,20 @@ export const HARVEST_GROUP_MARK_CLASS: Record<HarvestGroupId, string> = {
     "rounded-sm bg-lime-200/80 text-lime-950 ring-1 ring-lime-300/50 box-decoration-clone px-0.5",
 };
 
+export const HARVEST_UNRESOLVED_MARK_CLASS: Record<
+  "contact" | "organization",
+  string
+> = {
+  contact:
+    "rounded-sm bg-violet-50 text-violet-950 ring-1 ring-dashed ring-violet-400 box-decoration-clone px-0.5",
+  organization:
+    "rounded-sm bg-fuchsia-50 text-fuchsia-950 ring-1 ring-dashed ring-fuchsia-400 box-decoration-clone px-0.5",
+};
+
+/** Verify-this-task paint. Focused harvest marks must be yellow, not the group wash. */
+export const HARVEST_FOCUS_MARK_CLASS =
+  "rounded-sm bg-amber-200 text-amber-950 ring-2 ring-amber-400 box-decoration-clone px-0.5";
+
 export const HARVEST_GROUP_SWATCH_CLASS: Record<HarvestGroupId, string> = {
   contact: "bg-violet-200 ring-violet-300 text-violet-950",
   organization: "bg-fuchsia-200 ring-fuchsia-300 text-fuchsia-950",

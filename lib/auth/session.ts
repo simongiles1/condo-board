@@ -207,17 +207,22 @@ export function createSessionToken(user: {
   });
 }
 
-export const getSessionUser = cache(async (): Promise<AppUser | null> => {
-  if (!isAuthEnabled()) return null;
+export type SessionLookupResult =
+  | { status: "ok"; user: AppUser }
+  | { status: "unauthenticated" }
+  | { status: "unavailable"; message: string };
+
+const lookupSessionUser = cache(async (): Promise<SessionLookupResult> => {
+  if (!isAuthEnabled()) return { status: "unauthenticated" };
 
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
-  if (!token) return null;
+  if (!token) return { status: "unauthenticated" };
 
   const session = verifySignedSessionToken(token);
   if (!session) {
     await clearSessionCookie();
-    return null;
+    return { status: "unauthenticated" };
   }
 
   try {
@@ -235,25 +240,40 @@ export const getSessionUser = cache(async (): Promise<AppUser | null> => {
 
     if (!user || !isUserRole(user.role)) {
       await clearSessionCookie();
-      return null;
+      return { status: "unauthenticated" };
     }
 
     return {
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      role: user.role,
+      status: "ok",
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+      },
     };
   } catch (error) {
+    const message = formatAuthDbError(error, "Login");
     if (!isDbConnectionError(error)) {
-      console.warn(
-        `[auth/getSessionUser] Session lookup failed: ${formatAuthDbError(error, "Login")}`,
-      );
+      console.warn(`[auth/getSessionUser] Session lookup failed: ${message}`);
     }
-    return null;
+    return {
+      status: "unavailable",
+      message:
+        "Could not verify your session. The database is busy — retry in a moment.",
+    };
   }
 });
+
+export async function getSessionLookup(): Promise<SessionLookupResult> {
+  return lookupSessionUser();
+}
+
+export async function getSessionUser(): Promise<AppUser | null> {
+  const result = await lookupSessionUser();
+  return result.status === "ok" ? result.user : null;
+}
 
 export async function setSessionCookie(token: string) {
   const cookieStore = await cookies();

@@ -6,7 +6,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildProjectDuplicateGroups } from "../lib/projects/duplicate-groups";
+import {
+  buildProjectDuplicateGroups,
+  projectDuplicatesWaitReason,
+} from "../lib/projects/duplicate-groups";
 import type { ProjectFingerprintSummary } from "../lib/projects/fingerprint-list";
 import {
   canonicalizeProjectNameForFuzzyMatch,
@@ -32,6 +35,8 @@ function project(
     sourceMergeCount: 0,
     sourceEmailCount: 0,
     modelIds: [],
+    boardReportCount: 0,
+    boardLastReportAt: null,
     ...partial,
   };
 }
@@ -152,5 +157,46 @@ describe("buildProjectDuplicateGroups", () => {
       project({ id: "c", displayName: "Real Co", name: "Real Co" }),
     ]);
     assert.equal(groups.length, 0);
+  });
+});
+
+const idleWait = {
+  groupsLoading: false,
+  reviewStatusLoading: false,
+  reviewRunning: false,
+  startingReview: false,
+  cancellingReview: false,
+  pagePending: false,
+  pageMessage: null as string | null,
+};
+
+describe("projectDuplicatesWaitReason", () => {
+  it("is silent when nothing is in flight", () => {
+    assert.equal(projectDuplicatesWaitReason(idleWait), null);
+  });
+
+  it("explains a registry rebuild wait before review status", () => {
+    assert.match(
+      projectDuplicatesWaitReason({ ...idleWait, groupsLoading: true }),
+      /duplicate groups/,
+    );
+  });
+
+  it("explains identity-review status load after groups are on screen", () => {
+    assert.equal(
+      projectDuplicatesWaitReason({ ...idleWait, reviewStatusLoading: true }),
+      "Loading identity-review status…",
+    );
+  });
+
+  it("uses the page message when another Projects action holds the UI", () => {
+    assert.equal(
+      projectDuplicatesWaitReason({
+        ...idleWait,
+        pagePending: true,
+        pageMessage: "Syncing project registry and resolving mentions…",
+      }),
+      "Syncing project registry and resolving mentions…",
+    );
   });
 });

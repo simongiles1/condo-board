@@ -635,12 +635,24 @@ export async function saveOrgHighlightThirdPass(
         thirdPassUpdatedAt: now,
       })
       .where(eq(organizationHighlightExtractions.id, existing[0].id));
+
+    const { upsertOrgMentionsForEmail, upsertPaintedOrgMentionSurfacesForEmail } =
+      await import("@/lib/organizations/mention-persist");
+    await upsertOrgMentionsForEmail({
+      sourceEmailId: emailId,
+      entityCards: item.entityCards ?? [],
+      modelId,
+    });
+    await upsertPaintedOrgMentionSurfacesForEmail(emailId);
   }
 
-  await deleteOrgFingerprintMergesForEmails(
-    modelId,
-    items.map((item) => item.emailId),
+  const emailIds = items.map((item) => item.emailId);
+  const { resolveOrgMentions } = await import(
+    "@/lib/organizations/mention-resolve"
   );
+  await resolveOrgMentions({ emailIds });
+
+  await deleteOrgFingerprintMergesForEmails(modelId, emailIds);
 }
 
 export async function saveOrgFingerprintMerge(params: {

@@ -34,6 +34,7 @@ type SourcePanelTarget = {
   emailId: string | null;
   threadId: string | null;
   highlightQuote: string | null;
+  verifyLabel: string | null;
 };
 
 export type GlobalTodoTab = "due" | "open-ended" | "done";
@@ -309,6 +310,11 @@ export function GlobalTodosList({ items, archiveItems = [] }: Props) {
                 <TodoRow
                   key={task.id}
                   task={task}
+                  sourceOpen={
+                    sourcePanel != null &&
+                    (sourcePanel.emailId === task.sourceEmailId ||
+                      sourcePanel.threadId === task.sourceEmailThreadId)
+                  }
                   onOpenSource={setSourcePanel}
                 />
               ))}
@@ -358,6 +364,7 @@ export function GlobalTodosList({ items, archiveItems = [] }: Props) {
         emailId={sourcePanel?.emailId ?? null}
         threadId={sourcePanel?.threadId ?? null}
         highlightQuote={sourcePanel?.highlightQuote ?? null}
+        verifyLabel={sourcePanel?.verifyLabel ?? null}
         onClose={() => setSourcePanel(null)}
       />
     </div>
@@ -511,7 +518,7 @@ function TodoFilterButton({
                     query: event.target.value,
                   }))
                 }
-                placeholder="Contains…"
+                placeholder="Task, assignee, or quote…"
                 className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-600"
               />
             </div>
@@ -606,9 +613,11 @@ function TodoFilterButton({
 
 function TodoRow({
   task,
+  sourceOpen,
   onOpenSource,
 }: {
   task: GlobalTodoItem;
+  sourceOpen: boolean;
   onOpenSource: (target: SourcePanelTarget) => void;
 }) {
   const overdue = isOverdue(task.deadline);
@@ -618,13 +627,25 @@ function TodoRow({
   );
   const sourceDate = sourceDateLabel(task);
 
+  function openSource() {
+    onOpenSource({
+      emailId: task.sourceEmailId,
+      threadId: task.sourceEmailThreadId,
+      highlightQuote: task.sourceQuote?.trim() || null,
+      verifyLabel: task.description,
+    });
+  }
+
   return (
     <li
       className={`flex flex-wrap items-start justify-between gap-3 rounded-lg border px-3 py-3 shadow-sm ${
         task.completed
           ? "border-slate-100 bg-white opacity-75"
-          : "border-slate-200 bg-white"
-      }`}
+          : sourceOpen
+            ? "border-amber-300 bg-amber-50/40"
+            : "border-slate-200 bg-white"
+      } ${canOpenSource ? "cursor-pointer hover:border-amber-200 hover:bg-amber-50/30" : ""}`}
+      onClick={canOpenSource ? openSource : undefined}
     >
       <div className="min-w-0 flex-1 space-y-2 text-sm text-slate-800">
         <p className={task.completed ? "line-through" : undefined}>
@@ -660,13 +681,10 @@ function TodoRow({
         {canOpenSource ? (
           <button
             type="button"
-            onClick={() =>
-              onOpenSource({
-                emailId: task.sourceEmailId,
-                threadId: task.sourceEmailThreadId,
-                highlightQuote: task.sourceQuote?.trim() || task.description,
-              })
-            }
+            onClick={(event) => {
+              event.stopPropagation();
+              openSource();
+            }}
             aria-label={
               task.sourceEmailThreadId ? "Open thread" : "Open email"
             }
@@ -734,7 +752,10 @@ function CompleteButton({
     <div className="flex flex-col items-end gap-1">
       <button
         type="button"
-        onClick={() => markDone()}
+        onClick={(event) => {
+          event.stopPropagation();
+          markDone();
+        }}
         disabled={loading}
         className="rounded-md bg-teal-600 px-3 py-2 text-[11px] font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-60"
       >
@@ -805,8 +826,15 @@ function matchesTodoFilters(
   }
 
   const query = filters.query.trim().toLowerCase();
-  if (query && !item.description.toLowerCase().includes(query)) {
-    return false;
+  if (query) {
+    const haystack = [
+      item.description,
+      item.assignee,
+      item.sourceQuote ?? "",
+    ]
+      .join(" ")
+      .toLowerCase();
+    if (!haystack.includes(query)) return false;
   }
 
   if (filters.dateFrom || filters.dateTo) {

@@ -11,6 +11,7 @@ import {
   coalesceOrgEntityCards,
   entityCardDisplayName,
   parseOrgFingerprintResult,
+  parseOrgHighlightJson,
   type OrgEntityCard,
 } from "@/lib/email-analysis/org-highlight-shared";
 import {
@@ -52,6 +53,7 @@ import {
   buildOrgDuplicateGroups,
   type OrgDuplicateGroup,
 } from "@/lib/organizations/duplicate-groups";
+import { loadResolvedOrgMentionEmailCounts } from "@/lib/organizations/mention-evidence";
 
 export type { OrgFingerprintListSort } from "@/lib/organizations/org-list-sort";
 export { parseOrgFingerprintListSort } from "@/lib/organizations/org-list-sort";
@@ -66,6 +68,11 @@ export type OrgFingerprintSummary = OrgEntityCard & {
   sourceMergeCount: number;
   /** Distinct source email ids across contributing merges. */
   sourceEmailCount: number;
+  /**
+   * Distinct confirmed/provisional mention emails keyed by normalized alias
+   * nameKey. Org total stays a union; these rows can overlap.
+   */
+  aliasEmailCounts?: Record<string, number>;
   modelIds: string[];
 };
 
@@ -400,28 +407,49 @@ async function loadOrgPass3NameSightings(
   const rows = await db
     .select({
       emailId: organizationHighlightExtractions.emailId,
+      extractionJson: organizationHighlightExtractions.extractionJson,
+      secondPassExtractionJson:
+        organizationHighlightExtractions.secondPassExtractionJson,
       thirdPassExtractionJson:
         organizationHighlightExtractions.thirdPassExtractionJson,
     })
     .from(organizationHighlightExtractions);
 
   const out: OrgNameSighting[] = [];
+  const seen = new Set<string>();
+
+  function addSighting(emailId: string, name: string, identityKeys: string[]) {
+    const trimmed = name.trim();
+    if (!trimmed || !emailId) return;
+    const key = `${emailId}:${normalizeOrgNameKey(trimmed)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ emailId, name: trimmed, identityKeys });
+  }
+
   for (const row of rows) {
-    if (!row.thirdPassExtractionJson) continue;
-    let parsed: ReturnType<typeof parseOrgFingerprintResult>;
-    try {
-      parsed = parseOrgFingerprintResult(
-        JSON.parse(row.thirdPassExtractionJson) as unknown,
-      );
-    } catch {
-      continue;
+    if (row.thirdPassExtractionJson) {
+      try {
+        const parsed = parseOrgFingerprintResult(
+          JSON.parse(row.thirdPassExtractionJson) as unknown,
+        );
+        for (const card of parsed.entity_cards) {
+          const name = card.name?.trim();
+          if (!name) continue;
+          const identityKeys = identityKeysForHarvestCard(card, denials, mergeMap);
+          if (identityKeys.length === 0) continue;
+          addSighting(row.emailId, name, identityKeys);
+        }
+      } catch {
+        // Skip malformed pass-3 JSON.
+      }
     }
-    for (const card of parsed.entity_cards) {
-      const name = card.name?.trim();
-      if (!name) continue;
-      const identityKeys = identityKeysForHarvestCard(card, denials, mergeMap);
-      if (identityKeys.length === 0) continue;
-      out.push({ emailId: row.emailId, name, identityKeys });
+    for (const raw of [row.extractionJson, row.secondPassExtractionJson]) {
+      if (!raw) continue;
+      const highlight = parseOrgHighlightJson(raw);
+      for (const name of highlight.organization_names) {
+        addSighting(row.emailId, name, []);
+      }
     }
   }
   return out;
@@ -473,7 +501,15 @@ const globalForOrgFingerprints = globalThis as unknown as {
   };
   orgFingerprintInflight?: Promise<OrgFingerprintCachePayload>;
   orgFingerprintGeneration?: number;
+  orgFingerprintLogicVersion?: number;
 };
+
+/** Bump when source-email attribution rules change so stale in-memory lists rebuild. */
+const ORG_FINGERPRINT_LOGIC_VERSION = 4;
+if (globalForOrgFingerprints.orgFingerprintLogicVersion !== ORG_FINGERPRINT_LOGIC_VERSION) {
+  globalForOrgFingerprints.orgFingerprintLogicVersion = ORG_FINGERPRINT_LOGIC_VERSION;
+  globalForOrgFingerprints.orgFingerprintCache = undefined;
+}
 
 /** Drop the in-memory org list after merges, severs, or field moves. */
 export function invalidateOrgFingerprintSummariesCache() {
@@ -741,6 +777,41 @@ async function computeAllOrgFingerprintSummaries(): Promise<OrgFingerprintCacheP
   }
 
   const attributed = countedOrgs.map(toPublicSummary);
+
+  // Mention rows are authoritative for displayed source-email counts.
+  // Fingerprint bucketing above is the fallback when an org has no overlay.
+  const mentionCounts = await loadResolvedOrgMentionEmailCounts().catch(
+    () => null,
+  );
+  if (mentionCounts && mentionCounts.byOrganizationId.size > 0) {
+    const { organizationEntities } = await import("@/lib/db/schema");
+    const { getDb } = await import("@/lib/db");
+    const { eq } = await import("drizzle-orm");
+    const db = getDb();
+    const entityRows = await db
+      .select({
+        id: organizationEntities.id,
+        identityKey: organizationEntities.identityKey,
+      })
+      .from(organizationEntities)
+      .where(eq(organizationEntities.status, "active"));
+    const countByIdentity = new Map<string, number>();
+    const aliasByIdentity = new Map<string, Record<string, number>>();
+    for (const row of entityRows) {
+      const count = mentionCounts.byOrganizationId.get(row.id);
+      if (count != null) countByIdentity.set(row.identityKey, count);
+      const aliasCounts = mentionCounts.byOrganizationIdAndNameKey.get(row.id);
+      if (aliasCounts && aliasCounts.size > 0) {
+        aliasByIdentity.set(row.identityKey, Object.fromEntries(aliasCounts));
+      }
+    }
+    for (const org of attributed) {
+      const count = countByIdentity.get(org.id);
+      if (count != null) org.sourceEmailCount = count;
+      const aliasCounts = aliasByIdentity.get(org.id);
+      if (aliasCounts) org.aliasEmailCounts = aliasCounts;
+    }
+  }
 
   const allEmailIds = new Set<string>();
   for (const contrib of contributions) {

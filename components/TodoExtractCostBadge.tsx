@@ -2,7 +2,6 @@
 
 import { createPortal } from "react-dom";
 import {
-  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -16,14 +15,10 @@ import {
   type TodoExtractSummary,
 } from "@/lib/email-analysis/todo-highlight-run-display";
 import { formatCostUsd } from "@/lib/gemini/usage";
-import {
-  claimHoverPopover,
-  closeActiveHoverPopover,
-  releaseHoverPopover,
-} from "@/lib/ui/hover-popover-group";
+import { closeActiveHoverPopover } from "@/lib/ui/hover-popover-group";
+import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 
 const VIEWPORT_MARGIN = 8;
-const POPOVER_HIDE_DELAY_MS = 500;
 
 function computePopoverPosition(
   triggerRect: DOMRect,
@@ -79,65 +74,23 @@ type Props = {
 export function TodoExtractCostBadge({ summary, onOpenHarvest }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const popoverInstanceId = useRef(Symbol("todo-extract-cost-badge")).current;
-  const triggerHoveredRef = useRef(false);
-  const popoverHoveredRef = useRef(false);
-  const [open, setOpen] = useState(false);
+  const hover = useHoverPopover();
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
     zIndex: 50,
   });
 
-  function cancelHide() {
-    if (hideTimeoutRef.current) {
-      clearTimeout(hideTimeoutRef.current);
-      hideTimeoutRef.current = null;
-    }
-  }
-
-  function forceClose() {
-    cancelHide();
-    triggerHoveredRef.current = false;
-    popoverHoveredRef.current = false;
-    setOpen(false);
-    releaseHoverPopover(popoverInstanceId);
-  }
-
-  function scheduleHide() {
-    cancelHide();
-    hideTimeoutRef.current = setTimeout(() => {
-      if (!triggerHoveredRef.current && !popoverHoveredRef.current) {
-        forceClose();
-      }
-    }, POPOVER_HIDE_DELAY_MS);
-  }
-
-  function showPopover() {
-    claimHoverPopover(popoverInstanceId, forceClose);
-    cancelHide();
-    setOpen(true);
-  }
-
   function openPanel(todoItem?: TodoExtractListItem | null) {
-    closeActiveHoverPopover();
-    forceClose();
+    hover.forceClose();
     onOpenHarvest?.({
       focusEmailId: todoItem?.emailId ?? null,
       focusQuote: todoItem?.sourceQuote ?? null,
     });
   }
 
-  useEffect(() => {
-    return () => {
-      cancelHide();
-      releaseHoverPopover(popoverInstanceId);
-    };
-  }, [popoverInstanceId]);
-
   useLayoutEffect(() => {
-    if (!open || !rootRef.current || !popoverRef.current) return;
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
 
     const triggerRect = rootRef.current.getBoundingClientRect();
     const popoverRect = popoverRef.current.getBoundingClientRect();
@@ -148,7 +101,7 @@ export function TodoExtractCostBadge({ summary, onOpenHarvest }: Props) {
         popoverRect.height,
       ),
     );
-  }, [open, summary]);
+  }, [hover.open, summary]);
 
   const costLabel = formatCostUsd(summary.totalCostUsd);
   const todos = summary.todos ?? [];
@@ -159,16 +112,10 @@ export function TodoExtractCostBadge({ summary, onOpenHarvest }: Props) {
       <div
         ref={rootRef}
         className="inline-flex max-w-full"
-        onMouseEnter={() => {
-          triggerHoveredRef.current = true;
-          showPopover();
-        }}
-        onMouseLeave={() => {
-          triggerHoveredRef.current = false;
-          scheduleHide();
-        }}
-        onFocus={() => showPopover()}
-        onBlur={() => scheduleHide()}
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onFocus={hover.onTriggerFocus}
+        onBlur={hover.onTriggerBlur}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -196,7 +143,7 @@ export function TodoExtractCostBadge({ summary, onOpenHarvest }: Props) {
         </span>
       </div>
 
-      {open && typeof document !== "undefined"
+      {hover.open && typeof document !== "undefined"
         ? createPortal(
             <div
               ref={popoverRef}
@@ -205,14 +152,7 @@ export function TodoExtractCostBadge({ summary, onOpenHarvest }: Props) {
               className="w-max min-w-[18rem] max-w-[min(28rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
               onClick={(event) => event.stopPropagation()}
               onMouseDown={(event) => event.stopPropagation()}
-              onMouseEnter={() => {
-                popoverHoveredRef.current = true;
-                cancelHide();
-              }}
-              onMouseLeave={() => {
-                popoverHoveredRef.current = false;
-                scheduleHide();
-              }}
+              {...hover.popoverProps}
             >
               <div className="mb-2 flex items-baseline justify-between gap-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">

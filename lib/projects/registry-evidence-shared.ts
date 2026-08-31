@@ -4,12 +4,17 @@ import type {
   ProjectEntityCard,
   ProjectHighlightExtraction,
 } from "@/lib/email-analysis/project-highlight-shared";
+import { phasesMatch } from "@/lib/projects/project-phase";
 import {
   normalizeProjectNameKey,
-  normalizeProjectYearHint,
   projectMultiValueContains,
   splitProjectMultiValue,
 } from "@/lib/projects/project-multi-values";
+import {
+  normalizeProjectYearHint,
+  parseProjectYearRange,
+  yearsMatch,
+} from "@/lib/projects/project-year-range";
 
 export const PROJECT_EVIDENCE_FIELDS = [
   "source_emails",
@@ -66,7 +71,7 @@ export function isProjectEvidenceField(
 export function projectEvidenceFieldLabel(field: ProjectEvidenceField): string {
   if (field === "source_emails") return "Source emails";
   if (field === "name_alias") return "Alias";
-  if (field === "year_hint") return "Year";
+  if (field === "year_hint") return "Years";
   if (field === "phase") return "Phase";
   if (field === "contractor") return "Contractor";
   if (field === "location") return "Location";
@@ -222,21 +227,6 @@ function namesMatch(left: string | null | undefined, right: string): boolean {
   return normalizeProjectNameKey(left) === key;
 }
 
-function yearsMatch(left: string | null | undefined, right: string): boolean {
-  const trimmed = right.trim();
-  if (!trimmed) return false;
-  const leftYear = normalizeProjectYearHint(left);
-  const rightYear = normalizeProjectYearHint(trimmed);
-  if (leftYear && rightYear) return leftYear === rightYear;
-  return (left ?? "").trim().toLowerCase() === trimmed.toLowerCase();
-}
-
-function phasesMatch(left: string | null | undefined, right: string): boolean {
-  const key = right.trim().toLowerCase();
-  if (!key) return false;
-  return (left ?? "").trim().toLowerCase() === key;
-}
-
 export function projectCardMatchesEvidenceValue(
   card: ProjectEntityCard,
   field: ProjectEvidenceField,
@@ -310,8 +300,15 @@ export function splitProjectEvidenceNeedles(
   const trimmed = value.trim();
   if (!trimmed) return [];
   if (field === "year_hint") {
-    const year = normalizeProjectYearHint(trimmed);
-    return year && year !== trimmed ? [trimmed, year] : [trimmed];
+    const parsed = parseProjectYearRange(trimmed);
+    const canonical = normalizeProjectYearHint(trimmed);
+    const needles = [trimmed];
+    if (canonical && canonical !== trimmed) needles.push(canonical);
+    if (parsed) {
+      needles.push(String(parsed.start));
+      if (parsed.end !== parsed.start) needles.push(String(parsed.end));
+    }
+    return [...new Set(needles)];
   }
   return [trimmed];
 }

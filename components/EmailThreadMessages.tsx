@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
+import { HarvestMarkedBody } from "@/components/HarvestMarkedBody";
 import { DeleteEmailButton } from "@/components/DeleteEmailButton";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { SourceQuoteDisplay } from "@/components/SourceQuoteDisplay";
@@ -21,7 +22,12 @@ import {
   toHighlightSpans,
   type ContactHighlightExtraction,
 } from "@/lib/email-analysis/contact-highlight-shared";
-import { findFlexibleQuoteRange } from "@/lib/email-analysis/harvest-highlight-spans";
+import {
+  buildHarvestMarkTree,
+  locateSentenceQuoteRange,
+  resolveHarvestSpans,
+} from "@/lib/email-analysis/harvest-highlight-spans";
+import type { TodoExtractListItem } from "@/lib/email-analysis/todo-highlight-run-display";
 import { formatDateTime } from "@/lib/format/datetime";
 import { useAttachmentVisibilitySettings } from "@/lib/settings/attachment-visibility-settings";
 
@@ -61,12 +67,16 @@ function QuoteMarkedText({
   quote: string | null;
 }): ReactNode {
   if (!quote?.trim()) return text;
-  const range = findFlexibleQuoteRange(text, quote);
+  const range = locateSentenceQuoteRange(text, quote);
   if (!range) return text;
   return (
     <>
       {text.slice(0, range.start)}
-      <mark className="rounded-sm bg-amber-200 text-inherit box-decoration-clone px-0.5">
+      <mark
+        id="source-quote-mark"
+        data-source-quote-mark=""
+        className="rounded-sm bg-amber-200 text-amber-950 ring-2 ring-amber-400 box-decoration-clone px-0.5"
+      >
         {text.slice(range.start, range.end)}
       </mark>
       {text.slice(range.end)}
@@ -76,7 +86,60 @@ function QuoteMarkedText({
 
 function quoteMatches(text: string, quote: string | null): boolean {
   if (!quote?.trim() || !text) return false;
-  return findFlexibleQuoteRange(text, quote) != null;
+  return locateSentenceQuoteRange(text, quote) != null;
+}
+
+/** Scroll a child inside an overflow panel. Never use scrollIntoView — it
+ *  centers the whole message card and lands in quoted history. */
+function scrollChildIntoContainer(
+  container: HTMLElement,
+  child: HTMLElement,
+  paddingTop = 20,
+): void {
+  const containerRect = container.getBoundingClientRect();
+  const childRect = child.getBoundingClientRect();
+  const nextTop =
+    container.scrollTop + (childRect.top - containerRect.top) - paddingTop;
+  container.scrollTo({ top: Math.max(0, nextTop), behavior: "auto" });
+}
+
+function TodoHarvestBody({
+  text,
+  todos,
+  focusQuote,
+}: {
+  text: string;
+  todos: TodoExtractListItem[];
+  focusQuote?: string | null;
+}): ReactNode {
+  const tree = useMemo(
+    () =>
+      buildHarvestMarkTree(
+        resolveHarvestSpans({
+          text,
+          todos: todos.map((todo) => ({
+            title: todo.task,
+            sourceQuote: todo.sourceQuote,
+          })),
+          focusQuote,
+        }),
+      ),
+    [focusQuote, text, todos],
+  );
+
+  return (
+    <HarvestMarkedBody
+      text={text}
+      nodes={tree}
+      todos={todos.map((todo) => ({
+        type: "action_item",
+        title: todo.task,
+        detail: todo.assignee,
+        when: todo.deadline,
+        sourceQuote: todo.sourceQuote,
+      }))}
+    />
+  );
 }
 
 function BodyContent({
@@ -144,6 +207,30 @@ function HighlightedFullBody({
   uniqueOnly?: boolean;
   highlightQuote?: string | null;
 }) {
+  // Verify-this-task: yellow on the extracting sentence only. Do not wash the
+  // unique authored region teal — that reads as "the whole email is the quote".
+  if (highlightQuote?.trim()) {
+    const searchText =
+      uniqueOnly && uniqueText.trim() ? uniqueText : display.content;
+    const quote =
+      quoteMatches(searchText, highlightQuote) ||
+      quoteMatches(display.content, highlightQuote) ||
+      quoteMatches(uniqueText, highlightQuote)
+        ? highlightQuote
+        : null;
+    if (uniqueOnly) {
+      return (
+        <div className="prose prose-sm max-w-none whitespace-pre-wrap">
+          <QuoteMarkedText
+            text={uniqueText.trim() ? uniqueText : display.content}
+            quote={quote}
+          />
+        </div>
+      );
+    }
+    return <BodyContent display={display} quote={quote} />;
+  }
+
   const split = resolveHighlightSplit(display, uniqueText);
   if (!split) {
     if (uniqueOnly) {
@@ -151,12 +238,7 @@ function HighlightedFullBody({
         <p className="text-sm text-slate-500">(No unique content for this message)</p>
       );
     }
-    const quoteInUnique = quoteMatches(uniqueText, highlightQuote);
-    const quote =
-      quoteInUnique || (!uniqueText.trim() && quoteMatches(display.content, highlightQuote))
-        ? highlightQuote
-        : null;
-    return <BodyContent display={display} quote={quote} />;
+    return <BodyContent display={display} />;
   }
 
   const highlightClass =
@@ -165,16 +247,11 @@ function HighlightedFullBody({
   const showContactMarks =
     contactExtraction != null && extractionHasAny(contactExtraction);
   const showRemainder = Boolean(split.remainder) && !uniqueOnly;
-  const quoteInAuthored =
-    quoteMatches(uniqueText, highlightQuote) ||
-    quoteMatches(split.highlighted, highlightQuote);
-  const renderQuoted = Boolean(highlightQuote?.trim()) && quoteInAuthored;
 
   // Unique could not be located as a prefix of the HTML display. Paint the
   // mention unique string teal so the overlay matches what mentions search,
   // then show the full message unhighlighted.
   if (!split.aligned) {
-    const quote = renderQuoted ? highlightQuote : null;
     return (
       <div className="w-full max-w-none">
         <div
@@ -185,8 +262,6 @@ function HighlightedFullBody({
               text={split.highlighted}
               extraction={contactExtraction}
             />
-          ) : quote ? (
-            <QuoteMarkedText text={split.highlighted} quote={quote} />
           ) : (
             split.highlighted
           )}
@@ -210,31 +285,6 @@ function HighlightedFullBody({
           />
         </div>
         {showRemainder ? (
-          display.kind === "markdown" ? (
-            <MarkdownPreview>{split.remainder}</MarkdownPreview>
-          ) : (
-            <div className="prose prose-sm max-w-none whitespace-pre-wrap">
-              {split.remainder}
-            </div>
-          )
-        ) : null}
-      </div>
-    );
-  }
-
-  if (renderQuoted) {
-    const markedText = quoteMatches(uniqueText, highlightQuote)
-      ? uniqueText
-      : split.highlighted;
-    const showQuotedRemainder = showRemainder && markedText !== display.content;
-    return (
-      <div className="w-full max-w-none">
-        <div
-          className={`prose prose-sm whitespace-pre-wrap ${highlightClass}`}
-        >
-          <QuoteMarkedText text={markedText} quote={highlightQuote} />
-        </div>
-        {showQuotedRemainder ? (
           display.kind === "markdown" ? (
             <MarkdownPreview>{split.remainder}</MarkdownPreview>
           ) : (
@@ -292,6 +342,8 @@ export function EmailThreadMessages({
   uniqueContentOnly = false,
   focusEmailId = null,
   highlightQuote = null,
+  todosByEmailId = null,
+  scrollRootRef = null,
 }: {
   messages: ThreadMessage[];
   hideAttachments?: boolean;
@@ -299,7 +351,10 @@ export function EmailThreadMessages({
   uniqueContentOnly?: boolean;
   focusEmailId?: string | null;
   highlightQuote?: string | null;
+  todosByEmailId?: Record<string, TodoExtractListItem[]> | null;
+  scrollRootRef?: RefObject<HTMLElement | null> | null;
 }) {
+  const scrolledForKeyRef = useRef<string | null>(null);
   const visibilitySettings = useAttachmentVisibilitySettings();
   const [visibleMessages, setVisibleMessages] = useState(messages);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
@@ -314,24 +369,51 @@ export function EmailThreadMessages({
   }, [messages, focusEmailId]);
 
   // Expand every message when contact marks are present or unique-only mode is on.
+  // Do not reset to the focus email — that would collapse a message the user just opened.
   useEffect(() => {
-    if (contactExtractions || uniqueContentOnly) {
-      setExpandedIds(new Set(visibleMessages.map((message) => message.id)));
-      return;
-    }
-    const initialId = focusEmailId ?? visibleMessages.at(0)?.id;
-    setExpandedIds(initialId ? new Set([initialId]) : new Set());
-  }, [contactExtractions, uniqueContentOnly, visibleMessages, focusEmailId]);
+    if (!contactExtractions && !uniqueContentOnly) return;
+    setExpandedIds(new Set(visibleMessages.map((message) => message.id)));
+  }, [contactExtractions, uniqueContentOnly, visibleMessages]);
 
-  useEffect(() => {
-    if (!focusEmailId) return;
-    const frame = requestAnimationFrame(() => {
-      document
-        .getElementById(`thread-msg-${focusEmailId}`)
-        ?.scrollIntoView({ block: "center", inline: "nearest" });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [focusEmailId, visibleMessages]);
+  useLayoutEffect(() => {
+    if (!focusEmailId && !highlightQuote?.trim()) return;
+
+    const container = scrollRootRef?.current;
+    if (!container) return;
+
+    const scrollKey = `${focusEmailId ?? ""}::${highlightQuote ?? ""}`;
+    if (scrolledForKeyRef.current === scrollKey) return;
+
+    let cancelled = false;
+    let attempts = 0;
+
+    function tryScroll() {
+      if (cancelled) return;
+      const mark = container.querySelector<HTMLElement>(
+        "[data-source-quote-mark]",
+      );
+      if (mark) {
+        scrollChildIntoContainer(container, mark);
+        scrolledForKeyRef.current = scrollKey;
+        return;
+      }
+      const article = focusEmailId
+        ? container.querySelector<HTMLElement>(`#thread-msg-${focusEmailId}`)
+        : null;
+      if (article && attempts === 0) {
+        scrollChildIntoContainer(container, article);
+      }
+      attempts += 1;
+      if (attempts < 16) {
+        requestAnimationFrame(tryScroll);
+      }
+    }
+
+    tryScroll();
+    return () => {
+      cancelled = true;
+    };
+  }, [focusEmailId, highlightQuote, scrollRootRef, visibleMessages]);
 
   function removeMessage(emailId: string) {
     setVisibleMessages((prev) => prev.filter((message) => message.id !== emailId));
@@ -380,10 +462,8 @@ export function EmailThreadMessages({
           !focusEmailId || isFocus ? highlightQuote : null;
         const quoteMissing =
           Boolean(messageQuote?.trim()) &&
-          !quoteMatches(uniqueText, messageQuote) &&
-          (uniqueText
-            ? true
-            : !quoteMatches(message.bodyDisplay.content, messageQuote));
+          !quoteMatches(message.bodyDisplay.content, messageQuote) &&
+          !quoteMatches(uniqueText, messageQuote);
 
         return (
           <article
@@ -465,13 +545,31 @@ export function EmailThreadMessages({
                 ) : null}
 
                 <div className="text-slate-800">
-                  <HighlightedFullBody
-                    display={message.bodyDisplay}
-                    uniqueText={uniqueText}
-                    contactExtraction={contactExtraction}
-                    uniqueOnly={uniqueContentOnly}
-                    highlightQuote={messageQuote}
-                  />
+                  {(() => {
+                    const emailTodos = todosByEmailId?.[message.id] ?? [];
+                    if (emailTodos.length > 0) {
+                      return (
+                        <TodoHarvestBody
+                          text={
+                            uniqueText ||
+                            message.bodyDisplay.content ||
+                            message.bodyText
+                          }
+                          todos={emailTodos}
+                          focusQuote={messageQuote}
+                        />
+                      );
+                    }
+                    return (
+                      <HighlightedFullBody
+                        display={message.bodyDisplay}
+                        uniqueText={uniqueText}
+                        contactExtraction={contactExtraction}
+                        uniqueOnly={uniqueContentOnly}
+                        highlightQuote={messageQuote}
+                      />
+                    );
+                  })()}
                 </div>
 
                 {!hideAttachments && !uniqueContentOnly && visibleAttachments.length > 0 ? (

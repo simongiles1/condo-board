@@ -2,20 +2,15 @@
 
 import { createPortal } from "react-dom";
 import {
-  useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
 } from "react";
 
-import {
-  claimHoverPopover,
-  releaseHoverPopover,
-} from "@/lib/ui/hover-popover-group";
+import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 
 const VIEWPORT_MARGIN = 8;
-const POPOVER_HIDE_DELAY_MS = 500;
 const POPOVER_WIDTH_PX = 320;
 
 export type SyncRunResultKind =
@@ -119,54 +114,18 @@ function classifyErrorLine(line: string): string {
 export function SyncRunResultBadge({ kind, label, errors }: Props) {
   const rootRef = useRef<HTMLSpanElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const popoverInstanceId = useRef(Symbol("sync-run-result-badge")).current;
-  const triggerHoveredRef = useRef(false);
-  const popoverHoveredRef = useRef(false);
-  const [open, setOpen] = useState(false);
+  const errorLines = parseErrorLines(errors);
+  const canShowPopover =
+    errorLines.length > 0 && kind !== "success" && kind !== "running";
+  const hover = useHoverPopover({ enabled: canShowPopover });
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
     zIndex: 50,
   });
 
-  const errorLines = parseErrorLines(errors);
-  const showPopover = errorLines.length > 0 && kind !== "success" && kind !== "running";
-
-  function cancelHide() {
-    if (hideTimeoutRef.current) {
-      clearTimeout(hideTimeoutRef.current);
-      hideTimeoutRef.current = null;
-    }
-  }
-
-  function forceClose() {
-    cancelHide();
-    triggerHoveredRef.current = false;
-    popoverHoveredRef.current = false;
-    setOpen(false);
-    releaseHoverPopover(popoverInstanceId);
-  }
-
-  function scheduleHide() {
-    cancelHide();
-    hideTimeoutRef.current = setTimeout(() => {
-      if (!triggerHoveredRef.current && !popoverHoveredRef.current) {
-        forceClose();
-      }
-    }, POPOVER_HIDE_DELAY_MS);
-  }
-
-  function showErrorPopover() {
-    if (!showPopover) return;
-    claimHoverPopover(popoverInstanceId, forceClose);
-    triggerHoveredRef.current = true;
-    cancelHide();
-    setOpen(true);
-  }
-
   useLayoutEffect(() => {
-    if (!open || !rootRef.current || !popoverRef.current) return;
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
 
     const triggerRect = rootRef.current.getBoundingClientRect();
     const popoverHeight = popoverRef.current.offsetHeight;
@@ -174,18 +133,7 @@ export function SyncRunResultBadge({ kind, label, errors }: Props) {
       ...computePopoverPosition(triggerRect, POPOVER_WIDTH_PX, popoverHeight),
       width: POPOVER_WIDTH_PX,
     });
-  }, [open, errorLines.length]);
-
-  useEffect(() => {
-    const instanceId = popoverInstanceId;
-    return () => {
-      if (hideTimeoutRef.current) {
-        clearTimeout(hideTimeoutRef.current);
-        hideTimeoutRef.current = null;
-      }
-      releaseHoverPopover(instanceId);
-    };
-  }, [popoverInstanceId]);
+  }, [hover.open, errorLines.length]);
 
   if (kind === "success" || kind === "clear_all") {
     return (
@@ -203,13 +151,10 @@ export function SyncRunResultBadge({ kind, label, errors }: Props) {
     <span
       ref={rootRef}
       className={`inline-flex cursor-help items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 transition-colors ${badgeClassName(kind)}`}
-      onMouseEnter={showErrorPopover}
-      onMouseLeave={() => {
-        triggerHoveredRef.current = false;
-        scheduleHide();
-      }}
-      onFocus={showErrorPopover}
-      onBlur={scheduleHide}
+      onMouseEnter={hover.onTriggerEnter}
+      onMouseLeave={hover.onTriggerLeave}
+      onFocus={hover.onTriggerFocus}
+      onBlur={hover.onTriggerBlur}
       tabIndex={0}
       role="button"
       aria-label={`${label}. Hover for error details.`}
@@ -218,27 +163,20 @@ export function SyncRunResultBadge({ kind, label, errors }: Props) {
     </span>
   );
 
-  if (!showPopover) {
+  if (!canShowPopover) {
     return badge;
   }
 
   return (
     <>
       {badge}
-      {open && typeof document !== "undefined"
+      {hover.open && typeof document !== "undefined"
         ? createPortal(
             <div
               ref={popoverRef}
               style={popoverStyle}
               className="rounded-lg border border-slate-200 bg-white p-3 text-left shadow-lg"
-              onMouseEnter={() => {
-                popoverHoveredRef.current = true;
-                cancelHide();
-              }}
-              onMouseLeave={() => {
-                popoverHoveredRef.current = false;
-                scheduleHide();
-              }}
+              {...hover.popoverProps}
             >
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 {popoverTitle(kind)}

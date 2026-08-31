@@ -10,6 +10,7 @@ import {
 } from "@/components/HarvestMarkTooltip";
 import {
   HARVEST_GROUP_MARK_CLASS,
+  HARVEST_UNRESOLVED_MARK_CLASS,
   harvestIconFor,
   primaryHarvestGroup,
 } from "@/lib/email-analysis/harvest-highlight-theme";
@@ -46,12 +47,17 @@ function HarvestMark({
   node: HarvestMarkNode;
 }) {
   const group = primaryHarvestGroup(node.layers.map((layer) => layer.group));
+  const unresolved = node.layers.some((layer) => layer.unresolved);
+  const groupClassName =
+    unresolved && (group === "organization" || group === "contact")
+      ? HARVEST_UNRESOLVED_MARK_CLASS[group]
+      : HARVEST_GROUP_MARK_CLASS[group];
 
   return (
     <HarvestHoverMark
       text={text}
       node={node}
-      groupClassName={HARVEST_GROUP_MARK_CLASS[group]}
+      groupClassName={groupClassName}
       focused={nodeIsFocused(node)}
     >
       <MarkIcons node={node} />
@@ -83,6 +89,52 @@ export function renderHarvestRange(
   return parts;
 }
 
+export function HarvestMarkedInline({
+  text,
+  nodes,
+  empty,
+  className,
+  contactCards = [],
+  orgCards = [],
+  projectCards = [],
+  events = [],
+  todos = [],
+  reloadMentions,
+}: {
+  text: string;
+  nodes: HarvestMarkNode[];
+  empty?: ReactNode;
+  className?: string;
+  contactCards?: HarvestMarkTooltipData["contactCards"];
+  orgCards?: HarvestMarkTooltipData["orgCards"];
+  projectCards?: HarvestMarkTooltipData["projectCards"];
+  events?: HarvestMarkTooltipData["events"];
+  todos?: HarvestMarkTooltipData["todos"];
+  reloadMentions?: () => void;
+}): ReactNode {
+  if (!text.trim()) {
+    return empty ? <span className={className}>{empty}</span> : null;
+  }
+
+  return (
+    <HarvestMarkDataProvider
+      value={{
+        text,
+        contactCards,
+        orgCards,
+        projectCards,
+        events,
+        todos,
+        reloadMentions,
+      }}
+    >
+      <span className={className}>
+        {renderHarvestRange(text, 0, text.length, nodes)}
+      </span>
+    </HarvestMarkDataProvider>
+  );
+}
+
 export function HarvestMarkedBody({
   text,
   nodes,
@@ -91,6 +143,7 @@ export function HarvestMarkedBody({
   projectCards = [],
   events = [],
   todos = [],
+  reloadMentions,
 }: {
   text: string;
   nodes: HarvestMarkNode[];
@@ -99,6 +152,7 @@ export function HarvestMarkedBody({
   projectCards?: HarvestMarkTooltipData["projectCards"];
   events?: HarvestMarkTooltipData["events"];
   todos?: HarvestMarkTooltipData["todos"];
+  reloadMentions?: () => void;
 }): ReactNode {
   if (!text.trim()) {
     return <p className="text-sm text-slate-500">(No plain-text body)</p>;
@@ -106,7 +160,15 @@ export function HarvestMarkedBody({
 
   return (
     <HarvestMarkDataProvider
-      value={{ text, contactCards, orgCards, projectCards, events, todos }}
+      value={{
+        text,
+        contactCards,
+        orgCards,
+        projectCards,
+        events,
+        todos,
+        reloadMentions,
+      }}
     >
       <div className="prose prose-sm max-w-none whitespace-pre-wrap">
         {renderHarvestRange(text, 0, text.length, nodes)}

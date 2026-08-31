@@ -542,7 +542,7 @@ async function runProjectPass(
         return { emailId: item.emailId, entityCards: [], skipped: true };
       }
 
-      const { entityCards, usage, costUsd, modelName } =
+      const { entityCards, mentionCards, usage, costUsd, modelName } =
         await extractProjectFingerprints(
           {
             subject: item.subject,
@@ -554,7 +554,14 @@ async function runProjectPass(
           priorExtraction,
           modelId,
         );
-      return { emailId: item.emailId, entityCards, usage, costUsd, modelName };
+      return {
+        emailId: item.emailId,
+        entityCards,
+        mentionCards,
+        usage,
+        costUsd,
+        modelName,
+      };
     });
 
     await saveProjectHighlightThirdPass(modelId, results);

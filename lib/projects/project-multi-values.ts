@@ -89,14 +89,28 @@ export function normalizeProjectNameKey(name: string | null | undefined): string
     .trim();
 }
 
-/** First 4-digit year (19xx/20xx), so "FY2024" and "2024-25" share an identity. */
-export function normalizeProjectYearHint(
-  yearHint: string | null | undefined,
-): string | null {
-  const trimmed = (yearHint ?? "").trim();
-  if (!trimmed) return null;
-  const match = trimmed.match(/(?:19|20)\d{2}/);
-  return match?.[0] ?? null;
+export {
+  normalizeProjectYearHint,
+} from "@/lib/projects/project-year-range";
+
+export function parseProjectAliasesJson(
+  raw: string | null | undefined,
+): string[] {
+  if (!raw?.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return mergeProjectAliasLists(
+      null,
+      parsed.filter((item): item is string => typeof item === "string"),
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function serializeProjectAliasesJson(aliases: string[]): string {
+  return JSON.stringify(mergeProjectAliasLists(null, aliases));
 }
 
 export function mergeProjectAliasLists(

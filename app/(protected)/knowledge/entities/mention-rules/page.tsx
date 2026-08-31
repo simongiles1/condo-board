@@ -29,6 +29,20 @@ export default function MentionRulesPage() {
             >
               Back to Contacts
             </Link>
+            {" · "}
+            <Link
+              href="/knowledge/entities?tab=organizations"
+              className="font-medium text-teal-800 hover:underline"
+            >
+              Back to Organizations
+            </Link>
+            {" · "}
+            <Link
+              href="/knowledge/entities?tab=projects"
+              className="font-medium text-teal-800 hover:underline"
+            >
+              Back to Projects
+            </Link>
           </p>
         </div>
 
@@ -206,6 +220,74 @@ export default function MentionRulesPage() {
               Guess among several companies on the same email. Company is
               copied onto a mention only when the email has exactly one
               company name.
+            </li>
+          </ul>
+        </section>
+
+        <section id="projects" className="space-y-3">
+          <p className="text-xs uppercase tracking-wide text-slate-500">
+            Projects
+          </p>
+          <h2 className="text-lg font-semibold text-slate-900">
+            How project mentions attach
+          </h2>
+          <p className="text-sm text-slate-700">
+            A project mention is “we saw this work name in an email.” It sits
+            in Mentions until the matcher attaches it to a Projects card.
+            Process pending project merges re-syncs the registry (including
+            aliases) and re-runs the matcher. Re-harvest thread runs contact
+            and project passes 1–4 on that mail so you can test historical
+            emails in the browser.
+          </p>
+          <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
+            <li>
+              <strong>Unresolved</strong> — not attached. Ambiguous names,
+              year mismatches, or cards that failed the minting gate stay here.
+            </li>
+            <li>
+              <strong>Provisional</strong> — unique work-name match
+              (<code>unique_work_name_provisional</code>). Taken back if a
+              second project later collides.
+            </li>
+            <li>
+              <strong>Confirmed</strong> — unique identity key or unique exact
+              name/alias with overlapping years (
+              <code>unique_identity_key</code>,{" "}
+              <code>unique_name_or_alias</code>).
+            </li>
+          </ul>
+        </section>
+
+        <section id="organizations" className="space-y-3">
+          <p className="text-xs uppercase tracking-wide text-slate-500">
+            Organizations
+          </p>
+          <h2 className="text-lg font-semibold text-slate-900">
+            How organization mentions attach
+          </h2>
+          <p className="text-sm text-slate-700">
+            An organization mention is “this email used this name.” Confirmed
+            and provisional rows are the source of truth for Wikipedia emails,
+            harvest marks, registry totals, and Also-known-as counts.
+            Fingerprint harvest-name bucketing is only a fallback when a card
+            has no mention overlay yet.
+          </p>
+          <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
+            <li>
+              Auto-confirm uses this email only: unique mailbox, website,
+              distinctive legal name, unique header domain, or unique alias
+              that is not a prefix of another org (TCG can confirm; Trace
+              cannot while Trace Fire / Maintenance exist).
+            </li>
+            <li>
+              Prefix collisions stay unresolved with those orgs as candidates.
+              That is why an alias row can show a dash even when the org
+              total is large — it is not a character-length gate.
+            </li>
+            <li>
+              Profile snippets paint the canonical name, every registry
+              alias, and stored mention spans. They do not Command-F the
+              mailbox with distinctive-alias LIKE.
             </li>
           </ul>
         </section>

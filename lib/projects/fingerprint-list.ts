@@ -22,7 +22,6 @@ import { loadOrganizationIdentityNameKeys } from "@/lib/projects/org-identity-ke
 import {
   applyProjectFieldDenialsToCards,
   loadProjectFieldDenials,
-  projectIdentityKey,
   stripDeniedFieldsFromProjectCard,
   type ProjectFieldDenial,
 } from "@/lib/projects/field-denials";
@@ -34,14 +33,23 @@ import {
   foldProjectNames,
   mergeProjectMultiValues,
 } from "@/lib/projects/project-multi-values";
+import { preferProjectPhase } from "@/lib/projects/project-phase";
+import { preferProjectYearHint } from "@/lib/projects/project-year-range";
 import {
   sortProjectFingerprintSummaries,
   type ProjectFingerprintListSort,
 } from "@/lib/projects/project-list-sort";
 import {
+  buildAiReviewDuplicateGroups,
   buildProjectDuplicateGroups,
   type ProjectDuplicateGroup,
 } from "@/lib/projects/duplicate-groups";
+import { loadBoardReportMentionIndex } from "@/lib/projects/board-reports";
+import { createProjectIdentityKeyFn } from "@/lib/projects/identity-match";
+import {
+  loadLatestProposedIdentityReviewDecisions,
+  loadProjectIdentityPolicies,
+} from "@/lib/projects/identity-review";
 
 export type { ProjectFingerprintListSort } from "@/lib/projects/project-list-sort";
 export { parseProjectFingerprintListSort } from "@/lib/projects/project-list-sort";
@@ -58,6 +66,10 @@ export type ProjectFingerprintSummary = ProjectEntityCard & {
   /** Distinct source email ids across contributing merges. */
   sourceEmailCount: number;
   modelIds: string[];
+  /** Distinct management reports / packages that named this project. */
+  boardReportCount: number;
+  /** ISO date (YYYY-MM-DD) of the most recent matching report, when known. */
+  boardLastReportAt: string | null;
 };
 
 type ProjectSummaryBuild = ProjectFingerprintSummary & {
@@ -68,15 +80,8 @@ export type ProjectFingerprintListStats = {
   projectCount: number;
   mergeCount: number;
   emailCount: number;
+  boardMentionedCount: number;
 };
-
-function preferString(a: string | null, b: string | null): string | null {
-  const left = a?.trim() || null;
-  const right = b?.trim() || null;
-  if (!left) return right;
-  if (!right) return left;
-  return right.length > left.length ? right : left;
-}
 
 /**
  * Fold two project summaries. Prefer `a`'s name as canonical (caller seeds with
@@ -96,8 +101,8 @@ function foldProjectSummaries(
   });
   const card = {
     name: foldedNames.name,
-    year_hint: preferString(a.year_hint, b.year_hint),
-    phase: preferString(a.phase, b.phase),
+    year_hint: preferProjectYearHint(a.year_hint, b.year_hint),
+    phase: preferProjectPhase(a.phase, b.phase),
     contractor: mergeProjectMultiValues(a.contractor, b.contractor),
     location: mergeProjectMultiValues(a.location, b.location),
     equipment_mentions: mergeProjectMultiValues(
@@ -121,6 +126,8 @@ function foldProjectSummaries(
     emailIds,
     sourceEmailCount: emailIds.size,
     modelIds: [...new Set([...a.modelIds, ...b.modelIds])],
+    boardReportCount: 0,
+    boardLastReportAt: null,
   };
 }
 
@@ -140,6 +147,8 @@ function toPublicSummary(project: ProjectSummaryBuild): ProjectFingerprintSummar
     sourceMergeCount: project.sourceMergeCount,
     sourceEmailCount: project.emailIds.size,
     modelIds: project.modelIds,
+    boardReportCount: project.boardReportCount,
+    boardLastReportAt: project.boardLastReportAt,
   };
 }
 
@@ -181,6 +190,7 @@ function applyFieldDenialsToSummaries(
   denials: ProjectFieldDenial[],
   mergeMap: Map<string, string>,
   orgNameKeys: ReadonlySet<string>,
+  identityKeyFn: (card: ProjectEntityCard) => string,
 ): ProjectSummaryBuild[] {
   if (denials.length === 0) {
     return projects.filter((project) =>
@@ -196,7 +206,7 @@ function applyFieldDenialsToSummaries(
       ...project,
       ...stripped,
       aliases: [...(stripped.aliases ?? [])],
-      id: projectIdentityKey(stripped),
+      id: identityKeyFn(stripped),
       displayName: projectCardDisplayName(stripped),
       emailIds: new Set(project.emailIds),
     });
@@ -255,14 +265,32 @@ const globalForProjectFingerprints = globalThis as unknown as {
     payload: ProjectFingerprintCachePayload;
   };
   projectFingerprintInflight?: Promise<ProjectFingerprintCachePayload>;
+  projectFingerprintInflightGeneration?: number;
   projectFingerprintGeneration?: number;
 };
 
-/** Drop the in-memory project list after merges or severs. */
+/** Drop the in-memory list. Next `load` waits for a full rebuild. */
 export function invalidateProjectFingerprintSummariesCache() {
   globalForProjectFingerprints.projectFingerprintGeneration =
     (globalForProjectFingerprints.projectFingerprintGeneration ?? 0) + 1;
   globalForProjectFingerprints.projectFingerprintCache = undefined;
+  if (!globalForProjectFingerprints.projectFingerprintInflight) {
+    void startProjectFingerprintRebuild();
+  }
+}
+
+/**
+ * Keep serving the last list and rebuild in the background.
+ * Use after harvest writes that should not stall Entities → Projects.
+ */
+export function markProjectFingerprintSummariesStale() {
+  globalForProjectFingerprints.projectFingerprintGeneration =
+    (globalForProjectFingerprints.projectFingerprintGeneration ?? 0) + 1;
+  const cached = globalForProjectFingerprints.projectFingerprintCache;
+  if (cached) cached.expiresAt = 0;
+  if (!globalForProjectFingerprints.projectFingerprintInflight) {
+    void startProjectFingerprintRebuild();
+  }
 }
 
 function startProjectFingerprintRebuild(): Promise<ProjectFingerprintCachePayload> {
@@ -278,10 +306,9 @@ function startProjectFingerprintRebuild(): Promise<ProjectFingerprintCachePayloa
         merges: payload.mergeCount,
         emails: payload.emailCount,
       });
-      if (
-        (globalForProjectFingerprints.projectFingerprintGeneration ?? 0) ===
-        generation
-      ) {
+      const currentGeneration =
+        globalForProjectFingerprints.projectFingerprintGeneration ?? 0;
+      if (currentGeneration === generation) {
         globalForProjectFingerprints.projectFingerprintCache = {
           payload,
           expiresAt: Date.now() + PROJECT_FINGERPRINT_CACHE_TTL_MS,
@@ -289,17 +316,29 @@ function startProjectFingerprintRebuild(): Promise<ProjectFingerprintCachePayloa
       }
       if (globalForProjectFingerprints.projectFingerprintInflight === pending) {
         globalForProjectFingerprints.projectFingerprintInflight = undefined;
+        globalForProjectFingerprints.projectFingerprintInflightGeneration =
+          undefined;
+      }
+      if (
+        (globalForProjectFingerprints.projectFingerprintGeneration ?? 0) !==
+          generation &&
+        !globalForProjectFingerprints.projectFingerprintInflight
+      ) {
+        void startProjectFingerprintRebuild();
       }
       return payload;
     })
     .catch((error: unknown) => {
       if (globalForProjectFingerprints.projectFingerprintInflight === pending) {
         globalForProjectFingerprints.projectFingerprintInflight = undefined;
+        globalForProjectFingerprints.projectFingerprintInflightGeneration =
+          undefined;
       }
       throw error;
     });
 
   globalForProjectFingerprints.projectFingerprintInflight = pending;
+  globalForProjectFingerprints.projectFingerprintInflightGeneration = generation;
   return pending;
 }
 
@@ -325,10 +364,89 @@ async function getProjectFingerprintPayload(): Promise<ProjectFingerprintCachePa
     }
     return fresh.payload;
   }
-  if (globalForProjectFingerprints.projectFingerprintInflight) {
-    return globalForProjectFingerprints.projectFingerprintInflight;
+  const inflight = globalForProjectFingerprints.projectFingerprintInflight;
+  const inflightGeneration =
+    globalForProjectFingerprints.projectFingerprintInflightGeneration;
+  const generation =
+    globalForProjectFingerprints.projectFingerprintGeneration ?? 0;
+  if (inflight && inflightGeneration === generation) {
+    return inflight;
+  }
+  if (inflight) {
+    return inflight.then(() => getProjectFingerprintPayload());
   }
   return startProjectFingerprintRebuild();
+}
+
+function summariesFromPayload(
+  payload: ProjectFingerprintCachePayload,
+  params?: {
+    limit?: number;
+    offset?: number;
+    sort?: ProjectFingerprintListSort;
+  },
+): {
+  projects: ProjectFingerprintSummary[];
+  stats: ProjectFingerprintListStats;
+} {
+  const sort = params?.sort ?? "mentions-desc";
+  const offset = Math.max(0, params?.offset ?? 0);
+  const sorted = sortProjectFingerprintSummaries(payload.projects, sort);
+  const projects =
+    params?.limit == null
+      ? sorted.slice(offset)
+      : sorted.slice(offset, offset + params.limit);
+  return {
+    projects,
+    stats: {
+      projectCount: payload.projects.length,
+      mergeCount: payload.mergeCount,
+      emailCount: payload.emailCount,
+      boardMentionedCount: payload.projects.filter(
+        (project) => project.boardReportCount > 0,
+      ).length,
+    },
+  };
+}
+
+/**
+ * Cached list only. Never waits on a rebuild — Entities SSR uses this so
+ * navigating onto Projects cannot sit on a multi-minute fingerprint compute.
+ */
+export function peekProjectFingerprintSummaries(params?: {
+  limit?: number;
+  offset?: number;
+  sort?: ProjectFingerprintListSort;
+}): {
+  projects: ProjectFingerprintSummary[];
+  stats: ProjectFingerprintListStats;
+} | null {
+  const cached = globalForProjectFingerprints.projectFingerprintCache;
+  if (cached && !payloadHasSourceEmailIndex(cached.payload)) {
+    globalForProjectFingerprints.projectFingerprintCache = undefined;
+  }
+  const fresh = globalForProjectFingerprints.projectFingerprintCache;
+  if (!fresh) {
+    if (!globalForProjectFingerprints.projectFingerprintInflight) {
+      void startProjectFingerprintRebuild();
+    }
+    return null;
+  }
+  if (
+    fresh.expiresAt <= Date.now() &&
+    !globalForProjectFingerprints.projectFingerprintInflight
+  ) {
+    void startProjectFingerprintRebuild();
+  }
+  return summariesFromPayload(fresh.payload, params);
+}
+
+/** Snapshot of source-email ids per project from the fingerprint cache. */
+export async function snapshotProjectSourceEmailIds(): Promise<
+  Record<string, string[]>
+> {
+  const payload = await getProjectFingerprintPayload();
+  return payload.emailIdsByProjectId ?? {};
 }
 
 /** Email ids that make up a project's source-email count. */
@@ -337,8 +455,8 @@ export async function listProjectSourceEmailIds(
 ): Promise<string[]> {
   const id = projectId.trim();
   if (!id) return [];
-  const payload = await getProjectFingerprintPayload();
-  return payload.emailIdsByProjectId?.[id] ?? [];
+  const byId = await snapshotProjectSourceEmailIds();
+  return byId[id] ?? [];
 }
 
 /** Merge-thread + pass-3 emails to scan for work-name evidence. */
@@ -366,48 +484,46 @@ export async function loadProjectFingerprintSummaries(params?: {
   projects: ProjectFingerprintSummary[];
   stats: ProjectFingerprintListStats;
 }> {
-  const sort = params?.sort ?? "mentions-desc";
-  const offset = Math.max(0, params?.offset ?? 0);
   const payload = await getProjectFingerprintPayload();
-  const sorted = sortProjectFingerprintSummaries(payload.projects, sort);
-  const projects =
-    params?.limit == null ? sorted.slice(offset) : sorted.slice(offset, offset + params.limit);
-  return {
-    projects,
-    stats: {
-      projectCount: payload.projects.length,
-      mergeCount: payload.mergeCount,
-      emailCount: payload.emailCount,
-    },
-  };
+  return summariesFromPayload(payload, params);
+}
+
+function yieldEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerprintCachePayload> {
+  const started = Date.now();
   const db = getDb();
 
-  const [mergeRows, thirdPassRows, mergeMap, denials, orgNameKeys] =
+  const [mergeRows, mergeMap, denials, orgNameKeys, policies, mentionIndex] =
     await Promise.all([
       db
-        .select()
+        .select({
+          modelId: projectFingerprintMerges.modelId,
+          emailIdsJson: projectFingerprintMerges.emailIdsJson,
+          entityCardsJson: projectFingerprintMerges.entityCardsJson,
+        })
         .from(projectFingerprintMerges)
         .where(isNull(projectFingerprintMerges.error))
         .orderBy(desc(projectFingerprintMerges.updatedAt)),
-      db
-        .select({
-          emailId: projectHighlightExtractions.emailId,
-          modelId: projectHighlightExtractions.modelId,
-          thirdPassExtractionJson:
-            projectHighlightExtractions.thirdPassExtractionJson,
-        })
-        .from(projectHighlightExtractions)
-        .orderBy(desc(projectHighlightExtractions.thirdPassUpdatedAt)),
       loadProjectMergeMap(),
       loadProjectFieldDenials(),
       loadOrganizationIdentityNameKeys().catch(() => new Set<string>()),
+      loadProjectIdentityPolicies().catch(() => []),
+      loadBoardReportMentionIndex().catch(
+        () => new Map<string, { count: number; lastAt: string | null }>(),
+      ),
     ]);
+  const queryMs = Date.now() - started;
+
+  const identityKeyFn = createProjectIdentityKeyFn(policies);
 
   const contributions: MergeContribution[] = [];
-  for (const row of mergeRows) {
+  for (let i = 0; i < mergeRows.length; i++) {
+    const row = mergeRows[i]!;
     const parsed = parseProjectFingerprintResult(
       (() => {
         try {
@@ -424,11 +540,24 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
       emailIds: parseEmailIdsJson(row.emailIdsJson),
       cards,
     });
+    if (i > 0 && i % 40 === 0) await yieldEventLoop();
   }
 
+  // Pass-3 JSON is only the fallback when no thread merges exist yet.
+  // Re-parsing every email's cards for source-email counts was the 4–6 min
+  // Entities → Projects stall (merges already carry thread email ids).
   let usedPass3Fallback = false;
   if (contributions.length === 0) {
     usedPass3Fallback = true;
+    const thirdPassRows = await db
+      .select({
+        emailId: projectHighlightExtractions.emailId,
+        modelId: projectHighlightExtractions.modelId,
+        thirdPassExtractionJson:
+          projectHighlightExtractions.thirdPassExtractionJson,
+      })
+      .from(projectHighlightExtractions)
+      .orderBy(desc(projectHighlightExtractions.thirdPassUpdatedAt));
     for (const row of thirdPassRows) {
       if (!row.thirdPassExtractionJson) continue;
       const parsed = parseProjectFingerprintResult(
@@ -449,13 +578,21 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
       });
     }
   }
+  const parseMs = Date.now() - started - queryMs;
+  await yieldEventLoop();
 
   const flatCards = applyProjectFieldDenialsToCards(
     contributions.flatMap((c) => c.cards),
     denials,
     mergeMap,
   );
-  const uniqueCards = coalesceProjectEntityCards(flatCards, orgNameKeys);
+  const uniqueCards = coalesceProjectEntityCards(
+    flatCards,
+    orgNameKeys,
+    identityKeyFn,
+  );
+  const coalesceMs = Date.now() - started - queryMs - parseMs;
+  await yieldEventLoop();
 
   type ContribStats = {
     emailIds: Set<string>;
@@ -479,11 +616,12 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
     return stats;
   }
 
-  for (const contrib of contributions) {
+  for (let i = 0; i < contributions.length; i++) {
+    const contrib = contributions[i]!;
     const keysInContrib = new Set<string>();
     for (const card of contrib.cards) {
       if (!cardPassesNameMintingGate(card, orgNameKeys)) continue;
-      keysInContrib.add(projectIdentityKey(card));
+      keysInContrib.add(identityKeyFn(card));
       if (denials.length > 0) {
         const stripped = stripDeniedFieldsFromProjectCard(
           card,
@@ -491,7 +629,7 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
           mergeMap,
         );
         if (cardPassesNameMintingGate(stripped, orgNameKeys)) {
-          keysInContrib.add(projectIdentityKey(stripped));
+          keysInContrib.add(identityKeyFn(stripped));
         }
       }
     }
@@ -500,38 +638,16 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
       if (!stats) continue;
       stats.mergeCount += 1;
       stats.modelIds.add(contrib.modelId);
-      for (const id of contrib.emailIds) stats.candidateEmailIds.add(id);
+      for (const id of contrib.emailIds) {
+        stats.emailIds.add(id);
+        stats.candidateEmailIds.add(id);
+      }
     }
-  }
-
-  for (const row of thirdPassRows) {
-    if (!row.thirdPassExtractionJson) continue;
-    const parsed = parseProjectFingerprintResult(
-      (() => {
-        try {
-          return JSON.parse(row.thirdPassExtractionJson) as unknown;
-        } catch {
-          return null;
-        }
-      })(),
-    );
-    const cards = applyProjectFieldDenialsToCards(
-      filterMintedProjectCards(parsed.entity_cards, orgNameKeys),
-      denials,
-      mergeMap,
-    );
-    for (const card of cards) {
-      if (!cardPassesNameMintingGate(card, orgNameKeys)) continue;
-      const stats = ensureStats(projectIdentityKey(card));
-      if (!stats) continue;
-      stats.emailIds.add(row.emailId);
-      stats.candidateEmailIds.add(row.emailId);
-      stats.modelIds.add(row.modelId);
-    }
+    if (i > 0 && i % 40 === 0) await yieldEventLoop();
   }
 
   const projects: ProjectSummaryBuild[] = uniqueCards.map((card) => {
-    const key = projectIdentityKey(card);
+    const key = identityKeyFn(card);
     const stats = statsByIdentityKey.get(key);
     const emailIds = new Set(stats?.emailIds ?? []);
     return {
@@ -544,6 +660,8 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
       emailIds,
       sourceEmailCount: emailIds.size,
       modelIds: stats ? [...stats.modelIds] : [],
+      boardReportCount: 0,
+      boardLastReportAt: null,
     };
   });
 
@@ -552,6 +670,7 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
     denials,
     mergeMap,
     orgNameKeys,
+    identityKeyFn,
   );
 
   const allEmailIds = new Set<string>();
@@ -567,7 +686,22 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
     candidateEmailIdsByProjectId[project.id] = [
       ...new Set([...project.emailIds, ...(stats?.candidateEmailIds ?? [])]),
     ];
+    const mention = mentionIndex.get(project.id);
+    project.boardReportCount = mention?.count ?? 0;
+    project.boardLastReportAt = mention?.lastAt ?? null;
   }
+
+  console.info("[entities:project-fingerprints:compute]", {
+    ms: Date.now() - started,
+    queryMs,
+    parseMs,
+    coalesceMs,
+    policies: policies.length,
+    cards: flatCards.length,
+    merges: mergeRows.length,
+    projects: mergedProjects.length,
+    usedPass3Fallback,
+  });
 
   return {
     projects: mergedProjects.map(toPublicSummary),
@@ -582,8 +716,17 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
 export async function loadProjectDuplicateGroups(): Promise<
   ProjectDuplicateGroup[]
 > {
-  const { projects } = await loadProjectFingerprintSummaries({
-    sort: "mentions-desc",
-  });
-  return buildProjectDuplicateGroups(projects);
+  const [{ projects }, proposals] = await Promise.all([
+    loadProjectFingerprintSummaries({
+      sort: "mentions-desc",
+    }),
+    loadLatestProposedIdentityReviewDecisions().catch(() => []),
+  ]);
+  const aiGroups = buildAiReviewDuplicateGroups(projects, proposals);
+  const usedIds = new Set(
+    aiGroups.flatMap((group) => group.members.map((member) => member.id)),
+  );
+  const remaining = projects.filter((project) => !usedIds.has(project.id));
+  const fuzzy = buildProjectDuplicateGroups(remaining);
+  return [...aiGroups, ...fuzzy];
 }

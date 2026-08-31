@@ -7,6 +7,8 @@ import { ContactDuplicatesPanel } from "@/components/ContactDuplicatesPanel";
 import { ContactMentionsPanel } from "@/components/ContactMentionsPanel";
 import { ContactEvidenceSidePanel } from "@/components/ContactEvidenceSidePanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useEntityProfile } from "@/components/EntityProfileProvider";
+import { RolePhraseBadge } from "@/components/EntityMentionBadges";
 import { PersonAffiliationsPanel } from "@/components/PersonAffiliationsPanel";
 import {
   MergeEntityDialog,
@@ -306,6 +308,7 @@ export function ContactsRegistryClient({
   const [resolveResult, setResolveResult] = useState<ResolveResult | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const { openProfile } = useEntityProfile();
   const duplicatesLoaded = useRef(false);
   const [evidenceTarget, setEvidenceTarget] = useState<{
     kind: ContactEvidenceKind;
@@ -1325,27 +1328,21 @@ export function ContactsRegistryClient({
               <p className="text-sm text-slate-500">Select a person.</p>
             ) : (
               <>
-                {selectedPerson.sourceEmailCount > 0 ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setEvidenceTarget({
-                        kind: "person",
-                        attributeId: selectedPerson.id,
-                        label: selectedPerson.displayName,
-                      })
-                    }
-                    className="text-left"
-                  >
-                    <h2 className="text-lg font-semibold text-teal-800 underline-offset-2 hover:underline">
-                      {selectedPerson.displayName}
-                    </h2>
-                  </button>
-                ) : (
-                  <h2 className="text-lg font-semibold text-slate-900">
+                <button
+                  type="button"
+                  onClick={() =>
+                    openProfile({
+                      kind: "person",
+                      id: selectedPerson.id,
+                      displayName: selectedPerson.displayName,
+                    })
+                  }
+                  className="text-left"
+                >
+                  <h2 className="text-lg font-semibold text-teal-800 underline-offset-2 hover:underline">
                     {selectedPerson.displayName}
                   </h2>
-                )}
+                </button>
                 <p className="mt-1 text-xs text-slate-500">
                   {selectedPerson.sourceEmailCount > 0
                     ? `${selectedPerson.sourceEmailCount} mention${selectedPerson.sourceEmailCount === 1 ? "" : "s"}`
@@ -1503,6 +1500,9 @@ export function ContactsRegistryClient({
                         >
                           <div className="break-words text-teal-800 underline-offset-2 hover:underline">
                             {row.title}
+                          </div>
+                          <div className="mt-1">
+                            <RolePhraseBadge jobTitle={row.title} />
                           </div>
                           <div className="text-xs text-slate-500">
                             {formatRange(row.validFrom, row.validTo)}

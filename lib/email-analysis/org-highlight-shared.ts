@@ -49,6 +49,10 @@ export const ORG_HIGHLIGHT_CLASS: Record<OrgHighlightType, string> = {
     "rounded-sm bg-teal-200/90 text-teal-950 box-decoration-clone px-0.5",
 };
 
+/** Same hue as organization_name, lower opacity — sibling aliases when one is focused. */
+export const ORG_NAME_HIGHLIGHT_FADED_CLASS =
+  "rounded-sm bg-violet-200/40 text-violet-950/70 box-decoration-clone px-0.5";
+
 export const ORG_HIGHLIGHT_LABELS: Record<OrgHighlightType, string> = {
   organization_name: "Organization",
   phone: "Phone",

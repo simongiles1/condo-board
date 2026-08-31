@@ -20,6 +20,7 @@ const sample = [
 describe("parseProjectFingerprintListSort", () => {
   it("accepts known values and defaults to mentions-desc", () => {
     assert.equal(parseProjectFingerprintListSort("completeness-asc"), "completeness-asc");
+    assert.equal(parseProjectFingerprintListSort("board-desc"), "board-desc");
     assert.equal(parseProjectFingerprintListSort("bad"), "mentions-desc");
     assert.equal(parseProjectFingerprintListSort(null), "mentions-desc");
   });
@@ -67,6 +68,18 @@ describe("sortProjectFingerprintSummaries", () => {
     assert.deepEqual(
       sorted.map((project) => project.displayName),
       ["Sparse job", "Complete job"],
+    );
+  });
+
+  it("sorts board-report mentions high to low", () => {
+    const rows = [
+      { displayName: "Quiet job", sourceEmailCount: 40, boardReportCount: 0 },
+      { displayName: "Board job", sourceEmailCount: 3, boardReportCount: 9 },
+    ];
+    const sorted = sortProjectFingerprintSummaries(rows, "board-desc");
+    assert.deepEqual(
+      sorted.map((project) => project.displayName),
+      ["Board job", "Quiet job"],
     );
   });
 });

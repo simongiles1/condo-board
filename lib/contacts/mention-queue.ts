@@ -118,6 +118,7 @@ export async function loadMentionQueueGroups(params?: {
       phone: contactMentions.phone,
       rawCompany: contactMentions.rawCompany,
       jobTitle: contactMentions.jobTitle,
+      rolePhrase: contactMentions.rolePhrase,
       mentionKind: contactMentions.mentionKind,
       firstNameKey: contactMentions.firstNameKey,
       firstOrgKey: contactMentions.firstOrgKey,
@@ -156,6 +157,7 @@ export async function loadMentionQueueGroups(params?: {
       phone: row.phone,
       rawCompany: row.rawCompany,
       jobTitle: row.jobTitle,
+      rolePhrase: row.rolePhrase,
       mentionKind: mentionKindFromDb(row.mentionKind),
       firstNameKey: row.firstNameKey,
       firstOrgKey: row.firstOrgKey,
@@ -318,6 +320,33 @@ async function confirmUnresolvedMentionIds(params: {
       })
       .where(inArray(contactMentions.id, params.ids.slice(i, i + 400)));
   }
+}
+
+export async function confirmContactMention(params: {
+  mentionId: string;
+  personId: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const db = getDb();
+  const [mention] = await db
+    .select({ id: contactMentions.id })
+    .from(contactMentions)
+    .where(eq(contactMentions.id, params.mentionId))
+    .limit(1);
+  if (!mention) return { ok: false, error: "Mention not found." };
+
+  const [person] = await db
+    .select({ id: contactPersons.id })
+    .from(contactPersons)
+    .where(eq(contactPersons.id, params.personId))
+    .limit(1);
+  if (!person) return { ok: false, error: "Person not found." };
+
+  await confirmUnresolvedMentionIds({
+    ids: [params.mentionId],
+    personId: params.personId,
+    reason: "manual_attach",
+  });
+  return { ok: true };
 }
 
 /**

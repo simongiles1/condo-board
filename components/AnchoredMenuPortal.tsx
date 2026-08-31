@@ -20,6 +20,7 @@ function computeAnchoredMenuStyle(
   menuWidth: number,
   menuHeight: number,
   align: Align,
+  zIndex = 50,
 ): CSSProperties {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
@@ -48,7 +49,7 @@ function computeAnchoredMenuStyle(
     top,
     left,
     width: menuWidth,
-    zIndex: 50,
+    zIndex,
   };
 }
 
@@ -88,6 +89,7 @@ export function AnchoredMenuPortal({
   align = "end",
   width,
   matchTriggerWidth = false,
+  zIndex = 50,
   className,
   children,
 }: {
@@ -97,6 +99,7 @@ export function AnchoredMenuPortal({
   align?: Align;
   width?: number;
   matchTriggerWidth?: boolean;
+  zIndex?: number;
   className?: string;
   children: ReactNode;
 }) {
@@ -105,7 +108,7 @@ export function AnchoredMenuPortal({
     top: 0,
     left: 0,
     visibility: "hidden",
-    zIndex: 50,
+    zIndex,
   });
 
   useLayoutEffect(() => {
@@ -123,7 +126,13 @@ export function AnchoredMenuPortal({
       const menuHeight = menu?.offsetHeight ?? 0;
 
       setStyle(
-        computeAnchoredMenuStyle(triggerRect, menuWidth, menuHeight, align),
+        computeAnchoredMenuStyle(
+          triggerRect,
+          menuWidth,
+          menuHeight,
+          align,
+          zIndex,
+        ),
       );
     }
 
@@ -144,7 +153,7 @@ export function AnchoredMenuPortal({
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [open, triggerRef, menuRef, align, width, matchTriggerWidth, children]);
+  }, [open, triggerRef, menuRef, align, width, matchTriggerWidth, zIndex, children]);
 
   if (!open || typeof document === "undefined") return null;
 

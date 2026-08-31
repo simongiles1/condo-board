@@ -12,7 +12,7 @@ import { desc, eq } from "drizzle-orm";
 import { coalesceWeakEmailDuplicatePersons } from "@/lib/contacts/registry-apply";
 import { cleanupSharedMailboxRegistry } from "@/lib/contacts/registry-cleanup";
 import { ingestFingerprintMergeIntoRegistry } from "@/lib/contacts/registry-ingest";
-import { resolveContactMentions } from "@/lib/contacts/mention-resolve";
+import { resolveContactMentionsForStrongCards } from "@/lib/contacts/mention-resolve";
 import { getDb } from "@/lib/db";
 import {
   contactFingerprintMerges,
@@ -58,8 +58,9 @@ export async function enqueueRegistryIngestAfterPass4(params: {
       });
       if (result.status !== "failed" && params.emailIds.length > 0) {
         try {
-          const resolved = await resolveContactMentions({
+          const resolved = await resolveContactMentionsForStrongCards({
             emailIds: params.emailIds,
+            cards: params.entityCards ?? [],
           });
           console.info("[contact-mentions] resolve after ingest", {
             mergeId: params.mergeId,

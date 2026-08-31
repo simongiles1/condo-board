@@ -49,6 +49,8 @@ export type OrgEvidenceEmailSummary = {
   receivedAt: string;
   preview: string;
   matchReasons: OrgEvidenceMatchReason[];
+  /** Surface from stored mention offsets; empty when the span was not unique. */
+  highlightNeedles?: string[];
 };
 
 export type OrgEvidencePayload = {
@@ -122,6 +124,52 @@ export function findCaseInsensitiveRanges(
     from = start + Math.max(1, needle.length);
   }
   return out;
+}
+
+export type HighlightedTextPart = {
+  text: string;
+  hit: boolean;
+  /** Needle that produced this hit (original casing from the needles list). */
+  needle?: string;
+};
+
+/** Longest-first, non-overlapping case-insensitive highlights. */
+export function highlightTextParts(
+  text: string,
+  needles: string[],
+): HighlightedTextPart[] {
+  const ranges: Array<{ start: number; end: number; needle: string }> = [];
+  const sorted = [...needles]
+    .map((needle) => needle.trim())
+    .filter((needle) => needle.length > 0)
+    .sort((a, b) => b.length - a.length);
+  for (const needle of sorted) {
+    for (const range of findCaseInsensitiveRanges(text, needle)) {
+      if (ranges.some((existing) => range.start < existing.end && range.end > existing.start)) {
+        continue;
+      }
+      ranges.push({ ...range, needle });
+    }
+  }
+  ranges.sort((a, b) => a.start - b.start);
+  if (ranges.length === 0) return [{ text, hit: false }];
+  const parts: HighlightedTextPart[] = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    if (range.start > cursor) {
+      parts.push({ text: text.slice(cursor, range.start), hit: false });
+    }
+    parts.push({
+      text: text.slice(range.start, range.end),
+      hit: true,
+      needle: range.needle,
+    });
+    cursor = range.end;
+  }
+  if (cursor < text.length) {
+    parts.push({ text: text.slice(cursor), hit: false });
+  }
+  return parts;
 }
 
 export function orgCardMatchesEvidenceValue(

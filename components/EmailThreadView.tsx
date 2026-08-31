@@ -82,22 +82,29 @@ export function EmailThreadView({
 
   return (
     <div className="space-y-4">
-      {enableContactExtract && messages.length > 0 ? (
-        <ExtractContactsButton
-          key={extractKey}
-          items={extractItems}
-          onActiveExtractions={handleActiveExtractions}
-          uniqueContentOnly={uniqueContentOnly}
-          onUniqueContentOnlyChange={setUniqueContentOnly}
-        />
-      ) : null}
-
       <EmailThreadMessages
         messages={messages}
         hideAttachments={hideAttachments}
         contactExtractions={contactExtractions}
         uniqueContentOnly={uniqueContentOnly}
       />
+
+      {enableContactExtract && messages.length > 0 ? (
+        <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+          <summary className="cursor-pointer text-sm font-medium text-slate-700">
+            Contact extraction (lab)
+          </summary>
+          <div className="mt-3">
+            <ExtractContactsButton
+              key={extractKey}
+              items={extractItems}
+              onActiveExtractions={handleActiveExtractions}
+              uniqueContentOnly={uniqueContentOnly}
+              onUniqueContentOnlyChange={setUniqueContentOnly}
+            />
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }

@@ -4,18 +4,19 @@ import {
   hasMinRole,
   type UserRole,
 } from "@/lib/auth/roles";
-import { getSessionUser } from "@/lib/auth/session";
+import { getSessionLookup, type AppUser } from "@/lib/auth/session";
 
-export type SessionUser = NonNullable<Awaited<ReturnType<typeof getSessionUser>>>;
+export type SessionUser = AppUser;
 
 export async function requireSession(): Promise<
   SessionUser | NextResponse<{ error: string }>
 > {
-  const user = await getSessionUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const result = await getSessionLookup();
+  if (result.status === "ok") return result.user;
+  if (result.status === "unavailable") {
+    return NextResponse.json({ error: result.message }, { status: 503 });
   }
-  return user;
+  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 }
 
 export async function requireRole(

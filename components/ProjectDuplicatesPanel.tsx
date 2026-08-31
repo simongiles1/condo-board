@@ -10,6 +10,7 @@ import type {
 } from "@/lib/projects/duplicate-groups";
 import { PROJECT_NAME_FUZZY_THRESHOLD } from "@/lib/projects/project-name-fuzzy";
 import { splitProjectMultiValue } from "@/lib/projects/project-multi-values";
+import type { IdentityReviewRunRecord } from "@/lib/projects/identity-review-shared";
 
 function projectDuplicateMemberSubtitle(member: ProjectDuplicateGroupMember): string {
   const parts: string[] = [];
@@ -43,7 +44,68 @@ function formatScore(score: number): string {
   return `${Math.round(score * 100)}%`;
 }
 
+function DuplicatesWaitBanner({ reason }: { reason: string }) {
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    setElapsedSec(0);
+    const timer = window.setInterval(() => {
+      setElapsedSec((sec) => sec + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [reason]);
+  const clock =
+    elapsedSec >= 60
+      ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`
+      : `${elapsedSec}s`;
+  return (
+    <p
+      role="status"
+      aria-live="polite"
+      className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+    >
+      {reason}
+      {elapsedSec >= 3 ? ` · waited ${clock}` : ""}
+    </p>
+  );
+}
+
+function reviewProgressLabel(run: IdentityReviewRunRecord): string {
+  if (run.status === "running") {
+    if (run.currentPass === 2) {
+      return `Pass 2 · ${run.clusterCompleted} / ${run.clusterTotal} clusters`;
+    }
+    return `Pass 1 · clustering ${run.projectCount} projects`;
+  }
+  if (run.status === "completed") return "Identity review complete";
+  if (run.status === "cancelled") return "Identity review cancelled";
+  if (run.status === "failed") {
+    return run.lastError
+      ? `Identity review failed: ${run.lastError}`
+      : "Identity review failed";
+  }
+  return "Identity review";
+}
+
+function groupKindLabel(group: ProjectDuplicateGroup): string {
+  if (group.kind === "ai_review") {
+    const confidence = group.confidence ?? "medium";
+    const kind =
+      group.decisionKind === "single_span"
+        ? "one spanning job"
+        : group.decisionKind === "recurring_by_year"
+          ? "yearly campaigns"
+          : group.decisionKind === "mixed"
+            ? "mixed"
+            : "review";
+    return `AI review · ${confidence} · ${kind}`;
+  }
+  return `Fuzzy name · ${groupSubtitle(group)}`;
+}
+
 function groupSubtitle(group: ProjectDuplicateGroup): string {
+  if (group.kind === "ai_review") {
+    return `${group.memberCount} cards`;
+  }
   return `${group.memberCount} cards · links ≥ ${formatScore(group.minLinkScore)}`;
 }
 
@@ -52,25 +114,44 @@ export function ProjectDuplicatesPanel({
   loading,
   error,
   pending = false,
+  waitReason = null,
+  reviewRun = null,
+  reviewError = null,
+  reviewPending = false,
   onRefresh,
   onOpenMerge,
   onMergeAllInto,
+  onStartReview,
+  onCancelReview,
 }: {
   groups: ProjectDuplicateGroup[];
   loading: boolean;
   error: string | null;
   pending?: boolean;
+  waitReason?: string | null;
+  reviewRun?: IdentityReviewRunRecord | null;
+  reviewError?: string | null;
+  reviewPending?: boolean;
   onRefresh: () => void;
   onOpenMerge: (members: ProjectDuplicateGroupMember[]) => void;
   onMergeAllInto: (
     target: ProjectDuplicateGroupMember,
     sources: ProjectDuplicateGroupMember[],
   ) => void;
+  onStartReview: () => void;
+  onCancelReview: () => void;
 }) {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set());
   const [mergeAllTarget, setMergeAllTarget] =
     useState<ProjectDuplicateGroupMember | null>(null);
+  const reviewRunning = reviewRun?.status === "running";
+  const reviewBlocked = Boolean(waitReason) || loading || pending || reviewPending;
+  const reviewButtonLabel = reviewRunning
+    ? "Reviewing…"
+    : waitReason
+      ? "Waiting…"
+      : "AI review identities";
 
   const selectedGroup = useMemo(
     () => groups.find((g) => g.id === selectedGroupId) ?? null,
@@ -133,21 +214,70 @@ export function ProjectDuplicatesPanel({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-slate-600">
-          Clusters of projects whose names are similar after stripping
-          near-spellings and aliases. Pairs at or above{" "}
-          {formatScore(PROJECT_NAME_FUZZY_THRESHOLD)} similarity are grouped;
-          connected chains share a cluster. Review and merge by hand — nothing
-          auto-merges.
+          AI review groups work-type duplicates after reading emails (high
+          confidence auto-merges; medium/low wait here). Fuzzy name clusters
+          (≥ {formatScore(PROJECT_NAME_FUZZY_THRESHOLD)}) remain for anything
+          the review did not propose.
         </p>
-        <button
-          type="button"
-          disabled={loading || pending}
-          onClick={onRefresh}
-          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-        >
-          {loading ? "Loading…" : "Refresh"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={reviewBlocked || reviewRunning}
+            title={
+              waitReason ??
+              (reviewRunning
+                ? "Identity review is running"
+                : "Cluster work-type duplicates after reading emails")
+            }
+            aria-busy={reviewBlocked || reviewRunning}
+            onClick={onStartReview}
+            className="rounded-md border border-teal-300 bg-teal-50 px-3 py-1.5 text-sm font-medium text-teal-900 hover:bg-teal-100 disabled:opacity-50"
+          >
+            {reviewButtonLabel}
+          </button>
+          {reviewRunning ? (
+            <button
+              type="button"
+              disabled={reviewPending}
+              onClick={onCancelReview}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          ) : null}
+          <button
+            type="button"
+            disabled={loading || pending || Boolean(waitReason)}
+            onClick={onRefresh}
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {loading ? "Loading…" : "Refresh"}
+          </button>
+        </div>
       </div>
+
+      {waitReason ? <DuplicatesWaitBanner reason={waitReason} /> : null}
+
+      {reviewRun ? (
+        <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          {reviewProgressLabel(reviewRun)}
+          {reviewRun.totalCostUsd > 0
+            ? ` · ~$${reviewRun.totalCostUsd.toFixed(3)}`
+            : ""}
+          {reviewRun.highApplied > 0
+            ? ` · ${reviewRun.highApplied} high-confidence merge${reviewRun.highApplied === 1 ? "" : "s"} applied`
+            : ""}
+          {reviewRun.proposedCount > 0
+            ? ` · ${reviewRun.proposedCount} proposed`
+            : ""}
+        </p>
+      ) : null}
+
+      {reviewError ? (
+        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          {reviewError}
+        </p>
+      ) : null}
 
       {error ? (
         <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -159,14 +289,15 @@ export function ProjectDuplicatesPanel({
         <div className="flex max-h-[70vh] flex-col overflow-hidden border border-slate-200 bg-white">
           <div className="shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">
             {loading && groups.length === 0
-              ? "Scanning registry…"
+              ? "Loading duplicate groups…"
               : `${groups.length} duplicate group${groups.length === 1 ? "" : "s"}`}
           </div>
           <ul className="min-h-0 flex-1 overflow-y-auto">
             {!loading && groups.length === 0 ? (
               <li className="p-4 text-sm text-slate-500">
-                No fuzzy name matches found. Clusters appear here when two or
-                more projects score at or above{" "}
+                No fuzzy or AI-review groups found. Run AI review identities
+                to cluster MagLock-style variants; fuzzy matches still appear
+                when names score at or above{" "}
                 {formatScore(PROJECT_NAME_FUZZY_THRESHOLD)} similarity.
               </li>
             ) : (
@@ -188,7 +319,7 @@ export function ProjectDuplicatesPanel({
                           {group.label}
                         </span>
                         <span className="mt-0.5 block text-xs text-slate-500">
-                          Fuzzy name · {groupSubtitle(group)}
+                          {groupKindLabel(group)}
                         </span>
                       </span>
                       <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-xs font-semibold text-slate-700">
@@ -214,8 +345,10 @@ export function ProjectDuplicatesPanel({
                   {selectedGroup.label}
                 </h2>
                 <p className="mt-1 text-sm text-slate-600">
-                  {groupSubtitle(selectedGroup)} — review aliases and project
-                  fields before merging; the absorbed name is kept as an alias.
+                  {selectedGroup.kind === "ai_review"
+                    ? selectedGroup.rationale ||
+                      `${groupKindLabel(selectedGroup)} — review aliases and project fields before merging.`
+                    : `${groupSubtitle(selectedGroup)} — review aliases and project fields before merging; the absorbed name is kept as an alias.`}
                 </p>
               </div>
 

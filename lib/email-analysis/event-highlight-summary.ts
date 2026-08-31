@@ -25,16 +25,11 @@ export async function loadEventExtractSummariesForGroups(
   );
   if (entries.length === 0) return {};
 
-  const results = await Promise.all(
-    entries.map(async ([groupId, emailIds]) => {
-      const runs = await loadEventHighlightRuns(emailIds);
-      const summary = eventExtractSummaryFromRuns(runs);
-      return [groupId, summary] as const;
-    }),
-  );
-
+  // Sequential: parallel per-thread loads exhaust Supabase session pool (15 conn).
   const out: Record<string, EventExtractSummary> = {};
-  for (const [groupId, summary] of results) {
+  for (const [groupId, emailIds] of entries) {
+    const runs = await loadEventHighlightRuns(emailIds);
+    const summary = eventExtractSummaryFromRuns(runs);
     if (summary) out[groupId] = summary;
   }
   return out;

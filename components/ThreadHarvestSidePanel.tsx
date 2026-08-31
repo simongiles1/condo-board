@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { HarvestMarkedBody } from "@/components/HarvestMarkedBody";
+import {
+  HarvestMarkedBody,
+  HarvestMarkedInline,
+} from "@/components/HarvestMarkedBody";
 import { HarvestTypeIcon } from "@/components/HarvestTypeIcon";
 import { SourceQuoteDisplay } from "@/components/SourceQuoteDisplay";
 import type { EmailBodyDisplay } from "@/lib/email/format-body-display";
@@ -41,8 +44,11 @@ import {
 } from "@/lib/email-analysis/harvest-highlight-theme";
 import {
   buildHarvestMarkTree,
-  findFlexibleQuoteRange,
+  harvestMentionPaintsFromPayload,
+  locateSentenceQuoteRange,
   resolveHarvestSpans,
+  resolveSubjectHarvestSpans,
+  type HarvestMentionPayload,
 } from "@/lib/email-analysis/harvest-highlight-spans";
 import {
   mergeOrgHighlightExtractions,
@@ -85,6 +91,7 @@ type MessageBody = {
   receivedAt: string;
   bodyDisplay: EmailBodyDisplay;
   bodyDisplayUnique?: EmailBodyDisplay | null;
+  mentions?: HarvestMentionPayload;
 };
 
 type ContactRun = {
@@ -419,6 +426,7 @@ function HarvestEmailRow({
   }, [defaultOpen]);
 
   const bodyText = message ? resolveEvidenceBodyText(message) : "";
+  const subjectText = header.subject || "";
   const tree = useMemo(
     () =>
       buildHarvestMarkTree(
@@ -437,18 +445,49 @@ function HarvestEmailRow({
             sourceQuote: todo.sourceQuote,
           })),
           focusQuote,
+          mentionPaints: harvestMentionPaintsFromPayload(
+            message?.mentions,
+            bodyText,
+          ),
         }),
       ),
-    [bodyText, contact, org, project, events, todos, focusQuote],
+    [bodyText, contact, org, project, events, todos, focusQuote, message?.mentions],
   );
+  const subjectTree = useMemo(
+    () =>
+      buildHarvestMarkTree(
+        resolveSubjectHarvestSpans({
+          text: subjectText,
+          contact,
+          org,
+          project,
+          mentions: message?.mentions,
+        }),
+      ),
+    [subjectText, contact, org, project, message?.mentions],
+  );
+
+  const harvestTooltip = {
+    contactCards,
+    orgCards,
+    projectCards,
+    events,
+    todos: todos.map((todo) => ({
+      type: "action_item",
+      title: todo.task,
+      detail: todo.assignee,
+      sourceQuote: todo.sourceQuote,
+    })),
+    reloadMentions: () => setMessage(null),
+  };
 
   const unmatchedEventQuotes = events.filter((event) => {
     if (!event.sourceQuote?.trim() || !bodyText) return false;
-    return findFlexibleQuoteRange(bodyText, event.sourceQuote) == null;
+    return locateSentenceQuoteRange(bodyText, event.sourceQuote) == null;
   });
   const unmatchedTodoQuotes = todos.filter((todo) => {
     if (!todo.sourceQuote?.trim() || !bodyText) return false;
-    return findFlexibleQuoteRange(bodyText, todo.sourceQuote) == null;
+    return locateSentenceQuoteRange(bodyText, todo.sourceQuote) == null;
   });
 
   const contactCount =
@@ -465,18 +504,32 @@ function HarvestEmailRow({
 
   return (
     <li className="border-b border-slate-100">
-      <button
-        type="button"
-        onClick={() => setOpen((prev) => !prev)}
-        className="flex w-full items-start gap-2 px-4 py-3 text-left hover:bg-slate-50"
-        aria-expanded={open}
-      >
-        <span className="mt-0.5 shrink-0 text-slate-400" aria-hidden>
+      <div className="flex w-full items-start gap-2 px-4 py-3 hover:bg-slate-50">
+        <button
+          type="button"
+          onClick={() => setOpen((prev) => !prev)}
+          className="mt-0.5 shrink-0 text-slate-400"
+          aria-expanded={open}
+          aria-label={open ? "Collapse email" : "Expand email"}
+        >
           {open ? "▾" : "▸"}
-        </span>
-        <span className="min-w-0 flex-1">
+        </button>
+        <div
+          className="min-w-0 flex-1 cursor-pointer text-left"
+          onClick={() => setOpen((prev) => !prev)}
+        >
           <span className="block text-sm font-medium text-slate-900">
-            {header.subject || "(no subject)"}
+            <HarvestMarkedInline
+              text={subjectText}
+              nodes={subjectTree}
+              empty="(no subject)"
+              contactCards={harvestTooltip.contactCards}
+              orgCards={harvestTooltip.orgCards}
+              projectCards={harvestTooltip.projectCards}
+              events={harvestTooltip.events}
+              todos={harvestTooltip.todos}
+              reloadMentions={harvestTooltip.reloadMentions}
+            />
           </span>
           <span className="mt-0.5 block text-xs text-slate-500">
             {header.fromAddress} · {formatDateTime(header.receivedAt)}
@@ -518,8 +571,8 @@ function HarvestEmailRow({
               </span>
             ) : null}
           </span>
-        </span>
-      </button>
+        </div>
+      </div>
       {open ? (
         <div className="border-t border-slate-100 bg-slate-50/60 px-4 py-3">
           {loading ? (
@@ -551,16 +604,12 @@ function HarvestEmailRow({
               <HarvestMarkedBody
                 text={bodyText}
                 nodes={tree}
-                contactCards={contactCards}
-                orgCards={orgCards}
-                projectCards={projectCards}
-                events={events}
-                todos={todos.map((todo) => ({
-                  type: "action_item",
-                  title: todo.task,
-                  detail: todo.assignee,
-                  sourceQuote: todo.sourceQuote,
-                }))}
+                contactCards={harvestTooltip.contactCards}
+                orgCards={harvestTooltip.orgCards}
+                projectCards={harvestTooltip.projectCards}
+                events={harvestTooltip.events}
+                todos={harvestTooltip.todos}
+                reloadMentions={harvestTooltip.reloadMentions}
               />
             </>
           ) : null}

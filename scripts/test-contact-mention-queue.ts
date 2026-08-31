@@ -29,6 +29,7 @@ function row(
     phone: null,
     rawCompany: null,
     jobTitle: null,
+    rolePhrase: null,
     mentionKind: "referred",
     firstNameKey: "dan",
     firstOrgKey: null,
@@ -132,6 +133,25 @@ describe("buildMentionQueueGroups", () => {
     assert.equal(org.candidates[0]?.displayName, "Dan Miller");
     assert.equal(first.mentionCount, 1);
     assert.equal(org.samples[0]?.mentionId, "a");
+    assert.equal(org.samples[0]?.resolutionReason, "insufficient");
+    assert.equal(org.samples[0]?.rolePhrase, null);
+  });
+
+  it("copies role_phrase and resolution_reason onto samples", () => {
+    const groups = buildMentionQueueGroups([
+      row({
+        id: "haider",
+        firstName: "Haider",
+        lastName: "Mukadam",
+        jobTitle: "Property Manager",
+        rolePhrase: "property manager",
+        resolutionReason: "unique_first_plus_org_provisional",
+        firstNameKey: "haider",
+      }),
+    ]);
+    const sample = groups[0]?.samples[0];
+    assert.equal(sample?.rolePhrase, "property manager");
+    assert.equal(sample?.resolutionReason, "unique_first_plus_org_provisional");
   });
 
   it("keeps full-name Johns out of the first-name-only bucket", () => {

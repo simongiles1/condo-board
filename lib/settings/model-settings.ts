@@ -1,6 +1,17 @@
-export const MODEL_SETTINGS_STORAGE_KEY = "condo-board-model-settings";
+import {
+  billedPricingForModel,
+  formatUsdPerMillion,
+} from "@/lib/gemini/pricing";
+
+export const MODEL_SETTINGS_STORAGE_KEY = "condo-board-model-settings-v2";
 
 export const AVAILABLE_GEMINI_MODELS = [
+  {
+    id: "gemini-3.7-flash",
+    label: "Gemini 3.7 Flash",
+    inputPricePerMillion: 1.5,
+    outputPricePerMillion: 7.5,
+  },
   {
     id: "gemini-3.1-flash-lite",
     label: "Gemini 3.1 Flash Lite",
@@ -37,10 +48,10 @@ export type ModelSettings = {
 };
 
 export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
-  mainMinutes: "gemini-3.1-flash-lite",
-  mainTodos: "gemini-3.1-flash-lite",
-  omissionsMinutes: "gemini-3.1-flash-lite",
-  omissionsTodos: "gemini-3.1-flash-lite",
+  mainMinutes: "gemini-3.7-flash",
+  mainTodos: "gemini-3.7-flash",
+  omissionsMinutes: "gemini-3.7-flash",
+  omissionsTodos: "gemini-3.7-flash",
 };
 
 const ALLOWED_MODEL_IDS = new Set<string>(
@@ -90,8 +101,11 @@ export function saveModelSettings(settings: ModelSettings): void {
 }
 
 export function formatModelOptionLabel(model: (typeof AVAILABLE_GEMINI_MODELS)[number]): string {
-  const input = model.inputPricePerMillion.toFixed(2);
-  const output = model.outputPricePerMillion.toFixed(2);
+  const billed = billedPricingForModel(model.id);
+  const input = formatUsdPerMillion(billed?.input ?? model.inputPricePerMillion);
+  const output = formatUsdPerMillion(
+    billed?.output ?? model.outputPricePerMillion,
+  );
   return `${model.label} ($${input}/$${output} per 1M tokens)`;
 }
 

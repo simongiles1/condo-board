@@ -11,13 +11,10 @@ import {
 
 import type { BuildingEmailReference } from "@/lib/building/resolve-source-email";
 import { formatDateTime } from "@/lib/format/datetime";
-import {
-  claimHoverPopover,
-  releaseHoverPopover,
-} from "@/lib/ui/hover-popover-group";
+import { HOVER_POPOVER_ATTR } from "@/lib/ui/hover-popover-group";
+import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 
 const VIEWPORT_MARGIN = 8;
-const POPOVER_HIDE_DELAY_MS = 500;
 
 function MailIcon() {
   return (
@@ -75,56 +72,15 @@ type Props = {
 export function InsightSourceEmailsBadge({ emails, onOpenEmail }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const popoverInstanceId = useRef(Symbol("insight-source-emails-badge")).current;
-  const triggerHoveredRef = useRef(false);
-  const popoverHoveredRef = useRef(false);
-  const [open, setOpen] = useState(false);
+  const hover = useHoverPopover();
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
     zIndex: 50,
   });
 
-  function cancelHide() {
-    if (hideTimeoutRef.current) {
-      clearTimeout(hideTimeoutRef.current);
-      hideTimeoutRef.current = null;
-    }
-  }
-
-  function forceClose() {
-    cancelHide();
-    triggerHoveredRef.current = false;
-    popoverHoveredRef.current = false;
-    setOpen(false);
-    releaseHoverPopover(popoverInstanceId);
-  }
-
-  function scheduleHide() {
-    cancelHide();
-    hideTimeoutRef.current = setTimeout(() => {
-      if (!triggerHoveredRef.current && !popoverHoveredRef.current) {
-        forceClose();
-      }
-    }, POPOVER_HIDE_DELAY_MS);
-  }
-
-  function showPopover() {
-    claimHoverPopover(popoverInstanceId, forceClose);
-    cancelHide();
-    setOpen(true);
-  }
-
-  useEffect(() => {
-    return () => {
-      cancelHide();
-      releaseHoverPopover(popoverInstanceId);
-    };
-  }, [popoverInstanceId]);
-
   useLayoutEffect(() => {
-    if (!open || !rootRef.current || !popoverRef.current) return;
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
 
     function updatePosition() {
       const triggerRect = rootRef.current?.getBoundingClientRect();
@@ -142,10 +98,10 @@ export function InsightSourceEmailsBadge({ emails, onOpenEmail }: Props) {
     }
 
     updatePosition();
-  }, [open, emails.length]);
+  }, [hover.open, emails.length]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!hover.open) return;
 
     function updatePosition() {
       const triggerRect = rootRef.current?.getBoundingClientRect();
@@ -162,14 +118,12 @@ export function InsightSourceEmailsBadge({ emails, onOpenEmail }: Props) {
       });
     }
 
-    window.addEventListener("scroll", updatePosition, true);
     window.addEventListener("resize", updatePosition);
 
     return () => {
-      window.removeEventListener("scroll", updatePosition, true);
       window.removeEventListener("resize", updatePosition);
     };
-  }, [open, emails.length]);
+  }, [hover.open, emails.length]);
 
   if (!emails.length) return null;
 
@@ -177,18 +131,12 @@ export function InsightSourceEmailsBadge({ emails, onOpenEmail }: Props) {
     <div
       ref={rootRef}
       className="relative inline-flex"
-      onMouseEnter={() => {
-        triggerHoveredRef.current = true;
-        showPopover();
-      }}
-      onMouseLeave={() => {
-        triggerHoveredRef.current = false;
-        scheduleHide();
-      }}
-      onFocus={showPopover}
+      onMouseEnter={hover.onTriggerEnter}
+      onMouseLeave={hover.onTriggerLeave}
+      onFocus={hover.onTriggerFocus}
       onBlur={(event) => {
         if (!rootRef.current?.contains(event.relatedTarget as Node)) {
-          scheduleHide();
+          hover.onTriggerBlur();
         }
       }}
     >
@@ -205,21 +153,16 @@ export function InsightSourceEmailsBadge({ emails, onOpenEmail }: Props) {
         <span className="tabular-nums">{emails.length}</span>
       </button>
 
-      {open && typeof document !== "undefined"
+      {hover.open && typeof document !== "undefined"
         ? createPortal(
             <div
               ref={popoverRef}
               role="tooltip"
               style={popoverStyle}
               className="w-max min-w-[16rem] max-w-[min(28rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
-              onMouseEnter={() => {
-                popoverHoveredRef.current = true;
-                cancelHide();
-              }}
-              onMouseLeave={() => {
-                popoverHoveredRef.current = false;
-                scheduleHide();
-              }}
+              {...{ [HOVER_POPOVER_ATTR]: "" }}
+              onMouseEnter={hover.onPopoverEnter}
+              onMouseLeave={hover.onPopoverLeave}
             >
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Source email{emails.length === 1 ? "" : "s"} ({emails.length})
@@ -230,7 +173,7 @@ export function InsightSourceEmailsBadge({ emails, onOpenEmail }: Props) {
                     <button
                       type="button"
                       onClick={() => {
-                        forceClose();
+                        hover.forceClose();
                         onOpenEmail(email.emailId);
                       }}
                       className="w-full rounded-lg px-2 py-1.5 text-left transition hover:bg-slate-50"

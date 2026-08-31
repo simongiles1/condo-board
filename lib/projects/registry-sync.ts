@@ -20,7 +20,14 @@ import {
   resolveProjectScope,
   type ProjectScope,
 } from "@/lib/email-analysis/project-highlight-shared";
-import { mergeProjectMultiValues } from "@/lib/projects/project-multi-values";
+import {
+  mergeProjectAliasLists,
+  mergeProjectMultiValues,
+  parseProjectAliasesJson,
+  serializeProjectAliasesJson,
+} from "@/lib/projects/project-multi-values";
+import { preferProjectPhase } from "@/lib/projects/project-phase";
+import { preferProjectYearHint } from "@/lib/projects/project-year-range";
 
 export type ProjectEntityRow = {
   id: string;
@@ -31,6 +38,7 @@ export type ProjectEntityRow = {
   contractor: string | null;
   location: string | null;
   equipmentMentions: string | null;
+  aliases: string[];
   scope: ProjectScope | null;
   status: "active" | "merged";
   mergedIntoId: string | null;
@@ -59,6 +67,7 @@ export async function loadActiveProjectEntities(): Promise<ProjectEntityRow[]> {
     contractor: row.contractor,
     location: row.location,
     equipmentMentions: row.equipmentMentions,
+    aliases: parseProjectAliasesJson(row.aliasesJson),
     scope: parseProjectScope(row.scope),
     status: row.status as "active" | "merged",
     mergedIntoId: row.mergedIntoId,
@@ -146,6 +155,7 @@ export async function upsertProjectEntitiesFromSummaries(
     const prior = byKey.get(summary.id);
     if (!prior) {
       const id = randomUUID();
+      const aliases = mergeProjectAliasLists(summary.name, summary.aliases);
       await db.insert(projectEntities).values({
         id,
         identityKey: summary.id,
@@ -155,6 +165,7 @@ export async function upsertProjectEntitiesFromSummaries(
         contractor: summary.contractor,
         location: summary.location,
         equipmentMentions: summary.equipment_mentions,
+        aliasesJson: serializeProjectAliasesJson(aliases),
         scope: resolveProjectScope(summary),
         status: "active",
         mergedIntoId: null,
@@ -171,6 +182,7 @@ export async function upsertProjectEntitiesFromSummaries(
         contractor: summary.contractor,
         location: summary.location,
         equipmentMentions: summary.equipment_mentions,
+        aliases,
         scope: resolveProjectScope(summary),
         status: "active",
         mergedIntoId: null,
@@ -180,19 +192,25 @@ export async function upsertProjectEntitiesFromSummaries(
 
     const next = {
       name: preferString(prior.name, summary.name),
-      yearHint: preferString(prior.yearHint, summary.year_hint),
-      phase: preferString(prior.phase, summary.phase),
+      yearHint: preferProjectYearHint(prior.yearHint, summary.year_hint),
+      phase: preferProjectPhase(prior.phase, summary.phase),
       contractor: mergeProjectMultiValues(prior.contractor, summary.contractor),
       location: mergeProjectMultiValues(prior.location, summary.location),
       equipmentMentions: mergeProjectMultiValues(
         prior.equipmentMentions,
         summary.equipment_mentions,
       ),
+      aliases: mergeProjectAliasLists(
+        preferString(prior.name, summary.name),
+        parseProjectAliasesJson(prior.aliasesJson),
+        summary.aliases,
+      ),
       scope: preferProjectScope(
         parseProjectScope(prior.scope),
         resolveProjectScope(summary),
       ),
     };
+    const aliasesJson = serializeProjectAliasesJson(next.aliases);
     const changed =
       next.name !== prior.name ||
       next.yearHint !== prior.yearHint ||
@@ -200,6 +218,7 @@ export async function upsertProjectEntitiesFromSummaries(
       next.contractor !== prior.contractor ||
       next.location !== prior.location ||
       next.equipmentMentions !== prior.equipmentMentions ||
+      aliasesJson !== (prior.aliasesJson ?? "[]") ||
       next.scope !== parseProjectScope(prior.scope) ||
       prior.status !== "active";
 
@@ -207,7 +226,14 @@ export async function upsertProjectEntitiesFromSummaries(
       await db
         .update(projectEntities)
         .set({
-          ...next,
+          name: next.name,
+          yearHint: next.yearHint,
+          phase: next.phase,
+          contractor: next.contractor,
+          location: next.location,
+          equipmentMentions: next.equipmentMentions,
+          aliasesJson,
+          scope: next.scope,
           status: "active",
           mergedIntoId: null,
           updatedAt: nowIso,
@@ -225,6 +251,7 @@ export async function upsertProjectEntitiesFromSummaries(
       contractor: next.contractor,
       location: next.location,
       equipmentMentions: next.equipmentMentions,
+      aliases: next.aliases,
       scope: next.scope,
       status: "active",
       mergedIntoId: null,

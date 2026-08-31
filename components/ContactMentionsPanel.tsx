@@ -6,6 +6,12 @@ import Link from "next/link";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmailSidePanel } from "@/components/EmailSidePanel";
 import {
+  ResolutionReasonBadge,
+  RolePhraseBadge,
+} from "@/components/EntityMentionBadges";
+import { ReHarvestThreadButton, type HarvestRunMessage } from "@/components/ReHarvestThreadButton";
+import { harvestMessageClassName } from "@/components/HarvestRunNotice";
+import {
   rankMergeOptions,
   type MergeSearchOption,
 } from "@/lib/contacts/merge-search";
@@ -46,6 +52,7 @@ function extraMentionBits(sample: {
   phone: string | null;
   rawCompany: string | null;
   jobTitle: string | null;
+  rolePhrase?: string | null;
   resolvedPersonName?: string | null;
 }): string | null {
   const bits: string[] = [];
@@ -55,7 +62,9 @@ function extraMentionBits(sample: {
   }
   for (const value of [
     sample.rawCompany,
-    sample.jobTitle,
+    sample.jobTitle && sample.jobTitle.trim() !== sample.rolePhrase?.trim()
+      ? sample.jobTitle
+      : null,
     sample.email,
     sample.phone,
   ]) {
@@ -147,12 +156,16 @@ export function ContactMentionsPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [harvestMessage, setHarvestMessage] = useState<HarvestRunMessage | null>(
+    null,
+  );
   const [search, setSearch] = useState("");
   const [attachPending, startAttach] = useTransition();
   const [confirmPerson, setConfirmPerson] = useState<PersonOption | null>(null);
   const [confirmCreate, setConfirmCreate] = useState(false);
   const [panelEmailId, setPanelEmailId] = useState<string | null>(null);
   const [panelQuote, setPanelQuote] = useState<string | null>(null);
+  const [panelThreadId, setPanelThreadId] = useState<string | null>(null);
   const [selectedMentionIds, setSelectedMentionIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -424,6 +437,14 @@ export function ContactMentionsPanel({
           crowded To-line looks wrong.
         </p>
       ) : null}
+      {harvestMessage ? (
+        <p
+          className={`mb-3 ${harvestMessageClassName(harvestMessage.tone)}`}
+          role={harvestMessage.tone === "error" ? "alert" : "status"}
+        >
+          {harvestMessage.text}
+        </p>
+      ) : null}
       {message ? (
         <p className="mb-3 text-sm text-slate-600" role="status">
           {message}
@@ -488,18 +509,42 @@ export function ContactMentionsPanel({
             <p className="text-sm text-slate-500">Select a group.</p>
           ) : (
             <>
-              <h2 className="text-sm font-semibold text-slate-900">
-                {selected.label}
-              </h2>
-              <p className="mt-1 text-xs text-slate-500">
-                {selected.mentionCount} mention
-                {selected.mentionCount === 1 ? "" : "s"} across{" "}
-                {selected.emailCount} email
-                {selected.emailCount === 1 ? "" : "s"}
-                {selected.participantCount > 0
-                  ? ` · ${selected.participantCount} on To/From`
-                  : ""}
-              </p>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-900">
+                    {selected.label}
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {selected.mentionCount} mention
+                    {selected.mentionCount === 1 ? "" : "s"} across{" "}
+                    {selected.emailCount} email
+                    {selected.emailCount === 1 ? "" : "s"}
+                    {selected.participantCount > 0
+                      ? ` · ${selected.participantCount} on To/From`
+                      : ""}
+                  </p>
+                </div>
+                {selected.samples.some(
+                  (sample) => sample.threadId || sample.sourceEmailId,
+                ) ? (
+                  <ReHarvestThreadButton
+                    threadId={
+                      selected.samples.find((sample) => sample.threadId)
+                        ?.threadId ?? null
+                    }
+                    emailIds={selected.samples
+                      .map((sample) => sample.sourceEmailId)
+                      .filter((id): id is string => Boolean(id))}
+                    kinds={["contacts", "projects"]}
+                    disabled={busy}
+                    onComplete={() => {
+                      void loadGroups(view);
+                      onChanged?.();
+                    }}
+                    onMessage={setHarvestMessage}
+                  />
+                ) : null}
+              </div>
 
               {canAttach ? (
                 <div className="mt-4 space-y-3">
@@ -684,6 +729,15 @@ export function ContactMentionsPanel({
                           {extra ? (
                             <p className="mt-1 text-xs text-slate-600">{extra}</p>
                           ) : null}
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            <RolePhraseBadge
+                              rolePhrase={sample.rolePhrase}
+                              jobTitle={sample.jobTitle}
+                            />
+                            <ResolutionReasonBadge
+                              reason={sample.resolutionReason}
+                            />
+                          </div>
                           {sample.contextSnippet ? (
                             <p className="mt-2 text-sm leading-5 text-slate-700">
                               <MentionContextSnippet
@@ -703,6 +757,7 @@ export function ContactMentionsPanel({
                             onClick={() => {
                               setPanelEmailId(sample.sourceEmailId);
                               setPanelQuote(quote);
+                              setPanelThreadId(sample.threadId);
                             }}
                             aria-label="Open email"
                             title="Open email"
@@ -779,10 +834,12 @@ export function ContactMentionsPanel({
 
       <EmailSidePanel
         emailId={panelEmailId}
+        threadId={panelThreadId}
         highlightQuote={panelQuote}
         onClose={() => {
           setPanelEmailId(null);
           setPanelQuote(null);
+          setPanelThreadId(null);
         }}
       />
     </div>

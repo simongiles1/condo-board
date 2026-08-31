@@ -1,6 +1,8 @@
 /** Client-safe project list sort helpers (no DB imports). */
 
 import { projectMetadataFillCount } from "@/lib/projects/project-list-filter";
+import { projectPhaseSortRank } from "@/lib/projects/project-phase";
+import { projectYearRangeStart } from "@/lib/projects/project-year-range";
 
 export type ProjectFingerprintListSort =
   | "mentions-desc"
@@ -11,7 +13,9 @@ export type ProjectFingerprintListSort =
   | "year-asc"
   | "phase-asc"
   | "completeness-asc"
-  | "completeness-desc";
+  | "completeness-desc"
+  | "board-desc"
+  | "board-asc";
 
 const PROJECT_FINGERPRINT_LIST_SORTS = new Set<ProjectFingerprintListSort>([
   "mentions-desc",
@@ -23,6 +27,8 @@ const PROJECT_FINGERPRINT_LIST_SORTS = new Set<ProjectFingerprintListSort>([
   "phase-asc",
   "completeness-asc",
   "completeness-desc",
+  "board-desc",
+  "board-asc",
 ]);
 
 export function parseProjectFingerprintListSort(
@@ -45,13 +51,11 @@ type ProjectSortable = {
   contractor?: string | null;
   location?: string | null;
   equipment_mentions?: string | null;
+  boardReportCount?: number;
 };
 
 function firstYearValue(raw: string | null | undefined): number | null {
-  const match = raw?.match(/\d{4}/);
-  if (!match) return null;
-  const year = Number(match[0]);
-  return Number.isFinite(year) ? year : null;
+  return projectYearRangeStart(raw);
 }
 
 function compareMissingLast(
@@ -97,12 +101,12 @@ export function compareProjectFingerprintSummaries<T extends ProjectSortable>(
       return a.displayName.localeCompare(b.displayName);
     }
     case "phase-asc": {
-      const aPhase = a.phase?.trim() || "";
-      const bPhase = b.phase?.trim() || "";
-      if (!aPhase && bPhase) return 1;
-      if (aPhase && !bPhase) return -1;
-      const phaseCmp = aPhase.localeCompare(bPhase);
-      if (phaseCmp !== 0) return phaseCmp;
+      const phaseCmp = compareMissingLast(
+        projectPhaseSortRank(a.phase),
+        projectPhaseSortRank(b.phase),
+        "asc",
+      );
+      if (phaseCmp) return phaseCmp;
       return a.displayName.localeCompare(b.displayName);
     }
     case "completeness-asc":
@@ -111,6 +115,18 @@ export function compareProjectFingerprintSummaries<T extends ProjectSortable>(
       const bFill = projectMetadataFillCount(b);
       if (aFill !== bFill) {
         return sort === "completeness-asc" ? aFill - bFill : bFill - aFill;
+      }
+      if (b.sourceEmailCount !== a.sourceEmailCount) {
+        return b.sourceEmailCount - a.sourceEmailCount;
+      }
+      return a.displayName.localeCompare(b.displayName);
+    }
+    case "board-asc":
+    case "board-desc": {
+      const aBoard = a.boardReportCount ?? 0;
+      const bBoard = b.boardReportCount ?? 0;
+      if (aBoard !== bBoard) {
+        return sort === "board-asc" ? aBoard - bBoard : bBoard - aBoard;
       }
       if (b.sourceEmailCount !== a.sourceEmailCount) {
         return b.sourceEmailCount - a.sourceEmailCount;

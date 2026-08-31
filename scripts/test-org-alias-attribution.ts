@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { OrgFieldAttachment } from "../lib/organizations/field-attachments";
+import { orgSurfaceCollidesOnRoster } from "../lib/organizations/mention-shared";
 import {
   rebuildOrgEmailIdsFromSightings,
   type OrgEmailBucket,
@@ -140,5 +141,50 @@ describe("rebuildOrgEmailIdsFromSightings", () => {
 
     assert.deepEqual(idsOf(next, studio.id), ["e1"]);
     assert.deepEqual(idsOf(next, icc.id), ["e1"]);
+  });
+
+  it("counts unique short aliases like TCG, not prefix-colliding Trace", () => {
+    const trace = org({
+      id: "name:trace consulting group ltd",
+      name: "Trace Consulting Group Ltd.",
+      aliases: ["Trace Consulting Group", "Trace", "TCG"],
+    });
+    const fire = org({
+      id: "name:trace fire group",
+      name: "Trace Fire Group",
+    });
+    const next = rebuildOrgEmailIdsFromSightings({
+      organizations: [trace, fire],
+      nameSightings: [
+        { emailId: "a", name: "Trace Consulting Group Ltd.", identityKeys: [] },
+        { emailId: "b", name: "Trace Consulting Group", identityKeys: [] },
+        { emailId: "c", name: "Trace", identityKeys: [] },
+        { emailId: "d", name: "Trace Fire Group", identityKeys: [] },
+        { emailId: "e", name: "TCG", identityKeys: [] },
+      ],
+      attachments: [],
+    });
+    assert.deepEqual(idsOf(next, trace.id), ["a", "b", "e"]);
+    assert.deepEqual(idsOf(next, fire.id), ["d"]);
+  });
+});
+
+describe("orgSurfaceCollidesOnRoster", () => {
+  const roster = [
+    {
+      name: "Trace Consulting Group Ltd.",
+      aliases: ["TCG", "Trace"],
+    },
+    { name: "Trace Fire Group", aliases: ["TFG"] },
+  ];
+
+  it("flags Trace as a prefix of another primary and keeps unique TCG", () => {
+    const owner = roster[0]!.name;
+    assert.equal(orgSurfaceCollidesOnRoster("Trace", owner, roster), true);
+    assert.equal(orgSurfaceCollidesOnRoster("TCG", owner, roster), false);
+    assert.equal(
+      orgSurfaceCollidesOnRoster("Trace Consulting Group", owner, roster),
+      false,
+    );
   });
 });

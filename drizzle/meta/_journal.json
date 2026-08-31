@@ -309,6 +309,13 @@
       "when": 1787600000000,
       "tag": "0043_meetings_v2_repair",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1788167743513,
+      "tag": "0044_meetings_v2_settings",
+      "breakpoints": true
     }
   ]
 }

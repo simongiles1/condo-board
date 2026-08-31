@@ -1289,19 +1289,15 @@ function inferVisibility(title: string): string {
   return "open";
 }
 
-function buildOpenQuestions(
-  title: string,
-  transcriptEvidenceCount: number,
-  answerText: string | null,
-): string[] {
+function buildOpenQuestions(title: string, transcriptEvidenceCount: number, answerText: string | null): Array<{ question: string; recommended_answer: string; confidence: "high" | "medium" | "low" }> {
   if (answerText) return [];
   if (transcriptEvidenceCount > 0) return [];
-  return [`Can you confirm the final outcome for "${title}" from the live discussion?`];
+  return [{ question: `Can you confirm the final outcome for "${title}" from the live discussion?`, recommended_answer: "Based on context, the item was discussed but may require confirmation.", confidence: "low" }];
 }
 
 type AiInvestigationDocument = {
   discussion_summary: string;
-  outcome: "APPROVED" | "REJECTED" | "DEFERRED" | "NO_DECISION" | "INFORMATION_ONLY" | "UNCLEAR" | "INFORMAL_APPROVAL";
+  outcome: "APPROVED" | "REJECTED" | "DEFERRED" | "NO_DECISION" | "INFORMATION_ONLY" | "UNCLEAR";
   confidence: "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT";
   visibility: "PUBLIC" | "RESTRICTED" | "UNKNOWN";
   decisions: string[];
@@ -1311,14 +1307,13 @@ type AiInvestigationDocument = {
     resolution_text: string | null;
     result: "CARRIED" | "DEFEATED" | "DEFERRED" | "UNKNOWN";
     is_candidate?: boolean;
-    is_informal?: boolean;
-  } | null;
+      } | null;
   actions: Array<{
     owner: string | null;
     description: string;
     due_date: string | null;
   }>;
-  open_questions: string[];
+  open_questions: Array<{ question: string; recommended_answer: string; confidence: "high" | "medium" | "low" }>;
 };
 
 type AiValidationDocument = {
@@ -1351,7 +1346,7 @@ function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument
     discussion_summary: normalizeWhitespace(typeof record.discussion_summary === "string" ? record.discussion_summary : ""),
     outcome:
       outcome === "APPROVED" || outcome === "REJECTED" || outcome === "DEFERRED" || outcome === "NO_DECISION" ||
-      outcome === "INFORMATION_ONLY" || outcome === "UNCLEAR" || outcome === "INFORMAL_APPROVAL"
+      outcome === "INFORMATION_ONLY" || outcome === "UNCLEAR" || false
         ? (outcome as AiInvestigationDocument["outcome"])
         : "UNCLEAR",
     confidence:
@@ -1378,8 +1373,7 @@ function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument
               ? (motionRecord.result as NonNullable<AiInvestigationDocument["motion"]>["result"])
               : "UNKNOWN",
           is_candidate: motionRecord.is_candidate === true,
-          is_informal: motionRecord.is_informal === true,
-        }
+                  }
       : null,
     actions: Array.isArray(record.actions)
       ? record.actions.flatMap((entry) => {
@@ -1395,7 +1389,11 @@ function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument
         })
       : [],
     open_questions: Array.isArray(record.open_questions)
-      ? record.open_questions.filter((entry): entry is string => typeof entry === "string").map(normalizeWhitespace).filter(Boolean)
+      ? record.open_questions.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null).map((entry: any) => ({
+          question: typeof entry.question === "string" ? normalizeWhitespace(entry.question) : "",
+          recommended_answer: typeof entry.recommended_answer === "string" ? normalizeWhitespace(entry.recommended_answer) : "",
+          confidence: ["high", "medium", "low"].includes(entry.confidence?.toLowerCase()) ? entry.confidence.toLowerCase() : "medium",
+        })).filter((q: any) => Boolean(q.question))
       : [],
   };
 }
@@ -1776,35 +1774,30 @@ function addDeterministicValidationRows(options: {
     });
   }
 
-  if (investigation.outcome === "information_only" && (decisions.length > 0 || actions.length > 0 || motion)) {
+  if (investigation.outcome === "information_only" && motion) {
     pushValidationRow(rows, {
       meetingId,
       agendaItemId: agendaItem.id,
       validationType: "business_rule",
-      severity: "warning",
-      code: "information_only_contains_decisions_or_actions",
-      message: "Outcome is INFORMATION_ONLY, but the investigation still contains decisions, actions, or motion details.",
-      details: { title: agendaItem.title, decisions, actionCount: actions.length, hasMotion: Boolean(motion) },
+      severity: "info",
+      code: "information_only_contains_motion",
+      message: "Outcome is INFORMATION_ONLY, but a motion was captured.",
+      details: { title: agendaItem.title, hasMotion: true },
     });
   }
 
   if (motion) {
     const missingFields = [
-      !motion.moved_by ? "moved_by" : null,
-      !motion.seconded_by ? "seconded_by" : null,
       !motion.resolution_text ? "resolution_text" : null,
     ].filter(Boolean);
     if (missingFields.length > 0) {
-      const isInformal = investigation.outcome === "informal_approval";
       pushValidationRow(rows, {
         meetingId,
         agendaItemId: agendaItem.id,
         validationType: "schema",
-        severity: isInformal ? "info" : "warning",
+        severity: "warning",
         code: "incomplete_motion",
-        message: isInformal
-          ? "Informal approval captured without mover/seconder. Human review needed to assign them."
-          : "Motion details were captured but are incomplete.",
+        message: "Motion details were captured but are incomplete.",
         details: { title: agendaItem.title, missingFields },
       });
     }
@@ -1834,19 +1827,7 @@ function addDeterministicValidationRows(options: {
     }
   }
 
-  for (const action of actions) {
-    if (!action.owner) {
-      pushValidationRow(rows, {
-        meetingId,
-        agendaItemId: agendaItem.id,
-        validationType: "completeness",
-        severity: "warning",
-        code: "incomplete_action",
-        message: "An action item is missing an owner or due date.",
-        details: { title: agendaItem.title, actionDescription: action.description, missingFields: ["owner"] },
-      });
-    }
-  }
+
 
   if (transcriptEvidenceCount === 0 && documentEvidenceCount > 0) {
     pushValidationRow(rows, {
@@ -2301,6 +2282,21 @@ export async function investigateAgendaItems(
       };
     }
 
+    
+    const AUTONOMY_TEMPERATURE = (meetingRec?.settings as { autonomyTemperature?: number })?.autonomyTemperature ?? 0.8;
+    if (AUTONOMY_TEMPERATURE >= 0.5 && normalized.open_questions && normalized.open_questions.length > 0) {
+      const remainingQuestions = [];
+      for (const q of normalized.open_questions) {
+        if ((q.confidence === "high" || q.confidence === "medium") && q.recommended_answer) {
+          // Silently accept the AI's recommended answer
+          normalized.discussion_summary += `\n\n${q.recommended_answer}`;
+        } else {
+          remainingQuestions.push(q);
+        }
+      }
+      normalized.open_questions = remainingQuestions;
+    }
+
     investigationRows.push({
       id: randomUUID(),
       meetingV2Id: meetingId,
@@ -2312,7 +2308,7 @@ export async function investigateAgendaItems(
       decisionsJson: JSON.stringify(normalized.decisions),
       motionJson: JSON.stringify(normalized.motion),
       actionsJson: JSON.stringify(normalized.actions),
-      openQuestionsJson: JSON.stringify(normalized.open_questions),
+      openQuestionsJson: JSON.stringify(normalized.open_questions.map(q => typeof q === "string" ? q : q.question)),
       userAnswersJson: answerText ? JSON.stringify(userAnswers) : null,
       modelName,
       usageJson,

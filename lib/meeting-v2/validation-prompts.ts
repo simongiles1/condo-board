@@ -23,8 +23,6 @@ Important rules:
 - If evidence is incomplete, say so clearly instead of guessing.
 - Do not fail an item only because a due date is null.
 - Do not require a formal motion if the meeting clearly reached an action or direction without one.
-- If the outcome is INFORMAL_APPROVAL, ensure there is clear evidence of consensus or assent in the transcript. Do not fail the item for missing formal motion fields (mover/seconder).
-- When you see an INFORMAL_APPROVAL outcome, you MUST set needs_human_review: true and add an issue with severity "info" suggesting that the user should manually assign a Mover and Seconder to satisfy strict Gold Standard formatting.
 - If the outcome is APPROVED or REJECTED, be especially strict. Those outcomes need clear support.
 - If the outcome is DEFERRED, NO_DECISION, or UNCLEAR, allow ambiguity as long as it is described honestly.
 - If the investigation is mostly sound but has some ambiguity, use review_required instead of fail.

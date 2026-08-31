@@ -202,6 +202,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [draftBusy, setDraftBusy] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<V2Tab>("overview");
+  const [autonomyTemperature, setAutonomyTemperature] = useState(0.8);
 
   useEffect(() => {
     let active = true;
@@ -235,7 +236,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
       await fetch("/api/v2/meetings/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ meetingId }),
+        body: JSON.stringify({ meetingId, autonomyTemperature }),
       });
     } finally {
       setRunBusy(false);
@@ -330,7 +331,21 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
             </div>
 
             <div className="flex flex-col gap-3 xl:items-end">
-              <div className="flex flex-wrap gap-3">
+              <div className="flex flex-wrap gap-3 items-center">
+                <div className="flex flex-col gap-1 mr-2">
+                  <label htmlFor="temp-slider" className="text-[11px] font-semibold uppercase tracking-wider text-white/70">
+                    AI Autonomy: {autonomyTemperature.toFixed(1)}
+                  </label>
+                  <input 
+                    id="temp-slider"
+                    type="range" 
+                    min="0" max="1" step="0.1"
+                    value={autonomyTemperature}
+                    onChange={(e) => setAutonomyTemperature(parseFloat(e.target.value))}
+                    className="w-32 accent-teal-400" 
+                    title="0 = Always ask user | 1 = Fully autonomous"
+                  />
+                </div>
                 <button
                   className="inline-flex items-center rounded-xl bg-teal-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-md transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={runBusy}

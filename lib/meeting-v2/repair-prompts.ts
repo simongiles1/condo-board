@@ -43,7 +43,13 @@ Return JSON only with this exact shape:
       "due_date": "string|null"
     }
   ],
-  "open_questions": ["string"]
+  "open_questions": [
+    {
+      "question": "string",
+      "recommended_answer": "string",
+      "confidence": "high | medium | low"
+    }
+  ]
 }
 
 Constraints:

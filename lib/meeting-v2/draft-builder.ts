@@ -1047,10 +1047,8 @@ function mapMotion(item: DraftInputItem, presentDirectors: MeetingFramePerson[] 
 }
 
 function summarizeAgendaItem(item: DraftInputItem): string {
-  const parts = dedupeStrings([item.investigation.discussionSummary, ...item.investigation.decisions]);
-
   const fallbackSummary =
-    parts.join(" ") ||
+    item.investigation.discussionSummary ||
     item.notes.join(" ") ||
     "Discussion occurred on this topic and the Board considered the matter.";
 

@@ -6,7 +6,7 @@
     "dev": "node scripts/run-dev.cjs",
     "dev:restart": "node scripts/dev-restart.cjs",
     "build": "next build",
-    "start": "next start",
+    "start": "npm run db:migrate && next start",
     "lint": "eslint",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/db-migrate.cjs",

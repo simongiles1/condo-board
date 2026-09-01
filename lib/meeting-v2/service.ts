@@ -1881,13 +1881,12 @@ function addAiValidationRows(options: {
         ? "warning"
         : "info";
 
-  if (options.review.verdict !== "pass") {
-    pushValidationRow(options.rows, {
-      meetingId: options.meetingId,
-      agendaItemId: options.agendaItemId,
-      validationType: "ai_review",
-      severity: summarySeverity,
-      code: "ai_verdict",
+  pushValidationRow(options.rows, {
+    meetingId: options.meetingId,
+    agendaItemId: options.agendaItemId,
+    validationType: "ai_review",
+    severity: summarySeverity,
+    code: "ai_verdict",
       message:
         options.review.summary ||
         `AI validator verdict: ${options.review.verdict.replace(/_/g, " ")}.`,
@@ -1899,7 +1898,6 @@ function addAiValidationRows(options: {
         suggestedActions: options.review.suggested_actions,
       },
     });
-  }
 
   for (const issue of options.review.issues) {
     pushValidationRow(options.rows, {

@@ -248,6 +248,21 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     }
   }
 
+  async function handleRestartPipeline() {
+    const confirmed = window.confirm("Are you sure you want to restart from scratch? This will wipe all extracted data, investigations, and drafts for this meeting.");
+    if (!confirmed) return;
+    setRunBusy(true);
+    try {
+      await fetch("/api/v2/meetings/restart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meetingId, autonomyTemperature }),
+      });
+    } finally {
+      setRunBusy(false);
+    }
+  }
+
   async function handleGenerateDraft() {
     setDraftBusy(true);
     try {
@@ -357,7 +372,15 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   onClick={handleRunPipeline}
                   type="button"
                 >
-                  {runBusy ? "Starting..." : "Run / Resume Pipeline"}
+                  {runBusy ? "Resuming..." : "Resume Pipeline"}
+                </button>
+                <button
+                  className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={runBusy}
+                  onClick={handleRestartPipeline}
+                  type="button"
+                >
+                  {runBusy ? "Restarting..." : "Restart from Beginning"}
                 </button>
                 <button
                   className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"

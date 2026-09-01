@@ -71,6 +71,7 @@ Important rules:
 - If a person, contractor, or role is only partially known, preserve the partial wording in aliases or notes instead of inventing a full name or title.
 - Do not create topics from meeting administration lines such as call to order, ratification of agenda, next meeting scheduling, or adjournment.
 - EXCEPTION: You MUST extract "Approval of Previous Minutes" as a discrete topic. You MUST include the date of the previous meeting in the title if it is known (e.g. "Approval of Previous Minutes: May 19, 2026").
+- Categorize topics involving monthly financial statements, balance sheets, budget variances, reserve fund balances, investments, GICs, bad debts, or arrears strictly as "financial_matters".
 - Do not create topics from attachment-only boilerplate such as quotation validity, payment terms, warranties, limitation of liability, generic email sign-offs, gym rules, or record-request instructions unless they clearly define a separate board matter.
 - Do not invent motions, outcomes, or minutes wording.
 - Return strict JSON only. No markdown fences. No commentary.`;

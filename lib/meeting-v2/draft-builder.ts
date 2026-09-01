@@ -572,23 +572,20 @@ function parseNextMeetingHint(text: string): {
   time: string | null;
   location: string | null;
 } {
-  const weekdayMonth = text.match(/\b(?:Tuesday|Wednesday|Thursday|Friday|Monday)\s*,?\s*(June|July|August|September|October|November|December)\s+(\d{1,2})/i);
-  if (weekdayMonth) {
-    const year = 2026;
-    const parsed = Date.parse(`${weekdayMonth[1]} ${weekdayMonth[2]}, ${year}`);
-    return {
-      date: Number.isNaN(parsed) ? null : new Date(parsed).toISOString().slice(0, 10),
-      time:
-        findFirstMatchingValue([/\b([0-9]{1,2}[:.][0-9]{2}\s*(?:a\.?m\.?|p\.?m\.?))/i], text) ??
-        null,
-      location: /virtual/i.test(text) ? "virtually" : null,
-    };
+  let m = text.match(/\b(?:Tuesday|Wednesday|Thursday|Friday|Monday)(?:.*?)(June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?/i);
+  if (!m) {
+    m = text.match(/\b(June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\b|$)/i);
   }
-  const alt = text.match(/\b(June|July|August|September|October|November|December)\s+(\d{1,2})\b/i);
-  if (!alt) return { date: null, time: null, location: null };
-  const parsed = Date.parse(`${alt[1]} ${alt[2]}, 2026`);
+  if (!m) return { date: null, time: null, location: null };
+  
+  const monthNames = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+  const monthIdx = monthNames.indexOf(m[1].toLowerCase()) + 1;
+  const mm = String(monthIdx).padStart(2, "0");
+  const dd = String(parseInt(m[2])).padStart(2, "0");
+  const dateStr = `2026-${mm}-${dd}`;
+
   return {
-    date: Number.isNaN(parsed) ? null : new Date(parsed).toISOString().slice(0, 10),
+    date: dateStr,
     time:
       findFirstMatchingValue([/\b([0-9]{1,2}[:.][0-9]{2}\s*(?:a\.?m\.?|p\.?m\.?))/i], text) ??
       null,

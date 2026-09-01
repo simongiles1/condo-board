@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState, useRef, type ReactNode } from "react";
 import { MinutesStructuredEditor } from "@/components/MinutesStructuredEditor";
+import { AttendeesEditorDialog } from "@/components/AttendeesEditorDialog";
+import type { EditableAttendance } from "@/lib/minutes/attendance-edit";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
 import { serializeMinutesDoc } from "@/lib/minutes/doc-v2-edits";
 import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
@@ -969,6 +971,16 @@ function DraftPreviewBody({
 }) {
   const [doc, setDoc] = useState<MinutesDocumentV2 | null>(null);
   const saveTimeout = useRef<NodeJS.Timeout | null>(null);
+  const [attendeesDialogOpen, setAttendeesDialogOpen] = useState(false);
+
+  function handleSaveAttendees(
+    attendance: Pick<EditableAttendance, "present" | "byInvitation" | "regrets" | "guests">,
+  ) {
+    if (!doc) return;
+    const updatedDoc = { ...doc, attendance };
+    handleDocChange(updatedDoc);
+    setAttendeesDialogOpen(false);
+  }
 
   useEffect(() => {
     if (draft?.json) {
@@ -1018,7 +1030,13 @@ function DraftPreviewBody({
           <MinutesStructuredEditor
             doc={doc}
             onDocChange={handleDocChange}
-            onOpenAttendeesDialog={() => alert("Attendees editor coming soon to V2!")}
+            onOpenAttendeesDialog={() => setAttendeesDialogOpen(true)}
+          />
+          <AttendeesEditorDialog
+            open={attendeesDialogOpen}
+            attendance={{ ...doc.attendance, schemaVersion: "v2" }}
+            onClose={() => setAttendeesDialogOpen(false)}
+            onSave={handleSaveAttendees}
           />
         </div>
       ) : null}

@@ -983,11 +983,14 @@ function buildDraftInputItems(options: {
           notes: context?.notes ?? [],
         contextSpeakers: context
           ? dedupeStrings(
-              context.anchorChunkIds.flatMap((chunkId: string) =>
-                extractTranscriptSpeakerNames(context.chunksById[chunkId]?.text ?? ""),
-              ),
+              context.anchorChunkIds.flatMap((chunkId: string) => {
+                const chunk = context.chunksById[chunkId];
+                return chunk?.chunkKind === "transcript"
+                  ? extractTranscriptSpeakerNames(chunk.text ?? "")
+                  : [];
+              }),
             )
-            : [],
+          : [],
           investigation: {
             discussionSummary: normalizeWhitespace(investigation.discussionSummary),
             outcome: investigation.outcome,

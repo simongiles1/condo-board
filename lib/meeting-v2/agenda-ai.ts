@@ -124,6 +124,12 @@ Package chunk rules:
 - If a discussion section contains lettered sub-items like a., b., c., create separate topics for those lettered items.
 - If an agenda line says to refer to supporting pages, email correspondence, appendix pages, or attachment pages, include those referenced page numbers in sourcePages for that topic in addition to the agenda page itself.
 - For ratification blocks, you MUST create one discrete agenda topic per ratified line item (e.g., 6.1(a), 6.1(b), etc.). Never collapse multiple quotes or email approvals into a single generic "email approvals ratified" umbrella topic. Extract contractor name, quote amount, and date into notes for each topic.
+- You MUST assign the correct itemType:
+  - For "Approval of Previous Minutes", set itemType to "approval_of_previous_minutes". DO NOT drop it as administrative.
+  - For "Financial Matters" or financial statements, set itemType to "financial_matters". DO NOT drop it as administrative.
+  - For ratification items (e.g. email approvals), set itemType to "ratification_line_item".
+  - For matters explicitly requiring board approval, set itemType to "discussion_approval".
+  - For completed items or work updates, set itemType to "completed_items".
 - If the chunk only shows a bucket label like "ratification of email decisions", "review and approval of projects", "items completed", or "items for discussion" but does not yet list the underlying matters, do not create a placeholder topic for that bucket. Wait for the child matters unless the bucket itself is clearly the real business matter.
 - If the chunk is mainly an attachment or support page, use it to enrich an existing topic instead of creating new ones.
 - If a support page clearly continues a numbered or lettered agenda list already in progress, you may add or complete that agenda topic using the support page wording.
@@ -183,7 +189,7 @@ Transcript rules:
 - Preserve early guest-presentation topics when the transcript clearly shows a contractor, engineer, or presenter leading a distinct opening discussion block.
 - If the transcript clearly reveals a planned or structured meeting matter that belongs in the main agenda but is missing from documentTopics, add it to documentTopics rather than extraTopics.
 - Use extraTopics only for genuinely additional matters that do not behave like an official agenda topic.
-- Every transcript-only new matter must use itemType "extra_topic". EXCEPTION: If the transcript introduces the approval of previous minutes, add it to documentTopics with itemType "approval_of_previous_minutes" and ensure the title includes the previous meeting date if mentioned (e.g. "Approval of Previous Minutes: May 19, 2026"). Do not invent custom itemType values for extraTopics.
+- Every transcript-only new matter must use itemType "extra_topic". EXCEPTION: If the transcript introduces the approval of previous minutes or financial matters, add it to documentTopics with itemType "approval_of_previous_minutes" or "financial_matters" respectively. Do not invent custom itemType values for extraTopics.
 - If the transcript uses shorthand, partial names, or abbreviated project references, attach them to the matching existing topic through aliases or notes whenever reasonably possible.
 - Do not merge a transcript matter into an existing topic unless they are clearly the same business issue. Shared words, contractor names, or building-area overlap alone are not enough.
 - If the transcript gives a more specific unit number, room name, incident, or records issue than the package topic list, preserve that specific matter instead of flattening it into a broader nearby topic.

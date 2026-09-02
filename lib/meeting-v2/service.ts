@@ -943,8 +943,8 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
         meetingV2Id: meetingId,
         sourceArtifactId: boardPackageArtifact.id,
         pageNumber: page.pageNumber,
-        pageHeading: page.heading,
-        extractedText: page.text,
+        pageHeading: page.heading?.replace(/\x00/g, ''),
+        extractedText: page.text.replace(/\x00/g, ''),
         imagePath: null,
         createdAt: nowIso(),
       });

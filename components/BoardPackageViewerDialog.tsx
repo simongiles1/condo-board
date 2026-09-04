@@ -18,6 +18,7 @@ type Props = {
 
 export function BoardPackageViewerDialog({ open, meetingId, onClose }: Props) {
   const [meta, setMeta] = useState<BoardPackageMeta | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,22 +26,42 @@ export function BoardPackageViewerDialog({ open, meetingId, onClose }: Props) {
     if (!open) return;
 
     let cancelled = false;
+    let objectUrl: string | null = null;
 
-    async function loadMeta() {
+    async function loadBoardPackage() {
       setLoading(true);
       setError(null);
       setMeta(null);
+      setPreviewUrl(null);
 
       try {
-        const res = await fetch(`/api/meetings/${meetingId}/board-package?meta=1`);
-        if (!res.ok) {
-          const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+        const metaRes = await fetch(`/api/meetings/${meetingId}/board-package?meta=1`);
+        if (!metaRes.ok) {
+          const payload = (await metaRes.json().catch(() => null)) as { error?: string } | null;
           throw new Error(payload?.error ?? "Could not load board package.");
         }
 
-        const payload = (await res.json()) as BoardPackageMeta;
+        const metaPayload = (await metaRes.json()) as BoardPackageMeta;
         if (cancelled) return;
-        setMeta(payload);
+        setMeta(metaPayload);
+
+        if (!metaPayload.available) {
+          setError(
+            "Board package metadata exists in the database, but the PDF file is not stored on this machine. Open the meeting in the environment where it was uploaded, or upload the meeting again locally.",
+          );
+          return;
+        }
+
+        const pdfRes = await fetch(`/api/meetings/${meetingId}/board-package`);
+        if (!pdfRes.ok) {
+          const payload = (await pdfRes.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(payload?.error ?? "Could not load board package PDF.");
+        }
+
+        const blob = await pdfRes.blob();
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setPreviewUrl(objectUrl);
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : "Could not load board package.");
@@ -49,16 +70,26 @@ export function BoardPackageViewerDialog({ open, meetingId, onClose }: Props) {
       }
     }
 
-    void loadMeta();
+    void loadBoardPackage();
 
     return () => {
       cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
     };
   }, [open, meetingId]);
 
+  useEffect(() => {
+    if (!open && previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
+  }, [open, previewUrl]);
+
   if (!open) return null;
 
-  const pdfUrl = `/api/meetings/${meetingId}/board-package`;
+  const downloadUrl = `/api/meetings/${meetingId}/board-package`;
   const sizeLabel =
     meta?.sizeBytes != null
       ? meta.sizeBytes >= 1_048_576
@@ -99,9 +130,9 @@ export function BoardPackageViewerDialog({ open, meetingId, onClose }: Props) {
                 </p>
               ) : null}
             </div>
-            {meta?.available ? (
+            {meta?.available && previewUrl ? (
               <a
-                href={pdfUrl}
+                href={downloadUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
@@ -116,19 +147,18 @@ export function BoardPackageViewerDialog({ open, meetingId, onClose }: Props) {
           {loading ? (
             <p className="text-sm text-slate-600">Loading board package…</p>
           ) : error ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
               {error}
             </div>
-          ) : meta?.available ? (
+          ) : previewUrl ? (
             <iframe
-              title={`Board package: ${meta.fileName}`}
-              src={pdfUrl}
+              title={`Board package: ${meta?.fileName ?? "board-package.pdf"}`}
+              src={previewUrl}
               className="h-[min(70vh,720px)] w-full rounded-xl border border-slate-200 bg-slate-50"
             />
           ) : (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              The uploaded board package PDF is not stored on this server. Open the meeting on the
-              environment where it was uploaded to preview the file.
+              Board package preview is not available on this server.
             </div>
           )}
         </div>

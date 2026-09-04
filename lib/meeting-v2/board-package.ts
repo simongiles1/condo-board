@@ -1,4 +1,4 @@
-import { readFile } from "fs/promises";
+import { access, readFile } from "fs/promises";
 import path from "path";
 
 import { and, eq } from "drizzle-orm";
@@ -25,6 +25,33 @@ export type MeetingBoardPackagePayload = {
 function resolveStoredPath(storedPath: string | null | undefined): string | null {
   if (!storedPath?.trim()) return null;
   return path.resolve(process.cwd(), storedPath);
+}
+
+function isPathWithinUploadRoot(absolute: string, meetingId: string): boolean {
+  const uploadRoot = path.resolve(process.cwd(), "uploads", meetingId);
+  const normalizedAbsolute = path.normalize(absolute);
+  const normalizedRoot = path.normalize(uploadRoot);
+  if (process.platform === "win32") {
+    const absoluteLower = normalizedAbsolute.toLowerCase();
+    const rootLower = normalizedRoot.toLowerCase();
+    return (
+      absoluteLower === rootLower ||
+      absoluteLower.startsWith(`${rootLower}${path.sep}`)
+    );
+  }
+  return (
+    normalizedAbsolute === normalizedRoot ||
+    normalizedAbsolute.startsWith(`${normalizedRoot}${path.sep}`)
+  );
+}
+
+async function fileExists(absolutePath: string): Promise<boolean> {
+  try {
+    await access(absolutePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function loadMeetingBoardPackageMeta(
@@ -71,8 +98,8 @@ export async function loadMeetingBoardPackageMeta(
     artifact?.originalFilename?.trim() ||
     (storedPath ? path.basename(storedPath) : "board-package.pdf");
   const absolute = resolveStoredPath(storedPath);
-  const uploadRoot = path.resolve(process.cwd(), "uploads", meetingId);
-  const available = Boolean(absolute?.startsWith(uploadRoot));
+  const inUploadRoot = Boolean(absolute && isPathWithinUploadRoot(absolute, meetingId));
+  const available = inUploadRoot && absolute ? await fileExists(absolute) : false;
 
   return {
     ok: true,
@@ -130,14 +157,22 @@ export async function loadMeetingBoardPackage(
     artifact?.storagePath ||
     null;
   const absolute = resolveStoredPath(storedPath);
-  const uploadRoot = path.resolve(process.cwd(), "uploads", meetingId);
 
-  if (!absolute || !absolute.startsWith(uploadRoot)) {
+  if (!absolute || !isPathWithinUploadRoot(absolute, meetingId)) {
     return {
       ok: false,
       status: 404,
       error:
         "Board package PDF is not available on this server. If the meeting was uploaded in production, open it there.",
+    };
+  }
+
+  if (!(await fileExists(absolute))) {
+    return {
+      ok: false,
+      status: 404,
+      error:
+        "Board package metadata exists in the database, but the PDF file is not on this machine. Open the meeting where it was uploaded, or create a new local upload.",
     };
   }
 
@@ -155,11 +190,12 @@ export async function loadMeetingBoardPackage(
         source: "file",
       },
     };
-  } catch {
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown read error";
     return {
       ok: false,
       status: 404,
-      error: "Could not read the uploaded board package PDF.",
+      error: `Could not read the uploaded board package PDF (${detail}).`,
     };
   }
 }

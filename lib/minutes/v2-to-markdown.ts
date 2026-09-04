@@ -141,25 +141,25 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   const lines: string[] = [];
 
   lines.push("Present:");
-  for (const a of doc.attendance.present) {
+  for (const a of (doc.attendance?.present || [])) {
     lines.push(formatAttendeeLine(a));
   }
   lines.push("");
   lines.push("By Invitation:");
-  for (const a of doc.attendance.byInvitation) {
+  for (const a of (doc.attendance?.byInvitation || [])) {
     lines.push(formatAttendeeLine(a));
   }
-  if (doc.attendance.guests.length > 0) {
+  if ((doc.attendance?.guests || []).length > 0) {
     lines.push("");
     lines.push("Guests:");
-    for (const a of doc.attendance.guests) {
+    for (const a of (doc.attendance?.guests || [])) {
       lines.push(formatAttendeeLine(a));
     }
   }
-  if (doc.attendance.regrets.length > 0) {
+  if ((doc.attendance?.regrets || []).length > 0) {
     lines.push("");
     lines.push("Regrets:");
-    for (const a of doc.attendance.regrets) {
+    for (const a of (doc.attendance?.regrets || [])) {
       lines.push(formatAttendeeLine(a));
     }
   }
@@ -170,7 +170,7 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   lines.push("");
   if (doc.callToOrder) {
     const chair = doc.callToOrder.chairName?.trim() ?? "the Chair";
-    const time = doc.callToOrder.time?.trim() ?? doc.metadata.meetingTime.trim();
+    const time = doc.callToOrder.time?.trim() ?? (doc.metadata || {}).meetingTime.trim();
     lines.push(
       `Proper notice having been given and there being a quorum present, ${chair} called the meeting to order${time ? ` at ${time.replace(/\.+$/, "")}.` : "."} and presided as Chair.`,
     );
@@ -178,16 +178,21 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   lines.push("");
 
   // 2. APPROVAL OF PREVIOUS MINUTES
-  if (doc.approvalOfPreviousMinutes.length > 0) {
+  if ((doc.approvalOfPreviousMinutes || []).length > 0) {
     lines.push("## 2. APPROVAL OF PREVIOUS MINUTES");
     lines.push("");
-    for (const approval of doc.approvalOfPreviousMinutes) {
+    for (const approval of (doc.approvalOfPreviousMinutes || [])) {
       const prevDate = approval.previousMeetingDate
         ? formatMeetingDateDisplay(approval.previousMeetingDate)
         : "the previous meeting";
       if (approval.amendmentsNoted) {
         lines.push(
           `The Chair asked for any errors or omissions in the minutes of the Board meeting of ${prevDate} that were circulated previously for review. Several amendments were agreed to and incorporated into a clean copy of the minutes.`,
+        );
+        lines.push("");
+      } else {
+        lines.push(
+          `The Chair asked for any errors or omissions in the minutes of the Board meeting of ${prevDate} that were circulated previously for review. There being none, the minutes were accepted as presented.`,
         );
         lines.push("");
       }
@@ -198,16 +203,16 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
     }
   }
 
-  const mr = doc.managementReport;
+  const mr = doc.managementReport || {};
 
-  const publicFinancial = publicOnly(doc.financialMatters);
-  const publicRatification = publicOnly(mr.itemsForRatification);
+  const publicFinancial = publicOnly((doc.financialMatters || []));
+  const publicRatification = publicOnly(mr.itemsForRatification || []);
   const publicApprovalDiscussion = publicOnly([
-    ...mr.itemsForApproval,
-    ...mr.itemsForDiscussion,
+    ...mr.itemsForApproval || [],
+    ...mr.itemsForDiscussion || [],
   ]);
-  const publicInformation = publicOnly(mr.itemsForInformation);
-  const publicNewBusiness = publicOnly(doc.newOrOtherBusiness);
+  const publicInformation = publicOnly(mr.itemsForInformation || []);
+  const publicNewBusiness = publicOnly((doc.newOrOtherBusiness || []));
 
   // 3. FINANCIAL MATTERS
   if (publicFinancial.length > 0) {
@@ -252,7 +257,7 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   }
 
   // Correspondence
-  const publicCorrespondence = publicOnly(doc.correspondence);
+  const publicCorrespondence = publicOnly((doc.correspondence || []));
   if (publicCorrespondence.length > 0) {
     lines.push("## CORRESPONDENCE");
     lines.push("");
@@ -270,11 +275,11 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   if (doc.dateOfNextMeeting) {
     lines.push("## 6. DATE OF NEXT MEETING");
     lines.push("");
-    const d = doc.dateOfNextMeeting.date
-      ? formatMeetingDateDisplay(doc.dateOfNextMeeting.date)
+    const d = (doc.dateOfNextMeeting || {}).date
+      ? formatMeetingDateDisplay((doc.dateOfNextMeeting || {}).date)
       : "";
-    const t = doc.dateOfNextMeeting.time?.trim() ?? "";
-    const loc = doc.dateOfNextMeeting.location?.trim() ?? "";
+    const t = (doc.dateOfNextMeeting || {}).time?.trim() ?? "";
+    const loc = (doc.dateOfNextMeeting || {}).location?.trim() ?? "";
     lines.push(
       `The next meeting of the Board of Directors will be held${loc ? ` ${loc}` : " virtually"}${d ? ` on ${d}` : ""}${t ? ` commencing at ${t.replace(/\.+$/, "")}.` : "."}`,
     );
@@ -286,13 +291,13 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
     lines.push("## 7. MEETING CONCLUSION");
     lines.push("");
     lines.push(
-      `There being no further business to discuss, the meeting was unanimously concluded at ${doc.termination.time.replace(/\.+$/, "")}.`,
+      `There being no further business to discuss, the meeting was unanimously concluded at ${(doc.termination || {}).time.replace(/\.+$/, "")}.`,
     );
     lines.push("");
   }
 
   // Post-termination sections (e.g. 8. BUDGET DISCUSSION)
-  doc.postTerminationSections.forEach((section, idx) => {
+  (doc.postTerminationSections || []).forEach((section, idx) => {
     const num = 8 + idx;
     const publicItems = publicOnly(section.items);
     if (publicItems.length === 0) return;
@@ -302,7 +307,7 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   });
 
   // Special presentations (prepend-style sections if populated)
-  const publicSpecialPresentations = publicOnly(doc.specialPresentations);
+  const publicSpecialPresentations = publicOnly((doc.specialPresentations || []));
   if (publicSpecialPresentations.length > 0) {
     lines.push("## SPECIAL PRESENTATIONS");
     lines.push("");
@@ -310,14 +315,14 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   }
 
   if (hasAnyRestrictedItem(doc)) {
-    const finRest = restrictedOnly(doc.financialMatters);
-    const ratRest = restrictedOnly(mr.itemsForRatification);
+    const finRest = restrictedOnly((doc.financialMatters || []));
+    const ratRest = restrictedOnly(mr.itemsForRatification || []);
     const apprDiscRest = restrictedOnly([
-      ...mr.itemsForApproval,
-      ...mr.itemsForDiscussion,
+      ...mr.itemsForApproval || [],
+      ...mr.itemsForDiscussion || [],
     ]);
-    const infoRest = restrictedOnly(mr.itemsForInformation);
-    const newBizRest = restrictedOnly(doc.newOrOtherBusiness);
+    const infoRest = restrictedOnly(mr.itemsForInformation || []);
+    const newBizRest = restrictedOnly((doc.newOrOtherBusiness || []));
 
     const opts: RenderOpts = { italicTopic: true };
 
@@ -381,7 +386,7 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
       );
     }
 
-    doc.postTerminationSections.forEach((section, idx) => {
+    (doc.postTerminationSections || []).forEach((section, idx) => {
       const sectionRest = restrictedOnly(section.items);
       if (sectionRest.length === 0) return;
       const num = 8 + idx;

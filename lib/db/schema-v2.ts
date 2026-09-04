@@ -31,6 +31,7 @@ export const meetingsV2 = pgTable("meetings_v2", {
   currentStep: text("current_step"),
   progressPercent: integer("progress_percent").default(0),
   lastError: text("last_error"),
+  settings: jsonb("settings").$type<{ autonomyTemperature?: number }>().default({}),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

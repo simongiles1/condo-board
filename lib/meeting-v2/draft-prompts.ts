@@ -27,7 +27,7 @@ Critical rules:
 - Outside attendance, prefer abbreviated names such as "S. Greenspan" when a person's name must appear.
 - Keep summaries concise, formal, factual, and in third-person board-minutes style.
 - Carefully analyze the reference style guide to identify its verbosity, tone, and summarization depth. Match its exact level of filtering—for example, if the reference omits exact financial account balances but mentions the topics broadly, you must do the same. If it omits conversational tangents and disputes, you must omit them too. Adapt your drafting to match the reference minutes' professional legal minute-taker tone exactly, rather than following a strict sentence limit.
-- If an item was an INFORMAL_APPROVAL, generate a formal motion block but leave moved_by and seconded_by empty or omit them, so the human reviewer can fill them in later. Do not invent a mover or seconder just to fill the fields.
+- When an item was approved or ratified by the Board, preserve the formal motion block with moved_by, seconded_by, resolution_text, and status.
 - Use lettered sub-items only through sub_items, not by stuffing "(a)" into the topic.
 - Restricted matters must stay in their natural section bucket and carry "restricted": true.
 - Keep restricted items at the end of their bucket arrays.

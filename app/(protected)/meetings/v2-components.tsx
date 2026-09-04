@@ -1,7 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useRef, type ReactNode } from "react";
+import { MinutesStructuredEditor } from "@/components/MinutesStructuredEditor";
+import { AttendeesEditorDialog } from "@/components/AttendeesEditorDialog";
+import type { EditableAttendance } from "@/lib/minutes/attendance-edit";
+import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
+import { serializeMinutesDoc } from "@/lib/minutes/doc-v2-edits";
+import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
 
 type MeetingCard = {
   id: string;
@@ -73,6 +79,7 @@ type MeetingV2Status = {
     id: string;
     title: string;
     contentMarkdown: string;
+    json: string | null;
     format: string;
     createdAt: string;
     updatedAt: string;
@@ -202,6 +209,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [draftBusy, setDraftBusy] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<V2Tab>("overview");
+  const [autonomyTemperature, setAutonomyTemperature] = useState(0.8);
 
   useEffect(() => {
     let active = true;
@@ -235,7 +243,22 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
       await fetch("/api/v2/meetings/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ meetingId }),
+        body: JSON.stringify({ meetingId, autonomyTemperature }),
+      });
+    } finally {
+      setRunBusy(false);
+    }
+  }
+
+  async function handleRestartPipeline() {
+    const confirmed = window.confirm("Are you sure you want to restart from scratch? This will wipe all extracted data, investigations, and drafts for this meeting.");
+    if (!confirmed) return;
+    setRunBusy(true);
+    try {
+      await fetch("/api/v2/meetings/restart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meetingId, autonomyTemperature }),
       });
     } finally {
       setRunBusy(false);
@@ -289,7 +312,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     item.validation.some((validation) => validation.severity === "error" || validation.severity === "warning"),
   ).length;
   const readyCount = reviewableItems.filter(
-    (item) => item.openQuestions.length === 0 && item.validation.length === 0,
+    (item) => item.openQuestions.length === 0 && !item.validation.some(v => v.severity === "error" || v.severity === "warning"),
   ).length;
 
   return (
@@ -330,14 +353,36 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
             </div>
 
             <div className="flex flex-col gap-3 xl:items-end">
-              <div className="flex flex-wrap gap-3">
+              <div className="flex flex-wrap gap-3 items-center">
+                <div className="flex flex-col gap-1 mr-2">
+                  <label htmlFor="temp-slider" className="text-[11px] font-semibold uppercase tracking-wider text-white/70">
+                    AI Autonomy: {autonomyTemperature.toFixed(1)}
+                  </label>
+                  <input 
+                    id="temp-slider"
+                    type="range" 
+                    min="0" max="1" step="0.1"
+                    value={autonomyTemperature}
+                    onChange={(e) => setAutonomyTemperature(parseFloat(e.target.value))}
+                    className="w-32 accent-teal-400" 
+                    title="0 = Always ask user | 1 = Fully autonomous"
+                  />
+                </div>
                 <button
                   className="inline-flex items-center rounded-xl bg-teal-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-md transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={runBusy}
                   onClick={handleRunPipeline}
                   type="button"
                 >
-                  {runBusy ? "Starting..." : "Run / Resume Pipeline"}
+                  {runBusy ? "Resuming..." : "Resume Pipeline"}
+                </button>
+                <button
+                  className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={runBusy}
+                  onClick={handleRestartPipeline}
+                  type="button"
+                >
+                  {runBusy ? "Restarting..." : "Restart from Beginning"}
                 </button>
                 <button
                   className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
@@ -643,7 +688,7 @@ function AgendaReviewPanel({
       <div className="space-y-4">
         {status.items.map((item) => {
           const isOpen = openItemId === item.id;
-          const hasFlags = item.validation.length > 0;
+          const hasFlags = item.validation.some(v => v.severity === "error" || v.severity === "warning");
           return (
             <div
               key={item.id}
@@ -673,7 +718,7 @@ function AgendaReviewPanel({
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                   <span>{item.openQuestions.length} open</span>
-                  <span>{item.validation.length} flags</span>
+                  <span>{item.validation.filter(v => v.severity === "error" || v.severity === "warning").length} flags</span>
                   <span>{isOpen ? "Collapse" : "Expand"}</span>
                 </div>
               </button>
@@ -883,13 +928,32 @@ function DraftWorkspacePanel({
   meetingId: string;
   draft: MeetingV2Status["latestDraft"] | null;
 }) {
+  const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
   return (
     <SectionCard
       eyebrow="Draft"
-      title="Minutes draft preview"
-      description="The latest generated draft appears here in the same workspace so the meeting review and document review stay connected."
+      title={
+        <div className="flex items-center justify-between">
+          <span>Minutes draft</span>
+          <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+            <button
+              onClick={() => setEditorMode("edit")}
+              className={`px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${editorMode === "edit" ? "bg-teal-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+            >
+              Editor
+            </button>
+            <button
+              onClick={() => setEditorMode("preview")}
+              className={`border-l border-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${editorMode === "preview" ? "bg-teal-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+            >
+              PDF Preview
+            </button>
+          </div>
+        </div>
+      }
+      description="Edit the generated minutes directly, or toggle to the PDF preview to see the final layout."
     >
-      <DraftPreviewBody meetingId={meetingId} draft={draft} heightClassName="h-[70dvh] min-h-[42rem]" />
+      <DraftPreviewBody meetingId={meetingId} draft={draft} mode={editorMode} heightClassName="h-[70dvh] min-h-[42rem]" />
     </SectionCard>
   );
 }
@@ -897,12 +961,55 @@ function DraftWorkspacePanel({
 function DraftPreviewBody({
   meetingId,
   draft,
+  mode,
   heightClassName,
 }: {
   meetingId: string;
   draft: MeetingV2Status["latestDraft"] | null;
+  mode: "edit" | "preview";
   heightClassName: string;
 }) {
+  const [doc, setDoc] = useState<MinutesDocumentV2 | null>(null);
+  const saveTimeout = useRef<NodeJS.Timeout | null>(null);
+  const [attendeesDialogOpen, setAttendeesDialogOpen] = useState(false);
+
+  function handleSaveAttendees(
+    attendance: Pick<EditableAttendance, "present" | "byInvitation" | "regrets" | "guests">,
+  ) {
+    if (!doc) return;
+    const updatedDoc = { ...doc, attendance };
+    handleDocChange(updatedDoc);
+    setAttendeesDialogOpen(false);
+  }
+
+  useEffect(() => {
+    if (draft?.json) {
+      try {
+        const parsed = JSON.parse(draft.json);
+        const actualDoc = parsed.minutesV2?.data || parsed.data || parsed;
+        setDoc(actualDoc);
+      } catch (e) {
+        console.error("Failed to parse draft JSON", e);
+      }
+    }
+  }, [draft?.id]); // only re-run when a NEW draft is generated
+
+  function handleDocChange(updated: MinutesDocumentV2) {
+    setDoc(updated);
+    if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    
+    saveTimeout.current = setTimeout(() => {
+      const summaryJson = serializeMinutesDoc(updated);
+      const contentMarkdown = v2ToMarkdown(updated);
+      
+      fetch(`/api/v2/meetings/${meetingId}/draft/save`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draftId: draft!.id, summaryJson, contentMarkdown }),
+      }).catch(console.error);
+    }, 1000); // 1s debounce
+  }
+
   if (!draft) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-sm text-slate-600">
@@ -917,14 +1024,33 @@ function DraftPreviewBody({
         <div className="text-sm font-semibold text-slate-950">{draft.title}</div>
         <div className="mt-1 text-sm text-slate-500">Updated {formatDateTime(draft.updatedAt)}</div>
       </div>
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-        <iframe
-          key={draft.id}
-          title={`${draft.title} PDF preview`}
-          src={`/api/v2/meetings/${meetingId}/draft/file`}
-          className={`${heightClassName} w-full bg-white`}
-        />
-      </div>
+      
+      {mode === "edit" && doc ? (
+        <div className="rounded-2xl border border-slate-200 bg-white">
+          <MinutesStructuredEditor
+            doc={doc}
+            onDocChange={handleDocChange}
+            onOpenAttendeesDialog={() => setAttendeesDialogOpen(true)}
+          />
+          <AttendeesEditorDialog
+            open={attendeesDialogOpen}
+            attendance={{ ...doc.attendance, schemaVersion: "v2" }}
+            onClose={() => setAttendeesDialogOpen(false)}
+            onSave={handleSaveAttendees}
+          />
+        </div>
+      ) : null}
+
+      {mode === "preview" ? (
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+          <iframe
+            key={draft.id + doc?.metadata.meetingDate} // force refresh if needed
+            title={`${draft.title} PDF preview`}
+            src={`/api/v2/meetings/${meetingId}/draft/file`}
+            className={`${heightClassName} w-full bg-white`}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

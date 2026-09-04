@@ -25,7 +25,7 @@ import {
 import { AGENDA_ITEM_INVESTIGATION_PROMPT } from "@/lib/meeting-v2/investigation-prompts";
 import { AGENDA_ITEM_VALIDATION_PROMPT } from "@/lib/meeting-v2/validation-prompts";
 import { extractAgendaItemsWithAi } from "@/lib/meeting-v2/agenda-ai";
-import { buildMeetingV2DraftArtifact } from "@/lib/meeting-v2/draft-builder";
+import { buildMeetingV2DraftArtifact, buildMeetingFrame } from "@/lib/meeting-v2/draft-builder";
 import { chunkDocumentPages, chunkTranscriptSegments } from "@/lib/meeting-v2/chunking";
 import {
   loadInvestigationToolRuntime,
@@ -943,8 +943,8 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
         meetingV2Id: meetingId,
         sourceArtifactId: boardPackageArtifact.id,
         pageNumber: page.pageNumber,
-        pageHeading: page.heading,
-        extractedText: page.text,
+        pageHeading: page.heading?.replace(/\x00/g, ''),
+        extractedText: page.text.replace(/\x00/g, ''),
         imagePath: null,
         createdAt: nowIso(),
       });
@@ -1289,19 +1289,15 @@ function inferVisibility(title: string): string {
   return "open";
 }
 
-function buildOpenQuestions(
-  title: string,
-  transcriptEvidenceCount: number,
-  answerText: string | null,
-): string[] {
+function buildOpenQuestions(title: string, transcriptEvidenceCount: number, answerText: string | null): Array<{ question: string; recommended_answer: string; confidence: "high" | "medium" | "low" }> {
   if (answerText) return [];
   if (transcriptEvidenceCount > 0) return [];
-  return [`Can you confirm the final outcome for "${title}" from the live discussion?`];
+  return [{ question: `Can you confirm the final outcome for "${title}" from the live discussion?`, recommended_answer: "Based on context, the item was discussed but may require confirmation.", confidence: "low" }];
 }
 
 type AiInvestigationDocument = {
   discussion_summary: string;
-  outcome: "APPROVED" | "REJECTED" | "DEFERRED" | "NO_DECISION" | "INFORMATION_ONLY" | "UNCLEAR" | "INFORMAL_APPROVAL";
+  outcome: "APPROVED" | "REJECTED" | "DEFERRED" | "NO_DECISION" | "INFORMATION_ONLY" | "UNCLEAR";
   confidence: "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT";
   visibility: "PUBLIC" | "RESTRICTED" | "UNKNOWN";
   decisions: string[];
@@ -1311,14 +1307,13 @@ type AiInvestigationDocument = {
     resolution_text: string | null;
     result: "CARRIED" | "DEFEATED" | "DEFERRED" | "UNKNOWN";
     is_candidate?: boolean;
-    is_informal?: boolean;
-  } | null;
+      } | null;
   actions: Array<{
     owner: string | null;
     description: string;
     due_date: string | null;
   }>;
-  open_questions: string[];
+  open_questions: Array<{ question: string; recommended_answer: string; confidence: "high" | "medium" | "low" }>;
 };
 
 type AiValidationDocument = {
@@ -1351,7 +1346,7 @@ function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument
     discussion_summary: normalizeWhitespace(typeof record.discussion_summary === "string" ? record.discussion_summary : ""),
     outcome:
       outcome === "APPROVED" || outcome === "REJECTED" || outcome === "DEFERRED" || outcome === "NO_DECISION" ||
-      outcome === "INFORMATION_ONLY" || outcome === "UNCLEAR" || outcome === "INFORMAL_APPROVAL"
+      outcome === "INFORMATION_ONLY" || outcome === "UNCLEAR" || false
         ? (outcome as AiInvestigationDocument["outcome"])
         : "UNCLEAR",
     confidence:
@@ -1378,8 +1373,7 @@ function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument
               ? (motionRecord.result as NonNullable<AiInvestigationDocument["motion"]>["result"])
               : "UNKNOWN",
           is_candidate: motionRecord.is_candidate === true,
-          is_informal: motionRecord.is_informal === true,
-        }
+                  }
       : null,
     actions: Array.isArray(record.actions)
       ? record.actions.flatMap((entry) => {
@@ -1395,7 +1389,11 @@ function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument
         })
       : [],
     open_questions: Array.isArray(record.open_questions)
-      ? record.open_questions.filter((entry): entry is string => typeof entry === "string").map(normalizeWhitespace).filter(Boolean)
+      ? record.open_questions.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null).map((entry: any) => ({
+          question: typeof entry.question === "string" ? normalizeWhitespace(entry.question) : "",
+          recommended_answer: typeof entry.recommended_answer === "string" ? normalizeWhitespace(entry.recommended_answer) : "",
+          confidence: ["high", "medium", "low"].includes(entry.confidence?.toLowerCase()) ? entry.confidence.toLowerCase() : "medium",
+        })).filter((q: any) => Boolean(q.question))
       : [],
   };
 }
@@ -1776,35 +1774,30 @@ function addDeterministicValidationRows(options: {
     });
   }
 
-  if (investigation.outcome === "information_only" && (decisions.length > 0 || actions.length > 0 || motion)) {
+  if (investigation.outcome === "information_only" && motion) {
     pushValidationRow(rows, {
       meetingId,
       agendaItemId: agendaItem.id,
       validationType: "business_rule",
-      severity: "warning",
-      code: "information_only_contains_decisions_or_actions",
-      message: "Outcome is INFORMATION_ONLY, but the investigation still contains decisions, actions, or motion details.",
-      details: { title: agendaItem.title, decisions, actionCount: actions.length, hasMotion: Boolean(motion) },
+      severity: "info",
+      code: "information_only_contains_motion",
+      message: "Outcome is INFORMATION_ONLY, but a motion was captured.",
+      details: { title: agendaItem.title, hasMotion: true },
     });
   }
 
   if (motion) {
     const missingFields = [
-      !motion.moved_by ? "moved_by" : null,
-      !motion.seconded_by ? "seconded_by" : null,
       !motion.resolution_text ? "resolution_text" : null,
     ].filter(Boolean);
     if (missingFields.length > 0) {
-      const isInformal = investigation.outcome === "informal_approval";
       pushValidationRow(rows, {
         meetingId,
         agendaItemId: agendaItem.id,
         validationType: "schema",
-        severity: isInformal ? "info" : "warning",
+        severity: "warning",
         code: "incomplete_motion",
-        message: isInformal
-          ? "Informal approval captured without mover/seconder. Human review needed to assign them."
-          : "Motion details were captured but are incomplete.",
+        message: "Motion details were captured but are incomplete.",
         details: { title: agendaItem.title, missingFields },
       });
     }
@@ -1834,19 +1827,7 @@ function addDeterministicValidationRows(options: {
     }
   }
 
-  for (const action of actions) {
-    if (!action.owner) {
-      pushValidationRow(rows, {
-        meetingId,
-        agendaItemId: agendaItem.id,
-        validationType: "completeness",
-        severity: "warning",
-        code: "incomplete_action",
-        message: "An action item is missing an owner or due date.",
-        details: { title: agendaItem.title, actionDescription: action.description, missingFields: ["owner"] },
-      });
-    }
-  }
+
 
   if (transcriptEvidenceCount === 0 && documentEvidenceCount > 0) {
     pushValidationRow(rows, {
@@ -1906,17 +1887,17 @@ function addAiValidationRows(options: {
     validationType: "ai_review",
     severity: summarySeverity,
     code: "ai_verdict",
-    message:
-      options.review.summary ||
-      `AI validator verdict: ${options.review.verdict.replace(/_/g, " ")}.`,
-    details: {
-      verdict: options.review.verdict,
-      validatorConfidence: options.review.validator_confidence,
-      needsHumanReview: options.review.needs_human_review,
-      strengths: options.review.strengths,
-      suggestedActions: options.review.suggested_actions,
-    },
-  });
+      message:
+        options.review.summary ||
+        `AI validator verdict: ${options.review.verdict.replace(/_/g, " ")}.`,
+      details: {
+        verdict: options.review.verdict,
+        validatorConfidence: options.review.validator_confidence,
+        needsHumanReview: options.review.needs_human_review,
+        strengths: options.review.strengths,
+        suggestedActions: options.review.suggested_actions,
+      },
+    });
 
   for (const issue of options.review.issues) {
     pushValidationRow(options.rows, {
@@ -2176,7 +2157,7 @@ export async function investigateAgendaItems(
       )
     : eq(meetingsV2AgendaItems.meetingV2Id, meetingId);
 
-  const [agendaItems, contexts, evidenceRows, existingInvestigations] = await Promise.all([
+    const [agendaItems, contexts, evidenceRows, existingInvestigations, meetingRec, pages, chunks] = await Promise.all([
     db.select().from(meetingsV2AgendaItems).where(filters).orderBy(asc(meetingsV2AgendaItems.sortOrder)),
     db.select().from(meetingsV2AgendaItemContexts).where(
       agendaItemId
@@ -2202,6 +2183,9 @@ export async function investigateAgendaItems(
           )
         : eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId),
     ),
+    db.query.meetingsV2.findFirst({ where: eq(meetingsV2.id, meetingId) }),
+    db.select().from(meetingsV2DocumentPages).where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
+    db.select().from(meetingsV2DocumentChunks).where(eq(meetingsV2DocumentChunks.meetingV2Id, meetingId)),
   ]);
 
   if (agendaItemId) {
@@ -2224,6 +2208,15 @@ export async function investigateAgendaItems(
   let completedCount = agendaItems.length - pendingItems.length;
   const runtime = await loadInvestigationToolRuntime({ meetingId });
 
+  let directorsPromptLines: string[] = [];
+  if (meetingRec) {
+    const frame = buildMeetingFrame(meetingRec, pages, chunks);
+    const directors = frame.attendanceCandidates.present;
+    if (directors.length > 0) {
+      directorsPromptLines = directors.map(d => `- ${d.name} (${d.title_or_role})`);
+    }
+  }
+
   for (const item of pendingItems) {
     const context = contexts.find((entry) => entry.agendaItemId === item.id);
     const evidenceForItem = evidenceRows.filter((entry) => entry.agendaItemId === item.id);
@@ -2234,6 +2227,9 @@ export async function investigateAgendaItems(
       `Agenda item title: ${item.title}`,
       `Section label: ${item.sectionLabel ?? "Unknown"}`,
       `Board package source text: ${item.sourceText ?? "None"}`,
+      "",
+      "Attending Voting Directors:",
+      ...directorsPromptLines,
       "",
       "Prepared context JSON",
       context?.contextJson ?? "{}",
@@ -2286,6 +2282,21 @@ export async function investigateAgendaItems(
       };
     }
 
+    
+    const AUTONOMY_TEMPERATURE = (meetingRec?.settings as { autonomyTemperature?: number })?.autonomyTemperature ?? 0.8;
+    if (AUTONOMY_TEMPERATURE >= 0.5 && normalized.open_questions && normalized.open_questions.length > 0) {
+      const remainingQuestions = [];
+      for (const q of normalized.open_questions) {
+        if ((q.confidence === "high" || q.confidence === "medium") && q.recommended_answer) {
+          // Silently accept the AI's recommended answer
+          normalized.discussion_summary += `\n\n${q.recommended_answer}`;
+        } else {
+          remainingQuestions.push(q);
+        }
+      }
+      normalized.open_questions = remainingQuestions;
+    }
+
     investigationRows.push({
       id: randomUUID(),
       meetingV2Id: meetingId,
@@ -2297,7 +2308,7 @@ export async function investigateAgendaItems(
       decisionsJson: JSON.stringify(normalized.decisions),
       motionJson: JSON.stringify(normalized.motion),
       actionsJson: JSON.stringify(normalized.actions),
-      openQuestionsJson: JSON.stringify(normalized.open_questions),
+      openQuestionsJson: JSON.stringify(normalized.open_questions.map(q => typeof q === "string" ? q : q.question)),
       userAnswersJson: answerText ? JSON.stringify(userAnswers) : null,
       modelName,
       usageJson,
@@ -2581,6 +2592,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         id: drafts[0].id,
         title: drafts[0].title,
         contentMarkdown: drafts[0].contentMarkdown,
+        json: drafts[0].summaryJson,
         format: drafts[0].format,
         createdAt: drafts[0].createdAt,
         updatedAt: drafts[0].updatedAt,

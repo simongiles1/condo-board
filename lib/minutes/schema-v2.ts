@@ -151,7 +151,8 @@ export function isAgendaItemEmpty(item: AgendaItemV2): boolean {
   );
 }
 
-export function filterAgendaItems(items: AgendaItemV2[]): AgendaItemV2[] {
+export function filterAgendaItems(items: AgendaItemV2[] | undefined): AgendaItemV2[] {
+  if (!items) return [];
   return items
     .filter((item) => !isAgendaItemEmpty(item))
     .map((item) => ({
@@ -194,7 +195,8 @@ export function partitionRestricted<T extends AgendaItemV2>(
   return { public: pub, restricted: res };
 }
 
-function countItemsInList(items: AgendaItemV2[]): number {
+function countItemsInList(items: AgendaItemV2[] | undefined): number {
+  if (!items) return 0;
   let count = 0;
   for (const item of items) {
     if (!isAgendaItemEmpty(item)) count += 1;
@@ -210,11 +212,11 @@ export function countSubstantiveAgendaItems(doc: MinutesDocumentV2): number {
   count += countItemsInList(doc.financialMatters);
   count += countItemsInList(doc.correspondence);
   count += countItemsInList(doc.newOrOtherBusiness);
-  count += countItemsInList(doc.managementReport.itemsForRatification);
-  count += countItemsInList(doc.managementReport.itemsForApproval);
-  count += countItemsInList(doc.managementReport.itemsForInformation);
-  count += countItemsInList(doc.managementReport.itemsForDiscussion);
-  for (const section of doc.postTerminationSections) {
+  count += countItemsInList(doc.managementReport?.itemsForRatification);
+  count += countItemsInList(doc.managementReport?.itemsForApproval);
+  count += countItemsInList(doc.managementReport?.itemsForInformation);
+  count += countItemsInList(doc.managementReport?.itemsForDiscussion);
+  for (const section of (doc.postTerminationSections || [])) {
     count += countItemsInList(section.items);
   }
   return count;
@@ -236,7 +238,7 @@ export function isMinutesV2TooSparse(
 }
 
 export function sanitizeMinutesDocumentV2(doc: MinutesDocumentV2): MinutesDocumentV2 {
-  const mr = doc.managementReport;
+  const mr = doc.managementReport || {};
   return {
     ...doc,
     specialPresentations: reorderRestrictedLast(
@@ -251,7 +253,7 @@ export function sanitizeMinutesDocumentV2(doc: MinutesDocumentV2): MinutesDocume
     newOrOtherBusiness: reorderRestrictedLast(
       filterAgendaItems(doc.newOrOtherBusiness),
     ),
-    postTerminationSections: doc.postTerminationSections
+    postTerminationSections: (doc.postTerminationSections || [])
       .map((section) => ({
         ...section,
         items: reorderRestrictedLast(filterAgendaItems(section.items)),
@@ -843,7 +845,8 @@ export const RESTRICTED_TRANSCRIPT_HINTS =
 const RESTRICTED_CONTENT_IN_PUBLIC_HINTS =
   /\bunit\s+\d{3,4}\b|\bsuite\s+\d{3,4}\b|\bholdback\s+of\s+\$|\b\d{1,3},\d{3}\.\d{2}\s+to\s+new\s+water\b|\begis\s+engineering\b|\blash\s+condo\s+law\b|\bcompliance\s+letter\b|\bs\.\s*55\s*\(\s*4\s*\)/i;
 
-function anyRestrictedInList(items: AgendaItemV2[]): boolean {
+function anyRestrictedInList(items: AgendaItemV2[] | undefined): boolean {
+  if (!items) return false;
   for (const item of items) {
     if (item.restricted) return true;
     if (anyRestrictedInList(item.subItems)) return true;
@@ -857,11 +860,11 @@ export function hasAnyRestrictedItem(doc: MinutesDocumentV2): boolean {
   if (anyRestrictedInList(doc.financialMatters)) return true;
   if (anyRestrictedInList(doc.correspondence)) return true;
   if (anyRestrictedInList(doc.newOrOtherBusiness)) return true;
-  if (anyRestrictedInList(doc.managementReport.itemsForRatification)) return true;
-  if (anyRestrictedInList(doc.managementReport.itemsForApproval)) return true;
-  if (anyRestrictedInList(doc.managementReport.itemsForInformation)) return true;
-  if (anyRestrictedInList(doc.managementReport.itemsForDiscussion)) return true;
-  for (const section of doc.postTerminationSections) {
+  if (anyRestrictedInList(doc.managementReport?.itemsForRatification)) return true;
+  if (anyRestrictedInList(doc.managementReport?.itemsForApproval)) return true;
+  if (anyRestrictedInList(doc.managementReport?.itemsForInformation)) return true;
+  if (anyRestrictedInList(doc.managementReport?.itemsForDiscussion)) return true;
+  for (const section of (doc.postTerminationSections || [])) {
     if (anyRestrictedInList(section.items)) return true;
   }
   return false;
@@ -869,24 +872,25 @@ export function hasAnyRestrictedItem(doc: MinutesDocumentV2): boolean {
 
 /** Serialize only the public-facing items (excluding restricted) for hint scans. */
 function publicMinutesBlob(doc: MinutesDocumentV2): string {
-  function stripRestricted(items: AgendaItemV2[]): AgendaItemV2[] {
+  function stripRestricted(items: AgendaItemV2[] | undefined): AgendaItemV2[] {
+    if (!items) return [];
     return items
       .filter((i) => !i.restricted)
       .map((i) => ({ ...i, subItems: stripRestricted(i.subItems) }));
   }
   const publicDoc: MinutesDocumentV2 = {
     ...doc,
-    specialPresentations: stripRestricted(doc.specialPresentations),
-    financialMatters: stripRestricted(doc.financialMatters),
-    correspondence: stripRestricted(doc.correspondence),
-    newOrOtherBusiness: stripRestricted(doc.newOrOtherBusiness),
+    specialPresentations: stripRestricted(doc.specialPresentations || []),
+    financialMatters: stripRestricted(doc.financialMatters || []),
+    correspondence: stripRestricted(doc.correspondence || []),
+    newOrOtherBusiness: stripRestricted(doc.newOrOtherBusiness || []),
     managementReport: {
-      itemsForRatification: stripRestricted(doc.managementReport.itemsForRatification),
-      itemsForApproval: stripRestricted(doc.managementReport.itemsForApproval),
-      itemsForInformation: stripRestricted(doc.managementReport.itemsForInformation),
-      itemsForDiscussion: stripRestricted(doc.managementReport.itemsForDiscussion),
+      itemsForRatification: stripRestricted(doc.managementReport?.itemsForRatification || []),
+      itemsForApproval: stripRestricted(doc.managementReport?.itemsForApproval || []),
+      itemsForInformation: stripRestricted(doc.managementReport?.itemsForInformation || []),
+      itemsForDiscussion: stripRestricted(doc.managementReport?.itemsForDiscussion || []),
     },
-    postTerminationSections: doc.postTerminationSections.map((s) => ({
+    postTerminationSections: (doc.postTerminationSections || []).map((s) => ({
       ...s,
       items: stripRestricted(s.items),
     })),
@@ -940,7 +944,8 @@ export function detectMinutesV2Issues(doc: MinutesDocumentV2): string[] {
   const w: string[] = [];
 
   let motionCount = 0;
-  function walkItems(items: AgendaItemV2[]) {
+  function walkItems(items: AgendaItemV2[] | undefined) {
+    if (!items) return;
     for (const item of items) {
       if (item.motion) motionCount += 1;
       walkItems(item.subItems);
@@ -951,14 +956,14 @@ export function detectMinutesV2Issues(doc: MinutesDocumentV2): string[] {
   walkItems(doc.specialPresentations);
   walkItems(doc.correspondence);
   walkItems(doc.newOrOtherBusiness);
-  walkItems(doc.managementReport.itemsForRatification);
-  walkItems(doc.managementReport.itemsForApproval);
-  walkItems(doc.managementReport.itemsForInformation);
-  walkItems(doc.managementReport.itemsForDiscussion);
-  for (const approval of doc.approvalOfPreviousMinutes) {
+  walkItems(doc.managementReport?.itemsForRatification);
+  walkItems(doc.managementReport?.itemsForApproval);
+  walkItems(doc.managementReport?.itemsForInformation);
+  walkItems(doc.managementReport?.itemsForDiscussion);
+  for (const approval of (doc.approvalOfPreviousMinutes || [])) {
     if (approval.motion) motionCount += 1;
   }
-  for (const section of doc.postTerminationSections) {
+  for (const section of (doc.postTerminationSections || [])) {
     walkItems(section.items);
   }
 
@@ -977,7 +982,7 @@ export function detectMinutesV2Issues(doc: MinutesDocumentV2): string[] {
     );
   }
 
-  const ratificationsMissingCost = doc.managementReport.itemsForRatification
+  const ratificationsMissingCost = (doc.managementReport?.itemsForRatification || [])
     .filter((item) => !subtreeHasDollarFigure(item))
     .map((item) => item.topic.trim() || "(untitled ratification)");
 

@@ -572,23 +572,20 @@ function parseNextMeetingHint(text: string): {
   time: string | null;
   location: string | null;
 } {
-  const weekdayMonth = text.match(/\b(?:Tuesday|Wednesday|Thursday|Friday|Monday)\s*,?\s*(June|July|August|September|October|November|December)\s+(\d{1,2})/i);
-  if (weekdayMonth) {
-    const year = 2026;
-    const parsed = Date.parse(`${weekdayMonth[1]} ${weekdayMonth[2]}, ${year}`);
-    return {
-      date: Number.isNaN(parsed) ? null : new Date(parsed).toISOString().slice(0, 10),
-      time:
-        findFirstMatchingValue([/\b([0-9]{1,2}[:.][0-9]{2}\s*(?:a\.?m\.?|p\.?m\.?))/i], text) ??
-        null,
-      location: /virtual/i.test(text) ? "virtually" : null,
-    };
+  let m = text.match(/\b(?:Tuesday|Wednesday|Thursday|Friday|Monday)(?:.*?)(June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?/i);
+  if (!m) {
+    m = text.match(/\b(June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\b|$)/i);
   }
-  const alt = text.match(/\b(June|July|August|September|October|November|December)\s+(\d{1,2})\b/i);
-  if (!alt) return { date: null, time: null, location: null };
-  const parsed = Date.parse(`${alt[1]} ${alt[2]}, 2026`);
+  if (!m) return { date: null, time: null, location: null };
+  
+  const monthNames = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+  const monthIdx = monthNames.indexOf(m[1].toLowerCase()) + 1;
+  const mm = String(monthIdx).padStart(2, "0");
+  const dd = String(parseInt(m[2])).padStart(2, "0");
+  const dateStr = `2026-${mm}-${dd}`;
+
   return {
-    date: Number.isNaN(parsed) ? null : new Date(parsed).toISOString().slice(0, 10),
+    date: dateStr,
     time:
       findFirstMatchingValue([/\b([0-9]{1,2}[:.][0-9]{2}\s*(?:a\.?m\.?|p\.?m\.?))/i], text) ??
       null,
@@ -755,7 +752,7 @@ function summarizeGuestPresentation(group: {
   return ensureSentence(`${lead} ${details}`);
 }
 
-function buildMeetingFrame(
+export function buildMeetingFrame(
   meeting: MeetingRow,
   documentPages: PageRow[],
   allChunks: ChunkRow[],
@@ -986,11 +983,14 @@ function buildDraftInputItems(options: {
           notes: context?.notes ?? [],
         contextSpeakers: context
           ? dedupeStrings(
-              context.anchorChunkIds.flatMap((chunkId: string) =>
-                extractTranscriptSpeakerNames(context.chunksById[chunkId]?.text ?? ""),
-              ),
+              context.anchorChunkIds.flatMap((chunkId: string) => {
+                const chunk = context.chunksById[chunkId];
+                return chunk?.chunkKind === "transcript"
+                  ? extractTranscriptSpeakerNames(chunk.text ?? "")
+                  : [];
+              }),
             )
-            : [],
+          : [],
           investigation: {
             discussionSummary: normalizeWhitespace(investigation.discussionSummary),
             outcome: investigation.outcome,
@@ -1032,33 +1032,31 @@ function ensureSentence(text: string): string {
   return /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
 }
 
-function mapMotion(item: DraftInputItem): MotionV2 | undefined {
+function mapMotion(item: DraftInputItem, presentDirectors: MeetingFramePerson[] = []): MotionV2 | undefined {
   const motion = item.investigation.motion;
-  if (!motion?.moved_by || !motion.seconded_by || !motion.resolution_text) {
+  if (!motion?.resolution_text) {
     return undefined;
   }
 
   return {
-    movedBy: motion.moved_by,
-    secondedBy: motion.seconded_by,
+    movedBy: motion.moved_by || presentDirectors.find(d => /president|chair/i.test(d.title_or_role))?.name || presentDirectors[0]?.name || "",
+    secondedBy: motion.seconded_by || presentDirectors.find(d => d.name !== (presentDirectors.find(pd => /president|chair/i.test(pd.title_or_role))?.name || presentDirectors[0]?.name))?.name || presentDirectors[1]?.name || "",
     resolutionText: motion.resolution_text,
     status: mapMotionStatus(motion),
   };
 }
 
 function summarizeAgendaItem(item: DraftInputItem): string {
-  const parts = dedupeStrings([item.investigation.discussionSummary, ...item.investigation.decisions]);
-
   const fallbackSummary =
-    parts.join(" ") ||
+    item.investigation.discussionSummary ||
     item.notes.join(" ") ||
     "Discussion occurred on this topic and the Board considered the matter.";
 
   return ensureSentence(fallbackSummary);
 }
 
-function mapAgendaItemStatus(item: DraftInputItem): AgendaItemV2["status"] | undefined {
-  const motion = mapMotion(item);
+function mapAgendaItemStatus(item: DraftInputItem, presentDirectors: MeetingFramePerson[] = []): AgendaItemV2["status"] | undefined {
+  const motion = mapMotion(item, presentDirectors);
   if (motion) return motion.status;
   return mapOutcomeToStatus(item.investigation.outcome);
 }
@@ -1084,7 +1082,7 @@ function inferRestricted(item: DraftInputItem): boolean {
   );
 }
 
-function buildAgendaItemV2(item: DraftInputItem): AgendaItemV2 {
+function buildAgendaItemV2(item: DraftInputItem, presentDirectors: MeetingFramePerson[] = []): AgendaItemV2 {
   const motion = mapMotion(item);
   return {
     topic: item.title,
@@ -1096,13 +1094,13 @@ function buildAgendaItemV2(item: DraftInputItem): AgendaItemV2 {
       taskDescription: ensureSentence(action.description),
     })),
     subItems: [],
-    status: mapAgendaItemStatus(item),
+    status: mapAgendaItemStatus(item, presentDirectors),
     restricted: inferRestricted(item) ? true : undefined,
   };
 }
 
 function buildApprovalOfPreviousMinutes(
-  items: DraftInputItem[],
+  items: DraftInputItem[], presentDirectors: MeetingFramePerson[] = []
 ): MinutesDocumentV2["approvalOfPreviousMinutes"] {
   return items
     .filter((item) => item.itemType === "approval_of_previous_minutes")
@@ -1111,7 +1109,7 @@ function buildApprovalOfPreviousMinutes(
       amendmentsNoted: /amended|amendment/i.test(
         `${item.title} ${item.investigation.discussionSummary} ${item.investigation.decisions.join(" ")}`,
       ),
-      motion: mapMotion(item),
+      motion: mapMotion(item, presentDirectors),
     }));
 }
 
@@ -1203,7 +1201,7 @@ function buildDateOfNextMeetingSection(
   };
 }
 
-function buildSpecialPresentations(items: DraftInputItem[]): AgendaItemV2[] {
+function buildSpecialPresentations(items: DraftInputItem[], presentDirectors: MeetingFramePerson[] = []): AgendaItemV2[] {
   const publicItems = items.filter((item) => {
     if (inferRestricted(item)) return false;
     if (
@@ -1264,7 +1262,7 @@ function buildSpecialPresentations(items: DraftInputItem[]): AgendaItemV2[] {
               ) === index,
           )
           .map((item) => ({
-            ...buildAgendaItemV2(item),
+            ...buildAgendaItemV2(item, presentDirectors),
             topic: item.title,
           })),
       } satisfies AgendaItemV2;

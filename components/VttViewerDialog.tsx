@@ -1,22 +1,36 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import type { MergedVttCue } from "@/lib/parsers/vtt";
+import {
+  vttToMergedCues,
+  vttToReadableTranscript,
+} from "@/lib/parsers/vtt";
 import { ReadableTranscriptView } from "@/components/ReadableTranscriptView";
+import { SearchHighlightedText } from "@/components/SearchHighlightedText";
+import {
+  findCueMatches,
+  findTextMatches,
+  scrollChildIntoContainer,
+} from "@/lib/transcript/search";
 
 type Tab = "readable" | "raw";
 
 type Props = {
   open: boolean;
-  meetingId: string;
   fileLabel: string;
   onClose: () => void;
-};
+} & (
+  | { meetingId: string; vttContent?: never; localFileName?: never }
+  | { meetingId?: never; vttContent: string; localFileName?: string }
+);
 
 export function VttViewerDialog({
   open,
   meetingId,
+  vttContent,
+  localFileName,
   fileLabel,
   onClose,
 }: Props) {
@@ -28,13 +42,17 @@ export function VttViewerDialog({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
 
     let cancelled = false;
 
-    async function loadTranscript() {
+    function loadLocalTranscript(content: string, name: string) {
       setLoading(true);
       setError(null);
       setRawContent(null);
@@ -43,6 +61,27 @@ export function VttViewerDialog({
       setFileName(null);
       setCopied(false);
       setActiveTab("readable");
+      setSearchQuery("");
+      setCurrentMatchIndex(0);
+
+      setRawContent(content);
+      setReadableContent(vttToReadableTranscript(content));
+      setCues(vttToMergedCues(content));
+      setFileName(name);
+      setLoading(false);
+    }
+
+    async function loadRemoteTranscript() {
+      setLoading(true);
+      setError(null);
+      setRawContent(null);
+      setReadableContent(null);
+      setCues(null);
+      setFileName(null);
+      setCopied(false);
+      setActiveTab("readable");
+      setSearchQuery("");
+      setCurrentMatchIndex(0);
 
       try {
         const res = await fetch(`/api/meetings/${meetingId}/transcript`);
@@ -75,20 +114,72 @@ export function VttViewerDialog({
       }
     }
 
-    void loadTranscript();
+    if (vttContent != null) {
+      loadLocalTranscript(vttContent, localFileName ?? fileLabel);
+      return;
+    }
+
+    if (!meetingId) {
+      setError("No transcript source provided.");
+      setLoading(false);
+      return;
+    }
+
+    void loadRemoteTranscript();
 
     return () => {
       cancelled = true;
     };
-  }, [open, meetingId]);
+  }, [open, meetingId, vttContent, localFileName, fileLabel]);
 
   useEffect(() => {
     setCopied(false);
   }, [activeTab]);
 
-  if (!open) return null;
+  useEffect(() => {
+    setCurrentMatchIndex(0);
+  }, [searchQuery, activeTab]);
 
   const isReadableTab = activeTab === "readable";
+
+  const cueMatches = useMemo(
+    () => (cues ? findCueMatches(cues, searchQuery) : []),
+    [cues, searchQuery],
+  );
+
+  const rawMatches = useMemo(() => {
+    if (!rawContent || !searchQuery.trim()) return [];
+    return findTextMatches(rawContent, searchQuery).map((match, index) => ({
+      ...match,
+      globalIndex: index,
+    }));
+  }, [rawContent, searchQuery]);
+
+  const activeMatches = isReadableTab ? cueMatches : rawMatches;
+  const totalMatches = activeMatches.length;
+
+  useEffect(() => {
+    if (!open || !searchQuery.trim() || totalMatches === 0) return;
+
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const safeIndex = Math.min(currentMatchIndex, totalMatches - 1);
+    const mark = container.querySelector(
+      `[data-match-index="${safeIndex}"]`,
+    );
+    if (mark instanceof HTMLElement) {
+      scrollChildIntoContainer(container, mark);
+    }
+  }, [open, searchQuery, currentMatchIndex, totalMatches, activeTab]);
+
+  useEffect(() => {
+    if (currentMatchIndex >= totalMatches && totalMatches > 0) {
+      setCurrentMatchIndex(0);
+    }
+  }, [currentMatchIndex, totalMatches]);
+
+  if (!open) return null;
   const copyText = isReadableTab
     ? (readableContent ?? "")
     : (rawContent ?? "");
@@ -107,8 +198,39 @@ export function VttViewerDialog({
     }
   }
 
+  function goToNextMatch() {
+    if (totalMatches === 0) return;
+    setCurrentMatchIndex((index) => (index + 1) % totalMatches);
+  }
+
+  function goToPreviousMatch() {
+    if (totalMatches === 0) return;
+    setCurrentMatchIndex(
+      (index) => (index - 1 + totalMatches) % totalMatches,
+    );
+  }
+
+  function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        goToPreviousMatch();
+      } else {
+        goToNextMatch();
+      }
+    }
+  }
+
+  const trimmedSearch = searchQuery.trim();
+  const matchStatus =
+    trimmedSearch.length === 0
+      ? null
+      : totalMatches === 0
+        ? "No matches"
+        : `${currentMatchIndex + 1} of ${totalMatches}`;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <button
         type="button"
         className="absolute inset-0 bg-slate-900/40"
@@ -193,9 +315,62 @@ export function VttViewerDialog({
               </button>
             </div>
           )}
+
+          {!loading && !error && (
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[12rem] flex-1">
+                <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  ref={searchInputRef}
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  onKeyDown={handleSearchKeyDown}
+                  placeholder="Search transcript…"
+                  aria-label="Search transcript"
+                  className="h-8 w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-3 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={goToPreviousMatch}
+                  disabled={totalMatches === 0}
+                  aria-label="Previous match"
+                  title="Previous match (Shift+Enter)"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <ChevronUpIcon />
+                </button>
+                <button
+                  type="button"
+                  onClick={goToNextMatch}
+                  disabled={totalMatches === 0}
+                  aria-label="Next match"
+                  title="Next match (Enter)"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <ChevronDownIcon />
+                </button>
+                {matchStatus && (
+                  <span
+                    className={`min-w-[5.5rem] text-right text-xs tabular-nums ${
+                      totalMatches === 0 ? "text-amber-700" : "text-slate-500"
+                    }`}
+                    aria-live="polite"
+                  >
+                    {matchStatus}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div
+          ref={scrollContainerRef}
+          className="min-h-0 flex-1 overflow-y-auto px-6 py-5"
+        >
           {loading ? (
             <p className="text-sm text-slate-600">Loading transcript…</p>
           ) : error ? (
@@ -203,12 +378,25 @@ export function VttViewerDialog({
               {error}
             </div>
           ) : isReadableTab && cues && cues.length > 0 ? (
-            <ReadableTranscriptView cues={cues} />
+            <ReadableTranscriptView
+              cues={cues}
+              searchQuery={searchQuery}
+              matches={cueMatches}
+              currentMatchIndex={currentMatchIndex}
+            />
           ) : isReadableTab ? (
             <p className="text-sm text-slate-600">No transcript cues found.</p>
           ) : (
             <pre className="whitespace-pre-wrap break-words rounded-xl border border-slate-200 bg-slate-50 p-4 font-mono text-xs leading-relaxed text-slate-800">
-              {rawContent}
+              {trimmedSearch ? (
+                <SearchHighlightedText
+                  text={rawContent ?? ""}
+                  matches={rawMatches}
+                  currentMatchIndex={currentMatchIndex}
+                />
+              ) : (
+                rawContent
+              )}
             </pre>
           )}
         </div>
@@ -257,6 +445,55 @@ function CheckIcon({ className }: { className?: string }) {
       strokeWidth={2}
     >
       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.75}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z"
+      />
+    </svg>
+  );
+}
+
+function ChevronUpIcon() {
+  return (
+    <svg
+      aria-hidden
+      className="h-4 w-4"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg
+      aria-hidden
+      className="h-4 w-4"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
     </svg>
   );
 }

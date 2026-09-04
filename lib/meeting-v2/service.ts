@@ -25,6 +25,17 @@ import {
 import { AGENDA_ITEM_INVESTIGATION_PROMPT } from "@/lib/meeting-v2/investigation-prompts";
 import { AGENDA_ITEM_VALIDATION_PROMPT } from "@/lib/meeting-v2/validation-prompts";
 import { extractAgendaItemsWithAi } from "@/lib/meeting-v2/agenda-ai";
+import {
+  analyzeExtractionQuality,
+  buildMeetingV2Alerts,
+  getMeetingV2AgendaChunkSnapshotCount,
+  isDeepSeekKeyConfigured,
+  readMeetingV2Settings,
+  recordMeetingV2ExtractionRun,
+  type MeetingV2Alert,
+  type MeetingV2ExtractionQuality,
+  type MeetingV2Settings,
+} from "@/lib/meeting-v2/extraction-diagnostics";
 import { buildMeetingV2DraftArtifact, buildMeetingFrame } from "@/lib/meeting-v2/draft-builder";
 import { chunkDocumentPages, chunkTranscriptSegments } from "@/lib/meeting-v2/chunking";
 import {
@@ -77,13 +88,8 @@ export type MeetingV2Detail = {
       validations: number;
       drafts: number;
     };
-    extractionQuality: {
-      mode: "semantic" | "section_fallback";
-      likelyIncomplete: boolean;
-      pageLikeTitleCount: number;
-      suspiciousTitleCount: number;
-      note: string;
-    };
+    extractionQuality: MeetingV2ExtractionQuality;
+    alerts: MeetingV2Alert[];
     integrity: {
       isConsistent: boolean;
       note: string;
@@ -625,103 +631,9 @@ export function deriveMeetingV2ComputedStatus(counts: {
   };
 }
 
-function analyzeExtractionQuality(options: {
-  agendaItems: Array<Pick<AgendaItemRow, "title" | "sourceSectionId">>;
-  documentSectionCount: number;
-}): MeetingV2Detail["meeting"]["extractionQuality"] {
-  const { agendaItems, documentSectionCount } = options;
-  const pageLikeTitleCount = agendaItems.filter((item) => /^page\s+\d+$/i.test(item.title)).length;
-  const suspiciousTitleCount = agendaItems.filter((item) => {
-    const title = item.title.trim();
-    const normalized = title.toLowerCase();
-    return (
-      normalized.includes("outlook") ||
-      normalized.includes("inbox") ||
-      normalized.includes("@") ||
-      normalized.startsWith("for reference") ||
-      normalized.startsWith("please find a copy") ||
-      /^page\s+\d+$/i.test(title) ||
-      /^["“”']?[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(title)
-    );
-  }).length;
-  const sourcedFromSections = agendaItems.filter((item) => item.sourceSectionId).length;
-  const sectionFallbackLikely =
-    documentSectionCount > 0 &&
-    agendaItems.length > 0 &&
-    agendaItems.length >= Math.max(3, Math.floor(documentSectionCount * 0.9)) &&
-    sourcedFromSections >= Math.max(1, Math.floor(agendaItems.length * 0.9));
-  const likelyIncomplete =
-    agendaItems.length === 0 ||
-    pageLikeTitleCount > 0 ||
-    suspiciousTitleCount >= Math.max(3, Math.floor(agendaItems.length * 0.1)) ||
-    sectionFallbackLikely;
-
-  if (agendaItems.length === 0) {
-    return {
-      mode: "section_fallback",
-      likelyIncomplete: true,
-      pageLikeTitleCount,
-      suspiciousTitleCount,
-      note: "No agenda items were extracted yet.",
-    };
-  }
-
-  if (sectionFallbackLikely) {
-    return {
-      mode: "section_fallback",
-      likelyIncomplete,
-      pageLikeTitleCount,
-      suspiciousTitleCount,
-      note:
-        "Extraction currently looks like a page/section fallback pass, not a clean semantic agenda extraction.",
-    };
-  }
-
-  if (pageLikeTitleCount > 0 || suspiciousTitleCount > 0) {
-    return {
-      mode: "section_fallback",
-      likelyIncomplete,
-      pageLikeTitleCount,
-      suspiciousTitleCount,
-      note:
-        "Some extracted agenda titles look page-derived or noisy, so extraction likely needs another pass.",
-    };
-  }
-
-  return {
-    mode: "semantic",
-    likelyIncomplete: false,
-    pageLikeTitleCount,
-    suspiciousTitleCount,
-    note: "Agenda extraction looks structurally complete.",
-  };
-}
-
-export async function assessMeetingV2Extraction(meetingId: string): Promise<
-  MeetingV2Detail["meeting"]["extractionQuality"]
-> {
-  const db = getDb();
-  const agendaItems = await db
-    .select({
-      title: meetingsV2AgendaItems.title,
-      sourceSectionId: meetingsV2AgendaItems.sourceSectionId,
-    })
-    .from(meetingsV2AgendaItems)
-    .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));
-  const sectionCount = await db
-    .select()
-    .from(meetingsV2DocumentSections)
-    .where(eq(meetingsV2DocumentSections.meetingV2Id, meetingId));
-
-  return analyzeExtractionQuality({
-    agendaItems,
-    documentSectionCount: sectionCount.length,
-  });
-}
-
 function buildMeetingV2Stages(options: {
   counts: MeetingV2Detail["meeting"]["counts"];
-  extractionQuality: MeetingV2Detail["meeting"]["extractionQuality"];
+  extractionQuality: MeetingV2ExtractionQuality;
 }): MeetingV2Detail["meeting"]["stages"] {
   const { counts, extractionQuality } = options;
   const ingestComplete =
@@ -788,6 +700,41 @@ function buildMeetingV2Stages(options: {
       progressPercent: counts.investigations > 0 ? Math.min(100, Math.round((counts.validations / counts.investigations) * 100)) : 0,
     },
   ];
+}
+
+export async function assessMeetingV2Extraction(
+  meetingId: string,
+): Promise<MeetingV2ExtractionQuality> {
+  const db = getDb();
+  const [meeting, agendaItems, sectionCount, agendaChunkSnapshots] = await Promise.all([
+    db.select().from(meetingsV2).where(eq(meetingsV2.id, meetingId)),
+    db
+      .select({
+        title: meetingsV2AgendaItems.title,
+        sourceSectionId: meetingsV2AgendaItems.sourceSectionId,
+        itemType: meetingsV2AgendaItems.itemType,
+      })
+      .from(meetingsV2AgendaItems)
+      .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId)),
+    db
+      .select()
+      .from(meetingsV2DocumentSections)
+      .where(eq(meetingsV2DocumentSections.meetingV2Id, meetingId)),
+    getMeetingV2AgendaChunkSnapshotCount(meetingId),
+  ]);
+
+  const settings = readMeetingV2Settings(
+    meeting[0]?.settings as MeetingV2Settings | null | undefined,
+  );
+
+  return analyzeExtractionQuality({
+    agendaItems,
+    documentSectionCount: sectionCount.length,
+    extractionRun: settings.extractionRun ?? null,
+    agendaChunkSnapshots,
+    deepSeekKeyConfigured: isDeepSeekKeyConfigured(),
+    lastError: meeting[0]?.lastError ?? null,
+  });
 }
 
 async function ensureSourceArtifact(
@@ -1171,21 +1118,39 @@ export async function extractMeetingV2Agenda(meetingId: string): Promise<{ count
     existingAgendaItems.map((item) => `${item.sourceSectionId ?? "no-section"}:${item.normalizedTitle}`),
   );
 
-  if (process.env.DEEPSEEK_API_KEY?.trim()) {
-    const result = await extractAgendaItemsWithAi(meetingId, {
-      onProgress: async ({ current, total, label }) => {
-        await updatePhaseProgress({
-          meetingId,
-          pipelineState: "extracting",
-          basePercent: 25,
-          spanPercent: 15,
-          current,
-          total,
-          label,
-        });
-      },
-    });
-    return { count: result.agendaItemCount };
+  if (isDeepSeekKeyConfigured()) {
+    try {
+      const result = await extractAgendaItemsWithAi(meetingId, {
+        onProgress: async ({ current, total, label }) => {
+          await updatePhaseProgress({
+            meetingId,
+            pipelineState: "extracting",
+            basePercent: 25,
+            spanPercent: 15,
+            current,
+            total,
+            label,
+          });
+        },
+      });
+      await recordMeetingV2ExtractionRun(meetingId, {
+        extractor: "deepseek_incremental",
+        deepSeekKeyConfigured: true,
+        agendaItemCount: result.agendaItemCount,
+        apiError: null,
+      });
+      return { count: result.agendaItemCount };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "DeepSeek agenda extraction failed.";
+      await recordMeetingV2ExtractionRun(meetingId, {
+        extractor: "deepseek_incremental",
+        deepSeekKeyConfigured: true,
+        agendaItemCount: 0,
+        apiError: message,
+      });
+      throw error;
+    }
   }
 
   let processedCount = existingAgendaItems.length;
@@ -1243,7 +1208,15 @@ export async function extractMeetingV2Agenda(meetingId: string): Promise<{ count
     await db.insert(meetingsV2AgendaItems).values(agendaRows);
   }
 
-  return { count: existingAgendaItems.length + agendaRows.length };
+  const agendaItemCount = existingAgendaItems.length + agendaRows.length;
+  await recordMeetingV2ExtractionRun(meetingId, {
+    extractor: "section_fallback",
+    deepSeekKeyConfigured: false,
+    agendaItemCount,
+    apiError: null,
+  });
+
+  return { count: agendaItemCount };
 }
 
 function scoreTextMatch(text: string, keywords: string[]): number {
@@ -2599,10 +2572,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       }
     : null;
   const computed = deriveMeetingV2ComputedStatus(counts);
-  const extractionQuality = analyzeExtractionQuality({
-    agendaItems,
-    documentSectionCount: counts.documentSections,
-  });
+  const extractionQuality = await assessMeetingV2Extraction(meetingId);
   const stages = buildMeetingV2Stages({
     counts: {
       ...counts,
@@ -2612,13 +2582,18 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
   });
   const computedPipelineState = computed.pipelineState;
   const computedCurrentStep = computed.currentStep;
-  const integrityNote = extractionQuality.likelyIncomplete
-    ? `${computed.note} ${extractionQuality.note}`.trim()
-    : computed.note;
+  const integrityNote = computed.note;
   const isConsistent =
     computed.isConsistent &&
     computedPipelineState === selectedMeeting.pipelineState &&
     computedCurrentStep === (selectedMeeting.currentStep ?? computedCurrentStep);
+  const alerts = buildMeetingV2Alerts({
+    extractionQuality,
+    integrityNote,
+    isConsistent,
+    lastError: selectedMeeting.lastError,
+    pipelineState: selectedMeeting.pipelineState,
+  });
 
   return {
     meeting: {
@@ -2636,6 +2611,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       stages,
       counts,
       extractionQuality,
+      alerts,
       integrity: {
         isConsistent,
         note: integrityNote,

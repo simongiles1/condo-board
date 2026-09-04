@@ -1,4 +1,5 @@
 import { inngest } from "./client";
+import { classifyDeepSeekError } from "@/lib/meeting-v2/extraction-diagnostics";
 import {
   assessMeetingV2Extraction,
   deriveMeetingV2ComputedStatus,
@@ -140,8 +141,15 @@ export const runMeetingV2Pipeline = inngest.createFunction(
       return { success: true, meetingId };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown V2 pipeline failure";
+      const classified = classifyDeepSeekError(message);
+      const friendlyMessage =
+        classified.kind === "billing"
+          ? `DeepSeek billing or quota error: ${message}`
+          : classified.kind === "auth"
+            ? `DeepSeek authentication error: ${message}`
+            : message;
       await step.run("mark-meeting-failed", async () => {
-        await updateMeetingV2Status(meetingId, "failed", "Pipeline failed", 100, message);
+        await updateMeetingV2Status(meetingId, "failed", "Pipeline failed", 100, friendlyMessage);
       });
       throw error;
     }

@@ -8,7 +8,7 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { meetings, meetingsV2 } from "@/lib/db/schema";
-import { inngest } from "@/lib/inngest/client";
+import { seedMeetingV2TranscriptSegments } from "@/lib/meeting-v2/transcript";
 
 function assertFile(value: unknown): value is File {
   return typeof value === "object" && value !== null && "arrayBuffer" in value;
@@ -116,17 +116,14 @@ export async function POST(req: Request) {
       updatedAt: createdAt,
     });
 
-    console.info("[meetings:v2:upload] rows created", { meetingId });
-
-    await inngest.send({
-      name: "meeting-v2/pipeline.start",
-      data: { meetingId },
-    });
-
-    console.info("[meetings:v2:upload] event sent", {
+    await seedMeetingV2TranscriptSegments({
       meetingId,
-      event: "meeting-v2/pipeline.start",
+      transcriptText: vttBuffer.toString("utf8"),
+      storagePath: path.relative(process.cwd(), vttAbsolute).replace(/\\/g, "/"),
+      originalFilename: transcriptFile.name,
     });
+
+    console.info("[meetings:v2:upload] rows created", { meetingId });
 
     return NextResponse.json({ id: meetingId });
   } catch (error) {

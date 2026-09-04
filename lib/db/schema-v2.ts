@@ -6,6 +6,7 @@ import {
   jsonb,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import type { MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 
 export const meetingsV2 = pgTable("meetings_v2", {
   id: text("id").primaryKey(),
@@ -31,7 +32,7 @@ export const meetingsV2 = pgTable("meetings_v2", {
   currentStep: text("current_step"),
   progressPercent: integer("progress_percent").default(0),
   lastError: text("last_error"),
-  settings: jsonb("settings").$type<{ autonomyTemperature?: number }>().default({}),
+  settings: jsonb("settings").$type<MeetingV2Settings>().default({}),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

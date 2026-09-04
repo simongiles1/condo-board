@@ -4,10 +4,15 @@ import Link from "next/link";
 import { useEffect, useState, useRef, type ReactNode } from "react";
 import { MinutesStructuredEditor } from "@/components/MinutesStructuredEditor";
 import { AttendeesEditorDialog } from "@/components/AttendeesEditorDialog";
+import { VttViewerDialog } from "@/components/VttViewerDialog";
 import type { EditableAttendance } from "@/lib/minutes/attendance-edit";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
 import { serializeMinutesDoc } from "@/lib/minutes/doc-v2-edits";
 import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
+import type {
+  MeetingV2Alert,
+  MeetingV2ExtractionQuality,
+} from "@/lib/meeting-v2/extraction-diagnostics";
 
 type MeetingCard = {
   id: string;
@@ -47,13 +52,8 @@ type MeetingV2Status = {
       validations: number;
       drafts: number;
     };
-    extractionQuality: {
-      mode: "semantic" | "section_fallback";
-      likelyIncomplete: boolean;
-      pageLikeTitleCount: number;
-      suspiciousTitleCount: number;
-      note: string;
-    };
+    extractionQuality: MeetingV2ExtractionQuality;
+    alerts: MeetingV2Alert[];
     integrity: {
       isConsistent: boolean;
       note: string;
@@ -210,6 +210,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [runBusy, setRunBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<V2Tab>("overview");
   const [autonomyTemperature, setAutonomyTemperature] = useState(0.8);
+  const [vttDialogOpen, setVttDialogOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -314,6 +315,10 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const readyCount = reviewableItems.filter(
     (item) => item.openQuestions.length === 0 && !item.validation.some(v => v.severity === "error" || v.severity === "warning"),
   ).length;
+  const pipelineNotStarted =
+    displayState === "created" ||
+    status?.meeting.pipelineState === "created" ||
+    status?.meeting.currentStep === "Ready to start";
 
   return (
     <div className="space-y-6">
@@ -369,12 +374,25 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   />
                 </div>
                 <button
+                  className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15"
+                  onClick={() => setVttDialogOpen(true)}
+                  type="button"
+                >
+                  View Transcript
+                </button>
+                <button
                   className="inline-flex items-center rounded-xl bg-teal-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-md transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={runBusy}
                   onClick={handleRunPipeline}
                   type="button"
                 >
-                  {runBusy ? "Resuming..." : "Resume Pipeline"}
+                  {runBusy
+                    ? pipelineNotStarted
+                      ? "Starting..."
+                      : "Resuming..."
+                    : pipelineNotStarted
+                      ? "Start Pipeline"
+                      : "Resume Pipeline"}
                 </button>
                 <button
                   className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
@@ -439,16 +457,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         </div>
       </div>
 
-      {status && !status.meeting.integrity.isConsistent ? (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
-          {status.meeting.integrity.note}
-        </div>
-      ) : null}
-
-      {status?.meeting.lastError ? (
-        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-800">
-          {status.meeting.lastError}
-        </div>
+      {status?.meeting.alerts.length ? (
+        <MeetingV2AlertsPanel alerts={status.meeting.alerts} />
       ) : null}
 
       <div className="space-y-6">
@@ -473,8 +483,65 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
           </>
         ) : null}
       </div>
+
+      <VttViewerDialog
+        open={vttDialogOpen}
+        meetingId={meetingId}
+        fileLabel="transcript.vtt"
+        onClose={() => setVttDialogOpen(false)}
+      />
     </div>
   );
+}
+
+function MeetingV2AlertsPanel({ alerts }: { alerts: MeetingV2Alert[] }) {
+  return (
+    <div className="space-y-3">
+      {alerts.map((alert) => (
+        <div
+          key={alert.id}
+          className={`rounded-2xl border px-5 py-4 text-sm ${
+            alert.severity === "error"
+              ? "border-rose-200 bg-rose-50 text-rose-900"
+              : alert.severity === "warning"
+                ? "border-amber-200 bg-amber-50 text-amber-900"
+                : "border-slate-200 bg-slate-50 text-slate-800"
+          }`}
+        >
+          <p className="font-semibold">{alert.title}</p>
+          <p className="mt-2 leading-6">{alert.summary}</p>
+          {alert.likelyCause ? (
+            <p className="mt-3 leading-6">
+              <span className="font-semibold">Likely cause:</span> {alert.likelyCause}
+            </p>
+          ) : null}
+          {alert.recommendedAction ? (
+            <p className="mt-2 leading-6">
+              <span className="font-semibold">Recommended action:</span>{" "}
+              {alert.recommendedAction}
+            </p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function formatExtractionQualitySummary(quality: MeetingV2ExtractionQuality): string {
+  if (!quality.likelyIncomplete) {
+    return quality.note;
+  }
+
+  const extractorLabel =
+    quality.extractorUsed === "deepseek_incremental"
+      ? "DeepSeek semantic extraction"
+      : quality.extractorUsed === "section_fallback"
+        ? "PDF section fallback"
+        : quality.extractorUsed === "none"
+          ? "No extractor run yet"
+          : "Unknown extractor";
+
+  return `${extractorLabel}. ${quality.note}`;
 }
 
 function SummaryStat({ label, value }: { label: string; value: string }) {
@@ -557,7 +624,7 @@ function OverviewPanel({
                   ? "border-amber-200 bg-amber-50 text-amber-900"
                   : "border-emerald-200 bg-emerald-50 text-emerald-900"
               }
-              note={status.meeting.extractionQuality.note}
+              note={formatExtractionQualitySummary(status.meeting.extractionQuality)}
             />
           </div>
           <div className="rounded-[1.6rem] border border-slate-200 bg-slate-50 p-5">

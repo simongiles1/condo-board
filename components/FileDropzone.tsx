@@ -15,6 +15,7 @@ type Props = {
   accept: string;
   hint?: string;
   required?: boolean;
+  onFileChange?: (file: File | null) => void;
 };
 
 /** Native file input styled as dashed drop-area. */
@@ -24,30 +25,39 @@ export function FileDropzone({
   accept,
   hint,
   required = true,
+  onFileChange,
 }: Props) {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
 
-  const onPick = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    setFileName(f?.name ?? null);
-  }, []);
+  const onPick = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0] ?? null;
+      setFileName(f?.name ?? null);
+      onFileChange?.(f);
+    },
+    [onFileChange],
+  );
 
   const openPicker = useCallback(() => {
     inputRef.current?.click();
   }, []);
 
-  const onDropFiles = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    const f = e.dataTransfer.files?.[0];
-    if (f && inputRef.current) {
-      const dt = new DataTransfer();
-      dt.items.add(f);
-      inputRef.current.files = dt.files;
-      setFileName(f.name);
-    }
-  }, []);
+  const onDropFiles = useCallback(
+    (e: DragEvent) => {
+      e.preventDefault();
+      const f = e.dataTransfer.files?.[0];
+      if (f && inputRef.current) {
+        const dt = new DataTransfer();
+        dt.items.add(f);
+        inputRef.current.files = dt.files;
+        setFileName(f.name);
+        onFileChange?.(f);
+      }
+    },
+    [onFileChange],
+  );
 
   const preventDefaults = useCallback((e: DragEvent) => {
     e.preventDefault();

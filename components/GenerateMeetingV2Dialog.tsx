@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { FileDropzone } from "@/components/FileDropzone";
+import { VttViewerDialog } from "@/components/VttViewerDialog";
 import {
   buildTrimmedBoardPackage,
   type BoardPackageSelection,
@@ -44,6 +45,12 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
   const [formKey, setFormKey] = useState(0);
   const [boardPackageSelection, setBoardPackageSelection] =
     useState<BoardPackageSelection | null>(null);
+  const [transcriptFile, setTranscriptFile] = useState<File | null>(null);
+  const [transcriptPreviewContent, setTranscriptPreviewContent] = useState<
+    string | null
+  >(null);
+  const [vttDialogOpen, setVttDialogOpen] = useState(false);
+  const [vttPreviewLoading, setVttPreviewLoading] = useState(false);
 
   const handleBoardPackageChange = useCallback(
     (value: BoardPackageSelection | null) => {
@@ -71,6 +78,10 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
     setMeetingDate("");
     setFormKey((key) => key + 1);
     setBoardPackageSelection(null);
+    setTranscriptFile(null);
+    setTranscriptPreviewContent(null);
+    setVttDialogOpen(false);
+    setVttPreviewLoading(false);
   }
 
   function handleClose() {
@@ -88,6 +99,23 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
       current === "" || current === autoTitle ? nextTitle : current,
     );
     setAutoTitle(nextTitle);
+  }
+
+  async function handleViewTranscript() {
+    if (!transcriptFile) return;
+
+    setVttPreviewLoading(true);
+    setError(null);
+
+    try {
+      const content = await transcriptFile.text();
+      setTranscriptPreviewContent(content);
+      setVttDialogOpen(true);
+    } catch {
+      setError("Could not read the selected transcript file.");
+    } finally {
+      setVttPreviewLoading(false);
+    }
   }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -170,8 +198,9 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
             Upload transcript and board package
           </h2>
           <p className="mt-2 text-sm text-slate-600">
-            This creates a V2 workspace directly and starts the asynchronous
-            extraction pipeline. It does not run the legacy V1 Gemini flow.
+            This creates a V2 workspace from your transcript and board package.
+            Review the transcript before submitting, then start AI extraction
+            from the workspace when you are ready.
           </p>
         </div>
 
@@ -215,18 +244,31 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
             </div>
 
             <div className="grid gap-6 md:grid-cols-2">
-              <FileDropzone
-                name="transcript"
-                label="Teams transcript (.vtt)"
-                accept=".vtt,text/vtt"
-                required
-                helper="Required. Used as the factual transcript source."
-              />
+              <div className="space-y-3">
+                <FileDropzone
+                  name="transcript"
+                  label="Teams transcript (.vtt)"
+                  accept=".vtt,text/vtt"
+                  required
+                  helper="Required. Used as the factual transcript source."
+                  onFileChange={setTranscriptFile}
+                />
+                {transcriptFile ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleViewTranscript()}
+                    disabled={loading || vttPreviewLoading}
+                    className="inline-flex items-center rounded-xl border border-teal-200 bg-teal-50 px-4 py-2 text-sm font-semibold text-teal-800 transition hover:border-teal-300 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {vttPreviewLoading ? "Opening transcript…" : "View transcript"}
+                  </button>
+                ) : null}
+              </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-600">
                 V2 upload does not use a reference minutes PDF. The pipeline
                 ingests the transcript plus the board package you choose below, then builds reviewable
-                agenda items asynchronously.
+                agenda items when you start extraction.
               </div>
             </div>
 
@@ -261,6 +303,16 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
           </form>
         </div>
       </div>
+
+      {transcriptPreviewContent ? (
+        <VttViewerDialog
+          open={vttDialogOpen}
+          vttContent={transcriptPreviewContent}
+          localFileName={transcriptFile?.name}
+          fileLabel={transcriptFile?.name ?? "transcript.vtt"}
+          onClose={() => setVttDialogOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -34,6 +34,10 @@ export function FileDropzone({
     setFileName(f?.name ?? null);
   }, []);
 
+  const openPicker = useCallback(() => {
+    inputRef.current?.click();
+  }, []);
+
   const onDropFiles = useCallback((e: DragEvent) => {
     e.preventDefault();
     const f = e.dataTransfer.files?.[0];
@@ -55,9 +59,18 @@ export function FileDropzone({
       <label htmlFor={inputId} className="text-sm font-medium text-slate-800">
         {label}
       </label>
-      <label
-        htmlFor={inputId}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={`${label}. Drop files here or activate to browse.`}
         className="flex cursor-pointer flex-col rounded-lg border-2 border-dashed border-teal-200 bg-teal-50/40 px-4 py-6 text-center text-sm transition hover:border-teal-400 hover:bg-teal-50"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openPicker();
+          }
+        }}
+        onClick={openPicker}
         onDragEnter={preventDefaults}
         onDragOver={preventDefaults}
         onDrop={onDropFiles}
@@ -76,7 +89,7 @@ export function FileDropzone({
             No file chosen yet ({required ? "required" : "optional"})
           </span>
         )}
-      </label>
+      </div>
       <input
         ref={inputRef}
         id={inputId}
@@ -84,7 +97,9 @@ export function FileDropzone({
         type="file"
         accept={accept}
         required={required}
-        className="sr-only"
+        tabIndex={-1}
+        aria-hidden
+        className="pointer-events-none fixed h-0 w-0 opacity-0"
         onChange={onPick}
       />
     </div>

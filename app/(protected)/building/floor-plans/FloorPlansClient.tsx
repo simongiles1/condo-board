@@ -3,7 +3,6 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -15,7 +14,6 @@ import {
 import {
   buildingComparePlans,
   buildingHasPin,
-  buildingPlanNeighbors,
   globalPlanNeighbors,
   planHasPin,
   type PdfPoint,
@@ -37,6 +35,8 @@ import {
   type FloorPlansPayload,
 } from "@/lib/building/floor-plan-shared";
 import type { DrawColorPreset, FloorPlanAnnotation } from "@/lib/building/floor-plan-annotations";
+import type { MechanicalRiserDto, RiserIdRewrite } from "@/lib/building/floor-plan-mechanical-risers";
+import type { RiserTypeTemplate } from "@/lib/building/floor-plan-riser-templates";
 import { FloorPlanCompareViewer } from "@/components/building/FloorPlanCompareViewer";
 import {
   familyBadgeColor,
@@ -96,10 +96,22 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadWestFile, setUploadWestFile] = useState<File | null>(null);
   const [uploadEastFile, setUploadEastFile] = useState<File | null>(null);
-  const [mechanicalSplitUpload, setMechanicalSplitUpload] = useState(true);
+  const [splitUploadBySet, setSplitUploadBySet] = useState<
+    Record<FloorPlanDrawingSet, boolean>
+  >({
+    architectural: false,
+    mechanical: true,
+  });
   const [onionOpacity, setOnionOpacity] = useState(0);
   const [editExpanded, setEditExpanded] = useState(false);
+  const [selectedRegistrationMark, setSelectedRegistrationMark] = useState<
+    "building" | "reference" | null
+  >(null);
   const [compareExpanded, setCompareExpanded] = useState(false);
+
+  useEffect(() => {
+    setSelectedRegistrationMark(null);
+  }, [selectedId]);
   const [registrationDraft, setRegistrationDraft] = useState(
     initial.settings.registrationLabel,
   );
@@ -108,6 +120,7 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
   const [folderView, setFolderView] = useState(true);
   const [drawingSet, setDrawingSet] =
     useState<FloorPlanDrawingSet>("architectural");
+  const splitUpload = splitUploadBySet[drawingSet];
 
   useEffect(() => {
     return () => clearPdfBufferCache();
@@ -203,7 +216,7 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
   const upload = (file = uploadFile) =>
     run(async () => {
       if (!uploadFamilyId) throw new Error("Create a family first.");
-      if (drawingSet === "mechanical" && mechanicalSplitUpload) {
+      if (splitUpload) {
         if (!uploadWestFile || !uploadEastFile) {
           throw new Error("Choose west and east PDF files.");
         }
@@ -462,6 +475,157 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
     }
   }, []);
 
+  const ensureMechanicalRiser = useCallback(
+    async (typeId: string, label: string) => {
+      try {
+        const result = await readJson<{
+          riser: { id: string; typeId: string; label: string };
+          risers: FloorPlanSettingsDto["mechanicalRisers"];
+        }>(
+          await fetch("/api/building/mechanical-risers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ typeId, label }),
+          }),
+        );
+        setPayload((current) => ({
+          ...current,
+          settings: {
+            ...current.settings,
+            mechanicalRisers: result.risers,
+          },
+        }));
+        setError(null);
+        return result;
+      } catch (caught) {
+        const message =
+          caught instanceof Error ? caught.message : "Could not save riser.";
+        setError(message);
+        throw caught;
+      }
+    },
+    [],
+  );
+
+  const updateMechanicalRiser = useCallback(
+    async (id: string, completed: boolean) => {
+      try {
+        const result = await readJson<{
+          riser: FloorPlanSettingsDto["mechanicalRisers"][number];
+          risers: FloorPlanSettingsDto["mechanicalRisers"];
+        }>(
+          await fetch("/api/building/mechanical-risers", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, completed }),
+          }),
+        );
+        setPayload((current) => ({
+          ...current,
+          settings: {
+            ...current.settings,
+            mechanicalRisers: result.risers,
+          },
+        }));
+        setError(null);
+        return result;
+      } catch (caught) {
+        const message =
+          caught instanceof Error ? caught.message : "Could not update riser.";
+        setError(message);
+        throw caught;
+      }
+    },
+    [],
+  );
+
+  const reclassifyMechanicalRisers = useCallback(
+    async (ids: string[], typeId: string) => {
+      try {
+        const result = await readJson<{
+          risers: MechanicalRiserDto[];
+          rewrite: RiserIdRewrite;
+          updatedPlans: FloorPlanDto[];
+        }>(
+          await fetch("/api/building/mechanical-risers", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids, typeId }),
+          }),
+        );
+        setPayload((current) => ({
+          ...current,
+          settings: {
+            ...current.settings,
+            mechanicalRisers: result.risers,
+          },
+          plans: current.plans.map(
+            (plan) =>
+              result.updatedPlans.find((updated) => updated.id === plan.id) ??
+              plan,
+          ),
+        }));
+        setError(null);
+        return result;
+      } catch (caught) {
+        const message =
+          caught instanceof Error
+            ? caught.message
+            : "Could not reclassify riser.";
+        setError(message);
+        throw caught;
+      }
+    },
+    [],
+  );
+
+  const standardizeMechanicalRisers = useCallback(
+    async (params: {
+      typeId: string;
+      template: RiserTypeTemplate;
+      planIds?: string[];
+      autoOrient?: boolean;
+    }) => {
+      try {
+        const result = await readJson<{
+          ok: boolean;
+          replacedCount: number;
+          affectedPlanIds: string[];
+          templates: Record<string, RiserTypeTemplate>;
+          updatedPlans: FloorPlanDto[];
+        }>(
+          await fetch("/api/building/mechanical-risers/standardize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(params),
+          }),
+        );
+        setPayload((current) => ({
+          ...current,
+          settings: {
+            ...current.settings,
+            riserTemplates: result.templates,
+          },
+          plans: current.plans.map(
+            (plan) =>
+              result.updatedPlans.find((updated) => updated.id === plan.id) ??
+              plan,
+          ),
+        }));
+        setError(null);
+        return result;
+      } catch (caught) {
+        const message =
+          caught instanceof Error
+            ? caught.message
+            : "Could not standardize risers.";
+        setError(message);
+        throw caught;
+      }
+    },
+    [],
+  );
+
   const removePlan = (plan: FloorPlanDto) =>
     run(async () => {
       await readJson(
@@ -487,26 +651,43 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
 
   const moveFamily = (family: FloorPlanFamilyDto, direction: -1 | 1) =>
     run(async () => {
-      const sorted = [...payload.families].sort(
+      // Reorder within the active drawing set only — global sort_order is shared
+      // across architectural and mechanical families.
+      const sorted = [...visibleFamilies].sort(
         (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name),
       );
       const index = sorted.findIndex((item) => item.id === family.id);
       const neighbor = sorted[index + direction];
       if (!neighbor) return;
-      await readJson(
-        await fetch(`/api/building/floor-plan-families/${family.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sortOrder: neighbor.sortOrder }),
-        }),
-      );
-      await readJson(
-        await fetch(`/api/building/floor-plan-families/${neighbor.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sortOrder: family.sortOrder }),
-        }),
-      );
+
+      const familySortOrder = family.sortOrder;
+      const neighborSortOrder = neighbor.sortOrder;
+      if (familySortOrder === neighborSortOrder) {
+        await readJson(
+          await fetch(`/api/building/floor-plan-families/${family.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sortOrder: neighborSortOrder + direction,
+            }),
+          }),
+        );
+      } else {
+        await readJson(
+          await fetch(`/api/building/floor-plan-families/${family.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sortOrder: neighborSortOrder }),
+          }),
+        );
+        await readJson(
+          await fetch(`/api/building/floor-plan-families/${neighbor.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sortOrder: familySortOrder }),
+          }),
+        );
+      }
       await reload();
     });
 
@@ -596,9 +777,7 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
   })();
 
   const editNeighbors = selected
-    ? folderView
-      ? buildingPlanNeighbors(visiblePlans, visibleFamilies, selected.id)
-      : globalPlanNeighbors(visiblePlans, selected.id)
+    ? globalPlanNeighbors(visiblePlans, selected.id)
     : { prevId: null, nextId: null };
 
   const switchDrawingSet = (
@@ -648,10 +827,9 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
         <p className="mt-1 max-w-3xl text-sm text-slate-600">
           Upload one PDF per level. Place the building pin, crop to the plate,
           and compare floors — toggle architectural or mechanical drawings, then
-          pin and crop. Split mechanical floors upload as east + west sheets,
-          overlap until the cores line up, crop each sheet to building content,
-          and merge into one drawing; single-sheet
-          mechanical floors upload like architectural plans.
+          pin and crop. Split floors (common on parking levels) upload as east +
+          west sheets: overlap until the cores line up, crop each sheet to
+          building content, and merge into one drawing.
         </p>
       </div>
 
@@ -662,8 +840,8 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
       ) : null}
 
       <div className="flex min-h-0 flex-1 gap-4 overflow-hidden">
-        <aside className="flex w-80 shrink-0 flex-col overflow-y-auto rounded-xl border border-slate-200 bg-white">
-          <div className="flex flex-1 flex-col gap-4 p-3">
+        <aside className="flex min-h-0 w-80 shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-anchor-none p-3">
           <div className="flex flex-wrap items-center gap-2">
             <ModeButton
               active={effectiveMode === "edit"}
@@ -792,11 +970,13 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
 
           {visibleFamilies.length === 0 ? (
             <p className="text-sm text-slate-500">
-              {drawingSet === "mechanical"
-                ? mechanicalSplitUpload
+              {splitUpload
+                ? drawingSet === "mechanical"
                   ? "Add a mechanical family, then upload east and west PDFs for split floors."
-                  : "Add a mechanical family, then upload one PDF per floor."
-                : "Add a family, then upload one PDF per floor."}
+                  : "Add a family, then upload east and west PDFs for split floors."
+                : drawingSet === "mechanical"
+                  ? "Add a mechanical family, then upload one PDF per floor."
+                  : "Add a family, then upload one PDF per floor."}
             </p>
           ) : null}
 
@@ -999,32 +1179,31 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
           )}
           </div>
 
-          <div className="mt-auto space-y-2 border-t border-slate-200 p-3">
+          <div className="shrink-0 space-y-2 border-t border-slate-200 p-3">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-              {drawingSet === "mechanical" && mechanicalSplitUpload
-                ? "Upload east + west PDFs"
-                : "Upload PDF"}
+              {splitUpload ? "Upload east + west PDFs" : "Upload PDF"}
             </p>
-            {drawingSet === "mechanical" ? (
-              <label className="flex items-center gap-2 text-xs text-slate-600">
-                <input
-                  type="checkbox"
-                  checked={mechanicalSplitUpload}
-                  onChange={(event) => {
-                    const split = event.target.checked;
-                    setMechanicalSplitUpload(split);
-                    if (split) {
-                      setUploadFile(null);
-                    } else {
-                      setUploadWestFile(null);
-                      setUploadEastFile(null);
-                    }
-                  }}
-                  className="rounded border-slate-300"
-                />
-                East + west sheets per floor
-              </label>
-            ) : null}
+            <label className="flex items-center gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={splitUpload}
+                onChange={(event) => {
+                  const split = event.target.checked;
+                  setSplitUploadBySet((current) => ({
+                    ...current,
+                    [drawingSet]: split,
+                  }));
+                  if (split) {
+                    setUploadFile(null);
+                  } else {
+                    setUploadWestFile(null);
+                    setUploadEastFile(null);
+                  }
+                }}
+                className="rounded border-slate-300"
+              />
+              East + west sheets per floor
+            </label>
             <select
               value={uploadFamilyId}
               onChange={(event) => setUploadFamilyId(event.target.value)}
@@ -1064,7 +1243,7 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
               rows={1}
               className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
             />
-            {drawingSet === "mechanical" && mechanicalSplitUpload ? (
+            {splitUpload ? (
               <div className="grid grid-cols-2 gap-2">
                 <PdfDropZone
                   file={uploadWestFile}
@@ -1117,7 +1296,7 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
               disabled={
                 busy ||
                 !uploadFamilyId ||
-                (drawingSet === "mechanical" && mechanicalSplitUpload
+                (splitUpload
                   ? !uploadWestFile ||
                     !uploadEastFile ||
                     (parseFloorNumber(uploadFloor) == null &&
@@ -1142,7 +1321,7 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white p-3">
           {!selected || !selectedFamily ? (
             <p className="m-auto text-sm text-slate-500">
-              {drawingSet === "mechanical" && mechanicalSplitUpload
+              {splitUpload
                 ? "Select or upload east and west sheets to align, merge, pin, and compare."
                 : drawingSet === "mechanical"
                   ? "Select or upload a mechanical floor plan to crop, pin, and compare."
@@ -1187,6 +1366,7 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
                   nextPlanId={editNeighbors.nextId}
                   onSelectPlan={setSelectedId}
                   onClose={() => setEditExpanded(false)}
+                  enableFloorKeys={!selectedRegistrationMark}
                 >
                   <FloorPlanCropEditor
                     key={`${selected.id}-edit`}
@@ -1204,13 +1384,19 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
                     onSaveReferenceAnchor={saveReferenceAnchor}
                     onSaveAnnotations={saveAnnotations}
                     onSaveDrawColorPresets={saveDrawColorPresets}
+                    onEnsureMechanicalRiser={ensureMechanicalRiser}
+                    onUpdateMechanicalRiser={updateMechanicalRiser}
+                    onReclassifyMechanicalRisers={reclassifyMechanicalRisers}
+                    onStandardizeMechanicalRisers={standardizeMechanicalRisers}
                     onSetRegistrationPlan={setRegistrationPlan}
                     onSetPinReferencePlan={setPinReferencePlan}
                     onMoveToNewFamily={movePlanToNewFamily}
+                    onSelectPlan={setSelectedId}
                     saving={busy}
                     expanded={editExpanded}
                     embeddedExpanded={editExpanded}
                     onExpandedChange={setEditExpanded}
+                    onSelectedMarkChange={setSelectedRegistrationMark}
                   />
                 </FloorPlanExpandedShell>
               ) : null}
@@ -1220,6 +1406,9 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
                   family={selectedFamily}
                   plans={visiblePlans}
                   families={visibleFamilies}
+                  allPlans={payload.plans}
+                  allFamilies={payload.families}
+                  colorPresets={payload.settings.drawColorPresets}
                   registrationPlanId={payload.settings.registrationPlanId}
                   onionOpacity={onionOpacity}
                   onOnionOpacity={setOnionOpacity}
@@ -1234,12 +1423,10 @@ export function FloorPlansClient({ initial }: { initial: FloorPlansPayload }) {
               {effectiveMode === "compare" && !selectedCompareable ? (
                 <p className="m-auto text-sm text-slate-500">
                   {compareReady
-                    ? drawingSet === "mechanical"
+                    ? selected && planNeedsMerge(selected)
                       ? "Select a merged floor with a pin and crop, or use Previous / Next."
                       : "Select a cropped floor with a pin, or use Previous / Next to flip through the building."
-                    : drawingSet === "mechanical"
-                      ? "Merge, pin, and crop at least one mechanical floor to start comparing."
-                      : "Crop and pin at least one floor plan to start comparing."}
+                    : "Merge, pin, and crop at least one floor to start comparing."}
                 </p>
               ) : null}
             </>
@@ -1819,7 +2006,6 @@ function PdfDropZone({
   onFile: (file: File) => void;
   label?: string;
 }) {
-  const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -1837,15 +2023,31 @@ function PdfDropZone({
     [disabled, onFile],
   );
 
+  const openPicker = useCallback(() => {
+    if (disabled) return;
+    inputRef.current?.click();
+  }, [disabled]);
+
   return (
     <div>
-      <label
-        htmlFor={inputId}
+      <div
+        role="button"
+        tabIndex={disabled ? -1 : 0}
+        aria-disabled={disabled || undefined}
+        aria-label={`${label}. Drop a PDF or activate to browse files.`}
         className={`flex cursor-pointer flex-col rounded-lg border-2 border-dashed px-3 py-4 text-center text-sm transition ${
           dragOver
             ? "border-sky-400 bg-sky-50"
             : "border-slate-300 bg-slate-50 hover:border-sky-400 hover:bg-sky-50/60"
         } ${disabled ? "pointer-events-none opacity-60" : ""}`}
+        onKeyDown={(event) => {
+          if (disabled) return;
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openPicker();
+          }
+        }}
+        onClick={openPicker}
         onDragEnter={(event) => {
           preventDefaults(event);
           setDragOver(true);
@@ -1873,14 +2075,15 @@ function PdfDropZone({
         ) : (
           <span className="mt-2 text-xs text-slate-400">PDF only</span>
         )}
-      </label>
+      </div>
       <input
         ref={inputRef}
-        id={inputId}
         type="file"
         accept="application/pdf,.pdf"
         disabled={disabled}
-        className="sr-only"
+        tabIndex={-1}
+        aria-hidden
+        className="pointer-events-none fixed h-0 w-0 opacity-0"
         onChange={(event: ChangeEvent<HTMLInputElement>) => {
           takeFile(event.target.files?.[0]);
           event.target.value = "";

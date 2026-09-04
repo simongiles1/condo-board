@@ -1,11 +1,23 @@
-/** Riser-offset pairs: two boxes, one of which continues to the floor above (ABV). */
+/** Riser-offset pairs: one or more arrows between ABV boxes and a lower box. */
 
 import type { PdfPoint, PdfRect } from "@/lib/building/floor-plan-align";
-import type {
-  FloorPlanAnnotation,
-  FloorPlanCircleAnnotation,
-  FloorPlanRectangleAnnotation,
+import { duplicateCallout } from "@/lib/building/floor-plan-callouts";
+import { nearestPointOnSegment } from "@/lib/building/floor-plan-draw-snap";
+import {
+  annotationRotationDeg,
+  rotatePdfPointAround,
+  withAnnotationRotation,
+  type FloorPlanAnnotation,
+  type FloorPlanCallout,
+  type FloorPlanCircleAnnotation,
+  type FloorPlanRectangleAnnotation,
 } from "@/lib/building/floor-plan-annotations";
+import {
+  calloutRiserIds,
+  narrowCalloutToRisers,
+  type MechanicalRiserDto,
+  type MechanicalRiserTypeDto,
+} from "@/lib/building/floor-plan-mechanical-risers";
 
 export type ConnectableBox =
   | FloorPlanRectangleAnnotation
@@ -46,6 +58,49 @@ export function stripRiserLink(item: ConnectableBox): ConnectableBox {
     strokeWidthPt: item.strokeWidthPt,
   };
   if (item.variant === "cross") next.variant = "cross";
+  if (item.filled) next.filled = true;
+  if (item.callout) next.callout = item.callout;
+  if (item.markupSet === 2) next.markupSet = 2;
+  const rotationDeg = annotationRotationDeg(item);
+  if (rotationDeg !== 0) next.rotationDeg = rotationDeg;
+  return next;
+}
+
+/** Opposite-role partners on a linked box (`riserPartnerIds`, else `riserPartnerId`). */
+export function riserPartnerIds(item: ConnectableBox): string[] {
+  if (item.riserPartnerIds && item.riserPartnerIds.length > 0) {
+    return item.riserPartnerIds;
+  }
+  return item.riserPartnerId ? [item.riserPartnerId] : [];
+}
+
+function uniquePartnerIds(ids: string[]): string[] {
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const id of ids) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    next.push(id);
+  }
+  return next;
+}
+
+function applyRiserLink(
+  item: ConnectableBox,
+  id: string,
+  partnerIds: string[],
+  role: "above" | "below",
+): ConnectableBox {
+  const unique = uniquePartnerIds(partnerIds);
+  if (unique.length === 0) return stripRiserLink(item);
+  const next: ConnectableBox = {
+    ...stripRiserLink(item),
+    id,
+    riserPartnerId: unique[0],
+    riserRole: role,
+  };
+  if (item.callout) next.callout = item.callout;
+  if (unique.length > 1) next.riserPartnerIds = unique;
   return next;
 }
 
@@ -74,8 +129,13 @@ export function pointHitsConnectableBox(
   item: ConnectableBox,
   padPt: number,
 ): boolean {
-  if (item.type === "circle") return pointInEllipse(point, item.rect, padPt);
-  return pointInRect(point, item.rect, padPt);
+  const deg = annotationRotationDeg(item);
+  const local =
+    deg === 0
+      ? point
+      : rotatePdfPointAround(point, boxCenter(item), -deg);
+  if (item.type === "circle") return pointInEllipse(local, item.rect, padPt);
+  return pointInRect(local, item.rect, padPt);
 }
 
 /** Topmost rectangle or circle under `point`, or null. */
@@ -83,9 +143,11 @@ export function hitTestConnectableBox(
   point: PdfPoint,
   annotations: FloorPlanAnnotation[],
   padPt: number,
+  isVisible?: (item: FloorPlanAnnotation, index: number) => boolean,
 ): number | null {
   for (let i = annotations.length - 1; i >= 0; i--) {
     const item = annotations[i];
+    if (isVisible && !isVisible(item, i)) continue;
     if (isConnectableBox(item) && pointHitsConnectableBox(point, item, padPt)) {
       return i;
     }
@@ -126,14 +188,21 @@ function rayExitEllipse(
   return { x: center.x + dx * t, y: center.y + dy * t };
 }
 
-function boxEdgeToward(
+export function boxEdgeToward(
   item: ConnectableBox,
   toward: PdfPoint,
 ): PdfPoint {
   const center = boxCenter(item);
-  return item.type === "circle"
-    ? rayExitEllipse(center, toward, item.rect)
-    : rayExitRect(center, toward, item.rect);
+  const deg = annotationRotationDeg(item);
+  const localToward =
+    deg === 0 ? toward : rotatePdfPointAround(toward, center, -deg);
+  const localExit =
+    item.type === "circle"
+      ? rayExitEllipse(center, localToward, item.rect)
+      : rayExitRect(center, localToward, item.rect);
+  return deg === 0
+    ? localExit
+    : rotatePdfPointAround(localExit, center, deg);
 }
 
 /** Arrow from the above (ABV) box border to the lower box border. */
@@ -163,27 +232,26 @@ export function listRiserPairs(
   const seen = new Set<string>();
   for (let i = 0; i < annotations.length; i++) {
     const item = annotations[i];
-    if (
-      !isConnectableBox(item) ||
-      item.riserRole !== "above" ||
-      !item.id ||
-      !item.riserPartnerId ||
-      seen.has(item.id)
-    ) {
+    if (!isConnectableBox(item) || item.riserRole !== "above" || !item.id) {
       continue;
     }
-    const belowIndex = byId.get(item.riserPartnerId);
-    if (belowIndex == null) continue;
-    const below = annotations[belowIndex];
-    if (
-      !isConnectableBox(below) ||
-      below.riserRole !== "below" ||
-      below.riserPartnerId !== item.id
-    ) {
-      continue;
+    for (const partnerId of riserPartnerIds(item)) {
+      const pairKey = `${item.id}:${partnerId}`;
+      if (seen.has(pairKey)) continue;
+      const belowIndex = byId.get(partnerId);
+      if (belowIndex == null) continue;
+      const below = annotations[belowIndex];
+      if (
+        !isConnectableBox(below) ||
+        below.riserRole !== "below" ||
+        !below.id ||
+        !riserPartnerIds(below).includes(item.id)
+      ) {
+        continue;
+      }
+      seen.add(pairKey);
+      pairs.push({ aboveIndex: i, belowIndex, above: item, below });
     }
-    seen.add(item.id);
-    pairs.push({ aboveIndex: i, belowIndex, above: item, below });
   }
   return pairs;
 }
@@ -191,23 +259,27 @@ export function listRiserPairs(
 export function clearDanglingRiserLinks(
   annotations: FloorPlanAnnotation[],
 ): FloorPlanAnnotation[] {
-  const validAboveIds = new Set(
-    listRiserPairs(annotations).map((pair) => pair.above.id as string),
-  );
+  const partnersById = new Map<string, string[]>();
+  const roleById = new Map<string, "above" | "below">();
+  for (const pair of listRiserPairs(annotations)) {
+    const aboveId = pair.above.id;
+    const belowId = pair.below.id;
+    if (!aboveId || !belowId) continue;
+    roleById.set(aboveId, "above");
+    roleById.set(belowId, "below");
+    const abovePartners = partnersById.get(aboveId) ?? [];
+    if (!abovePartners.includes(belowId)) abovePartners.push(belowId);
+    partnersById.set(aboveId, abovePartners);
+    const belowPartners = partnersById.get(belowId) ?? [];
+    if (!belowPartners.includes(aboveId)) belowPartners.push(aboveId);
+    partnersById.set(belowId, belowPartners);
+  }
   return annotations.map((item) => {
-    if (!isConnectableBox(item)) return item;
-    if (!item.riserRole) return item;
-    if (item.riserRole === "above" && item.id && validAboveIds.has(item.id)) {
-      return item;
-    }
-    if (
-      item.riserRole === "below" &&
-      item.riserPartnerId &&
-      validAboveIds.has(item.riserPartnerId)
-    ) {
-      return item;
-    }
-    return stripRiserLink(item);
+    if (!isConnectableBox(item) || !item.riserRole || !item.id) return item;
+    const partners = partnersById.get(item.id);
+    const role = roleById.get(item.id);
+    if (!partners || !role) return stripRiserLink(item);
+    return applyRiserLink(item, item.id, partners, role);
   });
 }
 
@@ -224,17 +296,23 @@ export function annotationsForHigherFloor(
   return annotations.flatMap((item) => {
     if (!isConnectableBox(item)) return [item];
     if (item.id && dropIds.has(item.id)) return [];
-    if (item.riserRole || item.riserPartnerId || item.id) {
+    if (item.riserRole || item.riserPartnerId || item.riserPartnerIds || item.id) {
       return [stripRiserLink(item)];
     }
     return [item];
   });
 }
 
-function linkedToIds(item: ConnectableBox, ids: Set<string>): boolean {
-  return Boolean(
-    (item.id && ids.has(item.id)) ||
-      (item.riserPartnerId && ids.has(item.riserPartnerId)),
+function dropPartner(
+  item: ConnectableBox,
+  partnerId: string,
+): ConnectableBox {
+  if (!item.id || !item.riserRole) return stripRiserLink(item);
+  return applyRiserLink(
+    item,
+    item.id,
+    riserPartnerIds(item).filter((id) => id !== partnerId),
+    item.riserRole,
   );
 }
 
@@ -243,19 +321,55 @@ export function disconnectRiserBox(
   index: number,
 ): FloorPlanAnnotation[] {
   const item = annotations[index];
-  if (!isConnectableBox(item) || !item.riserRole) return annotations;
-  const ids = new Set<string>();
-  if (item.id) ids.add(item.id);
-  if (item.riserPartnerId) ids.add(item.riserPartnerId);
-  if (ids.size === 0) return annotations;
-  return annotations.map((entry) =>
-    isConnectableBox(entry) && linkedToIds(entry, ids)
-      ? stripRiserLink(entry)
-      : entry,
-  );
+  if (!isConnectableBox(item) || !item.riserRole || !item.id) {
+    return annotations;
+  }
+  const droppedId = item.id;
+  const partners = new Set(riserPartnerIds(item));
+  if (partners.size === 0) return annotations;
+  return annotations.map((entry) => {
+    if (!isConnectableBox(entry)) return entry;
+    if (entry.id === droppedId) return stripRiserLink(entry);
+    if (entry.id && partners.has(entry.id)) {
+      return dropPartner(entry, droppedId);
+    }
+    return entry;
+  });
 }
 
-export function connectRiserBoxes(
+function pointNearSegment(
+  point: PdfPoint,
+  a: PdfPoint,
+  b: PdfPoint,
+  thresholdSq: number,
+): boolean {
+  const nearest = nearestPointOnSegment(point, a, b);
+  const dx = point.x - nearest.x;
+  const dy = point.y - nearest.y;
+  return dx * dx + dy * dy <= thresholdSq;
+}
+
+/** Topmost riser connection arrow under `point`, identified by the above box id. */
+export function hitTestRiserPair(
+  point: PdfPoint,
+  annotations: FloorPlanAnnotation[],
+  thresholdPt: number,
+): string | null {
+  const thresholdSq = thresholdPt * thresholdPt;
+  const pairs = listRiserPairs(annotations);
+  for (let i = pairs.length - 1; i >= 0; i--) {
+    const pair = pairs[i];
+    const ends = riserArrowEndpoints(pair.above, pair.below);
+    if (!ends) continue;
+    if (pointNearSegment(point, ends.start, ends.end, thresholdSq)) {
+      return pair.above.id ?? null;
+    }
+  }
+  return null;
+}
+
+/** Swap which box is marked above (ABV) vs below for an existing pair. */
+export function reverseRiserPair(
   annotations: FloorPlanAnnotation[],
   aboveIndex: number,
   belowIndex: number,
@@ -264,45 +378,235 @@ export function connectRiserBoxes(
   const above = annotations[aboveIndex];
   const below = annotations[belowIndex];
   if (!isConnectableBox(above) || !isConnectableBox(below)) return null;
+  if (
+    above.riserRole !== "above" ||
+    below.riserRole !== "below" ||
+    !above.id ||
+    !below.id ||
+    !riserPartnerIds(above).includes(below.id) ||
+    !riserPartnerIds(below).includes(above.id) ||
+    riserPartnerIds(above).length !== 1 ||
+    riserPartnerIds(below).length !== 1
+  ) {
+    return null;
+  }
+
+  return annotations.map((item, i) => {
+    if (i === aboveIndex) {
+      return { ...above, riserRole: "below" as const };
+    }
+    if (i === belowIndex) {
+      return { ...below, riserRole: "above" as const };
+    }
+    return item;
+  });
+}
+
+export type ConnectRiserBoxesOptions = {
+  /** Subset of the source callout's catalog ids to copy onto the unlabeled partner. */
+  copyRiserIds?: string[];
+  types?: MechanicalRiserTypeDto[];
+  risers?: MechanicalRiserDto[];
+};
+
+export type ConnectPlaceDraft = {
+  kind: "annotation" | "overlay";
+  index: number;
+  center: PdfPoint;
+};
+
+export type ConnectRiserChoice = {
+  riserIds: string[];
+  aboveIndex?: number;
+  belowIndex?: number;
+  place?: ConnectPlaceDraft;
+};
+
+/**
+ * Same-size copy of `source`, centered on `center`, with no callout or link.
+ * Used so Connection can pair it as ABV and copy tags from the from-below box.
+ */
+export function unlabeledBoxCenteredOn(
+  source: ConnectableBox,
+  center: PdfPoint,
+): ConnectableBox {
+  const placed: ConnectableBox = {
+    type: source.type,
+    rect: {
+      x: center.x - source.rect.width / 2,
+      y: center.y - source.rect.height / 2,
+      width: source.rect.width,
+      height: source.rect.height,
+    },
+    color: source.color,
+    strokeWidthPt: source.strokeWidthPt,
+  };
+  if (source.variant === "cross") placed.variant = "cross";
+  if (source.markupSet === 2) placed.markupSet = 2;
+  return withAnnotationRotation(placed, annotationRotationDeg(source));
+}
+
+/**
+ * Same-size copy of `source`, centered on `center`, with no riser-offset link.
+ * Copies the callout (or a chosen subset) so follow-mode visibility still works.
+ */
+export function placeRiserBoxFromSource(
+  source: ConnectableBox,
+  center: PdfPoint,
+  options?: ConnectRiserBoxesOptions,
+): ConnectableBox {
+  const placed = unlabeledBoxCenteredOn(source, center);
+  if (source.callout) {
+    const copied = calloutForConnectCopy(source.callout, placed, options);
+    if (copied) placed.callout = copied;
+  }
+  return placed;
+}
+
+/**
+ * Place a new ABV box at `center` and pair it with the from-below source.
+ * `sourceIndex` is the saved box; omit it to write an overlay onto this floor
+ * as the below partner. Arrow points at the existing (not-ABV) riser.
+ */
+export function placeAndConnectRiserBox(
+  annotations: FloorPlanAnnotation[],
+  source: ConnectableBox,
+  center: PdfPoint,
+  sourceIndex: number | null,
+  options?: ConnectRiserBoxesOptions,
+): FloorPlanAnnotation[] | null {
+  const above = unlabeledBoxCenteredOn(source, center);
+  let next: FloorPlanAnnotation[];
+  let belowIndex: number;
+  if (sourceIndex == null) {
+    next = [...annotations, stripRiserLink(source), above];
+    belowIndex = next.length - 2;
+  } else {
+    next = [...annotations, above];
+    belowIndex = sourceIndex;
+  }
+  return connectRiserBoxes(next, next.length - 1, belowIndex, options);
+}
+
+/** Callout that would be copied when only one of the two boxes is labeled. */
+export function calloutCopiedOnConnect(
+  above: ConnectableBox,
+  below: ConnectableBox,
+): FloorPlanCallout | null {
+  if (above.callout && !below.callout) return above.callout;
+  if (below.callout && !above.callout) return below.callout;
+  return null;
+}
+
+export function connectNeedsRiserChoice(callout: FloorPlanCallout): boolean {
+  return calloutRiserIds(callout).length > 1;
+}
+
+function calloutForConnectCopy(
+  source: FloorPlanCallout,
+  target: ConnectableBox,
+  options?: ConnectRiserBoxesOptions,
+): FloorPlanCallout | null {
+  const requested = options?.copyRiserIds;
+  if (requested == null) return duplicateCallout(source, target);
+  const allowed = new Set(calloutRiserIds(source));
+  const chosen = requested.filter((id) => allowed.has(id));
+  if (chosen.length === 0) return null;
+  return duplicateCallout(
+    narrowCalloutToRisers(
+      source,
+      chosen,
+      options.types ?? [],
+      options.risers ?? [],
+    ),
+    target,
+  );
+}
+
+export function connectRiserBoxes(
+  annotations: FloorPlanAnnotation[],
+  aboveIndex: number,
+  belowIndex: number,
+  options?: ConnectRiserBoxesOptions,
+): FloorPlanAnnotation[] | null {
+  if (aboveIndex === belowIndex) return null;
+  const first = annotations[aboveIndex];
+  const second = annotations[belowIndex];
+  if (!isConnectableBox(first) || !isConnectableBox(second)) return null;
 
   if (
-    above.riserRole === "above" &&
-    below.riserRole === "below" &&
-    above.id &&
-    below.id &&
-    above.riserPartnerId === below.id &&
-    below.riserPartnerId === above.id
+    first.id &&
+    second.id &&
+    riserPartnerIds(first).includes(second.id) &&
+    riserPartnerIds(second).includes(first.id)
   ) {
     return annotations;
   }
+
+  let resolvedAboveIndex = aboveIndex;
+  let resolvedBelowIndex = belowIndex;
+  if (first.riserRole === "below" && !second.riserRole) {
+    resolvedAboveIndex = belowIndex;
+    resolvedBelowIndex = aboveIndex;
+  } else if (second.riserRole === "above" && !first.riserRole) {
+    resolvedAboveIndex = belowIndex;
+    resolvedBelowIndex = aboveIndex;
+  }
+
+  const above = annotations[resolvedAboveIndex];
+  const below = annotations[resolvedBelowIndex];
+  if (!isConnectableBox(above) || !isConnectableBox(below)) return null;
 
   const aboveId = above.id ?? newAnnotationId();
   let belowId = below.id ?? newAnnotationId();
   if (belowId === aboveId) belowId = newAnnotationId();
 
-  const idsToClear = new Set<string>([aboveId, belowId]);
-  if (above.riserPartnerId) idsToClear.add(above.riserPartnerId);
-  if (below.riserPartnerId) idsToClear.add(below.riserPartnerId);
+  const roleFlipIds = new Set<string>();
+  if (above.riserRole === "below") {
+    for (const id of riserPartnerIds(above)) roleFlipIds.add(id);
+  }
+  if (below.riserRole === "above") {
+    for (const id of riserPartnerIds(below)) roleFlipIds.add(id);
+  }
+
+  const abovePartners =
+    above.riserRole === "below" ? [] : [...riserPartnerIds(above)];
+  if (!abovePartners.includes(belowId)) abovePartners.push(belowId);
+  const belowPartners =
+    below.riserRole === "above" ? [] : [...riserPartnerIds(below)];
+  if (!belowPartners.includes(aboveId)) belowPartners.push(aboveId);
+
+  let linkedAbove = applyRiserLink(above, aboveId, abovePartners, "above");
+  let linkedBelow = applyRiserLink(below, belowId, belowPartners, "below");
+  if (linkedAbove.callout && !linkedBelow.callout) {
+    const copied = calloutForConnectCopy(
+      linkedAbove.callout,
+      linkedBelow,
+      options,
+    );
+    if (copied) linkedBelow = { ...linkedBelow, callout: copied };
+  } else if (linkedBelow.callout && !linkedAbove.callout) {
+    const copied = calloutForConnectCopy(
+      linkedBelow.callout,
+      linkedAbove,
+      options,
+    );
+    if (copied) linkedAbove = { ...linkedAbove, callout: copied };
+  }
 
   return annotations.map((item, i) => {
-    if (i === aboveIndex) {
-      return {
-        ...above,
-        id: aboveId,
-        riserPartnerId: belowId,
-        riserRole: "above" as const,
-      };
+    if (i === resolvedAboveIndex) {
+      return linkedAbove;
     }
-    if (i === belowIndex) {
-      return {
-        ...below,
-        id: belowId,
-        riserPartnerId: aboveId,
-        riserRole: "below" as const,
-      };
+    if (i === resolvedBelowIndex) {
+      return linkedBelow;
     }
-    if (isConnectableBox(item) && linkedToIds(item, idsToClear)) {
-      return stripRiserLink(item);
+    if (
+      isConnectableBox(item) &&
+      item.id &&
+      roleFlipIds.has(item.id)
+    ) {
+      return dropPartner(item, item.riserRole === "above" ? aboveId : belowId);
     }
     return item;
   });

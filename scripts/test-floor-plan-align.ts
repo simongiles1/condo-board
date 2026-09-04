@@ -59,6 +59,10 @@ import {
   panZoomScreenPoint,
   panZoomScreenRect,
   panZoomViewportToPage,
+  pinRelativeViewFromTransform,
+  centerViewOnPagePoint,
+  transformFromPinRelativeView,
+  viewportResizePanAction,
   clampPdfVisibleRender,
   clipRasterKey,
   clipRasterKeyEquals,
@@ -90,11 +94,15 @@ import {
   annotationsForCompareSheet,
   familyAnnotationSourcePlan,
   overlayAnnotationsForEditSheet,
+  visibleAnnotationsForCompareSheet,
 } from "../lib/building/floor-plan-compare-annotations";
 import {
+  filterAnnotationsByStrokeColors,
+  lineOverlayFilterForFamily,
   mapAnnotationsAcrossPlans,
   mapAnnotationsToCroppedPlate,
   mapPdfPointAcrossPlans,
+  parseDrawColorPresets,
 } from "../lib/building/floor-plan-annotations";
 
 describe("clampCropOrigin", () => {
@@ -1467,6 +1475,126 @@ describe("overlayPanZoom", () => {
   });
 });
 
+describe("centerViewOnPagePoint", () => {
+  it("places the PDF point at the viewport center after Y-flip", () => {
+    const view = { x: 10, y: 20, zoom: 2 };
+    const pageHeight = 800;
+    const scale = 0.5;
+    const point = { x: 120, y: 80 };
+    const next = centerViewOnPagePoint(
+      view,
+      { width: 1000, height: 600 },
+      point,
+      pageHeight,
+      scale,
+    );
+    const screen = panZoomScreenPoint(
+      pdfPointToCanvas(point, pageHeight, scale),
+      next,
+    );
+    assert.equal(next.zoom, 2);
+    assert.equal(screen.x, 500);
+    assert.equal(screen.y, 300);
+  });
+
+  it("does not treat PDF y as canvas y", () => {
+    const view = { x: 0, y: 0, zoom: 3 };
+    const pageHeight = 2000;
+    const point = { x: 1000, y: 1800 };
+    const next = centerViewOnPagePoint(
+      view,
+      { width: 800, height: 800 },
+      point,
+      pageHeight,
+      1,
+    );
+    const screen = panZoomScreenPoint(
+      pdfPointToCanvas(point, pageHeight, 1),
+      next,
+    );
+    assert.equal(screen.x, 400);
+    assert.equal(screen.y, 400);
+    assert.notEqual(next.y, 400 - point.y * 3);
+  });
+});
+
+describe("pinRelativeView", () => {
+  it("round-trips the same pin and page", () => {
+    const view = { x: 40, y: -20, zoom: 2 };
+    const pin = { x: 120, y: 80 };
+    const stored = pinRelativeViewFromTransform(view, pin, 800, 1);
+    assert.deepEqual(
+      transformFromPinRelativeView(stored, pin, 800, 1),
+      view,
+    );
+  });
+
+  it("keeps zoom and the pin's screen position when the sheet changes", () => {
+    const view = { x: 40, y: -20, zoom: 2.5 };
+    const pinA = { x: 100, y: 200 };
+    const stored = pinRelativeViewFromTransform(view, pinA, 800, 0.5);
+    const pinB = { x: 180, y: 60 };
+    const restored = transformFromPinRelativeView(stored, pinB, 1100, 0.5);
+    assert.equal(restored.zoom, 2.5);
+    const screenA = panZoomScreenPoint(
+      pdfPointToCanvas(pinA, 800, 0.5),
+      view,
+    );
+    const screenB = panZoomScreenPoint(
+      pdfPointToCanvas(pinB, 1100, 0.5),
+      restored,
+    );
+    assert.deepEqual(screenB, screenA);
+  });
+});
+
+describe("viewportResizePanAction", () => {
+  it("does not pan when the first measurement is from 0×0", () => {
+    assert.deepEqual(
+      viewportResizePanAction({ width: 0, height: 0 }, { width: 1400, height: 900 }),
+      { action: "seed" },
+    );
+  });
+
+  it("recenters by half the growth after a real size is known", () => {
+    assert.deepEqual(
+      viewportResizePanAction(
+        { width: 1200, height: 800 },
+        { width: 1400, height: 900 },
+      ),
+      { action: "recenter", x: 100, y: 50 },
+    );
+  });
+
+  it("ignores scrollbar-sized noise", () => {
+    assert.deepEqual(
+      viewportResizePanAction(
+        { width: 1200, height: 800 },
+        { width: 1210, height: 805 },
+      ),
+      { action: "none" },
+    );
+  });
+
+  it("keeps a restored pin on the same screen pixel across a remount seed", () => {
+    const view = { x: 40, y: -20, zoom: 2.5 };
+    const pin = { x: 100, y: 200 };
+    const stored = pinRelativeViewFromTransform(view, pin, 800, 0.5);
+    const restored = transformFromPinRelativeView(stored, pin, 800, 0.5);
+    const resize = viewportResizePanAction(
+      { width: 0, height: 0 },
+      { width: 1400, height: 900 },
+    );
+    assert.equal(resize.action, "seed");
+    const screenBefore = panZoomScreenPoint(pdfPointToCanvas(pin, 800, 0.5), view);
+    const screenAfter = panZoomScreenPoint(
+      pdfPointToCanvas(pin, 800, 0.5),
+      restored,
+    );
+    assert.deepEqual(screenAfter, screenBefore);
+  });
+});
+
 describe("panZoomFollowTransform", () => {
   it("is identity when the live view matches the rendered clip", () => {
     const view = { x: 12, y: -4, zoom: 1.5 };
@@ -1830,6 +1958,52 @@ describe("annotationsForCompareSheet", () => {
       { x: 100, y: 210 },
     ]);
   });
+
+  it("does not fall back to set 1 markup when comparing set 2", () => {
+    const plans = [
+      {
+        id: "f10s",
+        familyId: "layout-s",
+        floorNumber: 10,
+        name: "Floor 10",
+        annotations: [
+          {
+            type: "polyline" as const,
+            points: [
+              { x: 110, y: 210 },
+              { x: 150, y: 250 },
+            ],
+            color: "#dc2626",
+            strokeWidthPt: 2,
+          },
+        ],
+        pinXPt: 100,
+        pinYPt: 200,
+        cropXPt: 50,
+        cropYPt: 40,
+      },
+      {
+        id: "f15s",
+        familyId: "layout-s",
+        floorNumber: 15,
+        name: "Floor 15",
+        annotations: [],
+        pinXPt: 105,
+        pinYPt: 205,
+        cropXPt: 55,
+        cropYPt: 45,
+      },
+    ];
+    const families = [{ id: "layout-s", scaleDenominator: 150 }];
+    const mapped = annotationsForCompareSheet(
+      plans[1],
+      families[0],
+      plans,
+      families,
+      2,
+    );
+    assert.deepEqual(mapped, []);
+  });
 });
 
 describe("annotationsForCompareSheet cross-family", () => {
@@ -1879,6 +2053,149 @@ describe("annotationsForCompareSheet cross-family", () => {
       families,
     );
     assert.equal(resolved.length, 0);
+  });
+});
+
+describe("visibleAnnotationsForCompareSheet", () => {
+  const wall = {
+    type: "polyline" as const,
+    points: [
+      { x: 110, y: 210 },
+      { x: 150, y: 250 },
+    ],
+    color: "#dc2626",
+    strokeWidthPt: 2,
+  };
+  const heatPump = {
+    type: "polyline" as const,
+    points: [
+      { x: 90, y: 190 },
+      { x: 130, y: 230 },
+    ],
+    color: "#0ea5e9",
+    strokeWidthPt: 2,
+  };
+  const archPlan = {
+    id: "arch-5",
+    familyId: "arch",
+    floorNumber: 5,
+    name: "Floor 5",
+    annotations: [wall],
+    pinXPt: 100,
+    pinYPt: 200,
+    cropXPt: 50,
+    cropYPt: 40,
+  };
+  const mechPlan = {
+    id: "mech-5",
+    familyId: "mech",
+    floorNumber: 5,
+    name: "Floor 5",
+    annotations: [heatPump],
+    pinXPt: 80,
+    pinYPt: 180,
+    cropXPt: 40,
+    cropYPt: 30,
+  };
+  const families = [
+    { id: "arch", kind: "architectural" as const, scaleDenominator: 150 },
+    { id: "mech", kind: "mechanical" as const, scaleDenominator: 150 },
+  ];
+  const allPlans = [archPlan, mechPlan];
+
+  it("keeps this sheet's lines and pin-maps the other drawing set on the same floor", () => {
+    const visible = visibleAnnotationsForCompareSheet({
+      plan: archPlan,
+      family: families[0],
+      plans: [archPlan],
+      families: [families[0]],
+      allPlans,
+      allFamilies: families,
+      colorFilter: "all",
+    });
+    assert.equal(visible.length, 2);
+    assert.equal(visible[0]?.type, "polyline");
+    if (visible[0]?.type !== "polyline") return;
+    assert.deepEqual(visible[0].points, [
+      { x: 60, y: 170 },
+      { x: 100, y: 210 },
+    ]);
+    assert.equal(visible[1]?.color, "#0ea5e9");
+    if (visible[1]?.type !== "polyline") return;
+    assert.deepEqual(visible[1].points, [
+      { x: 60, y: 170 },
+      { x: 100, y: 210 },
+    ]);
+  });
+
+  it("hides the other drawing set when only architectural types are checked", () => {
+    const visible = visibleAnnotationsForCompareSheet({
+      plan: archPlan,
+      family: families[0],
+      plans: [archPlan],
+      families: [families[0]],
+      allPlans,
+      allFamilies: families,
+      colorFilter: ["#dc2626"],
+    });
+    assert.equal(visible.length, 1);
+    assert.equal(visible[0]?.color, "#dc2626");
+  });
+
+  it("shows only mechanical overlay when only mechanical types are checked", () => {
+    const visible = visibleAnnotationsForCompareSheet({
+      plan: archPlan,
+      family: families[0],
+      plans: [archPlan],
+      families: [families[0]],
+      allPlans,
+      allFamilies: families,
+      colorFilter: ["#0ea5e9"],
+    });
+    assert.equal(visible.length, 1);
+    assert.equal(visible[0]?.color, "#0ea5e9");
+  });
+
+  it("hides every overlay line when no types are checked", () => {
+    const visible = visibleAnnotationsForCompareSheet({
+      plan: archPlan,
+      family: families[0],
+      plans: [archPlan],
+      families: [families[0]],
+      allPlans,
+      allFamilies: families,
+      colorFilter: [],
+    });
+    assert.deepEqual(visible, []);
+  });
+
+  it("scopes mechanical overlay to the active riser pass", () => {
+    const pass1 = { ...heatPump, markupSet: 1 as const };
+    const pass2 = {
+      ...heatPump,
+      points: [
+        { x: 95, y: 195 },
+        { x: 135, y: 235 },
+      ],
+      markupSet: 2 as const,
+    };
+    const mechanical = { ...mechPlan, annotations: [pass1, pass2] };
+    const visible = visibleAnnotationsForCompareSheet({
+      plan: archPlan,
+      family: families[0],
+      plans: [archPlan],
+      families: [families[0]],
+      allPlans: [archPlan, mechanical],
+      allFamilies: families,
+      markupSet: 2,
+      colorFilter: ["#0ea5e9"],
+    });
+    assert.equal(visible.length, 1);
+    if (visible[0]?.type !== "polyline") return;
+    assert.deepEqual(visible[0].points, [
+      { x: 65, y: 175 },
+      { x: 105, y: 215 },
+    ]);
   });
 });
 
@@ -1995,5 +2312,166 @@ describe("resolveFloorPlanAnnotationMarkup", () => {
     writeFloorPlanAnnotationDraft(planId, [], saved);
     assert.equal(resolveFloorPlanAnnotationMarkup(planId, saved).length, 1);
     clearFloorPlanAnnotationDraft(planId);
+  });
+
+  it("keeps an approve draft when a remount writes an empty preload snapshot", () => {
+    const planId = "draft-approve-nav";
+    const saved = [
+      {
+        type: "polyline" as const,
+        points: [
+          { x: 1, y: 2 },
+          { x: 3, y: 4 },
+        ],
+        color: "#dc2626",
+        strokeWidthPt: 2,
+      },
+    ];
+    const approved = [
+      ...saved,
+      {
+        type: "rectangle" as const,
+        rect: { x: 10, y: 20, width: 8, height: 6 },
+        color: "#0ea5e9",
+        strokeWidthPt: 2,
+        callout: {
+          x: 14,
+          y: 30,
+          text: "Riser - HC B9",
+          riserId: "hc-b9",
+          riserIds: ["hc-b9"],
+        },
+      },
+    ];
+    clearFloorPlanAnnotationDraft(planId);
+    writeFloorPlanAnnotationDraft(planId, approved, saved);
+    writeFloorPlanAnnotationDraft(planId, [], saved);
+    const resolved = resolveFloorPlanAnnotationMarkup(planId, saved);
+    assert.equal(resolved.length, 2);
+    const box = resolved[1];
+    assert.equal(box?.type, "rectangle");
+    if (box?.type !== "rectangle") return;
+    assert.equal(box.callout?.riserId, "hc-b9");
+    clearFloorPlanAnnotationDraft(planId);
+  });
+});
+
+describe("draw color families", () => {
+  it("keeps built-in wall colors architectural when family is missing", () => {
+    const parsed = parseDrawColorPresets([
+      { color: "#dc2626", label: "Structural wall" },
+    ]);
+    assert.equal(parsed[0]?.family, "architectural");
+  });
+
+  it("treats user-added colors without family as mechanical", () => {
+    const parsed = parseDrawColorPresets([
+      { color: "#0ea5e9", label: "Heat pump", shortcut: "7" },
+    ]);
+    assert.equal(parsed[0]?.family, "mechanical");
+    assert.equal(parsed[0]?.shortcut, "7");
+  });
+
+  it("respects an explicit family on a stored preset", () => {
+    const parsed = parseDrawColorPresets([
+      { color: "#0ea5e9", label: "Heat pump", family: "architectural" },
+    ]);
+    assert.equal(parsed[0]?.family, "architectural");
+  });
+
+  it("splits overlay filters so each family only shows its own types", () => {
+    const presets = parseDrawColorPresets([
+      { color: "#dc2626", label: "Wall", family: "architectural" },
+      { color: "#0ea5e9", label: "Heat pump", family: "mechanical" },
+    ]);
+    const mechanicalOnly = ["#0ea5e9"];
+    assert.deepEqual(
+      lineOverlayFilterForFamily(mechanicalOnly, presets, "mechanical"),
+      ["#0ea5e9"],
+    );
+    assert.deepEqual(
+      lineOverlayFilterForFamily(mechanicalOnly, presets, "architectural"),
+      [],
+    );
+    assert.equal(
+      lineOverlayFilterForFamily("all", presets, "architectural"),
+      "all",
+    );
+  });
+
+  it("hides the other family's strokes when the overlay filter is a color list", () => {
+    const annotations = [
+      {
+        type: "polyline" as const,
+        points: [
+          { x: 0, y: 0 },
+          { x: 1, y: 1 },
+        ],
+        color: "#dc2626",
+        strokeWidthPt: 2,
+      },
+      {
+        type: "polyline" as const,
+        points: [
+          { x: 2, y: 2 },
+          { x: 3, y: 3 },
+        ],
+        color: "#0ea5e9",
+        strokeWidthPt: 2,
+      },
+    ];
+    const visible = filterAnnotationsByStrokeColors(annotations, ["#0ea5e9"]);
+    assert.equal(visible.length, 1);
+    assert.equal(visible[0]?.color, "#0ea5e9");
+  });
+
+  it("keeps checked equipment visible when another mechanical type is unchecked", () => {
+    const presets = parseDrawColorPresets([
+      { color: "#ca8a04", label: "Doors and windows", family: "architectural" },
+      { color: "#2563eb", label: "Interior", family: "architectural" },
+      { color: "#0ea5e9", label: "Heat pump", family: "mechanical" },
+      { color: "#fbbf24", label: "Elec closet", family: "mechanical" },
+      { color: "#6366f1", label: "Garbage chute", family: "mechanical" },
+    ]);
+    const checked = presets
+      .map((preset) => preset.color)
+      .filter((color) => color !== "#0ea5e9");
+    const overlay = [
+      {
+        type: "rectangle" as const,
+        rect: { x: 0, y: 0, width: 10, height: 10 },
+        color: "#ca8a04",
+        strokeWidthPt: 2,
+      },
+      {
+        type: "circle" as const,
+        rect: { x: 20, y: 0, width: 10, height: 10 },
+        variant: "cross" as const,
+        color: "#2563eb",
+        strokeWidthPt: 2,
+      },
+      {
+        type: "polyline" as const,
+        points: [
+          { x: 0, y: 0 },
+          { x: 1, y: 1 },
+        ],
+        color: "#0ea5e9",
+        strokeWidthPt: 2,
+      },
+    ];
+    const mechanicalOnly = lineOverlayFilterForFamily(
+      checked,
+      presets,
+      "mechanical",
+    );
+    assert.equal(
+      filterAnnotationsByStrokeColors(overlay, mechanicalOnly).length,
+      0,
+    );
+    const visible = filterAnnotationsByStrokeColors(overlay, checked);
+    assert.equal(visible.length, 2);
+    assert.equal(visible[0]?.color, "#ca8a04");
+    assert.equal(visible[1]?.color, "#2563eb");
   });
 });

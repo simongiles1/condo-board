@@ -445,6 +445,36 @@ export function canvasPointToPdf(
   };
 }
 
+/** Pan/zoom so a PDF-point extent (not just the page) fits the viewport. */
+export function fitPanZoomToPdfExtent(
+  viewport: { clientWidth: number; clientHeight: number },
+  extent: { minX: number; minY: number; maxX: number; maxY: number },
+  pageHeight: number,
+  layoutScale: number,
+  fitPad: number,
+  zoomMin: number,
+  zoomMax: number,
+): PdfPanZoom {
+  const width = (extent.maxX - extent.minX) * layoutScale;
+  const height = (extent.maxY - extent.minY) * layoutScale;
+  if (!(width > 0) || !(height > 0)) {
+    return { x: 0, y: 0, zoom: 1 };
+  }
+  const zoom = Math.min(
+    (viewport.clientWidth - fitPad) / width,
+    (viewport.clientHeight - fitPad) / height,
+    zoomMax,
+  );
+  const clamped = Math.max(zoom, zoomMin);
+  const centerX = ((extent.minX + extent.maxX) / 2) * layoutScale;
+  const centerY = (pageHeight - (extent.minY + extent.maxY) / 2) * layoutScale;
+  return {
+    zoom: clamped,
+    x: viewport.clientWidth / 2 - centerX * clamped,
+    y: viewport.clientHeight / 2 - centerY * clamped,
+  };
+}
+
 /**
  * Map a CSS pan/zoom of a page drawn at `layoutScale` into a pdf.js clip.
  * One PDF point becomes `layoutScale * zoom * dpr` device pixels — the same
@@ -464,6 +494,50 @@ export function pdfClipFromElementRects(
     renderScale: cssPerPt * pixelRatio,
     offsetX: (pageBox.left - viewportBox.left) * pixelRatio,
     offsetY: (pageBox.top - viewportBox.top) * pixelRatio,
+  };
+}
+
+/**
+ * Rasterize a PDF-point rectangle at 1 CSS pixel per point (× dpr device pixels).
+ * Used for template design previews that must match on-plan scale.
+ */
+export function pdfRectClipRenderParams(
+  clip: PdfRect,
+  pageHeight: number,
+  dpr = 1,
+): PdfVisibleRender {
+  const pixelRatio = Math.max(1, dpr);
+  const topCanvas = pageHeight - clip.y - clip.height;
+  return {
+    canvasWidth: Math.max(1, Math.round(clip.width * pixelRatio)),
+    canvasHeight: Math.max(1, Math.round(clip.height * pixelRatio)),
+    renderScale: pixelRatio,
+    offsetX: -clip.x * pixelRatio,
+    offsetY: -topCanvas * pixelRatio,
+  };
+}
+
+/** Convert a PDF point to coordinates inside a clip rect (SVG y-down, 1 pt = 1 unit). */
+export function pdfPointToClipCoords(
+  point: PdfPoint,
+  clip: PdfRect,
+  pageHeight: number,
+): CanvasPoint {
+  return {
+    x: point.x - clip.x,
+    y: clip.y + clip.height - point.y,
+  };
+}
+
+/** Convert clip-local SVG coordinates back to a PDF point. */
+export function clipCoordsToPdfPoint(
+  point: CanvasPoint,
+  clip: PdfRect,
+  pageHeight: number,
+): PdfPoint {
+  return {
+    x: point.x + clip.x,
+    y: clip.y + clip.height - point.y,
   };
 }
 
@@ -667,6 +741,109 @@ export function panZoomScreenPoint(
   return {
     x: view.x + point.x * view.zoom,
     y: view.y + point.y * view.zoom,
+  };
+}
+
+/**
+ * Zoom plus the building pin's viewport position. Switching sheets reapplies
+ * this so the pin stays on the same screen pixel at the same zoom.
+ */
+export type PinRelativeView = {
+  zoom: number;
+  pinScreenX: number;
+  pinScreenY: number;
+};
+
+export function pinRelativeViewFromTransform(
+  view: PdfPanZoom,
+  pin: PdfPoint,
+  pageHeight: number,
+  scale: number,
+): PinRelativeView {
+  const screen = panZoomScreenPoint(
+    pdfPointToCanvas(pin, pageHeight, scale),
+    view,
+  );
+  return {
+    zoom: view.zoom,
+    pinScreenX: screen.x,
+    pinScreenY: screen.y,
+  };
+}
+
+export function transformFromPinRelativeView(
+  stored: PinRelativeView,
+  pin: PdfPoint,
+  pageHeight: number,
+  scale: number,
+): PdfPanZoom {
+  const canvas = pdfPointToCanvas(pin, pageHeight, scale);
+  const zoom = stored.zoom;
+  return {
+    zoom,
+    x: stored.pinScreenX - canvas.x * zoom,
+    y: stored.pinScreenY - canvas.y * zoom,
+  };
+}
+
+/**
+ * Pan so a PDF point sits at the viewport center. View x/y are CSS pan of
+ * the Y-flipped page canvas — the same space as
+ * {@link transformFromPinRelativeView} — not raw PDF y.
+ */
+export function centerViewOnPagePoint(
+  view: PdfPanZoom,
+  viewport: { width: number; height: number },
+  pagePoint: PdfPoint,
+  pageHeight: number,
+  layoutScale: number,
+): PdfPanZoom {
+  return transformFromPinRelativeView(
+    {
+      zoom: view.zoom,
+      pinScreenX: viewport.width / 2,
+      pinScreenY: viewport.height / 2,
+    },
+    pagePoint,
+    pageHeight,
+    layoutScale,
+  );
+}
+
+/**
+ * Ignore viewport noise (scrollbars) but still recenter when the shell
+ * actually grows or shrinks. Same 16px band as clip-raster viewport compares.
+ */
+export const VIEWPORT_RECENTER_EPS_PX = 16;
+
+export type ViewportResizePan =
+  | { action: "none" }
+  | { action: "seed" }
+  | { action: "recenter"; x: number; y: number };
+
+/**
+ * Pan delta when the edit viewport changes size. The first real measurement
+ * must not be treated as a grow from 0×0 — that would shift a restored
+ * pin-relative view down-right by half the viewport on every sheet remount.
+ */
+export function viewportResizePanAction(
+  previous: { width: number; height: number },
+  next: { width: number; height: number },
+  epsPx: number = VIEWPORT_RECENTER_EPS_PX,
+): ViewportResizePan {
+  if (!(previous.width >= 2) || !(previous.height >= 2)) {
+    return { action: "seed" };
+  }
+  if (
+    Math.abs(previous.width - next.width) < epsPx &&
+    Math.abs(previous.height - next.height) < epsPx
+  ) {
+    return { action: "none" };
+  }
+  return {
+    action: "recenter",
+    x: (next.width - previous.width) / 2,
+    y: (next.height - previous.height) / 2,
   };
 }
 

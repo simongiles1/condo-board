@@ -109,7 +109,7 @@ export function FloorPlanExpandedShell({
             </p>
             <p className="truncate text-xs text-slate-500">
               {enableFloorKeys
-                ? "Toggle pin and crop visibility · Drag the pin to reposition · Arrow keys flip floors"
+                ? "Click a pin to select · Arrow keys nudge 1 pt (Shift 10) · ← → flip floors when no pin is selected"
                 : "Drag the east sheet to overlap elevator cores · Arrow keys nudge 1 pt"}
             </p>
           </div>

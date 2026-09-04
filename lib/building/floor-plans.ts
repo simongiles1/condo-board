@@ -1,5 +1,5 @@
 import { readFile, unlink } from "fs/promises";
-import { eq, and, isNotNull, asc } from "drizzle-orm";
+import { eq, and, isNotNull, asc, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 import { getDb } from "@/lib/db";
@@ -8,6 +8,8 @@ import {
   floorPlanFamilies,
   floorPlanSettings,
   floorPlans,
+  mechanicalRiserTypes,
+  mechanicalRisers,
 } from "@/lib/db/schema";
 
 import {
@@ -60,6 +62,22 @@ import {
   type DrawColorPreset,
   type FloorPlanAnnotation,
 } from "./floor-plan-annotations";
+import {
+  applyRiserReclassifyToAnnotations,
+  architecturalPresetsOnly,
+  mergeDrawColorPresets,
+  parseRiserLabel,
+  planMechanicalTypeSync,
+  type MechanicalRiserDto,
+  type MechanicalRiserTypeDto,
+  type RiserIdRewrite,
+} from "./floor-plan-mechanical-risers";
+import {
+  parseRiserTemplates,
+  serializeRiserTemplates,
+  standardizeFloorPlanAnnotations,
+  type RiserTypeTemplate,
+} from "./floor-plan-riser-templates";
 import { assertLooksLikePdf } from "@/lib/pdf/pdf-bytes";
 
 const MAX_UPLOAD_BYTES = 80 * 1024 * 1024;
@@ -81,15 +99,175 @@ function mapFamily(row: typeof floorPlanFamilies.$inferSelect): FloorPlanFamilyD
   };
 }
 
-function mapSettings(row: typeof floorPlanSettings.$inferSelect): FloorPlanSettingsDto {
+function mapRiserType(
+  row: typeof mechanicalRiserTypes.$inferSelect,
+): MechanicalRiserTypeDto {
+  const type: MechanicalRiserTypeDto = {
+    id: row.id,
+    name: row.name,
+    color: row.color,
+    sortOrder: row.sortOrder,
+  };
+  if (row.shortcut) type.shortcut = row.shortcut;
+  return type;
+}
+
+function mapRiser(row: typeof mechanicalRisers.$inferSelect): MechanicalRiserDto {
+  const riser: MechanicalRiserDto = {
+    id: row.id,
+    typeId: row.typeId,
+    label: row.label,
+  };
+  if (row.completed) riser.completed = true;
+  return riser;
+}
+
+async function loadMechanicalTypes(): Promise<MechanicalRiserTypeDto[]> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(mechanicalRiserTypes)
+    .orderBy(asc(mechanicalRiserTypes.sortOrder), asc(mechanicalRiserTypes.name));
+  return rows.map(mapRiserType);
+}
+
+async function loadMechanicalRisers(): Promise<MechanicalRiserDto[]> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(mechanicalRisers)
+    .orderBy(asc(mechanicalRisers.label));
+  return rows.map(mapRiser);
+}
+
+async function seedMechanicalTypesFromPresets(
+  presets: DrawColorPreset[],
+): Promise<MechanicalRiserTypeDto[]> {
+  const plan = planMechanicalTypeSync(presets, [], []);
+  if (plan.upserts.length === 0) return [];
+  const db = getDb();
+  const createdAt = nowIso();
+  const rows = plan.upserts.map((type, index) => ({
+    id: type.id || randomUUID(),
+    name: type.name,
+    color: type.color,
+    shortcut: type.shortcut ?? null,
+    sortOrder: index,
+    createdAt,
+  }));
+  await db.insert(mechanicalRiserTypes).values(rows);
+  return rows.map((row) =>
+    mapRiserType({
+      ...row,
+      shortcut: row.shortcut,
+    }),
+  );
+}
+
+async function syncMechanicalRiserTypes(
+  presets: DrawColorPreset[],
+): Promise<MechanicalRiserTypeDto[]> {
+  const existing = await loadMechanicalTypes();
+  const risers = await loadMechanicalRisers();
+  const inUse = risers.map((riser) => riser.typeId);
+  const plan = planMechanicalTypeSync(presets, existing, inUse);
+  if (plan.blockedNames.length > 0) {
+    throw new Error(
+      `Cannot remove ${plan.blockedNames.join(", ")} while numbered risers still exist.`,
+    );
+  }
+  const db = getDb();
+  const createdAt = nowIso();
+  for (const type of plan.upserts) {
+    const id = type.id || randomUUID();
+    const [row] = await db
+      .select()
+      .from(mechanicalRiserTypes)
+      .where(eq(mechanicalRiserTypes.id, id));
+    if (row) {
+      await db
+        .update(mechanicalRiserTypes)
+        .set({
+          name: type.name,
+          color: type.color,
+          shortcut: type.shortcut ?? null,
+          sortOrder: type.sortOrder,
+        })
+        .where(eq(mechanicalRiserTypes.id, id));
+    } else {
+      await db.insert(mechanicalRiserTypes).values({
+        id,
+        name: type.name,
+        color: type.color,
+        shortcut: type.shortcut ?? null,
+        sortOrder: type.sortOrder,
+        createdAt,
+      });
+    }
+  }
+  if (plan.deleteIds.length > 0) {
+    await db
+      .delete(mechanicalRiserTypes)
+      .where(inArray(mechanicalRiserTypes.id, plan.deleteIds));
+  }
+  return loadMechanicalTypes();
+}
+
+async function hydrateSettings(
+  row: typeof floorPlanSettings.$inferSelect,
+): Promise<FloorPlanSettingsDto> {
+  const stored = parseDrawColorPresets(row.drawColorPresetsJson);
+  let types = await loadMechanicalTypes();
+  if (types.length === 0) {
+    types = await seedMechanicalTypesFromPresets(stored);
+  }
+  const risers = await loadMechanicalRisers();
+  const riserTemplates = parseRiserTemplates(row.riserTemplatesJson);
   return {
     registrationLabel: row.registrationLabel,
     pinXPt: row.pinXPt,
     pinYPt: row.pinYPt,
     registrationPlanId: row.registrationPlanId,
     pinReferencePlanId: row.pinReferencePlanId,
-    drawColorPresets: parseDrawColorPresets(row.drawColorPresetsJson),
+    drawColorPresets: mergeDrawColorPresets(stored, types),
+    mechanicalRisers: risers,
+    riserTemplates,
   };
+}
+
+async function ensureSettings(): Promise<FloorPlanSettingsDto> {
+  const db = getDb();
+  const [existing] = await db
+    .select()
+    .from(floorPlanSettings)
+    .where(eq(floorPlanSettings.id, FLOOR_PLAN_SETTINGS_ID));
+  if (existing) {
+    return hydrateSettings(existing);
+  }
+  const createdAt = nowIso();
+  await db.insert(floorPlanSettings).values({
+    id: FLOOR_PLAN_SETTINGS_ID,
+    registrationLabel: "NW corner of Elevator A",
+    drawColorPresetsJson: JSON.stringify(parseDrawColorPresets(null)),
+    updatedAt: createdAt,
+  });
+  const [created] = await db
+    .select()
+    .from(floorPlanSettings)
+    .where(eq(floorPlanSettings.id, FLOOR_PLAN_SETTINGS_ID));
+  if (!created) {
+    return {
+      registrationLabel: "NW corner of Elevator A",
+      pinXPt: null,
+      pinYPt: null,
+      registrationPlanId: null,
+      pinReferencePlanId: null,
+      drawColorPresets: parseDrawColorPresets(null),
+      mechanicalRisers: [],
+      riserTemplates: {},
+    };
+  }
+  return hydrateSettings(created);
 }
 
 function mapPlan(row: typeof floorPlans.$inferSelect): FloorPlanDto {
@@ -148,32 +326,6 @@ function requireOriginalPath(row: typeof floorPlans.$inferSelect): string {
   return row.originalFilePath;
 }
 
-async function ensureSettings(): Promise<FloorPlanSettingsDto> {
-  const db = getDb();
-  const [existing] = await db
-    .select()
-    .from(floorPlanSettings)
-    .where(eq(floorPlanSettings.id, FLOOR_PLAN_SETTINGS_ID));
-  if (existing) {
-    return mapSettings(existing);
-  }
-  const createdAt = nowIso();
-  await db.insert(floorPlanSettings).values({
-    id: FLOOR_PLAN_SETTINGS_ID,
-    registrationLabel: "NW corner of Elevator A",
-    drawColorPresetsJson: JSON.stringify(parseDrawColorPresets(null)),
-    updatedAt: createdAt,
-  });
-  return {
-    registrationLabel: "NW corner of Elevator A",
-    pinXPt: null,
-    pinYPt: null,
-    registrationPlanId: null,
-    pinReferencePlanId: null,
-    drawColorPresets: parseDrawColorPresets(null),
-  };
-}
-
 export async function loadFloorPlansPayload(): Promise<FloorPlansPayload> {
   const db = getDb();
   const [settings, families, plans] = await Promise.all([
@@ -202,13 +354,17 @@ export async function updateFloorPlanSettings(patch: {
   let pinXPt = current.pinXPt;
   let pinYPt = current.pinYPt;
   let drawColorPresets = current.drawColorPresets;
+  let mechanicalRisers = current.mechanicalRisers;
 
   if (patch.registrationLabel != null) {
     registrationLabel = patch.registrationLabel.trim();
   }
 
   if (patch.drawColorPresets != null) {
-    drawColorPresets = parseDrawColorPresets(patch.drawColorPresets);
+    const parsed = parseDrawColorPresets(patch.drawColorPresets);
+    const types = await syncMechanicalRiserTypes(parsed);
+    drawColorPresets = mergeDrawColorPresets(parsed, types);
+    mechanicalRisers = await loadMechanicalRisers();
   }
 
   if (patch.registrationPlanId !== undefined) {
@@ -260,7 +416,9 @@ export async function updateFloorPlanSettings(patch: {
       pinReferencePlanId,
       pinXPt,
       pinYPt,
-      drawColorPresetsJson: JSON.stringify(drawColorPresets),
+      drawColorPresetsJson: JSON.stringify(
+        architecturalPresetsOnly(drawColorPresets),
+      ),
       updatedAt: nowIso(),
     })
     .where(eq(floorPlanSettings.id, FLOOR_PLAN_SETTINGS_ID));
@@ -271,6 +429,303 @@ export async function updateFloorPlanSettings(patch: {
     registrationPlanId,
     pinReferencePlanId,
     drawColorPresets,
+    mechanicalRisers,
+  };
+}
+
+export async function ensureMechanicalRiser(
+  typeId: string,
+  rawLabel: unknown,
+): Promise<{ riser: MechanicalRiserDto; risers: MechanicalRiserDto[] }> {
+  const label = parseRiserLabel(rawLabel);
+  if (label == null) {
+    throw new Error(
+      "Riser label must be 1–32 characters using letters, numbers, spaces, or - . / ,",
+    );
+  }
+  const trimmedTypeId = typeId.trim();
+  if (!trimmedTypeId) {
+    throw new Error("Riser type is required.");
+  }
+  const db = getDb();
+  const [type] = await db
+    .select()
+    .from(mechanicalRiserTypes)
+    .where(eq(mechanicalRiserTypes.id, trimmedTypeId));
+  if (!type) {
+    throw new Error("Riser type not found.");
+  }
+  const [existing] = await db
+    .select()
+    .from(mechanicalRisers)
+    .where(
+      and(
+        eq(mechanicalRisers.typeId, trimmedTypeId),
+        eq(mechanicalRisers.label, label),
+      ),
+    );
+  if (existing) {
+    return { riser: mapRiser(existing), risers: await loadMechanicalRisers() };
+  }
+  const row = {
+    id: randomUUID(),
+    typeId: trimmedTypeId,
+    label,
+    createdAt: nowIso(),
+  };
+  try {
+    await db.insert(mechanicalRisers).values(row);
+  } catch (error) {
+    const [raced] = await db
+      .select()
+      .from(mechanicalRisers)
+      .where(
+        and(
+          eq(mechanicalRisers.typeId, trimmedTypeId),
+          eq(mechanicalRisers.label, label),
+        ),
+      );
+    if (raced) {
+      return { riser: mapRiser(raced), risers: await loadMechanicalRisers() };
+    }
+    throw error;
+  }
+  return { riser: mapRiser(row), risers: await loadMechanicalRisers() };
+}
+
+export async function updateMechanicalRiser(
+  id: string,
+  patch: { completed: boolean },
+): Promise<{ riser: MechanicalRiserDto; risers: MechanicalRiserDto[] }> {
+  const trimmed = id.trim();
+  if (!trimmed) throw new Error("Riser is required.");
+  const db = getDb();
+  const [existing] = await db
+    .select()
+    .from(mechanicalRisers)
+    .where(eq(mechanicalRisers.id, trimmed));
+  if (!existing) throw new Error("Riser not found.");
+  await db
+    .update(mechanicalRisers)
+    .set({ completed: patch.completed })
+    .where(eq(mechanicalRisers.id, trimmed));
+  const [updated] = await db
+    .select()
+    .from(mechanicalRisers)
+    .where(eq(mechanicalRisers.id, trimmed));
+  if (!updated) throw new Error("Riser not found.");
+  return { riser: mapRiser(updated), risers: await loadMechanicalRisers() };
+}
+
+/**
+ * Move catalog stacks to another type. Same label on the target type merges
+ * into that row. Callouts and box colors update on every floor; line strokes
+ * stay as drawn.
+ */
+export async function reclassifyMechanicalRisers(
+  ids: string[],
+  typeId: string,
+): Promise<{
+  risers: MechanicalRiserDto[];
+  rewrite: RiserIdRewrite;
+  updatedPlans: FloorPlanDto[];
+}> {
+  const uniqueIds = [
+    ...new Set(ids.map((id) => id.trim()).filter(Boolean)),
+  ];
+  if (uniqueIds.length === 0) throw new Error("Riser is required.");
+  const trimmedTypeId = typeId.trim();
+  if (!trimmedTypeId) throw new Error("Riser type is required.");
+  const db = getDb();
+  const [type] = await db
+    .select()
+    .from(mechanicalRiserTypes)
+    .where(eq(mechanicalRiserTypes.id, trimmedTypeId));
+  if (!type) throw new Error("Riser type not found.");
+
+  const rewrite: RiserIdRewrite = {};
+  let catalogChanged = false;
+  for (const id of uniqueIds) {
+    const [row] = await db
+      .select()
+      .from(mechanicalRisers)
+      .where(eq(mechanicalRisers.id, id));
+    if (!row) throw new Error("Riser not found.");
+    if (row.typeId === trimmedTypeId) {
+      rewrite[row.id] = row.id;
+      continue;
+    }
+    const [collision] = await db
+      .select()
+      .from(mechanicalRisers)
+      .where(
+        and(
+          eq(mechanicalRisers.typeId, trimmedTypeId),
+          eq(mechanicalRisers.label, row.label),
+        ),
+      );
+    if (collision && collision.id !== row.id) {
+      rewrite[row.id] = collision.id;
+      if (row.completed && !collision.completed) {
+        await db
+          .update(mechanicalRisers)
+          .set({ completed: true })
+          .where(eq(mechanicalRisers.id, collision.id));
+      }
+      await db.delete(mechanicalRisers).where(eq(mechanicalRisers.id, row.id));
+    } else {
+      await db
+        .update(mechanicalRisers)
+        .set({ typeId: trimmedTypeId })
+        .where(eq(mechanicalRisers.id, row.id));
+      rewrite[row.id] = row.id;
+    }
+    catalogChanged = true;
+  }
+
+  const types = await loadMechanicalTypes();
+  const risers = await loadMechanicalRisers();
+  if (!catalogChanged) {
+    return { risers, rewrite, updatedPlans: [] };
+  }
+
+  const planRows = await db.select().from(floorPlans);
+  const updatedPlans: FloorPlanDto[] = [];
+  const updatedAt = nowIso();
+  for (const row of planRows) {
+    const annotations = parseFloorPlanAnnotations(row.annotationsJson);
+    const next = applyRiserReclassifyToAnnotations(
+      annotations,
+      rewrite,
+      types,
+      risers,
+    );
+    const changed = next.some((item, index) => item !== annotations[index]);
+    if (!changed) continue;
+    await db
+      .update(floorPlans)
+      .set({
+        annotationsJson: JSON.stringify(next),
+        updatedAt,
+      })
+      .where(eq(floorPlans.id, row.id));
+    updatedPlans.push(
+      mapPlan({
+        ...row,
+        annotationsJson: JSON.stringify(next),
+        updatedAt,
+      }),
+    );
+  }
+  return { risers, rewrite, updatedPlans };
+}
+
+export async function saveRiserTemplate(
+  template: RiserTypeTemplate,
+): Promise<{
+  template: RiserTypeTemplate;
+  templates: Record<string, RiserTypeTemplate>;
+}> {
+  const db = getDb();
+  await ensureSettings();
+  const [existing] = await db
+    .select({ riserTemplatesJson: floorPlanSettings.riserTemplatesJson })
+    .from(floorPlanSettings)
+    .where(eq(floorPlanSettings.id, FLOOR_PLAN_SETTINGS_ID));
+  const current = parseRiserTemplates(existing?.riserTemplatesJson);
+  current[template.typeId] = template;
+  const json = serializeRiserTemplates(current);
+  await db
+    .update(floorPlanSettings)
+    .set({
+      riserTemplatesJson: json,
+      updatedAt: nowIso(),
+    })
+    .where(eq(floorPlanSettings.id, FLOOR_PLAN_SETTINGS_ID));
+  return { template, templates: current };
+}
+
+export async function standardizeRiserType(params: {
+  typeId: string;
+  template: RiserTypeTemplate;
+  planIds?: string[];
+  autoOrient?: boolean;
+}): Promise<{
+  ok: true;
+  replacedCount: number;
+  affectedPlanIds: string[];
+  templates: Record<string, RiserTypeTemplate>;
+  updatedPlans: FloorPlanDto[];
+}> {
+  const db = getDb();
+  const { templates } = await saveRiserTemplate(params.template);
+
+  const types = await loadMechanicalTypes();
+  const type = types.find((t) => t.id === params.typeId);
+  if (!type) {
+    throw new Error("Riser type not found.");
+  }
+  const risers = await loadMechanicalRisers();
+
+  const planRows =
+    params.planIds && params.planIds.length > 0
+      ? await db
+          .select()
+          .from(floorPlans)
+          .where(inArray(floorPlans.id, params.planIds))
+      : await db.select().from(floorPlans);
+
+  let totalReplaced = 0;
+  const affectedPlanIds: string[] = [];
+  const updatedPlans: FloorPlanDto[] = [];
+
+  for (const row of planRows) {
+    let annotations: FloorPlanAnnotation[];
+    try {
+      annotations = parseFloorPlanAnnotations(
+        JSON.parse(row.annotationsJson || "[]"),
+      );
+    } catch {
+      continue;
+    }
+
+    const { annotations: nextAnnotations, replacedCount } =
+      standardizeFloorPlanAnnotations(
+        annotations,
+        type,
+        params.template,
+        risers,
+        { autoOrient: params.autoOrient },
+      );
+
+    if (replacedCount > 0) {
+      totalReplaced += replacedCount;
+      affectedPlanIds.push(row.id);
+      const updatedAt = nowIso();
+      await db
+        .update(floorPlans)
+        .set({
+          annotationsJson: JSON.stringify(nextAnnotations),
+          updatedAt,
+        })
+        .where(eq(floorPlans.id, row.id));
+
+      const [updated] = await db
+        .select()
+        .from(floorPlans)
+        .where(eq(floorPlans.id, row.id));
+      if (updated) {
+        updatedPlans.push(mapPlan(updated));
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    replacedCount: totalReplaced,
+    affectedPlanIds,
+    templates,
+    updatedPlans,
   };
 }
 
@@ -281,7 +736,10 @@ export async function createFloorPlanFamily(
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Family name is required.");
   const db = getDb();
-  const existing = await db.select().from(floorPlanFamilies);
+  const existing = await db
+    .select()
+    .from(floorPlanFamilies)
+    .where(eq(floorPlanFamilies.kind, kind));
   const sortOrder =
     existing.reduce((max, row) => Math.max(max, row.sortOrder), -1) + 1;
   const row = {
@@ -457,9 +915,6 @@ export async function createFloorPlanFromSplitUpload(input: {
     .from(floorPlanFamilies)
     .where(eq(floorPlanFamilies.id, input.familyId));
   if (!family) throw new Error("Family not found.");
-  if (parseFloorPlanDrawingSet(family.kind) !== "mechanical") {
-    throw new Error("East/west pairs can only be uploaded to a mechanical family.");
-  }
 
   const westPage = await readPdfPageSize(input.westBytes);
   const eastPage = await readPdfPageSize(input.eastBytes);
@@ -1031,12 +1486,10 @@ export async function saveFloorPlanPin(
 
   const nextSettings: FloorPlanSettingsDto = becomesRegistration
     ? {
-        registrationLabel: settings.registrationLabel,
+        ...settings,
         pinXPt: clamped.x,
         pinYPt: clamped.y,
         registrationPlanId: id,
-        pinReferencePlanId: settings.pinReferencePlanId,
-        drawColorPresets: settings.drawColorPresets,
       }
     : settings;
 

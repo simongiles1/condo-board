@@ -6,6 +6,8 @@ import {
   type DrawColorPreset,
   type FloorPlanAnnotation,
 } from "./floor-plan-annotations";
+import type { MechanicalRiserDto } from "./floor-plan-mechanical-risers";
+import type { RiserTypeTemplate } from "./floor-plan-riser-templates";
 import { resolveFloorPlanAnnotationMarkup } from "./floor-plan-annotation-draft";
 import type { FloorPlanStatus, PdfSize } from "./floor-plan-align";
 import { planHasPin } from "./floor-plan-align";
@@ -45,6 +47,10 @@ export type FloorPlanSettingsDto = {
   pinReferencePlanId: string | null;
   /** Labeled stroke colors for wall markup legend and picker. */
   drawColorPresets: DrawColorPreset[];
+  /** Numbered mechanical riser instances (type + number). */
+  mechanicalRisers: MechanicalRiserDto[];
+  /** Standardized templates per riser type. */
+  riserTemplates?: Record<string, RiserTypeTemplate>;
 };
 
 export type FloorPlanFamilyDto = {

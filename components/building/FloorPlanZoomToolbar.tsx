@@ -5,11 +5,14 @@ export function FloorPlanZoomToolbar({
   onZoomBy,
   onReset,
   resetLabel = "Fit",
+  onFitMarkup,
 }: {
   zoom: number;
   onZoomBy: (factor: number) => void;
   onReset: () => void;
   resetLabel?: string;
+  /** When off-canvas markup exists, zoom/pan to include every saved line. */
+  onFitMarkup?: () => void;
 }) {
   return (
     <div className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5">
@@ -39,6 +42,16 @@ export function FloorPlanZoomToolbar({
       >
         {resetLabel}
       </button>
+      {onFitMarkup ? (
+        <button
+          type="button"
+          onClick={onFitMarkup}
+          className="rounded-md px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-50"
+          title="Zoom to include markup drawn outside the PDF page edge"
+        >
+          Fit markup
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -40,7 +40,7 @@ export type BuildoutSequenceStep = {
   relatedIds: string[];
 };
 
-export const BUILDOUT_REVIEWED_ON = "2026-08-22";
+export const BUILDOUT_REVIEWED_ON = "2026-09-04";
 
 /**
  * Corpus snapshot for the playbook header. Not queried live — refresh when
@@ -86,6 +86,7 @@ export const BUILDOUT_STAGES: BuildoutItem[] = [
       "Parallel four-pass org harvest into organization_entities, with merge, field denials, and the Organizations registry tab.",
     remaining: [
       "Same attachment gap as contacts.",
+      "Run `backfill:org-mentions` if pass-3 JSON exists but mention counts are stale.",
       "Merge quality still matters before any later wiki export.",
     ],
   },
@@ -123,10 +124,10 @@ export const BUILDOUT_STAGES: BuildoutItem[] = [
     summary:
       "Dedicated harvest writes extracted_action_items. Body bulk finished (7,331 emails, then drip catch-up). Global To-Dos is the working list (last 120 days open; Archive for older). Meeting merge and manual adds share that list.",
     remaining: [
-      "Sentence highlight + Working-list click-in shipped 2026-08-20 on existing harvests. Confirm a few real rows paint yellow on the extracting sentence, not the unique body.",
+      "Working-list click-in and sentence highlights shipped (display-time clip, amber on the extracting sentence). Meeting-sourced rows still have no detail panel.",
       "related_event_id is still a stub — AGM prep should hang off the AGM event without becoming calendar rows.",
       "Assignee text is not resolved to contact registry IDs (after 2B).",
-      "QA auto-close: a later ping in the thread can mark an ask Done when the work was not actually delivered.",
+      "QA auto-close: a later ping in the thread can mark an ask Done when the work was not actually delivered (close-out wiring fixed 2026-08; spot-check edge cases).",
       "Attachment harvest not started (same new wiring as contacts / orgs / events / projects).",
       "120-day Working vs Archive split is intentional. Historical harvests exist for rare recurring obligations (reserve fund study). Do not invest full task-management UX on Archive first.",
     ],
@@ -137,10 +138,10 @@ export const BUILDOUT_STAGES: BuildoutItem[] = [
     title: "Projects",
     status: "in_progress",
     summary:
-      "Named building jobs (maglock, EV chargers, envelope work) are a first-class entity with a four-pass body harvest, fingerprint registry, and human merge. Identity is name plus year when present — 2024 and 2026 jobs stay separate until you merge them. Pipeline is built; roster quality is a month-long lab, not the critical path. Not added to harvest-after-sync until a bulk you trust finishes.",
+      "Named building jobs are first-class with four-pass body harvest, fingerprint registry, human merge, and mention staging (`project_mentions`). Entities → Projects has a Mentions tab, AI identity review (Duplicates), board-report salience, filters, pagination, and phase/year badges. Identity is name plus year when present — 2024 and 2026 jobs stay separate until you merge them. Bulk extract and roster curation continue in parallel; not on harvest-after-sync until a bulk you trust finishes.",
     remaining: [
-      "Bulk-extract projects on email bodies (inbox Extract Projects or bulk extract).",
-      "Merge duplicate mentions on Entities → Projects as they land. Do not auto-merge by name alone.",
+      "Bulk-extract projects on email bodies (inbox Extract Projects or bulk extract). Run `backfill:project-mentions` if pass-3 JSON exists but Mentions is empty.",
+      "Merge duplicate mentions and AI-proposed groups on Entities → Projects as they land. Do not auto-merge by name alone.",
       "Turn on drip for projects only after the historical bulk, or the nightly job becomes a 7,000-email run.",
       "Attachment harvest not started. related_project_id on to-dos is not wired yet.",
       "After the roster exists: nest tasks under projects (see Project operations). Board meetings review projects, not a 50-item task dump.",
@@ -236,7 +237,7 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     title: "Wikipedia graph + entity profiles",
     status: "in_progress",
     summary:
-      "Click a harvest mark, Global To-Dos mention, or registry name to open a shared letterhead side panel (emails when linked). Hover stays preview-only. Unique fingerprint → registry resolve on harvest clicks; ambiguous mentions stay unlinked.",
+      "Click-through to a shared letterhead side panel is live on harvest marks, Global To-Dos mentions, and registry names (Contacts / Organizations / Projects / Equipment). Hover stays preview-only. Unique fingerprint → registry resolve on harvest clicks; ambiguous mentions stay unlinked. Organization mentions and per-alias counts ship on the Organizations registry.",
     remaining: [
       "Side panel still lacks “what projects is this org on” / “what is this person CEO of” (affiliations parked).",
       "Hang AGM-style to-dos off calendar events via related_event_id.",
@@ -250,7 +251,7 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     title: "Who's-who involvement cards",
     status: "in_progress",
     summary:
-      "Person profile letterhead (initials, name, title, phone, email) plus a role-based “get me involved when” prompt from the job title. Not history-seeded yet.",
+      "Person profile letterhead (initials, name, title, phone, email) plus a role-based “get me involved when” prompt from the job title (live on entity profile click-through). Not history-seeded yet.",
     remaining: [
       "Replace the job-title heuristic with a mini-prompt from that person’s email history.",
       "Photos on the letterhead.",
@@ -277,9 +278,9 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     title: "To-do workspace",
     status: "not_started",
     summary:
-      "The working list is a filterable harvest inbox, not a management tool. ClickUp is overkill as a product to copy, but the missing primitives are known: click-in detail, dependencies / blockers, subtasks, comments, artifacts, assignments, due dates, categories, and reminders. Build these on Working (last 120 days), not Archive.",
+      "The working list is a filterable harvest inbox, not a management tool. Email-harvest click-in is live (row → source email + sentence highlight; Mark complete stays on the row). Meeting-sourced rows still have no detail panel. Build remaining primitives on Working (last 120 days), not Archive.",
     remaining: [
-      "Click-in for email harvests is live (row → source email + sentence highlight; Mark complete stays on the row). Meeting-sourced rows still have no detail panel.",
+      "Meeting-sourced rows: click-in detail panel (v2 meeting merge rows included).",
       "Dependencies, blockers, subtasks, comments, artifacts, assignees, due dates, categories.",
       "Comment timeline (who said what, when) and multiple reminders / notifications.",
       "Filters that already matter for the board: mine vs all, board vs management. Steal UX from existing task products; do not clone ClickUp.",
@@ -325,15 +326,45 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     ],
   },
   {
+    id: "floor-plan-markup",
+    stage: null,
+    title: "Floor plan markup & mechanical risers",
+    status: "in_progress",
+    summary:
+      "Building → Floor plans: upload, crop, per-building pin, compare, and full-screen edit. Architectural and mechanical families; east/west mechanical merge. Edit mode has lines, rectangles, rooms, callouts, riser connections, follow-a-stack-up-the-building, standardize templates, and overlay lines from other floors. Mechanical riser catalog persists type/number assignments.",
+    remaining: [
+      "Finish tracing riser stacks floor-by-floor (follow overlays, approve/dismiss, mark completed).",
+      "Standardize freehand boxes to template shapes building-wide; verify clip-draw dialog at plan scale.",
+      "Room/unit enclosures and leak glow for gap QA on dense sheets.",
+      "Drawing schedule extract into equipment registry (docs/02) — not started; markup is the manual path for now.",
+    ],
+  },
+  {
     id: "digital-twin",
     stage: null,
     title: "3D digital twin",
-    status: "not_started",
+    status: "in_progress",
     summary:
-      "Building → Asset Overview is a Three.js proof-of-concept. The lightweight twin (drawing filter → Blender GLB → nodes.json / financials.json → heatmap) is specified under /docs and has no application implementation.",
+      "Building → Asset overview & 3D: real massing from pinned floor plans (slabs, extruded walls, blueprint textures on slab tops). Phase 2–3 ship 3D riser pipe sweeps, system layer filters, opacity sliders, floor slicing, click-to-inspect, quick presets, and unit search with selective wall transparency. The docs/ lightweight twin (Blender GLB → nodes.json / financials.json → cost heatmap) is spec-only.",
     remaining: [
-      "Drawing ingestion and schedule extract (docs/02).",
-      "Spatial nodes + GLB (docs/03) and temporal ledger (docs/04).",
+      "Verify presets, wall-opacity cavity views, pipe inspection card, and unit highlight on production data.",
+      "Equipment nodes bound to 3D picks (docs/03 nodes.json) — not wired.",
+      "Temporal ledger + heatmap from email parse (docs/04 financials.json) — not wired.",
+      "Drawing schedule auto-extract (docs/02) instead of hand-traced riser markup.",
+    ],
+  },
+  {
+    id: "meeting-review-v2",
+    stage: null,
+    title: "Board meeting review (v2 pipeline)",
+    status: "in_progress",
+    summary:
+      "Operations → Meetings v2: upload board package PDF + transcript, Inngest pipeline (ingest → agenda extract → evidence → per-item investigation → validation → minutes draft). Review workspace at /operations/meetings/v2/[id]. Coexists with v1 generate flow; not yet the default board-meeting checklist.",
+    remaining: [
+      "End-to-end QA on a real monthly package (agenda alignment, evidence cites, draft quality).",
+      "Wire reviewed items into Global To-Dos and project ops (related_project_id, meeting mode).",
+      "Replace or retire v1 generate once v2 draft quality is trusted.",
+      "Resolution / motion tracking still belongs under governance, not this pipeline alone.",
     ],
   },
   {
@@ -353,28 +384,36 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
  */
 export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
   {
-    id: "seq-todo-highlight",
-    kind: "now",
-    title: "Verify to-do sentence highlights + Working-list click-in",
+    id: "seq-floor-plans",
+    kind: "parallel",
+    title: "Trace mechanical risers on floor plans",
     detail:
-      "Display-time clip on existing harvests: yellow on the extracting sentence, not the unique body. Click a Working row to open the source email with that mark; Mark complete stays on the row. Spot-check a handful of real tasks before treating this as done. Summary-first (NotebookLM) reading UX still waits until yellow is trusted.",
-    relatedIds: ["todos", "todo-workspace"],
+      "Building → Floor plans: crop/pin/compare is live. Keep following stacks floor-by-floor (approve, dismiss, completed). Standardize freehand boxes to catalog templates. Rooms and leak glow help close wall gaps before 3D trusts the geometry.",
+    relatedIds: ["floor-plan-markup", "digital-twin"],
+  },
+  {
+    id: "seq-3d-twin",
+    kind: "parallel",
+    title: "3D twin: verify massing, pipes, and unit highlight",
+    detail:
+      "Asset overview & 3D has real slabs/walls, blueprint textures, riser sweeps, layer presets, opacity sliders, floor slice, and unit search with wall transparency. Spot-check on production markup. nodes.json / financials.json heatmap remains spec-only (docs/).",
+    relatedIds: ["digital-twin", "floor-plan-markup"],
   },
   {
     id: "seq-projects",
     kind: "parallel",
-    title: "Project extract + identity merge (ongoing lab)",
+    title: "Project extract + mentions + identity merge (ongoing lab)",
     detail:
-      "Keep tweaking harvest and merge over the next month. Do not sequence other board-ops work behind a clean roster. Maglock 2024 and Maglock 2026 stay separate until you merge them. Leave harvest-after-sync alone until a bulk you trust finishes.",
+      "Mentions tab, AI Duplicates review, and board-report salience are live. Keep bulk extract and merge over the next month. Maglock 2024 and Maglock 2026 stay separate until you merge them. Leave harvest-after-sync alone until a bulk you trust finishes.",
     relatedIds: ["projects"],
   },
   {
-    id: "seq-project-merge",
+    id: "seq-meetings-v2",
     kind: "parallel",
-    title: "Merge duplicate project mentions as they land",
+    title: "Meetings v2 pipeline on a real package",
     detail:
-      "Fold obvious duplicates on Entities → Projects when you are in the lab. Same name + different years stay split on purpose. Skip 2B — linking people/orgs onto projects can wait.",
-    relatedIds: ["projects"],
+      "Upload PDF + transcript, let Inngest run ingest → agenda → evidence → investigate → validate → draft. QA review workspace output before making it the default meeting flow. Later: hang open items off projects and Global To-Dos.",
+    relatedIds: ["meeting-review-v2", "project-ops", "todos"],
   },
   {
     id: "seq-project-drip",
@@ -387,9 +426,9 @@ export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
   {
     id: "seq-wiki-graph",
     kind: "after",
-    title: "Wikipedia click-through and who's-who cards",
+    title: "Entity profiles: layer toggles and event links",
     detail:
-      "Click-through to a letterhead profile is live on harvest marks, Global To-Dos mentions, and registry names. Hover stays preview. “Get me involved when” is role-based from job title, not email history. Remaining: Christmas-tree layer toggles, related_event_id, history-seeded prompts, photos.",
+      "Click-through letterhead is live on harvest, Global To-Dos, and registries. Who's-who uses job-title heuristics. Remaining: Christmas-tree layer toggles, related_event_id for AGM prep, history-seeded prompts, photos, affiliations context.",
     relatedIds: ["entity-profiles", "who-is-who", "contacts"],
   },
   {
@@ -445,8 +484,8 @@ export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
     kind: "later",
     title: "Equipment (Stage 6)",
     detail:
-      "Nice-to-have vs the board checklist. Needs drawings from management, then attachment markdown. Do not invent durable assets from bid options.",
-    relatedIds: ["equipment", "digital-twin"],
+      "Nice-to-have vs the board checklist. Needs drawings from management, then attachment markdown. Hand-traced riser markup on floor plans is the interim spatial path. Do not invent durable assets from bid options.",
+    relatedIds: ["equipment", "floor-plan-markup", "digital-twin"],
   },
   {
     id: "seq-governance",
@@ -467,9 +506,9 @@ export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
   {
     id: "seq-deferred",
     kind: "later",
-    title: "Email drafts, 3D twin, concept auto-promote, Open Knowledge Format",
+    title: "Email drafts, nodes/financials heatmap, concept auto-promote, Open Knowledge Format",
     detail:
-      "Drafts wait until source-quote quality is trusted and who's-who prompts exist. Twin rides on equipment + drawings. OKF is an export + wiki layer after registries, affiliations, and equipment are solid — not the next extraction stage.",
+      "Drafts wait until source-quote quality is trusted and who's-who prompts exist. Cost heatmap rides on nodes.json + financials.json (docs/) after equipment registry quality is solid. OKF is an export + wiki layer after registries, affiliations, and equipment — not the next extraction stage.",
     relatedIds: ["email-drafts", "digital-twin", "concept-promote", "okf"],
   },
 ];
@@ -513,4 +552,108 @@ export function countByStatus(items: readonly BuildoutItem[]): Record<
     counts[item.status] += 1;
   }
   return counts;
+}
+
+/** Column order for the build-out Gantt (execution phase bands). */
+export const BUILDOUT_GANTT_PHASE_ORDER: readonly BuildoutSequenceKind[] = [
+  "now",
+  "parallel",
+  "blocked",
+  "after",
+  "later",
+  "deferred",
+] as const;
+
+export type BuildoutGanttRowKind = "playbook" | "stage" | "backlog";
+
+export type BuildoutGanttRow = {
+  id: string;
+  rowKind: BuildoutGanttRowKind;
+  label: string;
+  subtitle: string | null;
+  /** Item status; omitted for playbook rows. */
+  status: BuildoutStatus | null;
+  /** Phase columns where this row should render a bar. */
+  phases: BuildoutSequenceKind[];
+  /** Playbook step order (1-based) when `rowKind` is `playbook`. */
+  sequenceOrder: number | null;
+  summary: string;
+  remaining: string[];
+};
+
+function phasesForItem(itemId: string): BuildoutSequenceKind[] {
+  const phases = new Set<BuildoutSequenceKind>();
+  for (const step of BUILDOUT_SEQUENCE) {
+    if (step.relatedIds.includes(itemId)) {
+      phases.add(step.kind);
+    }
+  }
+  return BUILDOUT_GANTT_PHASE_ORDER.filter((phase) => phases.has(phase));
+}
+
+function compareStageLabel(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+  const parse = (value: string) => {
+    const match = /^(\d+)([A-Za-z]?)$/.exec(value.trim());
+    if (!match) return { num: Number.MAX_SAFE_INTEGER, suffix: value };
+    return { num: Number(match[1]), suffix: match[2] ?? "" };
+  };
+  const left = parse(a);
+  const right = parse(b);
+  if (left.num !== right.num) return left.num - right.num;
+  return left.suffix.localeCompare(right.suffix);
+}
+
+export function buildoutGanttRows(): {
+  playbook: BuildoutGanttRow[];
+  stages: BuildoutGanttRow[];
+  backlog: BuildoutGanttRow[];
+} {
+  const playbook: BuildoutGanttRow[] = BUILDOUT_SEQUENCE.map((step, index) => ({
+    id: step.id,
+    rowKind: "playbook",
+    label: step.title,
+    subtitle: BUILDOUT_SEQUENCE_KIND_LABEL[step.kind],
+    status: null,
+    phases: [step.kind],
+    sequenceOrder: index + 1,
+    summary: step.detail,
+    remaining: step.relatedIds.map((relatedId) => relatedItemLabel(relatedId)),
+  }));
+
+  const stages: BuildoutGanttRow[] = [...BUILDOUT_STAGES]
+    .sort((left, right) => compareStageLabel(left.stage, right.stage))
+    .map((item) => ({
+      id: item.id,
+      rowKind: "stage",
+      label: item.title,
+      subtitle: item.stage ? `Stage ${item.stage}` : null,
+      status: item.status,
+      phases: phasesForItem(item.id),
+      sequenceOrder: null,
+      summary: item.summary,
+      remaining: item.remaining,
+    }));
+
+  const backlog: BuildoutGanttRow[] = BUILDOUT_BACKLOG.map((item) => ({
+    id: item.id,
+    rowKind: "backlog",
+    label: item.title,
+    subtitle: null,
+    status: item.status,
+    phases: phasesForItem(item.id),
+    sequenceOrder: null,
+    summary: item.summary,
+    remaining: item.remaining,
+  }));
+
+  return { playbook, stages, backlog };
+}
+
+function relatedItemLabel(id: string): string {
+  const item = BUILDOUT_ITEMS_BY_ID.get(id);
+  if (!item) return id;
+  return item.stage ? `Stage ${item.stage} · ${item.title}` : item.title;
 }

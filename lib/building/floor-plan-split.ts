@@ -1,4 +1,4 @@
-/** East/west mechanical-sheet overlap layout. PDF space is origin bottom-left. */
+/** East/west sheet overlap layout. PDF space is origin bottom-left. */
 
 import {
   clampCropToPage,

@@ -5,7 +5,14 @@ import type {
   FloorPlanAnnotation,
   ShapeCrossVariant,
 } from "@/lib/building/floor-plan-annotations";
+import {
+  annotationRotationDeg,
+  pdfRectCenter,
+  rotatePdfPointAround,
+  rotatePdfPointsAround,
+} from "@/lib/building/floor-plan-annotations";
 import { ellipseCrossDiagonalSegments } from "@/lib/building/floor-plan-polyline-cut";
+import { pointInPolygon } from "@/lib/building/floor-plan-rooms";
 
 const EPS = 1e-9;
 const ORTHO_STEP = Math.PI / 4;
@@ -38,6 +45,30 @@ export type SnapResult = {
 };
 
 type Segment = { a: PdfPoint; b: PdfPoint };
+
+function rotateItemSegments(
+  item: FloorPlanAnnotation,
+  segments: Segment[],
+): Segment[] {
+  if (item.type === "polyline" || item.type === "room") return segments;
+  const deg = annotationRotationDeg(item);
+  if (deg === 0) return segments;
+  const center = pdfRectCenter(item.rect);
+  return segments.map((segment) => ({
+    a: rotatePdfPointAround(segment.a, center, deg),
+    b: rotatePdfPointAround(segment.b, center, deg),
+  }));
+}
+
+function rotateItemPoints(
+  item: FloorPlanAnnotation,
+  points: PdfPoint[],
+): PdfPoint[] {
+  if (item.type === "polyline" || item.type === "room") return points;
+  const deg = annotationRotationDeg(item);
+  if (deg === 0) return points;
+  return rotatePdfPointsAround(points, pdfRectCenter(item.rect), deg);
+}
 
 type SnapCandidate = {
   point: PdfPoint;
@@ -223,9 +254,16 @@ export function collectLineSegments(
         segments.push({ a: item.points[i - 1], b: item.points[i] });
       }
     } else if (item.type === "rectangle") {
-      segments.push(...rectangleSegments(item.rect, item.variant));
+      segments.push(
+        ...rotateItemSegments(
+          item,
+          rectangleSegments(item.rect, item.variant),
+        ),
+      );
     } else if (item.type === "circle") {
-      segments.push(...circleSegments(item.rect, item.variant));
+      segments.push(
+        ...rotateItemSegments(item, circleSegments(item.rect, item.variant)),
+      );
     }
   }
 
@@ -248,20 +286,24 @@ export function collectEndpoints(
     } else if (item.type === "rectangle") {
       const { x, y, width, height } = item.rect;
       endpoints.push(
-        { x, y },
-        { x: x + width, y },
-        { x: x + width, y: y + height },
-        { x, y: y + height },
+        ...rotateItemPoints(item, [
+          { x, y },
+          { x: x + width, y },
+          { x: x + width, y: y + height },
+          { x, y: y + height },
+        ]),
       );
     } else if (item.type === "circle") {
       const { x, y, width, height } = item.rect;
       const cx = x + width / 2;
       const cy = y + height / 2;
       endpoints.push(
-        { x: cx + width / 2, y: cy },
-        { x: cx - width / 2, y: cy },
-        { x: cx, y: cy + height / 2 },
-        { x: cx, y: cy - height / 2 },
+        ...rotateItemPoints(item, [
+          { x: cx + width / 2, y: cy },
+          { x: cx - width / 2, y: cy },
+          { x: cx, y: cy + height / 2 },
+          { x: cx, y: cy - height / 2 },
+        ]),
       );
     }
   }
@@ -473,10 +515,24 @@ function annotationSegments(item: FloorPlanAnnotation): Segment[] {
     }
     return segments;
   }
-  if (item.type === "circle") {
-    return circleSegments(item.rect, item.variant);
+  if (item.type === "room") {
+    const segments: Segment[] = [];
+    const points = item.points;
+    for (let i = 0; i < points.length; i++) {
+      segments.push({
+        a: points[i]!,
+        b: points[(i + 1) % points.length]!,
+      });
+    }
+    return segments;
   }
-  return rectangleSegments(item.rect, item.variant);
+  if (item.type === "circle") {
+    return rotateItemSegments(item, circleSegments(item.rect, item.variant));
+  }
+  return rotateItemSegments(
+    item,
+    rectangleSegments(item.rect, item.variant),
+  );
 }
 
 function annotationHit(
@@ -484,6 +540,7 @@ function annotationHit(
   item: FloorPlanAnnotation,
   thresholdSq: number,
 ): boolean {
+  if (item.type === "room" && pointInPolygon(point, item.points)) return true;
   for (const segment of annotationSegments(item)) {
     const nearest = nearestPointOnSegment(point, segment.a, segment.b);
     if (distSq(point, nearest) <= thresholdSq) return true;

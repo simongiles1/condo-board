@@ -42,8 +42,14 @@ import {
   panZoomScreenRect,
   panZoomViewportToPage,
   pdfPointsEqual,
+  pinRelativeViewFromTransform,
+  centerViewOnPagePoint,
+  transformFromPinRelativeView,
+  fitPanZoomToPdfExtent,
+  viewportResizePanAction,
   resizeCanvasRectFromHandle,
   type CropHandleKind,
+  type CanvasRect,
   type EditOverlayPlateLayout,
   type PdfPoint,
   type PdfRect,
@@ -54,8 +60,6 @@ import {
   floorPlanLabel,
   lineOverlayCandidates,
   crossSetLinePlanForFloor,
-  drawingSetLabel,
-  otherDrawingSet,
   type FloorPlanDrawingSet,
   type FloorPlanDto,
   type FloorPlanFamilyDto,
@@ -72,22 +76,36 @@ import {
   type RegistrationLegendItem,
 } from "./FloorPlanRegistrationMark";
 import { FloorPlanAnnotationLayer } from "./FloorPlanAnnotationLayer";
-import { FloorPlanEditorRibbon } from "./FloorPlanEditorRibbon";
+import { FloorPlanEditorRibbon, RiserInventoryPanel } from "./FloorPlanEditorRibbon";
+import { StandardizeRisersDialog } from "./StandardizeRisersDialog";
+import type { RiserTypeTemplate } from "@/lib/building/floor-plan-riser-templates";
 import { FloorPlanPdfCanvas, FloorPlanPdfClipCanvas } from "./FloorPlanPdfCanvas";
 import { FloorPlanZoomToolbar } from "./FloorPlanZoomToolbar";
 import type { PdfPageRenderInfo } from "@/lib/pdf/pdfjs-browser";
 import { useFloorPlanDrawing } from "@/lib/building/use-floor-plan-drawing";
-import type { SnapResult } from "@/lib/building/floor-plan-draw-snap";
+import {
+  pdfDeltaPerScreenPixel,
+  screenPxToCanvasUnits,
+  type SnapResult,
+} from "@/lib/building/floor-plan-draw-snap";
 import type {
   CutDraft,
   DrawColorPreset,
   FloorPlanAnnotation,
   LineDraft,
   BoundingBoxDraft,
+  MechanicalMarkupSet,
+  PdfMarkupExtent,
   SelectionDraft,
   VertexDragDraft,
   VertexHover,
 } from "@/lib/building/floor-plan-annotations";
+import {
+  markupExtentExceedsPage,
+  pdfMarkupExtent,
+} from "@/lib/building/floor-plan-annotations";
+import type { RoomFace, RoomLeak } from "@/lib/building/floor-plan-rooms";
+import { listFloorPlanRooms } from "@/lib/building/floor-plan-rooms";
 import {
   clearFloorPlanAnnotationDraft,
   resolveFloorPlanAnnotationMarkup,
@@ -95,14 +113,60 @@ import {
 } from "@/lib/building/floor-plan-annotation-draft";
 import { annotationsForHigherFloor } from "@/lib/building/floor-plan-riser-links";
 import {
+  applyFollowedRiserOffsets,
+  followedRiserOverlayAnnotations,
+  overlayAnnotationRiserIds,
+  overlayAnnotationsMatchingRisers,
+  planImmediatelyBelow,
+  riserIdsAdoptedFromMatchingBoxes,
+  stampCalloutsFromMatchingOverlays,
+} from "@/lib/building/floor-plan-compare-annotations";
+import {
+  annotationHasRiser,
+  annotationVisibleWhileFollowingRiser,
+  applyRiserReclassifyToAnnotations,
+  findRiserFocusPoint,
+  formatMechanicalRiserLabel,
+  formatMechanicalRiserLabels,
+  groupTaggedRisersByFloor,
+  mechanicalTypesFromPresets,
+  riserIsCompleted,
+  taggedRiserIdsFromAnnotations,
+  type MechanicalRiserDto,
+  type MechanicalRiserTypeDto,
+  type RiserIdRewrite,
+} from "@/lib/building/floor-plan-mechanical-risers";
+import {
   annotationsGeometricallyEqual,
   excludeMatchingOverlayAnnotations,
+  filterAnnotationsByMarkupSet,
   filterAnnotationsByStrokeColors,
   floorPlanAnnotationsEqual,
   mapAnnotationsAcrossPlans,
+  mergeAnnotationsByMarkupSet,
+  parseDrawColorPresets,
+  parseMechanicalMarkupSet,
+  strokeColorFilterHasSelection,
   type StrokeColorFilter,
 } from "@/lib/building/floor-plan-annotations";
 import { usePdfSession } from "@/lib/pdf/use-pdf-session";
+import {
+  followOffsetGet,
+  followOffsetSet,
+  followSkipAdd,
+  followSkipClear,
+  followSkipHas,
+  hydrateFloorPlanEditRibbonFromStorage,
+  peekPendingInventoryRiserPan,
+  clearPendingInventoryRiserPan,
+  readFloorPlanEditRibbonSession,
+  readFloorPlanEditViewSession,
+  setPendingInventoryRiserPan,
+  writeFloorPlanEditRibbonSession,
+  writeFloorPlanEditViewSession,
+  type FloorPlanFollowOffset,
+  type FloorPlanFollowSkip,
+} from "@/lib/building/floor-plan-edit-session";
 
 type ViewTransform = { x: number; y: number; zoom: number };
 
@@ -120,6 +184,7 @@ function mappedOverlayAnnotationsFromSource(
   sourceFamily: FloorPlanFamilyDto | null,
   anchorPin: PdfPoint | null,
   anchorFamily: FloorPlanFamilyDto,
+  markupSet?: MechanicalMarkupSet,
 ): FloorPlanAnnotation[] {
   if (!sourcePlan || !sourceFamily || !anchorPin || !planHasPin(sourcePlan)) {
     return [];
@@ -128,9 +193,13 @@ function mappedOverlayAnnotationsFromSource(
     sourcePlan.id,
     sourcePlan.annotations,
   );
-  if (sourceMarkup.length === 0) return [];
+  const scoped =
+    markupSet == null
+      ? sourceMarkup
+      : filterAnnotationsByMarkupSet(sourceMarkup, markupSet);
+  if (scoped.length === 0) return [];
   return mapAnnotationsAcrossPlans(
-    annotationsForHigherFloor(sourceMarkup),
+    annotationsForHigherFloor(scoped),
     { x: sourcePlan.pinXPt!, y: sourcePlan.pinYPt! },
     anchorPin,
     sourceFamily,
@@ -227,6 +296,24 @@ function zoomAround(
   };
 }
 
+function restoredEditView(
+  expanded: boolean,
+  pin: PdfPoint | null,
+  page: PdfSize,
+  scale: number,
+): ViewTransform | null {
+  if (!expanded || !pin) return null;
+  const stored = readFloorPlanEditViewSession();
+  if (!stored || !(stored.zoom > 0)) return null;
+  const zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, stored.zoom));
+  return transformFromPinRelativeView(
+    { ...stored, zoom },
+    pin,
+    page.height,
+    scale,
+  );
+}
+
 type DragKind = "move" | CropHandleKind;
 type HandleKind = CropHandleKind;
 
@@ -260,14 +347,20 @@ export function FloorPlanCropEditor({
   onSaveReferenceAnchor,
   onSaveAnnotations,
   onSaveDrawColorPresets,
+  onEnsureMechanicalRiser,
+  onUpdateMechanicalRiser,
+  onReclassifyMechanicalRisers,
+  onStandardizeMechanicalRisers,
   onSetRegistrationPlan,
   onSetPinReferencePlan,
   onMoveToNewFamily,
+  onSelectPlan,
   saving,
   savingAnnotations = false,
   expanded,
   onExpandedChange,
   embeddedExpanded = false,
+  onSelectedMarkChange,
 }: {
   plan: FloorPlanDto;
   family: FloorPlanFamilyDto;
@@ -283,15 +376,47 @@ export function FloorPlanCropEditor({
   onSaveReferenceAnchor: (anchor: PdfPoint) => void;
   onSaveAnnotations: (annotations: FloorPlanAnnotation[]) => Promise<void>;
   onSaveDrawColorPresets?: (presets: DrawColorPreset[]) => Promise<void>;
+  onEnsureMechanicalRiser?: (
+    typeId: string,
+    label: string,
+  ) => Promise<{ riser: MechanicalRiserDto; risers: MechanicalRiserDto[] }>;
+  onUpdateMechanicalRiser?: (
+    id: string,
+    completed: boolean,
+  ) => Promise<{ riser: MechanicalRiserDto; risers: MechanicalRiserDto[] }>;
+  onReclassifyMechanicalRisers?: (
+    ids: string[],
+    typeId: string,
+  ) => Promise<{
+    risers: MechanicalRiserDto[];
+    rewrite: RiserIdRewrite;
+    updatedPlans: FloorPlanDto[];
+  }>;
+  onStandardizeMechanicalRisers?: (params: {
+    typeId: string;
+    template: RiserTypeTemplate;
+    planIds?: string[];
+    autoOrient?: boolean;
+  }) => Promise<{
+    ok: boolean;
+    replacedCount: number;
+    affectedPlanIds: string[];
+    templates: Record<string, RiserTypeTemplate>;
+    updatedPlans: FloorPlanDto[];
+  }>;
   onSetRegistrationPlan?: (planId: string) => Promise<void>;
   onSetPinReferencePlan?: (planId: string) => Promise<void>;
   onMoveToNewFamily: (name: string) => Promise<void>;
+  /** Jump to another sheet in the expanded editor (e.g. riser inventory). */
+  onSelectPlan?: (planId: string) => void;
   saving: boolean;
   savingAnnotations?: boolean;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   /** Parent owns the full-screen shell; render crop UI inside it without a second portal. */
   embeddedExpanded?: boolean;
+  /** Fired when a registration mark is selected for keyboard nudging (or cleared). */
+  onSelectedMarkChange?: (mark: "building" | "reference" | null) => void;
 }) {
   const storedPage: PdfSize = useMemo(
     () => ({
@@ -300,6 +425,8 @@ export function FloorPlanCropEditor({
     }),
     [plan.originalPageWidthPt, plan.originalPageHeightPt],
   );
+  const [editRibbon] = useState(readFloorPlanEditRibbonSession);
+  const [ribbonReady, setRibbonReady] = useState(false);
   const [page, setPage] = useState<PdfSize>(storedPage);
   const overlayPlans = useMemo(
     () => editOverlayCandidates(plans, plan),
@@ -309,7 +436,9 @@ export function FloorPlanCropEditor({
     overlayPlans,
     plan.floorNumber,
   );
-  const [overlayEnabled, setOverlayEnabled] = useState(false);
+  const [overlayEnabled, setOverlayEnabled] = useState(
+    editRibbon.overlayEnabled,
+  );
   const [overlayPlanId, setOverlayPlanId] = useState(defaultOverlayId ?? "");
   const lineOverlayPlans = useMemo(
     () => lineOverlayCandidates(plans, plan),
@@ -319,18 +448,49 @@ export function FloorPlanCropEditor({
     lineOverlayPlans,
     plan.floorNumber,
   );
-  const [lineOverlayEnabled, setLineOverlayEnabled] = useState(false);
+  const [lineOverlayEnabled, setLineOverlayEnabled] = useState(
+    editRibbon.lineOverlayEnabled || editRibbon.showCrossSetLines,
+  );
   const [lineOverlayPlanId, setLineOverlayPlanId] = useState(
     defaultLineOverlayId ?? "",
   );
   const [lineOverlayColorFilter, setLineOverlayColorFilter] =
-    useState<StrokeColorFilter>("all");
+    useState<StrokeColorFilter>(editRibbon.lineOverlayColorFilter);
+  const [markupSet, setMarkupSet] = useState<MechanicalMarkupSet>(() =>
+    drawingSet === "mechanical"
+      ? parseMechanicalMarkupSet(editRibbon.markupSet)
+      : 1,
+  );
+  const [followedRiserIds, setFollowedRiserIds] = useState<string[]>(
+    () =>
+      drawingSet === "mechanical" ? editRibbon.followedRiserIds : [],
+  );
+  const [riserInventoryOpen, setRiserInventoryOpen] = useState(
+    () => drawingSet === "mechanical" && editRibbon.riserInventoryOpen,
+  );
+  const [followedRiserSkipped, setFollowedRiserSkipped] = useState<
+    FloorPlanFollowSkip[]
+  >(() => editRibbon.followedRiserSkipped);
+  const [followedRiserOffsets, setFollowedRiserOffsets] = useState<
+    FloorPlanFollowOffset[]
+  >(() => editRibbon.followedRiserOffsets);
+  const [selectedFollowedRiserId, setSelectedFollowedRiserId] = useState<
+    string | null
+  >(null);
+  const [followedMoveDrag, setFollowedMoveDrag] = useState<{
+    riserId: string;
+    startX: number;
+    startY: number;
+    startDx: number;
+    startDy: number;
+  } | null>(null);
+  const markupSetRef = useRef(markupSet);
+  markupSetRef.current = markupSet;
+  const allMarkupRef = useRef<FloorPlanAnnotation[]>([]);
   const crossSetLinePlan = useMemo(
     () => crossSetLinePlanForFloor(allPlans, allFamilies, plan, drawingSet),
     [allPlans, allFamilies, plan, drawingSet],
   );
-  const [showCrossSetLines, setShowCrossSetLines] = useState(false);
-  const crossSetLinesLabel = `${drawingSetLabel(otherDrawingSet(drawingSet))} lines`;
   const [savedAnnotations, setSavedAnnotations] = useState(
     () => plan.annotations,
   );
@@ -339,15 +499,40 @@ export function FloorPlanCropEditor({
   );
   const pendingAnnotationsRef = useRef<FloorPlanAnnotation[]>([]);
   const annotationsDirtyRef = useRef(false);
-  const annotationPlanIdRef = useRef(plan.id);
-  annotationPlanIdRef.current = plan.id;
-  const [showPin, setShowPin] = useState(true);
-  const [showReferenceAnchor, setShowReferenceAnchor] = useState(true);
-  const [showCrop, setShowCrop] = useState(true);
-  const [showLines, setShowLines] = useState(true);
-  const [colorPresets, setColorPresets] = useState<DrawColorPreset[]>(
-    () => settings.drawColorPresets,
+  const markupReadyRef = useRef(false);
+  const [showPin, setShowPin] = useState(editRibbon.showPin);
+  const [showReferenceAnchor, setShowReferenceAnchor] = useState(
+    editRibbon.showReferenceAnchor,
   );
+  const [showCrop, setShowCrop] = useState(editRibbon.showCrop);
+  const [showLines, setShowLines] = useState(editRibbon.showLines);
+  const [showRiserLabels, setShowRiserLabels] = useState(
+    editRibbon.showRiserLabels,
+  );
+  const [extendMarkupBounds, setExtendMarkupBounds] = useState(
+    editRibbon.extendMarkupBounds,
+  );
+  const [colorPresets, setColorPresets] = useState<DrawColorPreset[]>(
+    () => parseDrawColorPresets(settings.drawColorPresets),
+  );
+  const [mechanicalRisers, setMechanicalRisers] = useState<MechanicalRiserDto[]>(
+    () => settings.mechanicalRisers ?? [],
+  );
+  const [standardizeDialogOpen, setStandardizeDialogOpen] = useState(false);
+  const [standardizeClipMode, setStandardizeClipMode] = useState(false);
+  const [standardizeClipRect, setStandardizeClipRect] = useState<PdfRect | null>(
+    null,
+  );
+  const [standardizeClipDrag, setStandardizeClipDrag] = useState<{
+    start: PdfPoint;
+    current: PdfPoint;
+  } | null>(null);
+  const standardizeClipDragRef = useRef(standardizeClipDrag);
+  standardizeClipDragRef.current = standardizeClipDrag;
+  const [standardizeClipHint, setStandardizeClipHint] = useState<string | null>(
+    null,
+  );
+  const [catalogSaving, setCatalogSaving] = useState(false);
   const colorPresetsSaveRef = useRef<Promise<void> | null>(null);
   const colorPresetsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -372,6 +557,9 @@ export function FloorPlanCropEditor({
     startY: number;
     startAnchor: PdfPoint;
   } | null>(null);
+  const [selectedMark, setSelectedMark] = useState<"building" | "reference" | null>(
+    null,
+  );
   const [settingReference, setSettingReference] = useState(false);
   const [settingPinReference, setSettingPinReference] = useState(false);
   const [resizeFamily, setResizeFamily] = useState(false);
@@ -386,8 +574,9 @@ export function FloorPlanCropEditor({
   platePinRef.current = platePin;
 
   useEffect(() => {
-    setColorPresets(settings.drawColorPresets);
-  }, [settings.drawColorPresets]);
+    setColorPresets(parseDrawColorPresets(settings.drawColorPresets));
+    setMechanicalRisers(settings.mechanicalRisers ?? []);
+  }, [settings.drawColorPresets, settings.mechanicalRisers]);
 
   const handleColorPresetsChange = useCallback(
     (next: DrawColorPreset[]) => {
@@ -452,7 +641,17 @@ export function FloorPlanCropEditor({
   const pageRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const [mounted, setMounted] = useState(false);
-  const [view, setView] = useState<ViewTransform>(IDENTITY_VIEW);
+  const restoredOnMount = restoredEditView(
+    expanded,
+    planHasPin(plan) ? { x: plan.pinXPt!, y: plan.pinYPt! } : null,
+    storedPage,
+    scale,
+  );
+  const [view, setView] = useState<ViewTransform>(
+    restoredOnMount ?? IDENTITY_VIEW,
+  );
+  const fittedForExpandRef = useRef(restoredOnMount != null);
+  const lastViewportSizeRef = useRef({ width: 0, height: 0 });
   const viewRef = useRef(view);
   viewRef.current = view;
   const [drag, setDrag] = useState<{
@@ -477,6 +676,7 @@ export function FloorPlanCropEditor({
   } | null>(null);
 
   const referenceOverlayAnnotationsRef = useRef<FloorPlanAnnotation[]>([]);
+  const followedOverlayAnnotationsRef = useRef<FloorPlanAnnotation[]>([]);
   const [hiddenOverlayAnnotations, setHiddenOverlayAnnotations] = useState<
     FloorPlanAnnotation[]
   >([]);
@@ -502,7 +702,18 @@ export function FloorPlanCropEditor({
     viewportRef,
     colorPresets,
     referenceOverlayAnnotationsRef,
+    followedOverlayAnnotationsRef,
+    followedRiserIds,
     onHideReferenceOverlayAnnotation: hideReferenceOverlayAnnotation,
+    calloutEnabled: drawingSet === "mechanical",
+    markupSet,
+    initial: {
+      drawTool: editRibbon.drawTool,
+      rectangleVariant: editRibbon.rectangleVariant,
+      circleVariant: editRibbon.circleVariant,
+      strokeColor: editRibbon.strokeColor,
+      strokeWidthPt: editRibbon.strokeWidthPt,
+    },
   });
   const {
     drawTool,
@@ -521,21 +732,50 @@ export function FloorPlanCropEditor({
     cutDraft,
     connectDraftIndex,
     connectHoverIndex,
+    connectDraftOverlayIndex,
+    connectHoverOverlayIndex,
+    connectRiserChoice,
+    selectedRiserAboveId,
+    hoverRiserAboveId,
     hoverSnap,
     hoverVertex,
     vertexDrag,
+    hoverRoom,
+    hoverLeaks,
+    leakMaxGapPt,
+    listHoverRoomIndex,
+    editingRoomIndex,
+    shapeDragging,
+    editingCalloutIndex,
     setStrokeColor,
     setStrokeWidthPt,
+    setLeakMaxGapPt,
     setRectangleVariant,
     setCircleVariant,
     onToolChange,
     clearAnnotations,
     replaceAnnotations,
+    appendAnnotations,
+    mapAnnotations,
     getAnnotationsForSave,
     deselectAnnotations,
     deleteSelected,
     onAnnotationSelect,
+    onRiserSelect,
+    onCalloutPointerDown,
+    onCalloutTextChange,
+    onCalloutCommit,
+    onCalloutRemove,
+    onRoomLabelChange,
+    onRoomCommit,
+    setListHoverRoomIndex,
+    deleteRoom,
+    assignCalloutRiser,
+    patchCalloutCatalog,
+    flipSelectedRiserDirection,
     handleEscape,
+    confirmConnectRiserChoice,
+    cancelConnectRiserChoice,
     onDrawPointerDown,
     onDrawPointerMove,
     onDrawPointerUp,
@@ -545,11 +785,498 @@ export function FloorPlanCropEditor({
     onVertexPointerDown,
   } = drawing;
 
+  const riserTypes = useMemo(
+    () => mechanicalTypesFromPresets(colorPresets).filter((type) => type.id),
+    [colorPresets],
+  );
+
+  const roomList = useMemo(
+    () => listFloorPlanRooms(annotations),
+    [annotations],
+  );
+
+  const calibrationPlan = useMemo(
+    () => resolvePinReferencePlan(settings, plans),
+    [settings, plans],
+  );
+  const suggestedPin = useMemo(() => {
+    if (!calibrationPlan || calibrationPlan.id === plan.id) return null;
+    if (!draftReferenceAnchor) return null;
+    return pinFromReferenceAnchor(calibrationPlan, draftReferenceAnchor, page);
+  }, [calibrationPlan, plan.id, draftReferenceAnchor, page]);
+  const anchorPin = resolveOverlayAnchorPin(draftPin, plan, suggestedPin);
+
+  const belowFloorSourceOverlays = useMemo(() => {
+    if (drawingSet !== "mechanical") return [];
+    const below = planImmediatelyBelow(plans, plan);
+    if (!below || !anchorPin) return [];
+    const belowIds = taggedRiserIdsFromAnnotations(
+      filterAnnotationsByMarkupSet(
+        resolveFloorPlanAnnotationMarkup(below.id, below.annotations),
+        markupSet,
+      ),
+    );
+    if (belowIds.length === 0) return [];
+    const skippedRiserIds = followedRiserSkipped
+      .filter((entry) => entry.planId === plan.id)
+      .map((entry) => entry.riserId);
+    return followedRiserOverlayAnnotations({
+      plans,
+      families,
+      plan,
+      family,
+      riserIds: belowIds,
+      skippedRiserIds,
+      markupSet,
+      types: riserTypes,
+      risers: mechanicalRisers,
+      currentAnnotations: [],
+      anchorPin,
+    });
+  }, [
+    drawingSet,
+    plans,
+    plan,
+    family,
+    families,
+    markupSet,
+    riserTypes,
+    mechanicalRisers,
+    followedRiserSkipped,
+    anchorPin,
+  ]);
+
+  useEffect(() => {
+    if (drawingSet !== "mechanical") return;
+    const stamped = stampCalloutsFromMatchingOverlays(
+      annotations,
+      belowFloorSourceOverlays,
+    );
+    if (!stamped) return;
+    mapAnnotations(() => stamped);
+  }, [drawingSet, annotations, belowFloorSourceOverlays, mapAnnotations]);
+
+  const taggedRiserFloors = useMemo(() => {
+    if (drawingSet !== "mechanical") return [];
+    const extraApprovedIds = riserIdsAdoptedFromMatchingBoxes(
+      annotations,
+      belowFloorSourceOverlays,
+    );
+    return groupTaggedRisersByFloor(
+      plans.map((item) => ({
+        planId: item.id,
+        floorNumber: item.floorNumber,
+        current: item.floorNumber === plan.floorNumber,
+        annotations:
+          item.id === plan.id
+            ? annotations
+            : filterAnnotationsByMarkupSet(
+                resolveFloorPlanAnnotationMarkup(item.id, item.annotations),
+                markupSet,
+              ),
+      })),
+      riserTypes,
+      mechanicalRisers,
+      {
+        followSkipped: followedRiserSkipped,
+        extraApprovedIdsByFloor:
+          extraApprovedIds.length > 0
+            ? { [plan.floorNumber]: extraApprovedIds }
+            : undefined,
+      },
+    );
+  }, [
+    drawingSet,
+    plans,
+    plan.id,
+    plan.floorNumber,
+    annotations,
+    markupSet,
+    riserTypes,
+    mechanicalRisers,
+    followedRiserSkipped,
+    belowFloorSourceOverlays,
+  ]);
+
+  const handleCalloutCatalogAssign = useCallback(
+    (index: number, typeId: string, riserIds: string[]) => {
+      const type = riserTypes.find((item) => item.id === typeId);
+      const labels = riserIds
+        .map((id) => mechanicalRisers.find((riser) => riser.id === id)?.label)
+        .filter((value): value is string => value != null);
+      assignCalloutRiser(index, {
+        riserIds,
+        text: formatMechanicalRiserLabels(
+          type ?? { name: "Riser" },
+          labels,
+        ),
+        color: type?.color ?? strokeColor,
+        typeId,
+      });
+    },
+    [assignCalloutRiser, mechanicalRisers, riserTypes, strokeColor],
+  );
+
+  const handleCalloutCatalogEnsureRiser = useCallback(
+    async (typeId: string, label: string): Promise<string | null> => {
+      if (!onEnsureMechanicalRiser) return null;
+      setCatalogSaving(true);
+      try {
+        const result = await onEnsureMechanicalRiser(typeId, label);
+        setMechanicalRisers(result.risers);
+        return result.riser.id;
+      } catch (error) {
+        console.error(error);
+        return null;
+      } finally {
+        setCatalogSaving(false);
+      }
+    },
+    [onEnsureMechanicalRiser],
+  );
+
+  const handleFollowedRiserCompleted = useCallback(
+    async (id: string, completed: boolean) => {
+      if (!onUpdateMechanicalRiser) return;
+      setCatalogSaving(true);
+      try {
+        const result = await onUpdateMechanicalRiser(id, completed);
+        setMechanicalRisers(result.risers);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setCatalogSaving(false);
+      }
+    },
+    [onUpdateMechanicalRiser],
+  );
+
+  useEffect(() => {
+    setFollowedRiserIds((prev) =>
+      prev.filter((id) => mechanicalRisers.some((riser) => riser.id === id)),
+    );
+  }, [mechanicalRisers]);
+
+  const handleCalloutCatalogType = useCallback(
+    (index: number, typeId: string) => {
+      const type = riserTypes.find((item) => item.id === typeId);
+      if (!type) return;
+      patchCalloutCatalog(index, { typeId, color: type.color });
+    },
+    [patchCalloutCatalog, riserTypes],
+  );
+
+  const mergePendingMarkup = useCallback(() => {
+    const active = getAnnotationsForSave();
+    if (drawingSet !== "mechanical") return active;
+    return mergeAnnotationsByMarkupSet(
+      allMarkupRef.current,
+      active,
+      markupSetRef.current,
+    );
+  }, [drawingSet, getAnnotationsForSave]);
+
+  const handleCalloutCatalogReclassify = useCallback(
+    async (
+      riserIds: string[],
+      typeId: string,
+    ): Promise<RiserIdRewrite | null> => {
+      if (!onReclassifyMechanicalRisers) return null;
+      setCatalogSaving(true);
+      try {
+        const result = await onReclassifyMechanicalRisers(riserIds, typeId);
+        setMechanicalRisers(result.risers);
+        skipAnnotationReloadRef.current = true;
+        const rewrittenSaved = applyRiserReclassifyToAnnotations(
+          savedAnnotations,
+          result.rewrite,
+          riserTypes,
+          result.risers,
+        );
+        setSavedAnnotations(rewrittenSaved);
+        const rewrittenAll = applyRiserReclassifyToAnnotations(
+          mergePendingMarkup(),
+          result.rewrite,
+          riserTypes,
+          result.risers,
+        );
+        allMarkupRef.current = rewrittenAll;
+        mapAnnotations(() =>
+          drawingSet === "mechanical"
+            ? filterAnnotationsByMarkupSet(rewrittenAll, markupSetRef.current)
+            : rewrittenAll,
+        );
+        if (followedRiserIds.length > 0 && Object.keys(result.rewrite).length > 0) {
+          setFollowedRiserIds((prev) => {
+            const seen = new Set<string>();
+            const next: string[] = [];
+            for (const id of prev) {
+              const mapped = result.rewrite[id] ?? id;
+              if (seen.has(mapped)) continue;
+              seen.add(mapped);
+              next.push(mapped);
+            }
+            return next;
+          });
+        }
+        return result.rewrite;
+      } catch (error) {
+        console.error(error);
+        return null;
+      } finally {
+        setCatalogSaving(false);
+      }
+    },
+    [
+      onReclassifyMechanicalRisers,
+      savedAnnotations,
+      riserTypes,
+      mergePendingMarkup,
+      mapAnnotations,
+      drawingSet,
+      followedRiserIds,
+    ],
+  );
+
+  const handleStandardizeProceed = useCallback(
+    async (params: {
+      typeId: string;
+      template: RiserTypeTemplate;
+      scope: "current" | "all";
+      autoOrient: boolean;
+    }) => {
+      if (!onStandardizeMechanicalRisers) {
+        throw new Error("Standardization not configured.");
+      }
+      const type = riserTypes.find((t) => t.id === params.typeId);
+      if (!type) throw new Error("Riser type not found.");
+
+      const result = await onStandardizeMechanicalRisers({
+        typeId: params.typeId,
+        template: params.template,
+        planIds: params.scope === "current" ? [plan.id] : undefined,
+        autoOrient: params.autoOrient,
+      });
+
+      const thisPlanUpdated = result.updatedPlans.find((p) => p.id === plan.id);
+      if (thisPlanUpdated) {
+        skipAnnotationReloadRef.current = true;
+        setSavedAnnotations(thisPlanUpdated.annotations);
+        allMarkupRef.current = thisPlanUpdated.annotations;
+        clearFloorPlanAnnotationDraft(plan.id);
+        mapAnnotations(() =>
+          drawingSet === "mechanical"
+            ? filterAnnotationsByMarkupSet(thisPlanUpdated.annotations, markupSetRef.current)
+            : thisPlanUpdated.annotations,
+        );
+      }
+      return { count: result.replacedCount };
+    },
+    [
+      onStandardizeMechanicalRisers,
+      riserTypes,
+      plan.id,
+      drawingSet,
+      mapAnnotations,
+    ],
+  );
+
+  const handleSaveRiserTemplate = useCallback(
+    async (template: RiserTypeTemplate) => {
+      await fetch("/api/building/mechanical-risers/standardize", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template }),
+      });
+      if (settings.riserTemplates) {
+        settings.riserTemplates[template.typeId] = template;
+      }
+    },
+    [settings],
+  );
+
+  const handlePanToPdfPoint = useCallback(
+    (point: PdfPoint) => {
+      const viewport = viewportRef.current;
+      if (!viewport) return;
+      const viewportSize = {
+        width: viewport.clientWidth,
+        height: viewport.clientHeight,
+      };
+      if (viewportSize.width < 2 || viewportSize.height < 2) return;
+      setView((current) =>
+        centerViewOnPagePoint(
+          current,
+          viewportSize,
+          point,
+          page.height,
+          scale,
+        ),
+      );
+    },
+    [page.height, scale],
+  );
+
+  const clientToPdfPoint = useCallback(
+    (clientX: number, clientY: number): PdfPoint | null => {
+      if (expanded) {
+        const viewport = viewportRef.current;
+        if (!viewport) return null;
+        const bounds = viewport.getBoundingClientRect();
+        const pagePoint = panZoomViewportToPage(
+          { x: clientX - bounds.left, y: clientY - bounds.top },
+          viewRef.current,
+        );
+        return canvasPointToPdf(pagePoint, page.height, scale);
+      }
+      const pageEl = pageRef.current;
+      if (!pageEl) return null;
+      const bounds = pageEl.getBoundingClientRect();
+      if (bounds.width <= 0 || bounds.height <= 0) return null;
+      const sx = pageEl.offsetWidth / bounds.width;
+      const sy = pageEl.offsetHeight / bounds.height;
+      return canvasPointToPdf(
+        {
+          x: (clientX - bounds.left) * sx,
+          y: (clientY - bounds.top) * sy,
+        },
+        page.height,
+        scale,
+      );
+    },
+    [expanded, page.height, scale],
+  );
+
+  const beginStandardizeClipDrag = useCallback(
+    (event: React.PointerEvent | PointerEvent) => {
+      const point = clientToPdfPoint(event.clientX, event.clientY);
+      if (!point) return;
+      setStandardizeClipHint(null);
+      if ("currentTarget" in event && event.currentTarget instanceof Element) {
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        } catch {
+          // Ignore if capture is not supported on this target.
+        }
+      }
+      setStandardizeClipDrag({ start: point, current: point });
+    },
+    [clientToPdfPoint],
+  );
+
+  const finalizeStandardizeClip = useCallback(
+    (start: PdfPoint, end: PdfPoint) => {
+      const minX = Math.min(start.x, end.x);
+      const maxX = Math.max(start.x, end.x);
+      const minY = Math.min(start.y, end.y);
+      const maxY = Math.max(start.y, end.y);
+      const width = maxX - minX;
+      const height = maxY - minY;
+      if (width < 4 || height < 4) {
+        setStandardizeClipDrag(null);
+        setStandardizeClipHint(
+          "Clip rectangle is too small — drag a larger area around the riser.",
+        );
+        return;
+      }
+      const rect: PdfRect = {
+        x: Number(minX.toFixed(2)),
+        y: Number(minY.toFixed(2)),
+        width: Number(width.toFixed(2)),
+        height: Number(height.toFixed(2)),
+      };
+      setStandardizeClipRect(rect);
+      setStandardizeClipDrag(null);
+      setStandardizeClipMode(false);
+      setStandardizeClipHint(null);
+      setStandardizeDialogOpen(true);
+    },
+    [],
+  );
+
+  const clipDragging = standardizeClipDrag != null;
+
+  useEffect(() => {
+    if (!clipDragging) return;
+
+    function onMove(event: PointerEvent) {
+      const point = clientToPdfPoint(event.clientX, event.clientY);
+      if (!point) return;
+      setStandardizeClipDrag((prev) =>
+        prev ? { ...prev, current: point } : prev,
+      );
+    }
+
+    function onUp(event: PointerEvent) {
+      const prev = standardizeClipDragRef.current;
+      const end = clientToPdfPoint(event.clientX, event.clientY);
+      setStandardizeClipDrag(null);
+      if (prev && end) {
+        finalizeStandardizeClip(prev.start, end);
+      }
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [clipDragging, clientToPdfPoint, finalizeStandardizeClip]);
+
+  useEffect(() => {
+    if (!standardizeClipMode) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setStandardizeClipMode(false);
+        setStandardizeClipDrag(null);
+        setStandardizeClipHint(null);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [standardizeClipMode]);
+
+  const handleMarkupSetChange = useCallback(
+    (next: MechanicalMarkupSet) => {
+      if (next === markupSetRef.current) return;
+      allMarkupRef.current = mergePendingMarkup();
+      markupSetRef.current = next;
+      setMarkupSet(next);
+      replaceAnnotations(
+        drawingSet === "mechanical"
+          ? filterAnnotationsByMarkupSet(allMarkupRef.current, next)
+          : allMarkupRef.current,
+      );
+      setHiddenOverlayAnnotations([]);
+    },
+    [drawingSet, mergePendingMarkup, replaceAnnotations],
+  );
+
   const handleDeleteSelected = useCallback(() => {
     const removed = selectedIndices
       .map((index) => annotations[index])
       .filter((item): item is FloorPlanAnnotation => item != null);
+    const remaining = annotations.filter(
+      (_, index) => !selectedIndices.includes(index),
+    );
     deleteSelected();
+    if (followedRiserIds.length > 0) {
+      setFollowedRiserSkipped((prev) => {
+        let next = prev;
+        for (const followedRiserId of followedRiserIds) {
+          if (
+            removed.some((item) => annotationHasRiser(item, followedRiserId)) &&
+            !remaining.some((item) => annotationHasRiser(item, followedRiserId))
+          ) {
+            next = followSkipAdd(next, plan.id, followedRiserId);
+          }
+        }
+        return next;
+      });
+    }
     if (removed.length === 0) return;
     setHiddenOverlayAnnotations((prev) => {
       const next = [...prev];
@@ -560,7 +1287,7 @@ export function FloorPlanCropEditor({
       }
       return next;
     });
-  }, [selectedIndices, annotations, deleteSelected]);
+  }, [selectedIndices, annotations, deleteSelected, followedRiserIds, plan.id]);
 
   const handleClearAnnotations = useCallback(() => {
     clearAnnotations();
@@ -583,7 +1310,6 @@ export function FloorPlanCropEditor({
 
   useEffect(() => {
     if (lineOverlayPlans.length === 0) {
-      setLineOverlayEnabled(false);
       setLineOverlayPlanId("");
       return;
     }
@@ -595,11 +1321,10 @@ export function FloorPlanCropEditor({
     }
   }, [lineOverlayPlans, lineOverlayPlanId, plan.floorNumber]);
 
-  useEffect(() => {
-    if (!crossSetLinePlan) setShowCrossSetLines(false);
-  }, [crossSetLinePlan]);
-
   const loadedPlanIdRef = useRef<string | null>(null);
+  const skipAnnotationReloadRef = useRef(false);
+  const [markupReady, setMarkupReady] = useState(false);
+  markupReadyRef.current = markupReady;
   const savedAnnotationsRef = useRef(savedAnnotations);
   savedAnnotationsRef.current = savedAnnotations;
 
@@ -608,9 +1333,9 @@ export function FloorPlanCropEditor({
   }, [plan.id]);
 
   const pendingAnnotations = useMemo(
-    () => getAnnotationsForSave(),
+    () => mergePendingMarkup(),
     [
-      getAnnotationsForSave,
+      mergePendingMarkup,
       annotations,
       lineDraft,
       drawTool,
@@ -624,26 +1349,53 @@ export function FloorPlanCropEditor({
     [pendingAnnotations, savedAnnotations],
   );
   pendingAnnotationsRef.current = pendingAnnotations;
-  annotationsDirtyRef.current = annotationsDirty;
+  // Why: remount starts with [] vs server markup, which looks dirty. Persist
+  // only after the sheet has loaded or we overwrite an approve draft with [].
+  annotationsDirtyRef.current = markupReady && annotationsDirty;
 
   useEffect(() => {
+    // Mechanical markup is pass-scoped. The ribbon hydrates Pass 2 from
+    // localStorage in a layout effect; the first render is always Pass 1 so
+    // SSR HTML matches. Wait until that hydrate commits, otherwise this
+    // effect loads Pass 1 unlabeled boxes while the ribbon already says Pass 2.
+    if (drawingSet === "mechanical" && !ribbonReady) return;
     const planChanged = loadedPlanIdRef.current !== plan.id;
+    if (skipAnnotationReloadRef.current) {
+      skipAnnotationReloadRef.current = false;
+      loadedPlanIdRef.current = plan.id;
+      if (!annotationsDirtyRef.current) {
+        const initial = resolveFloorPlanAnnotationMarkup(
+          plan.id,
+          plan.annotations,
+        );
+        allMarkupRef.current = initial;
+        setSavedAnnotations(plan.annotations);
+      }
+      return;
+    }
     if (!planChanged && annotationsDirtyRef.current) return;
     loadedPlanIdRef.current = plan.id;
     const initial = resolveFloorPlanAnnotationMarkup(plan.id, plan.annotations);
+    allMarkupRef.current = initial;
     setSavedAnnotations(plan.annotations);
-    replaceAnnotations(initial);
-  }, [plan.id, plan.annotations, replaceAnnotations]);
+    replaceAnnotations(
+      drawingSet === "mechanical"
+        ? filterAnnotationsByMarkupSet(initial, markupSetRef.current)
+        : initial,
+    );
+    setMarkupReady(true);
+  }, [plan.id, plan.annotations, replaceAnnotations, drawingSet, ribbonReady]);
 
   useEffect(() => {
+    const planId = plan.id;
     return () => {
       if (annotationDraftTimerRef.current) {
         clearTimeout(annotationDraftTimerRef.current);
         annotationDraftTimerRef.current = null;
       }
-      if (annotationsDirtyRef.current) {
+      if (markupReadyRef.current && annotationsDirtyRef.current) {
         writeFloorPlanAnnotationDraft(
-          annotationPlanIdRef.current,
+          planId,
           pendingAnnotationsRef.current,
           savedAnnotationsRef.current,
         );
@@ -652,6 +1404,7 @@ export function FloorPlanCropEditor({
   }, [plan.id]);
 
   useEffect(() => {
+    if (!markupReady) return;
     if (!annotationsDirty) {
       if (floorPlanAnnotationsEqual(pendingAnnotations, savedAnnotations)) {
         clearFloorPlanAnnotationDraft(plan.id);
@@ -677,40 +1430,15 @@ export function FloorPlanCropEditor({
         annotationDraftTimerRef.current = null;
       }
     };
-  }, [annotationsDirty, pendingAnnotations, plan.id, savedAnnotations]);
+  }, [markupReady, annotationsDirty, pendingAnnotations, plan.id, savedAnnotations]);
 
   const [savingLines, setSavingLines] = useState(false);
-
-  const handleSaveAnnotations = useCallback(async () => {
-    const toSave = getAnnotationsForSave();
-    setSavingLines(true);
-    try {
-      await onSaveAnnotations(toSave);
-      replaceAnnotations(toSave);
-      setSavedAnnotations(toSave);
-      clearFloorPlanAnnotationDraft(plan.id);
-    } catch {
-      // Parent surfaces the error message.
-    } finally {
-      setSavingLines(false);
-    }
-  }, [getAnnotationsForSave, onSaveAnnotations, plan.id, replaceAnnotations]);
 
   const overlayPlan =
     overlayEnabled && overlayPlanId
       ? overlayPlans.find((item) => item.id === overlayPlanId) ?? null
       : null;
   const overlayActive = overlayPlan != null;
-  const calibrationPlan = useMemo(
-    () => resolvePinReferencePlan(settings, plans),
-    [settings, plans],
-  );
-  const suggestedPin = useMemo(() => {
-    if (!calibrationPlan || calibrationPlan.id === plan.id) return null;
-    if (!draftReferenceAnchor) return null;
-    return pinFromReferenceAnchor(calibrationPlan, draftReferenceAnchor, page);
-  }, [calibrationPlan, plan.id, draftReferenceAnchor, page]);
-  const anchorPin = resolveOverlayAnchorPin(draftPin, plan, suggestedPin);
   const lineOverlayPlan =
     lineOverlayPlanId
       ? lineOverlayPlans.find((item) => item.id === lineOverlayPlanId) ?? null
@@ -730,7 +1458,15 @@ export function FloorPlanCropEditor({
         : null,
     [allFamilies, crossSetLinePlan],
   );
-  const crossSetPlanHasMarkup = (crossSetLinePlan?.annotations.length ?? 0) > 0;
+  const lineOverlayStrokeFilter = lineOverlayColorFilter;
+  const hasLineOverlaySelection =
+    strokeColorFilterHasSelection(lineOverlayStrokeFilter);
+  const showSameSetLines =
+    lineOverlayEnabled && lineOverlayPlan != null && hasLineOverlaySelection;
+  const showCrossSetLines =
+    lineOverlayEnabled &&
+    crossSetLinePlan != null &&
+    hasLineOverlaySelection;
   const overlayFamily = useMemo(
     () =>
       overlayPlan
@@ -740,7 +1476,9 @@ export function FloorPlanCropEditor({
   );
   const overlayAnnotations = useMemo(() => {
     const mapped: FloorPlanAnnotation[] = [];
-    if (lineOverlayEnabled && lineOverlayPlan) {
+    const sameSetMarkupSet =
+      drawingSet === "mechanical" ? markupSet : undefined;
+    if (showSameSetLines && lineOverlayPlan) {
       mapped.push(
         ...filterAnnotationsByStrokeColors(
           mappedOverlayAnnotationsFromSource(
@@ -748,30 +1486,38 @@ export function FloorPlanCropEditor({
             lineOverlayFamily,
             anchorPin,
             family,
+            sameSetMarkupSet,
           ),
-          lineOverlayColorFilter,
+          lineOverlayStrokeFilter,
         ),
       );
     }
     if (showCrossSetLines && crossSetLinePlan) {
       mapped.push(
-        ...mappedOverlayAnnotationsFromSource(
-          crossSetLinePlan,
-          crossSetLineFamily,
-          anchorPin,
-          family,
+        ...filterAnnotationsByStrokeColors(
+          mappedOverlayAnnotationsFromSource(
+            crossSetLinePlan,
+            crossSetLineFamily,
+            anchorPin,
+            family,
+          ),
+          lineOverlayStrokeFilter,
         ),
       );
     }
     return excludeMatchingOverlayAnnotations(
       [...annotations, ...hiddenOverlayAnnotations],
       mapped,
+    ).filter((item) =>
+      followedRiserIds.length > 0
+        ? annotationVisibleWhileFollowingRiser(item, followedRiserIds)
+        : true,
     );
   }, [
-    lineOverlayEnabled,
+    showSameSetLines,
     lineOverlayPlan,
     lineOverlayFamily,
-    lineOverlayColorFilter,
+    lineOverlayStrokeFilter,
     showCrossSetLines,
     crossSetLinePlan,
     crossSetLineFamily,
@@ -779,8 +1525,343 @@ export function FloorPlanCropEditor({
     family,
     annotations,
     hiddenOverlayAnnotations,
+    drawingSet,
+    markupSet,
+    followedRiserIds,
   ]);
   referenceOverlayAnnotationsRef.current = overlayAnnotations;
+
+  const followedOverlayRaw = useMemo(() => {
+    if (drawingSet !== "mechanical") return [];
+    if (followedRiserIds.length === 0) return [];
+    const triggerIds = followedRiserIds.filter((id) => {
+      const riser = mechanicalRisers.find((item) => item.id === id);
+      if (!riser || riserIsCompleted(riser)) return false;
+      if (followSkipHas(followedRiserSkipped, plan.id, id)) return false;
+      return true;
+    });
+    if (triggerIds.length === 0) return [];
+    const skippedRiserIds = followedRiserSkipped
+      .filter((entry) => entry.planId === plan.id)
+      .map((entry) => entry.riserId);
+    return followedRiserOverlayAnnotations({
+      plans,
+      families,
+      plan,
+      family,
+      riserIds: triggerIds,
+      skippedRiserIds,
+      markupSet,
+      types: riserTypes,
+      risers: mechanicalRisers,
+      currentAnnotations: annotations,
+      anchorPin,
+    });
+  }, [
+    drawingSet,
+    followedRiserIds,
+    mechanicalRisers,
+    followedRiserSkipped,
+    plan,
+    family,
+    plans,
+    families,
+    markupSet,
+    riserTypes,
+    annotations,
+    anchorPin,
+  ]);
+  const followedOverlayAnnotations = useMemo(
+    () =>
+      applyFollowedRiserOffsets(
+        followedOverlayRaw,
+        plan.id,
+        followedRiserOffsets,
+      ),
+    [followedOverlayRaw, plan.id, followedRiserOffsets],
+  );
+  const followedRiserOffsetsRef = useRef(followedRiserOffsets);
+  followedRiserOffsetsRef.current = followedRiserOffsets;
+  const selectedFollowedRiserIdRef = useRef(selectedFollowedRiserId);
+  selectedFollowedRiserIdRef.current = selectedFollowedRiserId;
+  followedOverlayAnnotationsRef.current = followedOverlayAnnotations;
+
+  const clearFollowOffsetsForRisers = useCallback(
+    (riserIds: string[]) => {
+      if (riserIds.length === 0) return;
+      setFollowedRiserOffsets((prev) => {
+        let next = prev;
+        for (const id of riserIds) {
+          next = followOffsetSet(next, plan.id, id, 0, 0);
+        }
+        return next;
+      });
+    },
+    [plan.id],
+  );
+
+  const handleFollowedSelect = useCallback(
+    (riserId: string | null) => {
+      setSelectedFollowedRiserId(riserId);
+      if (riserId) {
+        setSelectedMark(null);
+        deselectAnnotations();
+      }
+    },
+    [deselectAnnotations],
+  );
+
+  const annotationsForFloor = useCallback(
+    (floorNumber: number) =>
+      plans
+        .filter((item) => item.floorNumber === floorNumber)
+        .flatMap((item) =>
+          item.id === plan.id
+            ? annotations
+            : filterAnnotationsByMarkupSet(
+                resolveFloorPlanAnnotationMarkup(item.id, item.annotations),
+                markupSet,
+              ),
+        ),
+    [plans, plan.id, annotations, markupSet],
+  );
+
+  const planIdForFloor = useCallback(
+    (floorNumber: number) => {
+      const onFloor = plans.filter((item) => item.floorNumber === floorNumber);
+      return (
+        onFloor.find((item) => item.familyId === plan.familyId)?.id ??
+        onFloor[0]?.id
+      );
+    },
+    [plans, plan.familyId],
+  );
+
+  const panToRiser = useCallback(
+    (riserId: string, floorNumber = plan.floorNumber): boolean => {
+      if (!expanded) return false;
+      const viewport = viewportRef.current;
+      if (!viewport) return false;
+      const viewportSize = {
+        width: viewport.clientWidth,
+        height: viewport.clientHeight,
+      };
+      if (viewportSize.width < 2 || viewportSize.height < 2) return false;
+
+      const floorAnnotations = annotationsForFloor(floorNumber);
+      const overlays =
+        floorNumber === plan.floorNumber ? followedOverlayAnnotations : [];
+      const point = findRiserFocusPoint(
+        riserId,
+        annotations,
+        overlays,
+        floorAnnotations,
+      );
+      if (!point) return false;
+
+      setView((current) =>
+        centerViewOnPagePoint(
+          current,
+          viewportSize,
+          point,
+          page.height,
+          scale,
+        ),
+      );
+      return true;
+    },
+    [
+      expanded,
+      plan.floorNumber,
+      annotationsForFloor,
+      annotations,
+      followedOverlayAnnotations,
+      page.height,
+      scale,
+    ],
+  );
+
+  const handleInventoryRiserClick = useCallback(
+    (args: { floorNumber: number; riserId: string; approved: boolean }) => {
+      if (args.floorNumber !== plan.floorNumber) {
+        const targetPlanId = planIdForFloor(args.floorNumber);
+        if (!targetPlanId) return;
+        setPendingInventoryRiserPan(args.riserId);
+        onSelectPlan?.(targetPlanId);
+        return;
+      }
+
+      if (!args.approved) {
+        handleFollowedSelect(args.riserId);
+      } else {
+        handleFollowedSelect(null);
+      }
+
+      if (!panToRiser(args.riserId, args.floorNumber)) {
+        setPendingInventoryRiserPan(args.riserId);
+      }
+    },
+    [
+      plan.floorNumber,
+      planIdForFloor,
+      onSelectPlan,
+      handleFollowedSelect,
+      panToRiser,
+    ],
+  );
+
+  useEffect(() => {
+    const pending = peekPendingInventoryRiserPan();
+    if (!pending || !expanded) return;
+
+    const attempt = () => {
+      if (!panToRiser(pending)) return;
+      clearPendingInventoryRiserPan();
+      const approvedHere = annotations.some((item) =>
+        annotationHasRiser(item, pending),
+      );
+      if (!approvedHere) {
+        handleFollowedSelect(pending);
+      }
+    };
+
+    const frame = requestAnimationFrame(() => {
+      requestAnimationFrame(attempt);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [
+    expanded,
+    plan.id,
+    annotations,
+    followedOverlayAnnotations,
+    panToRiser,
+    handleFollowedSelect,
+  ]);
+
+  const handleFollowedApprove = useCallback(
+    (index: number) => {
+      const overlays = followedOverlayAnnotationsRef.current;
+      const item = overlays[index];
+      if (!item) return;
+      const riserIds = overlayAnnotationRiserIds(item);
+      const toAdd =
+        riserIds.length > 0
+          ? overlayAnnotationsMatchingRisers(overlays, riserIds)
+          : [item];
+      appendAnnotations(toAdd);
+      const nextPending =
+        drawingSet === "mechanical"
+          ? mergeAnnotationsByMarkupSet(
+              allMarkupRef.current,
+              [...getAnnotationsForSave(), ...toAdd],
+              markupSetRef.current,
+            )
+          : [...getAnnotationsForSave(), ...toAdd];
+      writeFloorPlanAnnotationDraft(
+        plan.id,
+        nextPending,
+        savedAnnotationsRef.current,
+      );
+      clearFollowOffsetsForRisers(riserIds);
+      setSelectedFollowedRiserId(null);
+    },
+    [
+      appendAnnotations,
+      clearFollowOffsetsForRisers,
+      drawingSet,
+      getAnnotationsForSave,
+      plan.id,
+    ],
+  );
+
+  const handleFollowedDismiss = useCallback(
+    (index: number) => {
+      const item = followedOverlayAnnotationsRef.current[index];
+      if (!item) return;
+      const riserIds = overlayAnnotationRiserIds(item);
+      if (riserIds.length === 0) return;
+      setFollowedRiserSkipped((prev) => {
+        let next = prev;
+        for (const id of riserIds) {
+          next = followSkipAdd(next, plan.id, id);
+        }
+        return next;
+      });
+      clearFollowOffsetsForRisers(riserIds);
+      setSelectedFollowedRiserId((current) =>
+        current && riserIds.includes(current) ? null : current,
+      );
+    },
+    [clearFollowOffsetsForRisers, plan.id],
+  );
+
+  const handleFollowedMovePointerDown = useCallback(
+    (index: number, event: React.PointerEvent) => {
+      const item = followedOverlayAnnotationsRef.current[index];
+      if (!item) return;
+      const riserId = overlayAnnotationRiserIds(item)[0];
+      if (!riserId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      handleFollowedSelect(riserId);
+      const current = followOffsetGet(
+        followedRiserOffsetsRef.current,
+        plan.id,
+        riserId,
+      );
+      setFollowedMoveDrag({
+        riserId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startDx: current?.dx ?? 0,
+        startDy: current?.dy ?? 0,
+      });
+    },
+    [handleFollowedSelect, plan.id],
+  );
+
+  const handleSelectPointerDownWithFollow = useCallback(
+    (event: React.PointerEvent) => {
+      setSelectedFollowedRiserId(null);
+      onSelectPointerDown(event);
+    },
+    [onSelectPointerDown],
+  );
+
+  const handleSaveAnnotations = useCallback(async () => {
+    const active = getAnnotationsForSave();
+    const toSave =
+      drawingSet === "mechanical"
+        ? mergeAnnotationsByMarkupSet(
+            allMarkupRef.current,
+            active,
+            markupSetRef.current,
+          )
+        : active;
+    setSavingLines(true);
+    try {
+      await onSaveAnnotations(toSave);
+      allMarkupRef.current = toSave;
+      replaceAnnotations(
+        drawingSet === "mechanical"
+          ? filterAnnotationsByMarkupSet(toSave, markupSetRef.current)
+          : toSave,
+      );
+      setSavedAnnotations(toSave);
+      clearFloorPlanAnnotationDraft(plan.id);
+    } catch {
+      // Parent surfaces the error message.
+    } finally {
+      setSavingLines(false);
+    }
+  }, [
+    getAnnotationsForSave,
+    onSaveAnnotations,
+    plan.id,
+    replaceAnnotations,
+    drawingSet,
+  ]);
+
   const importOverlaySource = useMemo(() => {
     if (lineOverlayPlan && lineOverlayFamily) {
       return { plan: lineOverlayPlan, family: lineOverlayFamily };
@@ -804,12 +1885,16 @@ export function FloorPlanCropEditor({
             importOverlaySource.family,
             anchorPin,
             family,
+            drawingSet === "mechanical" &&
+              importOverlaySource.plan.id === lineOverlayPlan?.id
+              ? markupSet
+              : undefined,
           )
         : [];
     const filtered =
       lineOverlayPlan &&
       importOverlaySource?.plan.id === lineOverlayPlan.id
-        ? filterAnnotationsByStrokeColors(mapped, lineOverlayColorFilter)
+        ? filterAnnotationsByStrokeColors(mapped, lineOverlayStrokeFilter)
         : mapped;
     return filtered;
   }, [
@@ -817,7 +1902,9 @@ export function FloorPlanCropEditor({
     anchorPin,
     family,
     lineOverlayPlan,
-    lineOverlayColorFilter,
+    lineOverlayStrokeFilter,
+    drawingSet,
+    markupSet,
   ]);
 
   const handleImportOverlayLines = useCallback(async () => {
@@ -840,12 +1927,25 @@ export function FloorPlanCropEditor({
         : `Add ${toAdd.length} line(s) from ${sourceLabel} to this floor?`,
     );
     if (!confirmed) return;
-    const merged = [...current, ...toAdd];
+    const activeMerged = [...current, ...toAdd];
+    const toSave =
+      drawingSet === "mechanical"
+        ? mergeAnnotationsByMarkupSet(
+            allMarkupRef.current,
+            activeMerged,
+            markupSetRef.current,
+          )
+        : activeMerged;
     setSavingLines(true);
     try {
-      await onSaveAnnotations(merged);
-      replaceAnnotations(merged);
-      setSavedAnnotations(merged);
+      await onSaveAnnotations(toSave);
+      allMarkupRef.current = toSave;
+      replaceAnnotations(
+        drawingSet === "mechanical"
+          ? filterAnnotationsByMarkupSet(toSave, markupSetRef.current)
+          : toSave,
+      );
+      setSavedAnnotations(toSave);
       clearFloorPlanAnnotationDraft(plan.id);
       setLineOverlayEnabled(false);
       setHiddenOverlayAnnotations([]);
@@ -861,6 +1961,7 @@ export function FloorPlanCropEditor({
     onSaveAnnotations,
     replaceAnnotations,
     plan.id,
+    drawingSet,
   ]);
 
   const originalUrl = useMemo(
@@ -926,7 +2027,9 @@ export function FloorPlanCropEditor({
           })
         : null;
     if (sheetReason) return sheetReason;
-    if (!lineOverlayEnabled || !lineOverlayPlan || anchorPin) return null;
+    const lineOverlayNeedsPin =
+      (showSameSetLines && lineOverlayPlan != null) || showCrossSetLines;
+    if (!lineOverlayNeedsPin || anchorPin) return null;
     if (cropAwaitingPin) {
       return "Place the building pin first — the crop rectangle sits relative to it.";
     }
@@ -938,14 +2041,21 @@ export function FloorPlanCropEditor({
     overlayFamily,
     anchorPin,
     cropAwaitingPin,
-    lineOverlayEnabled,
+    showSameSetLines,
     lineOverlayPlan,
+    showCrossSetLines,
   ]);
   const buildingPinRequiredReason = useMemo(() => {
     if (anchorPin) return null;
-    if (lineOverlayPlans.length === 0 && overlayPlans.length === 0) return null;
+    if (
+      lineOverlayPlans.length === 0 &&
+      overlayPlans.length === 0 &&
+      crossSetLinePlan == null
+    ) {
+      return null;
+    }
     return "Building pin not set on this floor — click the drawing to place the red crosshair, then save.";
-  }, [anchorPin, lineOverlayPlans.length, overlayPlans.length]);
+  }, [anchorPin, lineOverlayPlans.length, overlayPlans.length, crossSetLinePlan]);
   const overlayRenderable = overlayActive && overlayLayout != null;
   const overlayLocked = overlayActive && familyCropSizeLocked(familySize);
   const familyFitsPage =
@@ -1028,7 +2138,6 @@ export function FloorPlanCropEditor({
     setResizeFamily(false);
     setResizeChoiceOpen(false);
     setNewFamilyName("");
-    onToolChange("none");
     setCrop(
       initialCrop(
         plan,
@@ -1063,7 +2172,6 @@ export function FloorPlanCropEditor({
     };
   }, [expanded]);
 
-  const fittedForExpandRef = useRef(false);
   const pageForFitRef = useRef(page);
   pageForFitRef.current = page;
   const scaleForFitRef = useRef(scale);
@@ -1073,23 +2181,162 @@ export function FloorPlanCropEditor({
     if (expanded) return;
     setView(IDENTITY_VIEW);
     fittedForExpandRef.current = false;
+    lastViewportSizeRef.current = { width: 0, height: 0 };
   }, [expanded]);
 
   const onViewportSize = useCallback((width: number, height: number) => {
-    if (!expanded || fittedForExpandRef.current) return;
+    if (!expanded) return;
     const viewport = viewportRef.current;
     if (!viewport || width < 2 || height < 2) return;
-    // Fit once when the full-screen viewport is measured. Re-fitting later
-    // (PDF page size, clip raster) would yank zoom after the user started.
-    setView(fitView(viewport, pageForFitRef.current, scaleForFitRef.current));
-    fittedForExpandRef.current = true;
+
+    if (!fittedForExpandRef.current) {
+      // Restore the last pin-relative view when switching sheets, otherwise fit
+      // once. Re-fitting later (PDF page size, clip raster) would yank zoom.
+      fittedForExpandRef.current = true;
+      lastViewportSizeRef.current = { width, height };
+      const pin = draftPinRef.current;
+      const restored = restoredEditView(
+        true,
+        pin,
+        pageForFitRef.current,
+        scaleForFitRef.current,
+      );
+      if (restored) {
+        setView(restored);
+        return;
+      }
+      setView(fitView(viewport, pageForFitRef.current, scaleForFitRef.current));
+      return;
+    }
+
+    // Switching sheets remounts this editor (`key={plan.id}`), so
+    // lastViewportSize starts at 0×0. A grow-from-zero recenter would pan by
+    // half the viewport (down-right) on every floor while leaving zoom alone.
+    const previous = lastViewportSizeRef.current;
+    const resize = viewportResizePanAction(previous, { width, height });
+    if (resize.action === "none") return;
+    lastViewportSizeRef.current = { width, height };
+    if (resize.action === "seed") return;
+
+    setView((current) => ({
+      ...current,
+      x: current.x + resize.x,
+      y: current.y + resize.y,
+    }));
   }, [expanded]);
+
+  useLayoutEffect(() => {
+    const stored = hydrateFloorPlanEditRibbonFromStorage();
+    setOverlayEnabled(stored.overlayEnabled);
+    setLineOverlayEnabled(
+      stored.lineOverlayEnabled || stored.showCrossSetLines,
+    );
+    setLineOverlayColorFilter(stored.lineOverlayColorFilter);
+    if (drawingSet === "mechanical") {
+      const nextSet = parseMechanicalMarkupSet(stored.markupSet);
+      // Why: the annotation-load effect reads this ref. Set it before
+      // setState so a same-commit load cannot keep the SSR default Pass 1.
+      markupSetRef.current = nextSet;
+      setMarkupSet(nextSet);
+      setFollowedRiserIds(stored.followedRiserIds);
+      setFollowedRiserSkipped(stored.followedRiserSkipped);
+      setFollowedRiserOffsets(stored.followedRiserOffsets);
+      setRiserInventoryOpen(stored.riserInventoryOpen);
+    }
+    setShowPin(stored.showPin);
+    setShowReferenceAnchor(stored.showReferenceAnchor);
+    setShowCrop(stored.showCrop);
+    setShowLines(stored.showLines);
+    setShowRiserLabels(stored.showRiserLabels);
+    setExtendMarkupBounds(stored.extendMarkupBounds);
+    onToolChange(stored.drawTool);
+    setRectangleVariant(stored.rectangleVariant);
+    setCircleVariant(stored.circleVariant);
+    setStrokeColor(stored.strokeColor);
+    setStrokeWidthPt(stored.strokeWidthPt);
+    setRibbonReady(true);
+    // Restore once after hydration so the first client render matches SSR
+    // defaults. localStorage is client-only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only restore
+  }, []);
+
+  useEffect(() => {
+    if (!ribbonReady) return;
+    writeFloorPlanEditRibbonSession({
+      drawTool,
+      rectangleVariant,
+      circleVariant,
+      strokeColor,
+      strokeWidthPt,
+      showPin,
+      showReferenceAnchor,
+      showCrop,
+      showLines,
+      showRiserLabels,
+      extendMarkupBounds,
+      showCrossSetLines,
+      overlayEnabled,
+      lineOverlayEnabled,
+      lineOverlayColorFilter,
+      markupSet,
+      riserInventoryOpen,
+      followedRiserIds,
+      followedRiserSkipped,
+      followedRiserOffsets,
+    });
+  }, [
+    ribbonReady,
+    drawTool,
+    rectangleVariant,
+    circleVariant,
+    strokeColor,
+    strokeWidthPt,
+    showPin,
+    showReferenceAnchor,
+    showCrop,
+    showLines,
+    showRiserLabels,
+    extendMarkupBounds,
+    showCrossSetLines,
+    overlayEnabled,
+    lineOverlayEnabled,
+    lineOverlayColorFilter,
+    markupSet,
+    riserInventoryOpen,
+    followedRiserIds,
+    followedRiserSkipped,
+    followedRiserOffsets,
+  ]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    if (!fittedForExpandRef.current) return;
+    const persistView = () => {
+      const pin = draftPinRef.current;
+      if (!pin) return;
+      writeFloorPlanEditViewSession(
+        pinRelativeViewFromTransform(
+          viewRef.current,
+          pin,
+          pageForFitRef.current.height,
+          scaleForFitRef.current,
+        ),
+      );
+    };
+    persistView();
+    return persistView;
+  }, [expanded, view, draftPin, page.height, scale]);
 
   useEffect(() => {
     if (!expanded) return;
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        if (selectedFollowedRiserIdRef.current) {
+          setSelectedFollowedRiserId(null);
+          event.preventDefault();
+          return;
+        }
         if (handleEscape()) return;
         onExpandedChange(false);
         return;
@@ -1341,6 +2588,7 @@ export function FloorPlanCropEditor({
       if (!draftPinRef.current) return;
       event.preventDefault();
       event.stopPropagation();
+      setSelectedMark("building");
       setPinDrag({
         startX: event.clientX,
         startY: event.clientY,
@@ -1355,6 +2603,7 @@ export function FloorPlanCropEditor({
       if (!draftReferenceAnchorRef.current) return;
       event.preventDefault();
       event.stopPropagation();
+      setSelectedMark("reference");
       setReferenceAnchorDrag({
         startX: event.clientX,
         startY: event.clientY,
@@ -1458,25 +2707,152 @@ export function FloorPlanCropEditor({
   }, [referenceAnchorDrag, page, scale, expanded, applyReferenceAnchor]);
 
   useEffect(() => {
-    if (embeddedExpanded) return;
+    onSelectedMarkChange?.(selectedMark);
+  }, [onSelectedMarkChange, selectedMark]);
 
+  useEffect(() => {
+    setSelectedMark(null);
+  }, [plan.id]);
+
+  useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (isTypingTarget(event.target)) return;
-      if (!draftPinRef.current) return;
+      if (!selectedMark) return;
       const step = event.shiftKey ? 10 : 1;
       let next: PdfPoint | null = null;
-      const pin = draftPinRef.current;
-      if (event.key === "ArrowLeft") next = nudgePin(pin, -step, 0, page);
-      if (event.key === "ArrowRight") next = nudgePin(pin, step, 0, page);
-      if (event.key === "ArrowDown") next = nudgePin(pin, 0, -step, page);
-      if (event.key === "ArrowUp") next = nudgePin(pin, 0, step, page);
-      if (!next) return;
-      event.preventDefault();
-      applyPin(next);
+      if (selectedMark === "building" && draftPinRef.current) {
+        const pin = draftPinRef.current;
+        if (event.key === "ArrowLeft") next = nudgePin(pin, -step, 0, page);
+        if (event.key === "ArrowRight") next = nudgePin(pin, step, 0, page);
+        if (event.key === "ArrowDown") next = nudgePin(pin, 0, -step, page);
+        if (event.key === "ArrowUp") next = nudgePin(pin, 0, step, page);
+        if (!next) return;
+        event.preventDefault();
+        event.stopPropagation();
+        applyPin(next);
+        return;
+      }
+      if (selectedMark === "reference" && draftReferenceAnchorRef.current) {
+        const anchor = draftReferenceAnchorRef.current;
+        if (event.key === "ArrowLeft") next = nudgePin(anchor, -step, 0, page);
+        if (event.key === "ArrowRight") next = nudgePin(anchor, step, 0, page);
+        if (event.key === "ArrowDown") next = nudgePin(anchor, 0, -step, page);
+        if (event.key === "ArrowUp") next = nudgePin(anchor, 0, step, page);
+        if (!next) return;
+        event.preventDefault();
+        event.stopPropagation();
+        applyReferenceAnchor(next);
+      }
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [applyPin, page, embeddedExpanded]);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [applyPin, applyReferenceAnchor, page, selectedMark]);
+
+  useEffect(() => {
+    if (!followedMoveDrag) return;
+
+    function clientDeltaToPdf(event: PointerEvent): { dx: number; dy: number } | null {
+      const pageEl = pageRef.current;
+      if (!pageEl) return null;
+      const bounds = pageEl.getBoundingClientRect();
+      if (bounds.width <= 0 || bounds.height <= 0) return null;
+      const sx = pageEl.offsetWidth / bounds.width;
+      const sy = pageEl.offsetHeight / bounds.height;
+      return {
+        dx: ((event.clientX - followedMoveDrag.startX) * sx) / scale,
+        dy: -((event.clientY - followedMoveDrag.startY) * sy) / scale,
+      };
+    }
+
+    function onMove(event: PointerEvent) {
+      const delta = clientDeltaToPdf(event);
+      if (!delta) return;
+      setFollowedRiserOffsets((prev) =>
+        followOffsetSet(
+          prev,
+          plan.id,
+          followedMoveDrag.riserId,
+          followedMoveDrag.startDx + delta.dx,
+          followedMoveDrag.startDy + delta.dy,
+        ),
+      );
+    }
+
+    function onUp() {
+      setFollowedMoveDrag(null);
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [followedMoveDrag, plan.id, scale]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (isTypingTarget(event.target)) return;
+      const riserId = selectedFollowedRiserIdRef.current;
+      if (!riserId) return;
+      if (event.key === "Escape") {
+        setSelectedFollowedRiserId(null);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.key === "Delete" || event.key === "Backspace") {
+        const overlays = followedOverlayAnnotationsRef.current;
+        const index = overlays.findIndex((item) =>
+          overlayAnnotationRiserIds(item).includes(riserId),
+        );
+        if (index >= 0) handleFollowedDismiss(index);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      const step = pdfDeltaPerScreenPixel(
+        scale,
+        expanded ? viewRef.current.zoom : 1,
+      );
+      let dx = 0;
+      let dy = 0;
+      switch (event.key) {
+        case "ArrowLeft":
+          dx = -step;
+          break;
+        case "ArrowRight":
+          dx = step;
+          break;
+        case "ArrowUp":
+          dy = step;
+          break;
+        case "ArrowDown":
+          dy = -step;
+          break;
+        default:
+          return;
+      }
+      const current = followOffsetGet(
+        followedRiserOffsetsRef.current,
+        plan.id,
+        riserId,
+      );
+      setFollowedRiserOffsets((prev) =>
+        followOffsetSet(
+          prev,
+          plan.id,
+          riserId,
+          (current?.dx ?? 0) + dx,
+          (current?.dy ?? 0) + dy,
+        ),
+      );
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [expanded, handleFollowedDismiss, plan.id, scale]);
 
   useEffect(() => {
     if (!expanded || draftPin || placingReferenceAnchor) return;
@@ -1656,8 +3032,15 @@ export function FloorPlanCropEditor({
   const onBackgroundPointerDown = (event: React.PointerEvent) => {
     if (!expanded || event.button !== 0) return;
     if (event.ctrlKey) return;
+    if (standardizeClipMode) {
+      event.preventDefault();
+      event.stopPropagation();
+      beginStandardizeClipDrag(event);
+      return;
+    }
     if (drawingActive) return;
     if (selectionInteractive) {
+      setSelectedMark(null);
       onSelectPointerDown(event);
       return;
     }
@@ -1673,7 +3056,11 @@ export function FloorPlanCropEditor({
       };
       return;
     }
-    if (draftPinRef.current) return;
+    if (draftPinRef.current) {
+      setSelectedMark(null);
+      return;
+    }
+    setSelectedMark(null);
     event.preventDefault();
     placeGestureRef.current = {
       startX: event.clientX,
@@ -1746,6 +3133,34 @@ export function FloorPlanCropEditor({
     setView(fitView(viewport, page, scale));
   };
 
+  const savedMarkupExtent = useMemo(() => {
+    if (!extendMarkupBounds) return null;
+    return pdfMarkupExtent(page.width, page.height, annotations);
+  }, [extendMarkupBounds, page.width, page.height, annotations]);
+
+  const hasOffCanvasMarkup = useMemo(
+    () =>
+      savedMarkupExtent != null &&
+      markupExtentExceedsPage(savedMarkupExtent, page.width, page.height),
+    [savedMarkupExtent, page.width, page.height],
+  );
+
+  const fitMarkupView = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !savedMarkupExtent) return;
+    setView(
+      fitPanZoomToPdfExtent(
+        viewport,
+        savedMarkupExtent,
+        page.height,
+        scale,
+        FIT_PAD,
+        ZOOM_MIN,
+        ZOOM_MAX,
+      ),
+    );
+  }, [savedMarkupExtent, page.height, scale]);
+
   useEffect(() => {
     if (!expanded || !mounted) return;
     const viewport = viewportRef.current;
@@ -1777,6 +3192,7 @@ export function FloorPlanCropEditor({
       zoom={view.zoom}
       onZoomBy={(factor) => zoomBy(factor)}
       onReset={resetView}
+      onFitMarkup={hasOffCanvasMarkup ? fitMarkupView : undefined}
     />
   );
 
@@ -1790,6 +3206,8 @@ export function FloorPlanCropEditor({
       strokeWidthPt={strokeWidthPt}
       annotationCount={annotations.length}
       selectedCount={selectedIndices.length}
+      selectedRiserConnection={selectedRiserAboveId != null}
+      onFlipRiserDirection={flipSelectedRiserDirection}
       onToolChange={onToolChange}
       onRectangleVariantChange={setRectangleVariant}
       onCircleVariantChange={setCircleVariant}
@@ -1808,11 +3226,50 @@ export function FloorPlanCropEditor({
       cropAwaitingPin={cropAwaitingPin}
       showLines={showLines}
       onShowLinesChange={setShowLines}
-      crossSetLinesAvailable={crossSetLinePlan != null}
-      crossSetLinesLabel={crossSetLinesLabel}
-      crossSetLinesHasMarkup={crossSetPlanHasMarkup}
-      showCrossSetLines={showCrossSetLines}
-      onShowCrossSetLinesChange={setShowCrossSetLines}
+      showRiserLabels={showRiserLabels}
+      onShowRiserLabelsChange={setShowRiserLabels}
+      extendMarkupBounds={extendMarkupBounds}
+      onExtendMarkupBoundsChange={setExtendMarkupBounds}
+      hasOffCanvasMarkup={hasOffCanvasMarkup}
+      onFitMarkupView={hasOffCanvasMarkup ? fitMarkupView : undefined}
+      defaultColorFamily={drawingSet}
+      showCalloutTool={drawingSet === "mechanical"}
+      markupSet={markupSet}
+      onMarkupSetChange={handleMarkupSetChange}
+      riserTypes={riserTypes}
+      risers={mechanicalRisers}
+      followedRiserIds={followedRiserIds}
+      onFollowedRiserIds={(ids) => {
+        const added = ids.filter((id) => !followedRiserIds.includes(id));
+        if (added.length > 0) {
+          setFollowedRiserSkipped((prev) => {
+            let next = prev;
+            for (const id of added) {
+              next = followSkipClear(next, plan.id, id);
+            }
+            return next;
+          });
+        }
+        setSelectedFollowedRiserId((current) =>
+          current && ids.includes(current) ? current : null,
+        );
+        setFollowedRiserIds(ids);
+      }}
+      onFollowedRiserCompleted={handleFollowedRiserCompleted}
+      riserInventoryOpen={riserInventoryOpen}
+      onRiserInventoryOpen={setRiserInventoryOpen}
+      onStandardizeOpen={() => {
+        setStandardizeClipRect(null);
+        setStandardizeClipHint(null);
+        setStandardizeClipMode(true);
+      }}
+      rooms={roomList}
+      listHoverRoomIndex={listHoverRoomIndex}
+      onListHoverRoomIndex={setListHoverRoomIndex}
+      onRoomLabelChange={onRoomLabelChange}
+      onRoomDelete={deleteRoom}
+      leakMaxGapPt={leakMaxGapPt}
+      onLeakMaxGapChange={setLeakMaxGapPt}
       overlayPlans={overlayPlans}
       overlayEnabled={overlayEnabled}
       overlayPlanId={overlayPlanId}
@@ -1852,12 +3309,32 @@ export function FloorPlanCropEditor({
           setLineOverlayEnabled(false);
         }
       }}
-      showLineOverlay={lineOverlayPlans.length > 0}
+      showLineOverlay={
+        lineOverlayPlans.length > 0 || crossSetLinePlan != null
+      }
       buildingPinRequiredReason={buildingPinRequiredReason}
       overlayBlockedReason={overlayBlockedReason}
       trailing={trailing}
     />
   );
+
+  const standardizeClipDraftScreen = useMemo(() => {
+    if (!standardizeClipDrag) return null;
+    const minX = Math.min(standardizeClipDrag.start.x, standardizeClipDrag.current.x);
+    const maxX = Math.max(standardizeClipDrag.start.x, standardizeClipDrag.current.x);
+    const minY = Math.min(standardizeClipDrag.start.y, standardizeClipDrag.current.y);
+    const maxY = Math.max(standardizeClipDrag.start.y, standardizeClipDrag.current.y);
+    return pdfRectToCanvas(
+      {
+        x: minX,
+        y: minY,
+        width: maxX - minX,
+        height: maxY - minY,
+      },
+      page.height,
+      scale,
+    );
+  }, [standardizeClipDrag, page.height, scale]);
 
   const stage = (
     <CropStage
@@ -1877,6 +3354,7 @@ export function FloorPlanCropEditor({
       baseOpacity={overlayRenderable ? EDIT_OVERLAY_OPACITY : 1}
       showCrop={cropChromeVisible}
       showLines={showLines}
+      showRiserLabels={showRiserLabels}
       placingPin={placingPin}
       placingAnchor={placingAnchor}
       buildingPinViewport={buildingPinViewport}
@@ -1887,6 +3365,7 @@ export function FloorPlanCropEditor({
       suggestedPinOnPage={!expanded ? suggestedPinOnPage : null}
       onPinDragStart={beginPinDrag}
       onReferenceAnchorDragStart={beginReferenceAnchorDrag}
+      onClearSelectedMark={() => setSelectedMark(null)}
       onInlinePlacePin={(event) => {
         if (placingReferenceAnchor) {
           if (markupSelectable) deselectAnnotations();
@@ -1921,25 +3400,79 @@ export function FloorPlanCropEditor({
       cutDraft={cutDraft}
       connectDraftIndex={connectDraftIndex}
       connectHoverIndex={connectHoverIndex}
+      connectDraftOverlayIndex={connectDraftOverlayIndex}
+      connectHoverOverlayIndex={connectHoverOverlayIndex}
+      selectedRiserAboveId={selectedRiserAboveId}
+      hoverRiserAboveId={hoverRiserAboveId}
       hoverSnap={hoverSnap}
       hoverVertex={hoverVertex}
       vertexDrag={vertexDrag}
+      hoverRoom={hoverRoom}
+      hoverLeaks={hoverLeaks}
+      listHoverRoomIndex={listHoverRoomIndex}
+      editingRoomIndex={editingRoomIndex}
+      shapeDragging={shapeDragging}
       draftColor={strokeColor}
       draftStrokeWidthPt={strokeWidthPt}
+      editingCalloutIndex={editingCalloutIndex}
+      calloutInteractive={
+        (selectionInteractive || drawTool === "callout") && showLines
+      }
       onDrawPointerDown={onDrawPointerDown}
       onDrawPointerMove={onDrawPointerMove}
       onDrawPointerUp={onDrawPointerUp}
-      onSelectPointerDown={onSelectPointerDown}
+      onSelectPointerDown={handleSelectPointerDownWithFollow}
       onSelectPointerMove={onSelectPointerMove}
       onSelectPointerUp={onSelectPointerUp}
       onVertexPointerDown={onVertexPointerDown}
-      onAnnotationSelect={onAnnotationSelect}
-      onDeselectAnnotations={deselectAnnotations}
+      onAnnotationSelect={(index, event) => {
+        setSelectedFollowedRiserId(null);
+        onAnnotationSelect(index, event);
+      }}
+      onRiserSelect={onRiserSelect}
+      onCalloutPointerDown={onCalloutPointerDown}
+      onCalloutTextChange={onCalloutTextChange}
+      onCalloutCommit={onCalloutCommit}
+      onCalloutRemove={onCalloutRemove}
+      onRoomLabelChange={onRoomLabelChange}
+      onRoomCommit={onRoomCommit}
+      calloutCatalogMode={drawingSet === "mechanical"}
+      riserTypes={riserTypes}
+      mechanicalRisers={mechanicalRisers}
+      catalogSaving={catalogSaving}
+      onCalloutCatalogAssign={handleCalloutCatalogAssign}
+      onCalloutCatalogType={handleCalloutCatalogType}
+      onCalloutCatalogReclassify={handleCalloutCatalogReclassify}
+      onCalloutCatalogEnsureRiser={handleCalloutCatalogEnsureRiser}
+      onDeselectAnnotations={() => {
+        deselectAnnotations();
+        setSelectedFollowedRiserId(null);
+      }}
       overlayAnnotations={overlayAnnotations}
+      followedOverlayAnnotations={followedOverlayAnnotations}
+      followedRiserIds={followedRiserIds}
+      selectedFollowedRiserId={selectedFollowedRiserId}
+      onFollowedApprove={handleFollowedApprove}
+      onFollowedDismiss={handleFollowedDismiss}
+      onFollowedMovePointerDown={handleFollowedMovePointerDown}
+      onFollowedSelect={handleFollowedSelect}
       lineOverlayOpacity={LINE_OVERLAY_OPACITY}
-      showLineOverlayAnnotations={
-        lineOverlayEnabled || showCrossSetLines
+      showLineOverlayAnnotations={lineOverlayEnabled}
+      markupExtent={savedMarkupExtent}
+      overlayPanel={
+        drawingSet === "mechanical" && riserInventoryOpen ? (
+          <RiserInventoryPanel
+            floors={taggedRiserFloors}
+            markupSet={markupSet}
+            onClose={() => setRiserInventoryOpen(false)}
+            onRiserClick={handleInventoryRiserClick}
+          />
+        ) : null
       }
+      standardizeClipMode={standardizeClipMode}
+      standardizeClipDraftScreen={standardizeClipDraftScreen}
+      standardizeClipHint={standardizeClipHint}
+      onStandardizeClipPointerDown={beginStandardizeClipDrag}
     />
   );
 
@@ -2180,11 +3713,74 @@ export function FloorPlanCropEditor({
       document.body,
     );
 
+  const connectRiserChoiceDialog =
+    mounted &&
+    connectRiserChoice != null &&
+    createPortal(
+      <ConnectRiserCalloutDialog
+        riserIds={connectRiserChoice.riserIds}
+        types={riserTypes}
+        risers={mechanicalRisers}
+        onConfirm={(ids) =>
+          confirmConnectRiserChoice(ids, {
+            types: riserTypes,
+            risers: mechanicalRisers,
+          })
+        }
+        onCancel={cancelConnectRiserChoice}
+      />,
+      document.body,
+    );
+
+  const selectedAnnotations = useMemo(
+    () =>
+      selectedIndices
+        .map((index) => annotations[index])
+        .filter((item): item is FloorPlanAnnotation => item != null),
+    [selectedIndices, annotations],
+  );
+
+  const standardizeClipBanner =
+    standardizeClipMode ? (
+      <div className="pointer-events-none absolute inset-x-0 top-2 z-50 flex justify-center px-3">
+        <div className="rounded-lg border border-slate-900/20 bg-slate-900/90 px-3 py-2 text-center text-xs font-medium text-white shadow-lg">
+          {standardizeClipHint ??
+            "Draw a rectangle around a riser on the plan (Esc to cancel)"}
+        </div>
+      </div>
+    ) : null;
+
+  const standardizeDialog =
+    standardizeClipRect != null ? (
+    <StandardizeRisersDialog
+      open={standardizeDialogOpen}
+      onClose={() => {
+        setStandardizeDialogOpen(false);
+        setStandardizeClipRect(null);
+      }}
+      currentPlan={plan}
+      allPlans={allPlans}
+      riserTypes={riserTypes}
+      risers={mechanicalRisers}
+      savedTemplates={settings.riserTemplates}
+      annotations={annotations}
+      selectedAnnotations={selectedAnnotations}
+      onSaveTemplate={handleSaveRiserTemplate}
+      onProceed={handleStandardizeProceed}
+      onPanToPoint={handlePanToPdfPoint}
+      pdfUrl={originalUrl}
+      pageHeight={page.height}
+      clipRect={standardizeClipRect}
+    />
+  ) : null;
+
   if (!expanded) {
     return (
       <>
         {inlineEditor}
         {resizeChoiceDialog}
+        {connectRiserChoiceDialog}
+        {standardizeDialog}
       </>
     );
   }
@@ -2194,10 +3790,15 @@ export function FloorPlanCropEditor({
       <>
         <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-3">
           {renderEditorRibbon(zoomToolbar)}
-          <div className="min-h-0 flex-1">{stage}</div>
+          <div className="relative min-h-0 flex-1">
+            {standardizeClipBanner}
+            {stage}
+          </div>
           {saveRow}
         </div>
         {resizeChoiceDialog}
+        {connectRiserChoiceDialog}
+        {standardizeDialog}
       </>
     );
   }
@@ -2229,7 +3830,10 @@ export function FloorPlanCropEditor({
               Close
             </button>
           </div>
-          <div className="min-h-0 flex-1">{stage}</div>
+          <div className="relative min-h-0 flex-1">
+            {standardizeClipBanner}
+            {stage}
+          </div>
           <div className="shrink-0 border-t border-slate-200 px-4 py-3">
             {saveRow}
           </div>
@@ -2245,6 +3849,8 @@ export function FloorPlanCropEditor({
       </div>
       {modal}
       {resizeChoiceDialog}
+      {connectRiserChoiceDialog}
+      {standardizeDialog}
     </>
   );
 }
@@ -2266,6 +3872,7 @@ function CropStage({
   baseOpacity,
   showCrop,
   showLines,
+  showRiserLabels,
   placingPin,
   placingAnchor,
   buildingPinViewport,
@@ -2274,8 +3881,10 @@ function CropStage({
   referenceAnchorOnPage,
   suggestedPinViewport,
   suggestedPinOnPage,
+  selectedMark,
   onPinDragStart,
   onReferenceAnchorDragStart,
+  onClearSelectedMark,
   onInlinePlacePin,
   registrationLegend,
   markupLegend,
@@ -2297,11 +3906,22 @@ function CropStage({
   cutDraft,
   connectDraftIndex,
   connectHoverIndex,
+  connectDraftOverlayIndex,
+  connectHoverOverlayIndex,
+  selectedRiserAboveId,
+  hoverRiserAboveId,
   hoverSnap,
   hoverVertex,
   vertexDrag,
+  hoverRoom = null,
+  hoverLeaks = [],
+  listHoverRoomIndex = null,
+  editingRoomIndex = null,
+  shapeDragging = false,
   draftColor,
   draftStrokeWidthPt,
+  editingCalloutIndex,
+  calloutInteractive,
   onDrawPointerDown,
   onDrawPointerMove,
   onDrawPointerUp,
@@ -2310,10 +3930,38 @@ function CropStage({
   onSelectPointerUp,
   onVertexPointerDown,
   onAnnotationSelect,
+  onRiserSelect,
+  onCalloutPointerDown,
+  onCalloutTextChange,
+  onCalloutCommit,
+  onCalloutRemove,
+  onRoomLabelChange,
+  onRoomCommit,
+  calloutCatalogMode = false,
+  riserTypes = [],
+  mechanicalRisers = [],
+  catalogSaving = false,
+  onCalloutCatalogAssign,
+  onCalloutCatalogType,
+  onCalloutCatalogReclassify,
+  onCalloutCatalogEnsureRiser,
   onDeselectAnnotations,
   overlayAnnotations,
+  followedOverlayAnnotations = [],
+  followedRiserIds = [],
+  selectedFollowedRiserId = null,
+  onFollowedApprove,
+  onFollowedDismiss,
+  onFollowedMovePointerDown,
+  onFollowedSelect,
   lineOverlayOpacity,
   showLineOverlayAnnotations,
+  markupExtent = null,
+  overlayPanel = null,
+  standardizeClipMode = false,
+  standardizeClipDraftScreen = null,
+  standardizeClipHint = null,
+  onStandardizeClipPointerDown,
 }: {
   expanded: boolean;
   view: ViewTransform;
@@ -2331,6 +3979,7 @@ function CropStage({
   baseOpacity: number;
   showCrop: boolean;
   showLines: boolean;
+  showRiserLabels: boolean;
   placingPin: boolean;
   placingAnchor: boolean;
   buildingPinViewport: { x: number; y: number } | null;
@@ -2339,8 +3988,10 @@ function CropStage({
   referenceAnchorOnPage: { x: number; y: number } | null;
   suggestedPinViewport: { x: number; y: number } | null;
   suggestedPinOnPage: { x: number; y: number } | null;
+  selectedMark: "building" | "reference" | null;
   onPinDragStart: (event: React.PointerEvent) => void;
   onReferenceAnchorDragStart: (event: React.PointerEvent) => void;
+  onClearSelectedMark: () => void;
   onInlinePlacePin: (event: React.MouseEvent<HTMLDivElement>) => void;
   registrationLegend: RegistrationLegendItem[];
   markupLegend: RegistrationLegendItem[];
@@ -2365,11 +4016,22 @@ function CropStage({
   cutDraft: CutDraft | null;
   connectDraftIndex: number | null;
   connectHoverIndex: number | null;
+  connectDraftOverlayIndex: number | null;
+  connectHoverOverlayIndex: number | null;
+  selectedRiserAboveId: string | null;
+  hoverRiserAboveId: string | null;
   hoverSnap: SnapResult | null;
   hoverVertex: VertexHover | null;
   vertexDrag: VertexDragDraft | null;
+  hoverRoom?: RoomFace | null;
+  hoverLeaks?: RoomLeak[];
+  listHoverRoomIndex?: number | null;
+  editingRoomIndex?: number | null;
+  shapeDragging?: boolean;
   draftColor: string;
   draftStrokeWidthPt: number;
+  editingCalloutIndex: number | null;
+  calloutInteractive: boolean;
   onDrawPointerDown: (event: React.PointerEvent<SVGSVGElement>) => void;
   onDrawPointerMove: (event: React.PointerEvent<SVGSVGElement>) => void;
   onDrawPointerUp: (event: React.PointerEvent<SVGSVGElement>) => void;
@@ -2385,10 +4047,59 @@ function CropStage({
     index: number,
     event: React.PointerEvent<SVGPathElement>,
   ) => void;
+  onRiserSelect: (
+    aboveId: string,
+    event: React.PointerEvent<SVGLineElement>,
+  ) => void;
+  onCalloutPointerDown: (
+    index: number,
+    event: React.PointerEvent,
+  ) => void;
+  onCalloutTextChange: (index: number, text: string) => void;
+  onCalloutCommit: () => void;
+  onCalloutRemove: (index: number) => void;
+  onRoomLabelChange?: (index: number, text: string) => void;
+  onRoomCommit?: () => void;
+  calloutCatalogMode?: boolean;
+  riserTypes?: MechanicalRiserTypeDto[];
+  mechanicalRisers?: MechanicalRiserDto[];
+  catalogSaving?: boolean;
+  onCalloutCatalogAssign?: (
+    index: number,
+    typeId: string,
+    riserIds: string[],
+  ) => void;
+  onCalloutCatalogType?: (index: number, typeId: string) => void;
+  onCalloutCatalogReclassify?: (
+    riserIds: string[],
+    typeId: string,
+  ) => Promise<RiserIdRewrite | null>;
+  onCalloutCatalogEnsureRiser?: (
+    typeId: string,
+    label: string,
+  ) => Promise<string | null>;
   onDeselectAnnotations: () => void;
   overlayAnnotations: FloorPlanAnnotation[];
+  followedOverlayAnnotations?: FloorPlanAnnotation[];
+  followedRiserIds?: string[];
+  selectedFollowedRiserId?: string | null;
+  onFollowedApprove?: (index: number) => void;
+  onFollowedDismiss?: (index: number) => void;
+  onFollowedMovePointerDown?: (
+    index: number,
+    event: React.PointerEvent,
+  ) => void;
+  onFollowedSelect?: (riserId: string | null) => void;
   lineOverlayOpacity: number;
   showLineOverlayAnnotations: boolean;
+  markupExtent?: PdfMarkupExtent | null;
+  overlayPanel?: React.ReactNode;
+  standardizeClipMode?: boolean;
+  standardizeClipDraftScreen?: CanvasRect | null;
+  standardizeClipHint?: string | null;
+  onStandardizeClipPointerDown?: (
+    event: React.PointerEvent | PointerEvent,
+  ) => void;
 }) {
   const pageSize = {
     width: page.width * scale,
@@ -2425,27 +4136,47 @@ function CropStage({
     coords: { x: number; y: number },
     color: string,
     draggable: boolean,
+    markKind: "building" | "reference" | null,
     onDragStart?: (event: React.PointerEvent) => void,
-  ) => (
-    <div
-      className={`absolute ${draggable ? "pointer-events-auto z-20" : "pointer-events-none"}`}
-      style={{ left: coords.x, top: coords.y }}
-    >
-      {draggable && onDragStart ? (
-        <div
-          className="absolute -left-4 -top-4 h-8 w-8 cursor-move"
-          onPointerDown={onDragStart}
-          aria-label="Drag to reposition mark"
+  ) => {
+    const selected = markKind != null && selectedMark === markKind;
+    return (
+      <div
+        className={`absolute ${draggable ? "pointer-events-auto z-20" : "pointer-events-none"}`}
+        style={{ left: coords.x, top: coords.y }}
+      >
+        {draggable && onDragStart ? (
+          <div
+            className={`absolute -left-4 -top-4 h-8 w-8 cursor-move rounded-full ${
+              selected ? "ring-2 ring-offset-1" : ""
+            }`}
+            style={
+              selected
+                ? ({ "--tw-ring-color": color } as React.CSSProperties)
+                : undefined
+            }
+            onPointerDown={onDragStart}
+            aria-label={
+              selected
+                ? "Selected pin — drag or use arrow keys to nudge"
+                : "Click to select pin — drag to reposition"
+            }
+            title={
+              selected
+                ? "Selected — arrow keys nudge 1 pt (Shift 10 pt)"
+                : "Click to select for arrow-key nudging"
+            }
+          />
+        ) : null}
+        <FloorPlanRegistrationMark
+          x={0}
+          y={0}
+          color={color}
+          className="relative"
         />
-      ) : null}
-      <FloorPlanRegistrationMark
-        x={0}
-        y={0}
-        color={color}
-        className="relative"
-      />
-    </div>
-  );
+      </div>
+    );
+  };
 
   const annotationLayer = (
     <FloorPlanAnnotationLayer
@@ -2455,9 +4186,19 @@ function CropStage({
       zoom={expanded ? view.zoom : 1}
       overlayAnnotations={overlayAnnotations}
       overlayOpacity={lineOverlayOpacity}
+      followedOverlayAnnotations={followedOverlayAnnotations}
+      followedRiserIds={followedRiserIds}
+      selectedFollowedRiserId={selectedFollowedRiserId}
+      onFollowedApprove={onFollowedApprove}
+      onFollowedDismiss={onFollowedDismiss}
+      onFollowedMovePointerDown={onFollowedMovePointerDown}
+      onFollowedSelect={onFollowedSelect}
       annotations={annotations}
       showSavedAnnotations={showLines}
       showOverlayAnnotations={showLineOverlayAnnotations}
+      showRiserLabels={showRiserLabels}
+      markupExtent={markupExtent}
+      showPageBoundsOutline={markupExtent != null}
       selectedIndices={selectedIndices}
       selectionDraft={selectionDraft}
       lineDraft={lineDraft}
@@ -2465,14 +4206,25 @@ function CropStage({
       cutDraft={cutDraft}
       connectDraftIndex={connectDraftIndex}
       connectHoverIndex={connectHoverIndex}
+      connectDraftOverlayIndex={connectDraftOverlayIndex}
+      connectHoverOverlayIndex={connectHoverOverlayIndex}
+      selectedRiserAboveId={selectedRiserAboveId}
+      hoverRiserAboveId={hoverRiserAboveId}
       hoverSnap={hoverSnap}
       hoverVertex={hoverVertex}
       vertexDrag={vertexDrag}
+      hoverRoom={hoverRoom}
+      hoverLeaks={hoverLeaks}
+      listHoverRoomIndex={listHoverRoomIndex}
+      editingRoomIndex={editingRoomIndex}
+      shapeDragging={shapeDragging}
       draftColor={draftColor}
       draftStrokeWidthPt={draftStrokeWidthPt}
       drawInteractive={drawingActive}
-      selectInteractive={selectionInteractive && showLines}
-      selectable={markupSelectable && showLines}
+      selectInteractive={selectionInteractive && showLines && !standardizeClipMode}
+      selectable={markupSelectable && showLines && !standardizeClipMode}
+      editingCalloutIndex={editingCalloutIndex}
+      calloutInteractive={calloutInteractive}
       onPointerDown={onDrawPointerDown}
       onPointerMove={onDrawPointerMove}
       onPointerUp={onDrawPointerUp}
@@ -2481,6 +4233,21 @@ function CropStage({
       onSelectPointerUp={onSelectPointerUp}
       onVertexPointerDown={onVertexPointerDown}
       onAnnotationSelect={onAnnotationSelect}
+      onRiserSelect={onRiserSelect}
+      onCalloutPointerDown={onCalloutPointerDown}
+      onCalloutTextChange={onCalloutTextChange}
+      onCalloutCommit={onCalloutCommit}
+      onCalloutRemove={onCalloutRemove}
+      onRoomLabelChange={onRoomLabelChange}
+      onRoomCommit={onRoomCommit}
+      calloutCatalogMode={calloutCatalogMode}
+      riserTypes={riserTypes}
+      mechanicalRisers={mechanicalRisers}
+      catalogSaving={catalogSaving}
+      onCalloutCatalogAssign={onCalloutCatalogAssign}
+      onCalloutCatalogType={onCalloutCatalogType}
+      onCalloutCatalogReclassify={onCalloutCatalogReclassify}
+      onCalloutCatalogEnsureRiser={onCalloutCatalogEnsureRiser}
     />
   );
 
@@ -2503,11 +4270,22 @@ function CropStage({
       </div>
     ) : null;
 
+  const standardizeClipOverlayZoom = expanded ? view.zoom : 1;
+  const standardizeClipOverlay =
+    standardizeClipMode && standardizeClipDraftScreen ? (
+      <StandardizeClipDraftOverlay
+        rect={standardizeClipDraftScreen}
+        pageWidth={pageSize.width}
+        pageHeight={pageSize.height}
+        zoom={standardizeClipOverlayZoom}
+      />
+    ) : null;
+
   const overlay = (
     <>
       {overlayLayer}
       {buildingPinOnPage && !drawingActive
-        ? pinMark(buildingPinOnPage, true)
+        ? pinMark(buildingPinOnPage, REGISTRATION_MARK_THIS, false, null)
         : null}
       {!expanded && showCrop ? (
         <CropChrome
@@ -2522,6 +4300,7 @@ function CropStage({
         />
       ) : null}
       {!expanded ? annotationLayer : null}
+      {!expanded ? standardizeClipOverlay : null}
     </>
   );
 
@@ -2550,17 +4329,24 @@ function CropStage({
                   referenceAnchorViewport,
                   REGISTRATION_MARK_REFERENCE,
                   true,
+                  "reference",
                   onReferenceAnchorDragStart,
                 )
               : null}
             {suggestedPinViewport
-              ? pinMark(suggestedPinViewport, REGISTRATION_MARK_SUGGESTED, false)
+              ? pinMark(
+                  suggestedPinViewport,
+                  REGISTRATION_MARK_SUGGESTED,
+                  false,
+                  null,
+                )
               : null}
             {buildingPinViewport
               ? pinMark(
                   buildingPinViewport,
                   REGISTRATION_MARK_THIS,
                   true,
+                  "building",
                   onPinDragStart,
                 )
               : null}
@@ -2576,14 +4362,21 @@ function CropStage({
             referenceAnchorOnPage,
             REGISTRATION_MARK_REFERENCE,
             true,
+            "reference",
             onReferenceAnchorDragStart,
           )
         : null}
       {suggestedPinOnPage
-        ? pinMark(suggestedPinOnPage, REGISTRATION_MARK_SUGGESTED, false)
+        ? pinMark(suggestedPinOnPage, REGISTRATION_MARK_SUGGESTED, false, null)
         : null}
       {buildingPinOnPage
-        ? pinMark(buildingPinOnPage, REGISTRATION_MARK_THIS, true, onPinDragStart)
+        ? pinMark(
+            buildingPinOnPage,
+            REGISTRATION_MARK_THIS,
+            true,
+            "building",
+            onPinDragStart,
+          )
         : null}
     </>
   ) : null;
@@ -2606,17 +4399,28 @@ function CropStage({
         <button
           type="button"
           onClick={onExpand}
-          className="absolute right-2 top-2 z-10 rounded-lg border border-slate-200 bg-white/95 p-1.5 text-slate-700 shadow-sm hover:bg-white"
+          className="absolute right-2 top-2 z-40 rounded-lg border border-slate-200 bg-white/95 p-1.5 text-slate-700 shadow-sm hover:bg-white"
           aria-label="Expand crop editor"
           title="Full screen"
         >
           <FloorPlanExpandIcon />
         </button>
+        {standardizeClipMode ? (
+          <div className="pointer-events-none absolute inset-x-0 top-2 z-50 flex justify-center px-3">
+            <div className="rounded-lg border border-slate-900/20 bg-slate-900/90 px-3 py-2 text-center text-xs font-medium text-white shadow-lg">
+              {standardizeClipHint ??
+                "Draw a rectangle around a riser on the plan (Esc to cancel)"}
+            </div>
+          </div>
+        ) : null}
         {stageLegend}
+        {overlayPanel}
         <div
           ref={pageRef}
           className={`relative ${
-            (placingPin || placingAnchor) && !drawingActive
+            standardizeClipMode
+              ? "cursor-crosshair"
+              : (placingPin || placingAnchor) && !drawingActive
               ? "cursor-crosshair"
               : drawingActive
                 ? "cursor-crosshair"
@@ -2626,7 +4430,17 @@ function CropStage({
           }`}
           style={pageSize}
           onPointerDown={(event) => {
-            if (event.button !== 0 || !selectionInteractive) return;
+            if (event.button !== 0) return;
+            if (standardizeClipMode && onStandardizeClipPointerDown) {
+              event.preventDefault();
+              event.stopPropagation();
+              onStandardizeClipPointerDown(event);
+              return;
+            }
+            if (!selectionInteractive && !placingPin && !placingAnchor) {
+              onClearSelectedMark();
+            }
+            if (!selectionInteractive) return;
             onSelectPointerDown(event);
           }}
           onPointerMove={
@@ -2660,6 +4474,8 @@ function CropStage({
           ? "cursor-grabbing"
           : ctrlHeld
             ? "cursor-grab"
+            : standardizeClipMode
+              ? "cursor-crosshair"
             : drawingActive || placingPin || placingAnchor
               ? "cursor-crosshair"
               : markupSelectable
@@ -2668,8 +4484,16 @@ function CropStage({
       }`}
       style={{ touchAction: "none" }}
       onPointerDown={onBackgroundPointerDown}
-      onPointerMove={selectionInteractive ? onSelectPointerMove : undefined}
-      onPointerUp={selectionInteractive ? onSelectPointerUp : undefined}
+      onPointerMove={
+        selectionInteractive && !standardizeClipMode
+          ? onSelectPointerMove
+          : undefined
+      }
+      onPointerUp={
+        selectionInteractive && !standardizeClipMode
+          ? onSelectPointerUp
+          : undefined
+      }
     >
       <div
         className="pointer-events-none absolute left-0 top-0"
@@ -2722,11 +4546,48 @@ function CropStage({
         >
           <div className="relative" style={pageSize}>
             {annotationLayer}
+            {standardizeClipOverlay}
           </div>
         </div>
       </div>
       {stageLegend}
+      {overlayPanel}
     </div>
+  );
+}
+
+/** Clip-region drag preview — stroke stays constant on screen when the page is zoomed. */
+function StandardizeClipDraftOverlay({
+  rect,
+  pageWidth,
+  pageHeight,
+  zoom = 1,
+}: {
+  rect: { x: number; y: number; width: number; height: number };
+  pageWidth: number;
+  pageHeight: number;
+  zoom?: number;
+}) {
+  const stroke = screenPxToCanvasUnits(2, zoom);
+  const dash = `${screenPxToCanvasUnits(6, zoom)} ${screenPxToCanvasUnits(4, zoom)}`;
+  return (
+    <svg
+      className="pointer-events-none absolute left-0 top-0 z-30 overflow-visible"
+      width={pageWidth}
+      height={pageHeight}
+      aria-hidden
+    >
+      <rect
+        x={rect.x}
+        y={rect.y}
+        width={Math.max(0, rect.width)}
+        height={Math.max(0, rect.height)}
+        fill="rgba(56, 189, 248, 0.15)"
+        stroke="#0ea5e9"
+        strokeWidth={stroke}
+        strokeDasharray={dash}
+      />
+    </svg>
   );
 }
 
@@ -2814,6 +4675,118 @@ function Handle({
       className={`absolute h-3 w-3 rounded-sm ${CROP_TONE_CLASS[tone].handle} ${HANDLE_CLASS[kind]}`}
       onPointerDown={(event) => onPointerDown(kind, event)}
     />
+  );
+}
+
+function ConnectRiserCalloutDialog({
+  riserIds,
+  types,
+  risers,
+  onConfirm,
+  onCancel,
+}: {
+  riserIds: string[];
+  types: MechanicalRiserTypeDto[];
+  risers: MechanicalRiserDto[];
+  onConfirm: (ids: string[]) => void;
+  onCancel: () => void;
+}) {
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const labels = riserIds.map((id) => {
+    const riser = risers.find((item) => item.id === id);
+    if (!riser) return { id, label: id };
+    const type = types.find((item) => item.id === riser.typeId);
+    return {
+      id,
+      label: formatMechanicalRiserLabel(type?.name ?? "Riser", riser.label),
+    };
+  });
+
+  const toggle = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
+    );
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 p-4"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connect-riser-callout-title"
+        className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <h2
+          id="connect-riser-callout-title"
+          className="text-base font-semibold text-slate-900"
+        >
+          Which risers continue?
+        </h2>
+        <p className="mt-2 text-sm text-slate-600">
+          This box is tagged with more than one riser. Select which one(s) the
+          connected box is — a combined shaft can split into a subset here, then
+          again higher up.
+        </p>
+        <div className="mt-3 flex flex-col gap-1.5">
+          {labels.map((item) => {
+            const checked = selectedIds.includes(item.id);
+            return (
+              <label
+                key={item.id}
+                className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 hover:bg-slate-100"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(item.id)}
+                  className="h-4 w-4 rounded border-slate-300 text-slate-900"
+                />
+                <span className="font-medium">{item.label}</span>
+              </label>
+            );
+          })}
+        </div>
+        <div className="mt-2 flex gap-3 text-xs">
+          <button
+            type="button"
+            onClick={() => setSelectedIds(riserIds)}
+            className="font-medium text-slate-600 hover:text-slate-900"
+          >
+            Select all
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedIds([])}
+            className="font-medium text-slate-600 hover:text-slate-900"
+          >
+            Clear
+          </button>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={selectedIds.length === 0}
+            onClick={() => onConfirm(selectedIds)}
+            className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+          >
+            Connect
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

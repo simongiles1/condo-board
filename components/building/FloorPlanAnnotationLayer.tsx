@@ -1,6 +1,13 @@
 "use client";
 
-import { useMemo, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import type { PdfPoint, PdfRect } from "@/lib/building/floor-plan-align";
 import { pdfPointToCanvas } from "@/lib/building/floor-plan-align";
@@ -32,8 +39,30 @@ import {
   circleToPolylinePoints,
 } from "@/lib/building/floor-plan-polyline-cut";
 import {
+  annotationPdfBounds,
+  annotationRotationDeg,
+  markupExtentExceedsPage,
   pdfRectFromCorners,
+  rotatePdfPointAround,
+  rotatePdfPointsAround,
+  pdfRectCenter,
+  type PdfMarkupExtent,
 } from "@/lib/building/floor-plan-annotations";
+import {
+  annotationHasRiser,
+  annotationVisibleWhileFollowingRiser,
+  calloutRiserIds,
+  findRiserByTypeAndLabel,
+  isMechanicalRiserCallout,
+  labelsForRiserType,
+  lookupRiser,
+  matchMechanicalTypeByColor,
+  parseRiserLabel,
+  resolveCalloutDisplayText,
+  type MechanicalRiserDto,
+  type MechanicalRiserTypeDto,
+  type RiserIdRewrite,
+} from "@/lib/building/floor-plan-mechanical-risers";
 import {
   boxCenter,
   isConnectableBox,
@@ -41,6 +70,23 @@ import {
   riserArrowEndpoints,
   type ConnectableBox,
 } from "@/lib/building/floor-plan-riser-links";
+import {
+  MAX_ROOM_LEAK_MAX_GAP_PT,
+  polygonCentroid,
+  ROOM_LABEL_FONT_PX,
+  roomDisplayColor,
+  type RoomFace,
+  type RoomLeak,
+} from "@/lib/building/floor-plan-rooms";
+import {
+  CALLOUT_FONT_PX,
+  CALLOUT_LINE_PX,
+  CALLOUT_PAD_X_PX,
+  CALLOUT_PAD_Y_PX,
+  calloutBubbleScreenSize,
+  calloutBubbleSizePt,
+  calloutLeaderEndpoints,
+} from "@/lib/building/floor-plan-callouts";
 
 const HIT_SCREEN_PX = 12;
 
@@ -180,6 +226,19 @@ function boundingBoxDraftPath(
     return circleAnnotationPath(rect, pageHeight, scale, variant);
   }
   return rectAnnotationPath(rect, pageHeight, scale, variant);
+}
+
+/** SVG rotate is clockwise on a Y-down canvas; PDF rotation is CCW with Y up. */
+function boxCanvasRotateTransform(
+  item: ConnectableBox,
+  pageHeight: number,
+  scale: number,
+): string | undefined {
+  const deg = annotationRotationDeg(item);
+  if (deg === 0) return undefined;
+  const center = boxCenter(item);
+  const canvas = pdfPointToCanvas(center, pageHeight, scale);
+  return `rotate(${-deg} ${canvas.x} ${canvas.y})`;
 }
 
 const SNAP_COLOR = "#0ea5e9";
@@ -533,6 +592,8 @@ function SnapMarker({
 
 const CONNECT_PENDING_COLOR = "#16a34a";
 const CONNECT_HOVER_COLOR = "#22c55e";
+const RISER_SELECTED_COLOR = "#0ea5e9";
+const RISER_HOVER_COLOR = "#38bdf8";
 
 function boxFillPath(
   item: ConnectableBox,
@@ -582,31 +643,30 @@ function ArrowHead({
   );
 }
 
-function OutlinedLabel({
-  x,
-  y,
-  children,
+function OutlinedText({
   color,
   fontSize,
   zoom,
+  textAnchor = "middle",
+  fontWeight = 700,
+  children,
 }: {
-  x: number;
-  y: number;
-  children: string;
   color: string;
   fontSize: number;
   zoom: number;
+  textAnchor?: "middle" | "start" | "end";
+  fontWeight?: number;
+  children: ReactNode;
 }) {
   const whiteStroke = screenPxToCanvasUnits(3, zoom);
   const blackStroke = screenPxToCanvasUnits(1.5, zoom);
   const shared = {
-    x,
-    y,
-    textAnchor: "middle" as const,
+    textAnchor,
     fontSize,
-    fontWeight: 700 as const,
+    fontWeight,
     fontFamily: "ui-sans-serif, system-ui, sans-serif",
     style: { userSelect: "none" as const },
+    pointerEvents: "none" as const,
   };
   return (
     <>
@@ -635,6 +695,36 @@ function OutlinedLabel({
   );
 }
 
+function OutlinedLabel({
+  x,
+  y,
+  children,
+  color,
+  fontSize,
+  zoom,
+}: {
+  x: number;
+  y: number;
+  children: string;
+  color: string;
+  fontSize: number;
+  zoom: number;
+}) {
+  return (
+    <OutlinedText
+      color={color}
+      fontSize={fontSize}
+      zoom={zoom}
+      textAnchor="middle"
+      fontWeight={700}
+    >
+      <tspan x={x} y={y}>
+        {children}
+      </tspan>
+    </OutlinedText>
+  );
+}
+
 function RiserOffsetOverlay({
   annotations,
   pageHeight,
@@ -642,6 +732,11 @@ function RiserOffsetOverlay({
   zoom,
   connectDraftIndex,
   connectHoverIndex,
+  riserSelectable = false,
+  selectedRiserAboveId = null,
+  hoverRiserAboveId = null,
+  followedRiserIds = [],
+  onRiserSelect,
 }: {
   annotations: FloorPlanAnnotation[];
   pageHeight: number;
@@ -649,9 +744,22 @@ function RiserOffsetOverlay({
   zoom: number;
   connectDraftIndex: number | null;
   connectHoverIndex: number | null;
+  riserSelectable?: boolean;
+  selectedRiserAboveId?: string | null;
+  hoverRiserAboveId?: string | null;
+  followedRiserIds?: string[];
+  onRiserSelect?: (
+    aboveId: string,
+    event: React.PointerEvent<SVGLineElement>,
+  ) => void;
 }) {
-  const pairs = listRiserPairs(annotations);
+  const pairs = listRiserPairs(annotations).filter(
+    (pair) =>
+      followedRiserIds.length === 0 ||
+      followedRiserIds.some((id) => annotationHasRiser(pair.above, id)),
+  );
   const stroke = screenPxToCanvasUnits(3.5, zoom);
+  const hitStroke = screenPxToCanvasUnits(HIT_SCREEN_PX, zoom);
   const fontSize = screenPxToCanvasUnits(11, zoom);
   const labelGap = screenPxToCanvasUnits(4, zoom);
 
@@ -661,45 +769,77 @@ function RiserOffsetOverlay({
     const item = annotations[index];
     if (!isConnectableBox(item)) return;
     highlights.push(
-      <path
+      <g
         key={key}
-        d={boxFillPath(item, pageHeight, scale)}
-        fill={color}
-        fillOpacity={0.18}
-        stroke={color}
-        strokeWidth={stroke}
-        pointerEvents="none"
-      />,
+        transform={boxCanvasRotateTransform(item, pageHeight, scale)}
+      >
+        <path
+          d={boxFillPath(item, pageHeight, scale)}
+          fill={color}
+          fillOpacity={0.18}
+          stroke={color}
+          strokeWidth={stroke}
+          pointerEvents="none"
+        />
+      </g>,
     );
   };
   highlightIndex(connectHoverIndex, CONNECT_HOVER_COLOR, "connect-hover");
   highlightIndex(connectDraftIndex, CONNECT_PENDING_COLOR, "connect-pending");
+  const labeledAboveIds = new Set<string>();
 
   return (
-    <g pointerEvents="none">
+    <g>
       {highlights}
       {pairs.map((pair) => {
         const linkColor = pair.above.color;
         const ends = riserArrowEndpoints(pair.above, pair.below);
         const center = boxCenter(pair.above);
-        const bottom = pdfPointToCanvas(
-          { x: center.x, y: pair.above.rect.y },
-          pageHeight,
-          scale,
+        const localBottom = { x: center.x, y: pair.above.rect.y };
+        const bottomPdf = rotatePdfPointAround(
+          localBottom,
+          center,
+          annotationRotationDeg(pair.above),
         );
+        const bottom = pdfPointToCanvas(bottomPdf, pageHeight, scale);
+        const aboveId = pair.above.id ?? "";
+        const selected = aboveId !== "" && selectedRiserAboveId === aboveId;
+        const hovered = aboveId !== "" && hoverRiserAboveId === aboveId;
+        const startCanvas = ends
+          ? pdfPointToCanvas(ends.start, pageHeight, scale)
+          : null;
+        const endCanvas = ends
+          ? pdfPointToCanvas(ends.end, pageHeight, scale)
+          : null;
+        const showAbvLabel = aboveId !== "" && !labeledAboveIds.has(aboveId);
+        if (showAbvLabel) labeledAboveIds.add(aboveId);
         return (
-          <g key={`riser-${pair.above.id}`}>
-            {ends ? (
+          <g key={`riser-${pair.above.id}-${pair.below.id}`}>
+            {ends && startCanvas && endCanvas ? (
               <>
                 <line
-                  x1={pdfPointToCanvas(ends.start, pageHeight, scale).x}
-                  y1={pdfPointToCanvas(ends.start, pageHeight, scale).y}
-                  x2={pdfPointToCanvas(ends.end, pageHeight, scale).x}
-                  y2={pdfPointToCanvas(ends.end, pageHeight, scale).y}
+                  x1={startCanvas.x}
+                  y1={startCanvas.y}
+                  x2={endCanvas.x}
+                  y2={endCanvas.y}
                   stroke={linkColor}
                   strokeWidth={stroke}
                   strokeLinecap="round"
+                  pointerEvents="none"
                 />
+                {selected || hovered ? (
+                  <line
+                    x1={startCanvas.x}
+                    y1={startCanvas.y}
+                    x2={endCanvas.x}
+                    y2={endCanvas.y}
+                    stroke={selected ? RISER_SELECTED_COLOR : RISER_HOVER_COLOR}
+                    strokeWidth={stroke + screenPxToCanvasUnits(3, zoom)}
+                    strokeLinecap="round"
+                    pointerEvents="none"
+                    opacity={0.9}
+                  />
+                ) : null}
                 <ArrowHead
                   start={ends.start}
                   end={ends.end}
@@ -708,21 +848,1149 @@ function RiserOffsetOverlay({
                   zoom={zoom}
                   color={linkColor}
                 />
+                {riserSelectable && aboveId ? (
+                  <line
+                    x1={startCanvas.x}
+                    y1={startCanvas.y}
+                    x2={endCanvas.x}
+                    y2={endCanvas.y}
+                    stroke="transparent"
+                    strokeWidth={Math.max(hitStroke, stroke)}
+                    strokeLinecap="round"
+                    pointerEvents="stroke"
+                    className="cursor-pointer"
+                    onPointerDown={(event) => {
+                      if (event.button !== 0) return;
+                      onRiserSelect?.(aboveId, event);
+                    }}
+                  />
+                ) : null}
               </>
             ) : null}
-            <OutlinedLabel
-              x={bottom.x}
-              y={bottom.y + fontSize + labelGap}
-              color={linkColor}
-              fontSize={fontSize}
-              zoom={zoom}
-            >
-              ABV
-            </OutlinedLabel>
+            {showAbvLabel ? (
+              <OutlinedLabel
+                x={bottom.x}
+                y={bottom.y + fontSize + labelGap}
+                color={linkColor}
+                fontSize={fontSize}
+                zoom={zoom}
+              >
+                ABV
+              </OutlinedLabel>
+            ) : null}
           </g>
         );
       })}
     </g>
+  );
+}
+
+const CATALOG_EDITOR_WIDTH_PX = 240;
+const CATALOG_EDITOR_BASE_HEIGHT_PX = 220;
+const CATALOG_EDITOR_ROW_HEIGHT_PX = 22;
+
+function catalogEditorHeightPx(selectedCount: number): number {
+  return CATALOG_EDITOR_BASE_HEIGHT_PX + Math.max(0, selectedCount - 1) * CATALOG_EDITOR_ROW_HEIGHT_PX;
+}
+
+function CatalogCalloutEditor({
+  item,
+  types,
+  risers,
+  saving,
+  onAssign,
+  onTypeChange,
+  onReclassify,
+  onEnsureRiser,
+  onCommit,
+}: {
+  item: ConnectableBox;
+  types: MechanicalRiserTypeDto[];
+  risers: MechanicalRiserDto[];
+  saving: boolean;
+  onAssign: (typeId: string, riserIds: string[]) => void;
+  onTypeChange: (typeId: string) => void;
+  onReclassify?: (
+    riserIds: string[],
+    typeId: string,
+  ) => Promise<RiserIdRewrite | null>;
+  onEnsureRiser?: (typeId: string, label: string) => Promise<string | null>;
+  onCommit: () => void;
+}) {
+  const callout = item.callout;
+  const existingIds = callout ? calloutRiserIds(callout) : [];
+  const existing = existingIds
+    .map((id) => lookupRiser(risers, id))
+    .find((riser) => riser != null);
+  const matched = matchMechanicalTypeByColor(types, item.color);
+  const [typeId, setTypeId] = useState(
+    existing?.typeId ?? callout?.typeId ?? matched?.id ?? types[0]?.id ?? "",
+  );
+  const [selectedIds, setSelectedIds] = useState<string[]>(existingIds);
+  const [numberFilter, setNumberFilter] = useState("");
+  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+  const [numberMenuOpen, setNumberMenuOpen] = useState(true);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addValue, setAddValue] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const openedAtRef = useRef(0);
+  const committedRef = useRef(false);
+  const reclassifyingRef = useRef(false);
+  const typeIdRef = useRef(typeId);
+  const selectedIdsRef = useRef(selectedIds);
+  const onAssignRef = useRef(onAssign);
+  const onCommitRef = useRef(onCommit);
+  typeIdRef.current = typeId;
+  selectedIdsRef.current = selectedIds;
+  onAssignRef.current = onAssign;
+  onCommitRef.current = onCommit;
+
+  const persistedRiserIdsKey = callout
+    ? JSON.stringify(calloutRiserIds(callout))
+    : "[]";
+
+  useEffect(() => {
+    openedAtRef.current = performance.now();
+    committedRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    const nextIds = callout ? calloutRiserIds(callout) : [];
+    setSelectedIds(nextIds);
+    const next = nextIds
+      .map((id) => lookupRiser(risers, id))
+      .find((riser) => riser != null);
+    if (next) {
+      setTypeId(next.typeId);
+      return;
+    }
+    if (callout?.typeId) {
+      setTypeId(callout.typeId);
+    }
+  }, [persistedRiserIdsKey, callout?.typeId]);
+
+  useEffect(() => {
+    const nextIds = callout ? calloutRiserIds(callout) : [];
+    if (nextIds.length === 0) return;
+    const next = nextIds
+      .map((id) => lookupRiser(risers, id))
+      .find((riser) => riser != null);
+    if (next) setTypeId(next.typeId);
+  }, [risers, persistedRiserIdsKey]);
+
+  const selectedType = types.find((type) => type.id === typeId);
+  const labels = labelsForRiserType(risers, typeId);
+  const filterText = numberFilter.trim();
+  const filteredLabels = labels.filter((value) =>
+    filterText
+      ? value.toLowerCase().includes(filterText.toLowerCase())
+      : true,
+  );
+
+  const applyType = (nextId: string) => {
+    setTypeMenuOpen(false);
+    setNumberFilter("");
+    if (nextId === typeIdRef.current) return;
+    const assigned = selectedIdsRef.current;
+    if (assigned.length > 0 && onReclassify) {
+      const previous = typeIdRef.current;
+      setTypeId(nextId);
+      reclassifyingRef.current = true;
+      void (async () => {
+        const rewrite = await onReclassify(assigned, nextId);
+        reclassifyingRef.current = false;
+        if (!rewrite) {
+          setTypeId(previous);
+          return;
+        }
+        setSelectedIds([
+          ...new Set(assigned.map((id) => rewrite[id] ?? id)),
+        ]);
+      })();
+      return;
+    }
+    setTypeId(nextId);
+    setSelectedIds([]);
+    if (nextId) onTypeChange(nextId);
+  };
+
+  const addRiserId = (riserId: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(riserId) ? prev : [...prev, riserId],
+    );
+    setNumberFilter("");
+    setNumberMenuOpen(false);
+    setAddOpen(false);
+  };
+
+  const removeRiserId = (riserId: string) => {
+    setSelectedIds((prev) => prev.filter((id) => id !== riserId));
+  };
+
+  const commitSelection = () => {
+    if (committedRef.current) return;
+    if (reclassifyingRef.current) return;
+    committedRef.current = true;
+    committedRef.current = true;
+    const activeTypeId = typeIdRef.current;
+    const activeSelectedIds = selectedIdsRef.current;
+    if (activeTypeId && activeSelectedIds.length > 0) {
+      onAssignRef.current(activeTypeId, activeSelectedIds);
+      return;
+    }
+    onCommitRef.current();
+  };
+
+  const selectExistingLabel = (label: string) => {
+    const riser = findRiserByTypeAndLabel(risers, typeId, label);
+    if (!riser) return;
+    addRiserId(riser.id);
+  };
+
+  const submitNewLabel = async () => {
+    const parsed = parseRiserLabel(addValue);
+    if (!typeId || parsed == null) {
+      setAddError("Enter a label using letters and numbers (max 32 characters).");
+      return;
+    }
+    const existingRiser = findRiserByTypeAndLabel(risers, typeId, parsed);
+    if (existingRiser) {
+      addRiserId(existingRiser.id);
+      return;
+    }
+    if (!onEnsureRiser) {
+      setAddError("Saving is unavailable.");
+      return;
+    }
+    setAddError(null);
+    const riserId = await onEnsureRiser(typeId, parsed);
+    if (!riserId) {
+      setAddError("Could not add that label.");
+      return;
+    }
+    addRiserId(riserId);
+    setAddValue("");
+  };
+
+  useEffect(() => {
+    function onPointerDown(event: PointerEvent) {
+      if (performance.now() - openedAtRef.current < 120) return;
+      const target = event.target as Node | null;
+      if (editorRef.current?.contains(target)) return;
+      commitSelection();
+    }
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () =>
+      document.removeEventListener("pointerdown", onPointerDown, true);
+  }, []);
+
+  const fieldClass =
+    "h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500";
+
+  return (
+    <div
+      ref={editorRef}
+      role="dialog"
+      aria-label="Riser catalog"
+      style={{
+        width: "100%",
+        height: "100%",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: 8,
+        background: "#ffffff",
+        border: "1.5px solid #0ea5e9",
+        borderRadius: 4,
+        fontFamily: "ui-sans-serif, system-ui, sans-serif",
+        overflow: "visible",
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="relative">
+        <button
+          type="button"
+          disabled={saving || types.length === 0}
+          aria-label="Riser type"
+          aria-expanded={typeMenuOpen}
+          onClick={() => setTypeMenuOpen((open) => !open)}
+          className={`${fieldClass} flex items-center justify-between text-left`}
+        >
+          <span className="inline-flex min-w-0 items-center gap-2 truncate">
+            <span
+              aria-hidden
+              className="h-3 w-3 shrink-0 rounded-sm border border-slate-300"
+              style={{ backgroundColor: selectedType?.color ?? "#e2e8f0" }}
+            />
+            {selectedType?.name ??
+              (types.length === 0 ? "Add a mechanical type first" : "Type")}
+          </span>
+          <span aria-hidden className="ml-1 shrink-0 text-slate-400">
+            ▾
+          </span>
+        </button>
+        {typeMenuOpen ? (
+          <ul className="absolute left-0 right-0 top-full z-10 mt-0.5 max-h-40 overflow-auto rounded border border-slate-200 bg-white py-1 shadow-md">
+            {types.map((type) => (
+              <li key={type.id}>
+                <button
+                  type="button"
+                  onClick={() => applyType(type.id)}
+                  className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs ${
+                    type.id === typeId
+                      ? "bg-slate-900 text-white"
+                      : "text-slate-800 hover:bg-slate-50"
+                  }`}
+                >
+                  <span
+                    aria-hidden
+                    className="h-3 w-3 shrink-0 rounded-sm border border-slate-300"
+                    style={{ backgroundColor: type.color }}
+                  />
+                  <span className="truncate">{type.name}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+
+      <div className="relative">
+        <label className="sr-only" htmlFor="catalog-riser-number">
+          Riser label
+        </label>
+        <input
+          id="catalog-riser-number"
+          type="text"
+          value={numberFilter}
+          disabled={saving || !typeId}
+          placeholder={labels.length > 0 ? "Filter or enter label" : "Label"}
+          aria-expanded={numberMenuOpen}
+          autoFocus
+          onChange={(event) => {
+            setNumberFilter(event.target.value);
+            setNumberMenuOpen(true);
+          }}
+          onFocus={() => setNumberMenuOpen(true)}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Escape") {
+              event.preventDefault();
+              if (addOpen) {
+                setAddOpen(false);
+                return;
+              }
+              commitSelection();
+            } else if (event.key === "Enter") {
+              event.preventDefault();
+              const parsed = parseRiserLabel(numberFilter);
+              if (parsed != null) {
+                void (async () => {
+                  const existingRiser = findRiserByTypeAndLabel(
+                    risers,
+                    typeId,
+                    parsed,
+                  );
+                  if (existingRiser) {
+                    selectExistingLabel(parsed);
+                    return;
+                  }
+                  if (!onEnsureRiser) return;
+                  const riserId = await onEnsureRiser(typeId, parsed);
+                  if (riserId) addRiserId(riserId);
+                })();
+              } else if (selectedIds.length > 0) {
+                commitSelection();
+              }
+            }
+          }}
+          className={fieldClass}
+        />
+        {numberMenuOpen && typeId ? (
+          <ul className="absolute left-0 right-0 top-full z-20 mt-0.5 max-h-24 overflow-auto rounded border border-slate-200 bg-white py-1 shadow-md">
+            {filteredLabels.length > 0 ? (
+              filteredLabels.map((value) => (
+                <li key={value}>
+                  <button
+                    type="button"
+                    onClick={() => selectExistingLabel(value)}
+                    className="block w-full px-2 py-1.5 text-left text-xs text-slate-800 hover:bg-slate-50"
+                  >
+                    {value}
+                  </button>
+                </li>
+              ))
+            ) : (
+              <li className="px-2 py-1.5 text-xs text-slate-500">
+                {filterText ? "No matches" : "No labels yet"}
+              </li>
+            )}
+            <li className="border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setAddOpen(true);
+                  setAddValue(numberFilter);
+                  setAddError(null);
+                  setNumberMenuOpen(false);
+                }}
+                className="block w-full px-2 py-1.5 text-left text-xs font-medium text-sky-700 hover:bg-sky-50"
+              >
+                Add new label…
+              </button>
+            </li>
+          </ul>
+        ) : null}
+      </div>
+
+      {selectedIds.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {selectedIds.map((riserId) => {
+            const riser = lookupRiser(risers, riserId);
+            return (
+              <span
+                key={riserId}
+                className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-800"
+              >
+                {riser?.label ?? "?"}
+                <button
+                  type="button"
+                  aria-label={`Remove riser ${riser?.label ?? riserId}`}
+                  className="text-slate-500 hover:text-slate-900"
+                  onClick={() => removeRiserId(riserId)}
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {selectedIds.length > 0 ? (
+        <button
+          type="button"
+          disabled={saving || !typeId}
+          onClick={() => {
+            setNumberMenuOpen(true);
+            setAddOpen(false);
+          }}
+          className="text-left text-[11px] font-medium text-sky-700 hover:text-sky-900 disabled:opacity-50"
+        >
+          + Add another
+        </button>
+      ) : null}
+
+      {addOpen ? (
+        <div className="rounded border border-slate-200 bg-slate-50 p-2">
+          <p className="mb-1 text-[11px] font-medium text-slate-700">
+            New {selectedType?.name ?? "riser"} label
+          </p>
+          <input
+            type="text"
+            value={addValue}
+            disabled={saving}
+            autoFocus
+            onChange={(event) => {
+              setAddValue(event.target.value);
+              setAddError(null);
+            }}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void submitNewLabel();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setAddOpen(false);
+              }
+            }}
+            className={fieldClass}
+          />
+          {addError ? (
+            <p className="mt-1 text-[11px] text-red-600">{addError}</p>
+          ) : null}
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void submitNewLabel()}
+              className="rounded bg-slate-900 px-2 py-1 text-[11px] font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              onClick={() => setAddOpen(false)}
+              className="rounded px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function followOverlayRiserIds(item: FloorPlanAnnotation): string[] {
+  if (item.type !== "rectangle" && item.type !== "circle") return [];
+  if (!item.callout) return [];
+  return calloutRiserIds(item.callout);
+}
+
+function FollowReviewButton({
+  x,
+  y,
+  size,
+  zoom,
+  selected,
+  label,
+  onPointerDown,
+  children,
+}: {
+  x: number;
+  y: number;
+  size: number;
+  zoom: number;
+  selected?: boolean;
+  label: string;
+  onPointerDown: (event: React.PointerEvent) => void;
+  children: ReactNode;
+}) {
+  const stroke = screenPxToCanvasUnits(1.25, zoom);
+  const radius = screenPxToCanvasUnits(3, zoom);
+  return (
+    <g
+      role="button"
+      aria-label={label}
+      className="cursor-pointer"
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onPointerDown(event);
+      }}
+    >
+      <rect
+        x={x}
+        y={y}
+        width={size}
+        height={size}
+        rx={radius}
+        fill="#ffffff"
+        stroke={selected ? "#0ea5e9" : "#0f172a"}
+        strokeWidth={selected ? stroke + screenPxToCanvasUnits(0.75, zoom) : stroke}
+      />
+      {children}
+    </g>
+  );
+}
+
+/** Approve / dismiss / move handles on an unsaved follow overlay box. */
+function FollowReviewControls({
+  item,
+  pageHeight,
+  scale,
+  zoom,
+  selected,
+  onApprove,
+  onDismiss,
+  onMovePointerDown,
+}: {
+  item: FloorPlanAnnotation;
+  pageHeight: number;
+  scale: number;
+  zoom: number;
+  selected: boolean;
+  onApprove: () => void;
+  onDismiss: () => void;
+  onMovePointerDown: (event: React.PointerEvent) => void;
+}) {
+  const bounds = annotationPdfBounds(item);
+  if (!bounds) return null;
+  const size = screenPxToCanvasUnits(16, zoom);
+  const gap = screenPxToCanvasUnits(3, zoom);
+  const pad = screenPxToCanvasUnits(4, zoom);
+  const icon = screenPxToCanvasUnits(1.5, zoom);
+  const topRight = pdfPointToCanvas(
+    { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+    pageHeight,
+    scale,
+  );
+  const stripWidth = size * 3 + gap * 2;
+  const originX = topRight.x - stripWidth;
+  const originY = topRight.y - size - pad;
+  const moveX = originX;
+  const checkX = originX + size + gap;
+  const deleteX = originX + (size + gap) * 2;
+  const cx = (x: number) => x + size / 2;
+  const cy = originY + size / 2;
+  const arm = size * 0.28;
+
+  return (
+    <g pointerEvents="all">
+      <FollowReviewButton
+        x={moveX}
+        y={originY}
+        size={size}
+        zoom={zoom}
+        selected={selected}
+        label="Move this overlay on this floor"
+        onPointerDown={onMovePointerDown}
+      >
+        <path
+          d={`M ${cx(moveX)} ${cy - arm - size * 0.06} L ${cx(moveX)} ${cy + arm + size * 0.06} M ${cx(moveX) - arm - size * 0.06} ${cy} L ${cx(moveX) + arm + size * 0.06} ${cy} M ${cx(moveX) - size * 0.1} ${cy - arm} L ${cx(moveX)} ${cy - arm - size * 0.08} L ${cx(moveX) + size * 0.1} ${cy - arm} M ${cx(moveX) - size * 0.1} ${cy + arm} L ${cx(moveX)} ${cy + arm + size * 0.08} L ${cx(moveX) + size * 0.1} ${cy + arm} M ${cx(moveX) - arm} ${cy - size * 0.1} L ${cx(moveX) - arm - size * 0.08} ${cy} L ${cx(moveX) - arm} ${cy + size * 0.1} M ${cx(moveX) + arm} ${cy - size * 0.1} L ${cx(moveX) + arm + size * 0.08} ${cy} L ${cx(moveX) + arm} ${cy + size * 0.1}`}
+          fill="none"
+          stroke="#0f172a"
+          strokeWidth={icon}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          pointerEvents="none"
+        />
+      </FollowReviewButton>
+      <FollowReviewButton
+        x={checkX}
+        y={originY}
+        size={size}
+        zoom={zoom}
+        label="Save this riser to this floor"
+        onPointerDown={() => onApprove()}
+      >
+        <rect
+          x={checkX + size * 0.22}
+          y={originY + size * 0.22}
+          width={size * 0.56}
+          height={size * 0.56}
+          rx={screenPxToCanvasUnits(1.5, zoom)}
+          fill="none"
+          stroke="#0f172a"
+          strokeWidth={icon}
+          pointerEvents="none"
+        />
+        <path
+          d={`M ${checkX + size * 0.32} ${originY + size * 0.52} L ${checkX + size * 0.44} ${originY + size * 0.68} L ${checkX + size * 0.7} ${originY + size * 0.34}`}
+          fill="none"
+          stroke="#15803d"
+          strokeWidth={icon}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          pointerEvents="none"
+        />
+      </FollowReviewButton>
+      <FollowReviewButton
+        x={deleteX}
+        y={originY}
+        size={size}
+        zoom={zoom}
+        label="Remove this overlay; the riser does not continue on this floor"
+        onPointerDown={() => onDismiss()}
+      >
+        <path
+          d={`M ${deleteX + size * 0.3} ${originY + size * 0.3} L ${deleteX + size * 0.7} ${originY + size * 0.7} M ${deleteX + size * 0.7} ${originY + size * 0.3} L ${deleteX + size * 0.3} ${originY + size * 0.7}`}
+          stroke="#b91c1c"
+          strokeWidth={icon}
+          strokeLinecap="round"
+          pointerEvents="none"
+        />
+      </FollowReviewButton>
+    </g>
+  );
+}
+
+function CalloutMarks({
+  annotations,
+  pageHeight,
+  scale,
+  zoom,
+  editingIndex,
+  interactive,
+  ghost = false,
+  ghostOpacity = 0.55,
+  dashed = false,
+  catalogMode = false,
+  riserTypes = [],
+  risers = [],
+  catalogSaving = false,
+  followedRiserIds = [],
+  showRiserLabels = true,
+  onPointerDown,
+  onTextChange,
+  onCommit,
+  onRemove,
+  onCatalogAssign,
+  onCatalogType,
+  onCatalogReclassify,
+  onCatalogEnsureRiser,
+}: {
+  annotations: FloorPlanAnnotation[];
+  pageHeight: number;
+  scale: number;
+  zoom: number;
+  editingIndex: number | null;
+  interactive: boolean;
+  ghost?: boolean;
+  ghostOpacity?: number;
+  dashed?: boolean;
+  catalogMode?: boolean;
+  riserTypes?: MechanicalRiserTypeDto[];
+  risers?: MechanicalRiserDto[];
+  catalogSaving?: boolean;
+  /** When set, only callouts for this riser stack are drawn (saved layer). */
+  followedRiserIds?: string[];
+  /** When false, hide mechanical riser callout bubbles (boxes stay visible). */
+  showRiserLabels?: boolean;
+  onPointerDown?: (index: number, event: React.PointerEvent) => void;
+  onTextChange?: (index: number, text: string) => void;
+  onCommit?: () => void;
+  onRemove?: (index: number) => void;
+  onCatalogAssign?: (index: number, typeId: string, riserIds: string[]) => void;
+  onCatalogType?: (index: number, typeId: string) => void;
+  onCatalogReclassify?: (
+    riserIds: string[],
+    typeId: string,
+  ) => Promise<RiserIdRewrite | null>;
+  onCatalogEnsureRiser?: (
+    typeId: string,
+    label: string,
+  ) => Promise<string | null>;
+}) {
+  const marks: ReactNode[] = [];
+  for (let index = 0; index < annotations.length; index++) {
+    const item = annotations[index];
+    if (!isConnectableBox(item) || item.callout == null) continue;
+    if (
+      followedRiserIds.length > 0 &&
+      !annotationVisibleWhileFollowingRiser(item, followedRiserIds)
+    ) {
+      continue;
+    }
+    const callout = item.callout;
+    const editing = interactive && editingIndex === index;
+    const catalogEditing = catalogMode && editing;
+    if (
+      !showRiserLabels &&
+      !catalogEditing &&
+      !editing &&
+      isMechanicalRiserCallout(callout)
+    ) {
+      continue;
+    }
+    const selectedRiserCount = catalogEditing
+      ? calloutRiserIds(callout).length
+      : 0;
+    const editorHeightPx = catalogEditing
+      ? catalogEditorHeightPx(Math.max(1, selectedRiserCount))
+      : CATALOG_EDITOR_BASE_HEIGHT_PX;
+    const displayText = resolveCalloutDisplayText(
+      callout,
+      riserTypes,
+      risers,
+    );
+    const emptyPlaceholder = catalogMode ? "Type · #" : "Label";
+    const screen = catalogEditing
+      ? {
+          widthPx: CATALOG_EDITOR_WIDTH_PX,
+          heightPx: editorHeightPx,
+          lines: [displayText],
+        }
+      : calloutBubbleScreenSize(displayText.length > 0 ? displayText : emptyPlaceholder);
+    const width = screenPxToCanvasUnits(screen.widthPx, zoom);
+    const height = screenPxToCanvasUnits(screen.heightPx, zoom);
+    const center = pdfPointToCanvas(
+      { x: callout.x, y: callout.y },
+      pageHeight,
+      scale,
+    );
+    const x = center.x - width / 2;
+    const y = center.y - height / 2;
+    const sizePt = calloutBubbleSizePt(
+      catalogEditing ? "Type 99" : displayText.length > 0 ? displayText : emptyPlaceholder,
+      scale,
+      zoom,
+    );
+    const ends = calloutLeaderEndpoints(item, callout, sizePt);
+    const fontSize = screenPxToCanvasUnits(CALLOUT_FONT_PX, zoom);
+    const lineHeight = screenPxToCanvasUnits(CALLOUT_LINE_PX, zoom);
+    const padX = screenPxToCanvasUnits(CALLOUT_PAD_X_PX, zoom);
+    const padY = screenPxToCanvasUnits(CALLOUT_PAD_Y_PX, zoom);
+    const stroke = screenPxToCanvasUnits(1.25, zoom);
+    const radius = screenPxToCanvasUnits(3, zoom);
+    const closeSize = screenPxToCanvasUnits(12, zoom);
+    const placeholder = displayText.length === 0;
+    const displayLines = catalogEditing
+      ? []
+      : calloutBubbleScreenSize(
+          displayText.length === 0 ? emptyPlaceholder : displayText,
+        ).lines;
+    const dash = ghost || dashed
+      ? `${screenPxToCanvasUnits(6, zoom)} ${screenPxToCanvasUnits(4, zoom)}`
+      : undefined;
+
+    marks.push(
+      <g
+        key={`callout-${index}`}
+        opacity={ghost ? ghostOpacity : 1}
+        style={catalogEditing ? { overflow: "visible" } : undefined}
+      >
+        {ends ? (
+          <>
+            <line
+              x1={pdfPointToCanvas(ends.start, pageHeight, scale).x}
+              y1={pdfPointToCanvas(ends.start, pageHeight, scale).y}
+              x2={pdfPointToCanvas(ends.end, pageHeight, scale).x}
+              y2={pdfPointToCanvas(ends.end, pageHeight, scale).y}
+              stroke={item.color}
+              strokeWidth={stroke}
+              strokeLinecap="round"
+              strokeDasharray={dash}
+              pointerEvents="none"
+            />
+            <ArrowHead
+              start={ends.start}
+              end={ends.end}
+              pageHeight={pageHeight}
+              scale={scale}
+              zoom={zoom}
+              color={item.color}
+            />
+          </>
+        ) : null}
+        <rect
+          x={x}
+          y={y}
+          width={width}
+          height={height}
+          rx={radius}
+          fill="#ffffff"
+          stroke={
+            catalogEditing ? "none" : editing ? "#0ea5e9" : item.color
+          }
+          strokeWidth={
+            catalogEditing
+              ? 0
+              : editing
+                ? stroke + screenPxToCanvasUnits(1, zoom)
+                : stroke
+          }
+          strokeDasharray={catalogEditing ? undefined : dash}
+          pointerEvents={interactive && !ghost && !catalogEditing ? "all" : "none"}
+          className={
+            interactive && !ghost && !catalogEditing ? "cursor-move" : undefined
+          }
+          onPointerDown={
+            interactive && !ghost && !catalogEditing
+              ? (event) => {
+                  if (event.button !== 0) return;
+                  onPointerDown?.(index, event);
+                }
+              : undefined
+          }
+        />
+        {catalogEditing ? (
+          <foreignObject
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            overflow="visible"
+          >
+            <div
+              xmlns="http://www.w3.org/1999/xhtml"
+              style={{
+                width: `${screen.widthPx}px`,
+                height: `${screen.heightPx}px`,
+                transform: `scale(${1 / Math.max(zoom, 0.01)})`,
+                transformOrigin: "top left",
+              }}
+            >
+              <CatalogCalloutEditor
+                item={item}
+                types={riserTypes}
+                risers={risers}
+                saving={catalogSaving}
+                onAssign={(typeId, riserIds) =>
+                  onCatalogAssign?.(index, typeId, riserIds)
+                }
+                onTypeChange={(typeId) => onCatalogType?.(index, typeId)}
+                onReclassify={onCatalogReclassify}
+                onEnsureRiser={onCatalogEnsureRiser}
+                onCommit={() => onCommit?.()}
+              />
+            </div>
+          </foreignObject>
+        ) : editing ? (
+          <foreignObject x={x} y={y} width={width} height={height}>
+            <textarea
+              autoFocus
+              spellCheck={false}
+              value={callout.text}
+              placeholder="Label"
+              onChange={(event) => onTextChange?.(index, event.target.value)}
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  onCommit?.();
+                } else if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  onCommit?.();
+                }
+              }}
+              onBlur={() => onCommit?.()}
+              style={{
+                width: "100%",
+                height: "100%",
+                boxSizing: "border-box",
+                resize: "none",
+                border: "none",
+                outline: "none",
+                background: "transparent",
+                fontSize: `${fontSize}px`,
+                lineHeight: `${lineHeight}px`,
+                padding: `${padY}px ${padX}px`,
+                fontFamily: "ui-sans-serif, system-ui, sans-serif",
+                color: item.color,
+              }}
+            />
+          </foreignObject>
+        ) : (
+          <OutlinedText
+            color={placeholder ? "#94a3b8" : item.color}
+            fontSize={fontSize}
+            zoom={zoom}
+            textAnchor="start"
+            fontWeight={400}
+          >
+            {displayLines.map((line, lineIndex) => (
+              <tspan
+                key={lineIndex}
+                x={x + padX}
+                y={y + padY + (lineIndex + 0.8) * lineHeight}
+              >
+                {line}
+              </tspan>
+            ))}
+          </OutlinedText>
+        )}
+        {interactive && !ghost && editing ? (
+          <g
+            className="cursor-pointer"
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onRemove?.(index);
+            }}
+          >
+            <circle
+              cx={x + width}
+              cy={y}
+              r={closeSize / 2}
+              fill="#0f172a"
+              stroke="#ffffff"
+              strokeWidth={screenPxToCanvasUnits(1, zoom)}
+            />
+            <path
+              d={`M ${x + width - closeSize * 0.22} ${y - closeSize * 0.22} L ${x + width + closeSize * 0.22} ${y + closeSize * 0.22} M ${x + width + closeSize * 0.22} ${y - closeSize * 0.22} L ${x + width - closeSize * 0.22} ${y + closeSize * 0.22}`}
+              stroke="#ffffff"
+              strokeWidth={screenPxToCanvasUnits(1.25, zoom)}
+              strokeLinecap="round"
+              pointerEvents="none"
+            />
+          </g>
+        ) : null}
+      </g>,
+    );
+  }
+  return marks.length > 0 ? <g>{marks}</g> : null;
+}
+
+function closedPolygonPath(
+  points: PdfPoint[],
+  pageHeight: number,
+  scale: number,
+): string {
+  if (points.length < 3) return "";
+  return `${polylinePath(points, pageHeight, scale)} Z`;
+}
+
+function RoomHoverFill({
+  points,
+  pageHeight,
+  scale,
+  zoom,
+  color = "#0ea5e9",
+  fillOpacity = 0.2,
+}: {
+  points: PdfPoint[];
+  pageHeight: number;
+  scale: number;
+  zoom: number;
+  color?: string;
+  fillOpacity?: number;
+}) {
+  const d = closedPolygonPath(points, pageHeight, scale);
+  if (!d) return null;
+  return (
+    <path
+      d={d}
+      fill={color}
+      fillOpacity={fillOpacity}
+      stroke={color}
+      strokeWidth={screenPxToCanvasUnits(2, zoom)}
+      pointerEvents="none"
+    />
+  );
+}
+
+function RoomLeakGlow({
+  leaks,
+  pageHeight,
+  scale,
+  zoom,
+}: {
+  leaks: RoomLeak[];
+  pageHeight: number;
+  scale: number;
+  zoom: number;
+}) {
+  const reactId = useId().replace(/:/g, "");
+  if (leaks.length === 0) return null;
+  const minGlow = screenPxToCanvasUnits(22, zoom);
+  const baseStroke = screenPxToCanvasUnits(3, zoom);
+  return (
+    <g pointerEvents="none" aria-hidden>
+      {leaks.map((leak, index) => {
+        const a = pdfPointToCanvas(leak.a, pageHeight, scale);
+        const b = pdfPointToCanvas(leak.b, pageHeight, scale);
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        const gap = Math.hypot(b.x - a.x, b.y - a.y);
+        // Narrower gaps get a stronger bloom so hairline near-misses stand out.
+        const smallness = Math.min(
+          1,
+          Math.max(0, 1 - leak.width / MAX_ROOM_LEAK_MAX_GAP_PT),
+        );
+        const radius = Math.max(
+          minGlow,
+          gap * 1.5 + minGlow * (0.45 + smallness * 0.9),
+        );
+        const centerOpacity = 0.58 + smallness * 0.32;
+        const midOpacity = 0.24 + smallness * 0.22;
+        const stroke =
+          baseStroke + smallness * screenPxToCanvasUnits(2.5, zoom);
+        const gradientId = `room-leak-glow-${reactId}-${index}`;
+        const showAnchor = smallness >= 0.35;
+        const anchorR = stroke * (1.1 + smallness * 0.5);
+        return (
+          <g key={gradientId}>
+            <defs>
+              <radialGradient id={gradientId}>
+                <stop
+                  offset="0%"
+                  stopColor="#ef4444"
+                  stopOpacity={centerOpacity}
+                />
+                <stop
+                  offset="38%"
+                  stopColor="#ef4444"
+                  stopOpacity={midOpacity}
+                />
+                <stop offset="100%" stopColor="#ef4444" stopOpacity="0" />
+              </radialGradient>
+            </defs>
+            <circle
+              cx={mid.x}
+              cy={mid.y}
+              r={radius}
+              fill={`url(#${gradientId})`}
+            />
+            <line
+              x1={a.x}
+              y1={a.y}
+              x2={b.x}
+              y2={b.y}
+              stroke="#dc2626"
+              strokeWidth={stroke}
+              strokeLinecap="round"
+            />
+            {showAnchor ? (
+              <circle
+                cx={mid.x}
+                cy={mid.y}
+                r={anchorR}
+                fill="#dc2626"
+                stroke="#fef2f2"
+                strokeWidth={screenPxToCanvasUnits(1, zoom)}
+              />
+            ) : null}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+function RoomLabelEditor({
+  item,
+  pageHeight,
+  scale,
+  zoom,
+  onChange,
+  onCommit,
+}: {
+  item: Extract<FloorPlanAnnotation, { type: "room" }>;
+  pageHeight: number;
+  scale: number;
+  zoom: number;
+  onChange: (text: string) => void;
+  onCommit: () => void;
+}) {
+  const centroid = polygonCentroid(item.points);
+  const canvas = pdfPointToCanvas(centroid, pageHeight, scale);
+  const widthPx = 148;
+  const heightPx = 32;
+  const width = screenPxToCanvasUnits(widthPx, zoom);
+  const height = screenPxToCanvasUnits(heightPx, zoom);
+  return (
+    <foreignObject
+      x={canvas.x - width / 2}
+      y={canvas.y - height / 2}
+      width={width}
+      height={height}
+      overflow="visible"
+    >
+      <div
+        xmlns="http://www.w3.org/1999/xhtml"
+        style={{
+          width: `${widthPx}px`,
+          height: `${heightPx}px`,
+          transform: `scale(${1 / Math.max(zoom, 0.01)})`,
+          transformOrigin: "top left",
+        }}
+      >
+        <input
+          autoFocus
+          spellCheck={false}
+          value={item.label}
+          placeholder="Unit number"
+          onChange={(event) => onChange(event.target.value)}
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Escape" || event.key === "Enter") {
+              event.preventDefault();
+              onCommit();
+            }
+          }}
+          onBlur={() => onCommit()}
+          className="h-8 w-full rounded border border-sky-400 bg-white px-2 text-sm font-semibold text-slate-800 shadow-sm outline-none"
+        />
+      </div>
+    </foreignObject>
   );
 }
 
@@ -736,6 +2004,7 @@ function AnnotationShape({
   selectable,
   ghost = false,
   ghostOpacity = 0.55,
+  dashed = false,
   onSelect,
 }: {
   item: FloorPlanAnnotation;
@@ -747,13 +2016,19 @@ function AnnotationShape({
   selectable: boolean;
   ghost?: boolean;
   ghostOpacity?: number;
+  dashed?: boolean;
   onSelect?: (index: number, event: React.PointerEvent<SVGPathElement>) => void;
 }) {
   const stroke = savedStrokeWidth(item.strokeWidthPt, zoom);
   const hitStroke = screenPxToCanvasUnits(HIT_SCREEN_PX, zoom);
+  const isRoom = item.type === "room";
+  const closedHit =
+    isRoom || item.type === "rectangle" || item.type === "circle";
   let d = "";
   if (item.type === "polyline" && item.points.length >= 2) {
     d = polylinePath(item.points, pageHeight, scale);
+  } else if (isRoom && item.points.length >= 3) {
+    d = `${polylinePath(item.points, pageHeight, scale)} Z`;
   } else if (item.type === "rectangle" || item.type === "circle") {
     d = boundingBoxAnnotationPath(item, pageHeight, scale);
   } else {
@@ -761,23 +2036,39 @@ function AnnotationShape({
   }
 
   const color = item.color;
+  const isFilled =
+    (item.type === "rectangle" || item.type === "circle") &&
+    item.filled === true;
+  const dash =
+    ghost || dashed
+      ? `${screenPxToCanvasUnits(6, zoom)} ${screenPxToCanvasUnits(4, zoom)}`
+      : undefined;
 
   return (
-    <g opacity={ghost ? ghostOpacity : 1}>
+    <g
+      opacity={ghost ? ghostOpacity : 1}
+      transform={
+        item.type === "rectangle" || item.type === "circle"
+          ? boxCanvasRotateTransform(item, pageHeight, scale)
+          : undefined
+      }
+    >
       <path
         d={d}
-        fill="none"
+        fill={isFilled ? color : isRoom ? color : "none"}
+        fillOpacity={isFilled ? 1 : isRoom ? 0.14 : undefined}
         stroke={color}
         strokeWidth={stroke}
         strokeLinecap="round"
         strokeLinejoin="round"
-        strokeDasharray={ghost ? `${screenPxToCanvasUnits(6, zoom)} ${screenPxToCanvasUnits(4, zoom)}` : undefined}
+        strokeDasharray={dash}
         pointerEvents="none"
       />
       {selected ? (
         <path
           d={d}
-          fill="none"
+          fill={isFilled ? color : isRoom ? "#0ea5e9" : "none"}
+          fillOpacity={isFilled ? 1 : isRoom ? 0.1 : undefined}
           stroke="#0ea5e9"
           strokeWidth={stroke + screenPxToCanvasUnits(3, zoom)}
           strokeLinecap="round"
@@ -789,13 +2080,13 @@ function AnnotationShape({
       {selectable ? (
         <path
           d={d}
-          fill="none"
+          fill={closedHit ? "transparent" : "none"}
           stroke="transparent"
           strokeWidth={Math.max(hitStroke, stroke)}
           strokeLinecap="round"
           strokeLinejoin="round"
-          pointerEvents="stroke"
-          className="cursor-pointer"
+          pointerEvents={closedHit ? "all" : "stroke"}
+          className="cursor-grab"
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             event.preventDefault();
@@ -881,6 +2172,7 @@ function PolylineVertexHandles({
   );
 }
 
+/** Overlay of saved and in-progress markup, including box callouts. */
 export function FloorPlanAnnotationLayer({
   pageWidth,
   pageHeight,
@@ -888,6 +2180,8 @@ export function FloorPlanAnnotationLayer({
   zoom = 1,
   overlayAnnotations = [],
   overlayOpacity = 0.55,
+  followedOverlayAnnotations = [],
+  followedRiserIds = [],
   annotations,
   selectedIndices,
   selectionDraft,
@@ -897,6 +2191,11 @@ export function FloorPlanAnnotationLayer({
   hoverSnap,
   hoverVertex = null,
   vertexDrag = null,
+  hoverRoom = null,
+  hoverLeaks = [],
+  listHoverRoomIndex = null,
+  editingRoomIndex = null,
+  shapeDragging = false,
   draftColor,
   draftStrokeWidthPt,
   drawInteractive,
@@ -910,10 +2209,39 @@ export function FloorPlanAnnotationLayer({
   onSelectPointerUp,
   onAnnotationSelect,
   onVertexPointerDown,
-  showSavedAnnotations = true,
-  showOverlayAnnotations = true,
   connectDraftIndex = null,
   connectHoverIndex = null,
+  connectDraftOverlayIndex = null,
+  connectHoverOverlayIndex = null,
+  selectedRiserAboveId = null,
+  hoverRiserAboveId = null,
+  onRiserSelect,
+  showSavedAnnotations = true,
+  showOverlayAnnotations = true,
+  editingCalloutIndex = null,
+  calloutInteractive = false,
+  onCalloutPointerDown,
+  onCalloutTextChange,
+  onCalloutCommit,
+  onCalloutRemove,
+  onRoomLabelChange,
+  onRoomCommit,
+  calloutCatalogMode = false,
+  riserTypes = [],
+  mechanicalRisers = [],
+  catalogSaving = false,
+  onCalloutCatalogAssign,
+  onCalloutCatalogType,
+  onCalloutCatalogReclassify,
+  onCalloutCatalogEnsureRiser,
+  selectedFollowedRiserId = null,
+  onFollowedApprove,
+  onFollowedDismiss,
+  onFollowedMovePointerDown,
+  onFollowedSelect,
+  showRiserLabels = true,
+  markupExtent = null,
+  showPageBoundsOutline = false,
 }: {
   pageWidth: number;
   pageHeight: number;
@@ -921,6 +2249,19 @@ export function FloorPlanAnnotationLayer({
   zoom?: number;
   overlayAnnotations?: FloorPlanAnnotation[];
   overlayOpacity?: number;
+  /** Followed riser preview from the floor below; dashed until approved. */
+  followedOverlayAnnotations?: FloorPlanAnnotation[];
+  /** When non-empty, only those riser stacks' saved boxes/callouts are drawn. */
+  followedRiserIds?: string[];
+  /** Overlay box selected for this-floor move / arrow-key nudge. */
+  selectedFollowedRiserId?: string | null;
+  onFollowedApprove?: (index: number) => void;
+  onFollowedDismiss?: (index: number) => void;
+  onFollowedMovePointerDown?: (
+    index: number,
+    event: React.PointerEvent,
+  ) => void;
+  onFollowedSelect?: (riserId: string | null) => void;
   /** When false, saved lines stay in state but are not drawn (drafts/tools still render). */
   showSavedAnnotations?: boolean;
   /** When false, reference overlay lines stay mounted but hidden (no PDF reload). */
@@ -934,6 +2275,13 @@ export function FloorPlanAnnotationLayer({
   hoverSnap: SnapResult | null;
   hoverVertex?: VertexHover | null;
   vertexDrag?: VertexDragDraft | null;
+  hoverRoom?: RoomFace | null;
+  /** Near-miss wall gaps for the room under the cursor. */
+  hoverLeaks?: RoomLeak[];
+  /** Room highlighted from the ribbon unit list. */
+  listHoverRoomIndex?: number | null;
+  editingRoomIndex?: number | null;
+  shapeDragging?: boolean;
   draftColor: string;
   draftStrokeWidthPt: number;
   drawInteractive: boolean;
@@ -956,6 +2304,49 @@ export function FloorPlanAnnotationLayer({
   ) => void;
   connectDraftIndex?: number | null;
   connectHoverIndex?: number | null;
+  connectDraftOverlayIndex?: number | null;
+  connectHoverOverlayIndex?: number | null;
+  selectedRiserAboveId?: string | null;
+  hoverRiserAboveId?: string | null;
+  onRiserSelect?: (
+    aboveId: string,
+    event: React.PointerEvent<SVGLineElement>,
+  ) => void;
+  editingCalloutIndex?: number | null;
+  calloutInteractive?: boolean;
+  onCalloutPointerDown?: (
+    index: number,
+    event: React.PointerEvent,
+  ) => void;
+  onCalloutTextChange?: (index: number, text: string) => void;
+  onCalloutCommit?: () => void;
+  onCalloutRemove?: (index: number) => void;
+  onRoomLabelChange?: (index: number, text: string) => void;
+  onRoomCommit?: () => void;
+  calloutCatalogMode?: boolean;
+  riserTypes?: MechanicalRiserTypeDto[];
+  mechanicalRisers?: MechanicalRiserDto[];
+  catalogSaving?: boolean;
+  onCalloutCatalogAssign?: (
+    index: number,
+    typeId: string,
+    riserIds: string[],
+  ) => void;
+  onCalloutCatalogType?: (index: number, typeId: string) => void;
+  onCalloutCatalogReclassify?: (
+    riserIds: string[],
+    typeId: string,
+  ) => Promise<RiserIdRewrite | null>;
+  onCalloutCatalogEnsureRiser?: (
+    typeId: string,
+    label: string,
+  ) => Promise<string | null>;
+  /** When false, hide mechanical riser callout bubbles (boxes stay visible). */
+  showRiserLabels?: boolean;
+  /** When set and larger than the page, the SVG grows so off-canvas markup is visible. */
+  markupExtent?: PdfMarkupExtent | null;
+  /** Dashed outline of the PDF page when markup extends past it. */
+  showPageBoundsOutline?: boolean;
 }) {
   const selectedSet = useMemo(
     () => new Set(selectedIndices),
@@ -976,6 +2367,7 @@ export function FloorPlanAnnotationLayer({
   const hasContent =
     annotations.length > 0 ||
     overlayAnnotations.length > 0 ||
+    followedOverlayAnnotations.length > 0 ||
     lineDraft != null ||
     boundingBoxDraft != null ||
     selectionDraft != null ||
@@ -1009,9 +2401,17 @@ export function FloorPlanAnnotationLayer({
       item.type === "polyline"
         ? item.points
         : item.type === "rectangle"
-          ? rectangleToPolylinePoints(item.rect)
+          ? rotatePdfPointsAround(
+              rectangleToPolylinePoints(item.rect),
+              pdfRectCenter(item.rect),
+              annotationRotationDeg(item),
+            )
           : item.type === "circle"
-            ? circleToPolylinePoints(item.rect)
+            ? rotatePdfPointsAround(
+                circleToPolylinePoints(item.rect),
+                pdfRectCenter(item.rect),
+                annotationRotationDeg(item),
+              )
             : null;
     if (!points || points.length < 2) return null;
 
@@ -1036,21 +2436,59 @@ export function FloorPlanAnnotationLayer({
 
   if (!hasContent && !drawInteractive && !selectInteractive && !selectable) return null;
 
-  const pointerActive = drawInteractive || selectInteractive;
+  const followReviewActive =
+    followedOverlayAnnotations.length > 0 &&
+    onFollowedApprove != null &&
+    !drawInteractive;
+  const pointerActive =
+    drawInteractive || Boolean(selectInteractive) || followReviewActive;
+
+  const extentActive =
+    markupExtent != null &&
+    markupExtentExceedsPage(markupExtent, pageWidth, pageHeight);
+  const layerTransform = extentActive
+    ? `translate(${-markupExtent!.minX * scale}, ${-(pageHeight - markupExtent!.maxY) * scale})`
+    : undefined;
+  const svgPositionStyle: React.CSSProperties | undefined = extentActive
+    ? {
+        left: markupExtent!.minX * scale,
+        top: (pageHeight - markupExtent!.maxY) * scale,
+        width: (markupExtent!.maxX - markupExtent!.minX) * scale,
+        height: (markupExtent!.maxY - markupExtent!.minY) * scale,
+        overflow: "visible",
+      }
+    : undefined;
+
+  const handleSelectOrFollowPointerDown = (
+    event: React.PointerEvent<SVGSVGElement>,
+  ) => {
+    if (selectInteractive) {
+      onSelectPointerDown?.(event);
+      return;
+    }
+    if (followReviewActive && event.button === 0) {
+      onFollowedSelect?.(null);
+    }
+  };
 
   return (
     <svg
-      className={`absolute inset-0 z-[30] h-full w-full outline-none ${
-        pointerActive ? "pointer-events-auto" : "pointer-events-none"
-      }${selectInteractive && hoverVertex ? " cursor-move" : ""}`}
-      style={{ touchAction: pointerActive ? "none" : undefined }}
+      className={`absolute z-[30] outline-none ${
+        extentActive ? "" : "inset-0 h-full w-full"
+      }${pointerActive ? " pointer-events-auto" : " pointer-events-none"}${
+        shapeDragging ? " cursor-grabbing" : selectInteractive && hoverVertex ? " cursor-move" : hoverRoom || hoverLeaks.length > 0 ? " cursor-cell" : ""
+      }`}
+      style={{
+        touchAction: pointerActive ? "none" : undefined,
+        ...svgPositionStyle,
+      }}
       tabIndex={drawInteractive ? -1 : undefined}
       aria-label={drawInteractive ? "Floor plan drawing canvas" : undefined}
       onPointerDown={
         drawInteractive
           ? onPointerDown
-          : selectInteractive
-            ? onSelectPointerDown
+          : selectInteractive || followReviewActive
+            ? handleSelectOrFollowPointerDown
             : undefined
       }
       onPointerMove={
@@ -1068,6 +2506,20 @@ export function FloorPlanAnnotationLayer({
             : undefined
       }
     >
+      <g transform={layerTransform}>
+      {showPageBoundsOutline && extentActive ? (
+        <rect
+          x={0}
+          y={0}
+          width={pageWidth * scale}
+          height={pageHeight * scale}
+          fill="none"
+          stroke="#94a3b8"
+          strokeWidth={screenPxToCanvasUnits(1.5, zoom)}
+          strokeDasharray={`${screenPxToCanvasUnits(8, zoom)} ${screenPxToCanvasUnits(6, zoom)}`}
+          pointerEvents="none"
+        />
+      ) : null}
       <g
         visibility={overlayVisible ? "visible" : "hidden"}
         pointerEvents="none"
@@ -1086,12 +2538,195 @@ export function FloorPlanAnnotationLayer({
             ghostOpacity={overlayOpacity}
           />
         ))}
+        <CalloutMarks
+          annotations={overlayAnnotations}
+          pageHeight={pageHeight}
+          scale={scale}
+          zoom={zoom}
+          editingIndex={null}
+          interactive={false}
+          ghost
+          ghostOpacity={overlayOpacity}
+          catalogMode={calloutCatalogMode}
+          riserTypes={riserTypes}
+          risers={mechanicalRisers}
+          showRiserLabels={showRiserLabels}
+        />
       </g>
+      {followedOverlayAnnotations.length > 0 ? (
+        <g pointerEvents={followReviewActive ? "auto" : "none"}>
+          {followedOverlayAnnotations.map((item, index) => {
+            const riserIds = followOverlayRiserIds(item);
+            const selected =
+              selectedFollowedRiserId != null &&
+              riserIds.includes(selectedFollowedRiserId);
+            return (
+              <g key={`follow-${index}`}>
+                <AnnotationShape
+                  item={item}
+                  index={index}
+                  pageHeight={pageHeight}
+                  scale={scale}
+                  zoom={zoom}
+                  selected={selected}
+                  selectable={false}
+                  dashed
+                />
+              </g>
+            );
+          })}
+          {([
+            [connectHoverOverlayIndex, CONNECT_HOVER_COLOR, "connect-overlay-hover"],
+            [connectDraftOverlayIndex, CONNECT_PENDING_COLOR, "connect-overlay-pending"],
+          ] as const).map(([index, color, key]) => {
+            if (index == null) return null;
+            const item = followedOverlayAnnotations[index];
+            if (!isConnectableBox(item)) return null;
+            return (
+              <g
+                key={key}
+                transform={boxCanvasRotateTransform(item, pageHeight, scale)}
+              >
+                <path
+                  d={boxFillPath(item, pageHeight, scale)}
+                  fill={color}
+                  fillOpacity={0.18}
+                  stroke={color}
+                  strokeWidth={screenPxToCanvasUnits(3.5, zoom)}
+                  pointerEvents="none"
+                />
+              </g>
+            );
+          })}
+          <CalloutMarks
+            annotations={followedOverlayAnnotations}
+            pageHeight={pageHeight}
+            scale={scale}
+            zoom={zoom}
+            editingIndex={null}
+            interactive={false}
+            dashed
+            catalogMode={calloutCatalogMode}
+            riserTypes={riserTypes}
+            risers={mechanicalRisers}
+            showRiserLabels={showRiserLabels}
+          />
+          {followReviewActive
+            ? followedOverlayAnnotations.map((item, index) => (
+                <FollowReviewControls
+                  key={`follow-review-${index}`}
+                  item={item}
+                  pageHeight={pageHeight}
+                  scale={scale}
+                  zoom={zoom}
+                  selected={
+                    selectedFollowedRiserId != null &&
+                    followOverlayRiserIds(item).includes(selectedFollowedRiserId)
+                  }
+                  onApprove={() => onFollowedApprove?.(index)}
+                  onDismiss={() => onFollowedDismiss?.(index)}
+                  onMovePointerDown={(event) =>
+                    onFollowedMovePointerDown?.(index, event)
+                  }
+                />
+              ))
+            : null}
+        </g>
+      ) : null}
       <g
         visibility={savedVisible ? "visible" : "hidden"}
         pointerEvents={savedVisible ? undefined : "none"}
       >
-        {annotations.map((item, index) => (
+        {annotations.map((item, index) => {
+          if (item.type !== "room") return null;
+          if (
+            followedRiserIds.length > 0 &&
+            !annotationVisibleWhileFollowingRiser(item, followedRiserIds)
+          ) {
+            return null;
+          }
+          const roomColor = roomDisplayColor(annotations, index);
+          return (
+            <AnnotationShape
+              key={`room-${index}`}
+              item={{ ...item, color: roomColor }}
+              index={index}
+              pageHeight={pageHeight}
+              scale={scale}
+              zoom={zoom}
+              selected={selectedSet.has(index)}
+              selectable={selectable && savedVisible}
+              onSelect={onAnnotationSelect}
+            />
+          );
+        })}
+        {hoverRoom ? (
+          <RoomHoverFill
+            points={hoverRoom.points}
+            pageHeight={pageHeight}
+            scale={scale}
+            zoom={zoom}
+          />
+        ) : null}
+        <RoomLeakGlow
+          leaks={hoverLeaks}
+          pageHeight={pageHeight}
+          scale={scale}
+          zoom={zoom}
+        />
+        {listHoverRoomIndex != null &&
+        (() => {
+          const item = annotations[listHoverRoomIndex];
+          return item?.type === "room" ? (
+            <RoomHoverFill
+              points={item.points}
+              pageHeight={pageHeight}
+              scale={scale}
+              zoom={zoom}
+              color={roomDisplayColor(annotations, listHoverRoomIndex)}
+              fillOpacity={0.32}
+            />
+          ) : null;
+        })()}
+        {annotations.map((item, index) => {
+          if (
+            followedRiserIds.length > 0 &&
+            !annotationVisibleWhileFollowingRiser(item, followedRiserIds)
+          ) {
+            return null;
+          }
+          if (item.type === "room") {
+            if (editingRoomIndex === index) {
+              return (
+                <RoomLabelEditor
+                  key={`room-edit-${index}`}
+                  item={item}
+                  pageHeight={pageHeight}
+                  scale={scale}
+                  zoom={zoom}
+                  onChange={(text) => onRoomLabelChange?.(index, text)}
+                  onCommit={() => onRoomCommit?.()}
+                />
+              );
+            }
+            if (!item.label.trim()) return null;
+            const centroid = polygonCentroid(item.points);
+            const canvas = pdfPointToCanvas(centroid, pageHeight, scale);
+            const fontSize = screenPxToCanvasUnits(ROOM_LABEL_FONT_PX, zoom);
+            return (
+              <OutlinedLabel
+                key={`room-label-${index}`}
+                x={canvas.x}
+                y={canvas.y + fontSize * 0.35}
+                color={roomDisplayColor(annotations, index)}
+                fontSize={fontSize}
+                zoom={zoom}
+              >
+                {item.label}
+              </OutlinedLabel>
+            );
+          }
+          return (
           <g key={index}>
             <AnnotationShape
               item={item}
@@ -1117,7 +2752,8 @@ export function FloorPlanAnnotationLayer({
               />
             ) : null}
           </g>
-        ))}
+          );
+        })}
       </g>
       {savedVisible ? (
         <RiserOffsetOverlay
@@ -1127,6 +2763,35 @@ export function FloorPlanAnnotationLayer({
           zoom={zoom}
           connectDraftIndex={connectDraftIndex}
           connectHoverIndex={connectHoverIndex}
+          riserSelectable={selectInteractive && selectable}
+          selectedRiserAboveId={selectedRiserAboveId}
+          hoverRiserAboveId={hoverRiserAboveId}
+          followedRiserIds={followedRiserIds}
+          onRiserSelect={onRiserSelect}
+        />
+      ) : null}
+      {savedVisible ? (
+        <CalloutMarks
+          annotations={annotations}
+          pageHeight={pageHeight}
+          scale={scale}
+          zoom={zoom}
+          editingIndex={editingCalloutIndex}
+          interactive={calloutInteractive && savedVisible}
+          catalogMode={calloutCatalogMode}
+          riserTypes={riserTypes}
+          risers={mechanicalRisers}
+          catalogSaving={catalogSaving}
+          followedRiserIds={followedRiserIds}
+          showRiserLabels={showRiserLabels}
+          onPointerDown={onCalloutPointerDown}
+          onTextChange={onCalloutTextChange}
+          onCommit={onCalloutCommit}
+          onRemove={onCalloutRemove}
+          onCatalogAssign={onCalloutCatalogAssign}
+          onCatalogType={onCalloutCatalogType}
+          onCatalogReclassify={onCalloutCatalogReclassify}
+          onCatalogEnsureRiser={onCalloutCatalogEnsureRiser}
         />
       ) : null}
       {lineDraft && lineDraft.points.length > 0 ? (
@@ -1315,6 +2980,7 @@ export function FloorPlanAnnotationLayer({
           zoom={zoom}
         />
       ) : null}
+      </g>
     </svg>
   );
 }

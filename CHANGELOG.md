@@ -6,7 +6,218 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Highlighted unit walls are a 6-inch shell of the labeled room fill** — Asset
+  overview no longer extrudes drawn wall polylines into a highlighted unit. The
+  opaque enclosure follows the 2D unit polygon silhouette (T-stem spikes that
+  enclose no floor are dropped). Drawn walls stay on the faded global shell.
+
+- **3D building camera & unit labels** — Swapped orbit controls so left-drag pans and
+  middle-drag (mouse wheel button) rotates; scroll wheel now zooms toward the cursor
+  instead of the viewport center. Highlighted unit labels use fixed screen-pixel size
+  (larger text) so they stay readable at any zoom level. Turning on a unit highlight
+  now automatically drops shell wall and slab opacity to 5%.
+
+- **Build-out progress dialog** — Replaced the long vertical card list with a
+  wider Gantt-style execution timeline: phase columns (parallel, blocked, after,
+  later, parked), compact swimlane rows for the playbook and inventory, sticky
+  workstream labels, and a side detail panel on row select.
+
 ### Added
+
+- **3D Unit Highlighting & Selective Wall Transparency** — In Building → Asset overview & 3D,
+  added the ability to search, select, and highlight individual units with selective wall
+  transparency preservation:
+  - **Unit search & toggle panel**: Dedicated "Units" tab in the 3D control drawer with instant
+    text search by unit number (e.g., "101", "204"), floor quick-filter buttons ("All Floors",
+    "Floor 1", etc.), bulk "Highlight all" and "Clear all" buttons, active highlight tags,
+    and individual unit toggle checkboxes with unit color swatches.
+  - **Opaque unit geometry**: When units are toggled on, their floor boundaries render as
+    solid 3D plates with 100% opacity (no transparency) and interactive 3D billboard labels
+    indicating the unit number.
+  - **Selective wall transparency**: Walls touching the perimeter or interior of highlighted units
+    remain 100% opaque, while all other walls in the building obey the shell transparency
+    slider (`wallOpacity`). Users can drag the wall opacity slider down to make surrounding
+    walls semi-transparent or invisible while keeping highlighted units and their enclosing
+    walls prominently visible.
+  - **Geometric wall-touching detection**: Pinpoints wall segments that overlap unit boundaries
+    or lie within unit footprints, distinguishing unit boundary runs from exterior walls of
+    adjacent units at corner vertices.
+  - **Cross-tab sync**: Active highlighted unit counts reflect on the "Units" tab header and
+    on the "Layers" tab's Structure Shell panel with one-click clear and view shortcuts.
+
+- **Phase 3 3D building interactivity, visibility & layer filtering** — The 3D
+  Digital Twin viewer at Building → Asset overview & 3D now includes comprehensive
+  layer controls, material opacity sliders, floor slicing, click-to-inspect
+  raycasting, and quick view presets:
+  - **Quick view presets**: One-click preset buttons for "Reset Full Building",
+    "Mechanical Only" (hides all slabs/walls to isolate the 3D pipe network),
+    "Only HC" (isolates Heating & Cooling risers with ghosted structure),
+    "Sanitary & Laundry" (isolates drainage risers), "Floors 8–10" (slices to
+    specific tower plates), and "Structure Only" (slabs and walls without risers).
+  - **Structure opacity & visibility controls**: Individual toggles and 0–100%
+    opacity sliders for both walls and slabs, allowing users to make walls translucent
+    to see pipes running inside internal wall cavities or isolate slabs completely.
+  - **Interactive click-to-inspect with scene dimming**: Clicking any 3D pipe sweep
+    or equipment primitive dims the surrounding scene (non-selected pipes to 18%
+    opacity, structure dimmed) and highlights the target run in electric cyan.
+    Displays an interactive floating Inspector Card showing nominal diameter, total
+    run length, elevation span, spanned floors, and connected level chips with
+    one-click "Isolate Riser Run" and "Filter Floors" actions.
+  - **Floor slicing and isolation**: Level filtering supporting "All Floors",
+    "Range" (with quick buttons for Basement, Podium 1–7, Tower 8–24, Upper),
+    and "Single Level" selection for both structural geometry and mechanical runs.
+  Building → Asset overview & 3D now renders continuous 3D volumetric pipe
+  runs (`TubeGeometry`) connecting 2D mechanical riser nodes across floors.
+  Vertical runs transition into smooth filleted elbows at horizontal offset
+  jogs (podium/tower transfer levels) using `QuadraticBezierCurve3` to avoid
+  pinched miter glitches. Pipes are styled by system type colors matching the
+  2D floor plan editor presets (Kitchen, Toilet, Laundry, HC, RWL, Heat pump).
+  Added terminal equipment bounding primitives at bottom sumps/collectors and
+  top terminal vent cowls. A dedicated control panel provides system layer
+  checkboxes, pipe opacity slider, equipment toggles, and click-to-inspect
+  metadata banners showing pipe diameter, length, and floor range.
+
+### Fixed
+
+- **Building 3D Unit Search Duplicate Keys** — Fixed a React duplicate key error
+  (`Encountered two children with the same key, '7:708'`) occurring when switching
+  to the "Units" tab or selecting units that have multiple room polygons or duplicate
+  annotations on the same floor level:
+  - Deduplicated unit listings in `UnitSearchControls` by `unitId` so that multi-polygon
+    or multi-room units appear as a single entry in the search list and active highlight chips.
+  - Deduplicated `touchingUnitIds` in `extrudeWalls` when a wall segment borders multiple
+    polygons of the same unit.
+  - Scoped 3D scene graph group names to unique unit annotation keys.
+
+- **Riser standardization dialog clip & placement** — The template preview now
+  zooms small clips for editing while keeping true PDF scale for shape sizes.
+  The sample freehand riser is chosen from the clip you drew (not always the
+  first riser on the floor), so placed circles and rectangles appear on the
+  clip instead of thousands of points away. New sessions start with an empty
+  template instead of an auto-added rectangle sized to the floor average.
+  Clip previews rasterize at display resolution (no CSS upscaling blur). The
+  sample riser box in the preview uses the same solid stroke as on the plan
+  (not a dashed pink overlay). The clip-region drag rectangle keeps a constant
+  screen stroke width when panning/zooming the sheet. Template shapes in the
+  clip preview use click-drag drawing (Shift = square) like the main canvas box
+  tools, with matching on-screen stroke weights.
+
+- **Compare lines overlay toolbar** — The **Lines overlay** control (and onion
+  skin slider) lived in a footer bar that was easy to miss in full-screen
+  compare and could sit below the fold in the inline panel. Both now sit in
+  the compare toolbar: a second row under the title in expanded mode, and
+  above the canvas in inline mode.
+
+- **Extending a line no longer freezes then crashes** — Holding **Shift**
+  while dragging a polyline vertex (ortho constraint or Shift-click) used
+  to re-run the vertex update on every key-repeat. Each pass rebuilt the
+  room graph, so a traced floor hung for several seconds and then threw
+  “Maximum update depth exceeded.” Shift now applies once on press and
+  once on release, and the room graph waits until the drag ends.
+
+### Changed
+
+- **Build-out progress popup** — Curated statuses refreshed (reviewed
+  2026-09-04). **3D digital twin** and new **Floor plan markup & mechanical
+  risers** are in progress (massing, riser sweeps, unit highlight, 2D tracing).
+  **Board meeting review (v2 pipeline)** added. Projects, entity profiles,
+  and to-do click-in reflect shipped work since the August review. Playbook
+  sequence leads with floor-plan tracing, 3D verification, projects lab, and
+  meetings v2 QA in parallel.
+
+- **Room leak glow** — Hairline near-miss gaps now bloom harder: wider
+  radius, higher opacity, thicker stroke, and a small anchor dot on the
+  smallest leaks so the red emanation is easier to spot on dense sheets.
+
+- **Riser standardization uses a plan-scale drawing clip** — Clicking
+  **Standardize** now prompts you to draw a reference rectangle on the
+  floor plan. The dialog opens with that region rasterized at true PDF
+  scale (1 pt = 1 px) so circles and rectangles can be placed and dragged
+  directly over the drawing. The dashed pink box shows the sample freehand
+  riser rectangle for alignment.
+
+### Added
+
+- **Standardize Mechanical Riser Shapes & Templates** — In the 2D floor plan editor, users can now define standardized shape templates for each mechanical riser type (e.g., toilet, kitchen, laundry). Templates support custom dimensions for rectangles as well as multi-circle configurations (such as the standard 3-circle toilet riser cluster with concentric or crosshair/filled variations). Clicking **Standardize** centers the defined template layout within every corresponding freehand rectangle on the plan (or across all floors in the building) and replaces the freehand boxes while preserving callout labels, riser connections, and orientations.
+
+- **2D blueprint texture overlay on 3D floor slabs** — Each 3D floor slab
+  in the building model viewer now maps its exact 2D architectural source
+  drawing onto its top face. Aligned 1:1 with extruded walls and columns
+  via the building pin datum, the blueprint plane uses a +0.01 m elevation
+  offset with GPU polygonOffset to prevent surface flickering. A floating
+  overlay control provides global show/hide, a 0–100% opacity slider, and
+  level-by-level visibility checkboxes to inspect individual floors.
+
+- **Real 3D building massing** — Building → Asset overview & 3D now stacks
+  slabs and extruded walls from pinned, cropped architectural floor plans
+  instead of the placeholder parking/podium/tower boxes. Each ready floor
+  snaps to the shared building pin, converts PDF points with the family
+  scale (1:100 if unset), and uses 3.5 m storeys with 200 mm slabs and
+  150 mm walls. Missing floors are not invented; unready or duplicate
+  sheets are skipped with a count on the viewer.
+
+- **Riser label visibility** — Toggle mechanical riser callout labels (Sanitary
+  B11, etc.) on or off in edit mode (**View → riser labels**) and compare mode
+  (**Riser labels** checkbox). Boxes and lines stay visible; only the callout
+  bubbles and leaders hide. The choice persists in the edit ribbon session.
+
+- **Compare overlay line types** — Compare still stacks architectural or
+  mechanical drawings separately. Overlay strokes on those sheets now use
+  the same **Lines overlay** checkboxes as edit mode: all types, all
+  architectural, all mechanical, or individual colors. Checking mechanical
+  while comparing architectural drawings pin-maps that floor's mechanical
+  markup onto the stacked plates (and the reverse).
+
+- **Drag floor-plan shapes** — In Select (**V**), click a rectangle, circle,
+  line, or unit and drag it to a new position. Arrow keys still nudge by a
+  pixel. Grab a polyline vertex to reshape it as before.
+
+- **Room leak glow** — In Room (**U**), hovering a space that is almost
+  closed lights a red bloom on wall gaps smaller than the leak threshold
+  (default 12 PDF points). Doorways and large openings stay dark. A **Leak**
+  slider next to the unit list sets that threshold from 3 to 48 points.
+
+- **Room tool for unit enclosures** — The edit ribbon **Tools** group has a
+  Room control (**U**) next to rectangle and circle. Hover over a space
+  enclosed by drawn walls to preview the whole perimeter; gaps show no
+  highlight. Click to define that area as a unit and type the unit number.
+  Riser boxes inside a unit do not steal the hover face.
+
+- **Tagged riser list by floor** — The edit ribbon **Risers** group has a
+  **List** toggle. It opens a side panel over the drawing that lists every
+  tagged riser on each floor, grouped by type (legend colors) and then by
+  number. Floors and types are collapsible; the floor you are on starts
+  expanded. Use it to check whether a riser seen on a higher floor was
+  already tagged below.
+
+- **Rotate floor-plan boxes** — The edit ribbon **Tools** group has a
+  rotate control (**T**). Click and hold a rectangle or circle to spin it
+  around its center through 360°. Hold **Shift** to snap to 45° increments
+  (0, 45, 90, 135, 180, …). Connection place-from-below copies the source
+  rotation onto the new box.
+
+- **Follow one riser up the building** — The edit ribbon **Risers** group
+  has a dropdown of catalog instances you have created. Selecting one shows
+  that box from the floor immediately below as a dashed overlay. Each overlay
+  has **approve**, **move**, and **dismiss** controls: approve writes that
+  box to this floor, dismiss skips it because the stack does not continue,
+  and move (drag or arrow keys) nudges it on this floor only. Saved boxes
+  look like ordinary markup. **Not following** hides overlays that were not
+  approved. An **Open / Done** toggle marks a stack completed so it stops
+  overlaying once you have traced it to its top floor.
+
+- **Mechanical riser catalog** — Mechanical types (color, shortcut, name) are
+  stored as official records, not freeform legend text. Callout mode (**A**) on
+  a mechanical sheet picks a type and a number; if that number is new, it is
+  added to the riser table and reused on other floors. Architectural lines stay
+  unlabeled for now.
+
+- **Floor plan box callouts** — Callout mode (**A**) on mechanical drawings
+  labels a rectangle or circle with a catalog type and number. The bubble stays
+  movable with a leader on the box edge. Click the bubble again to change the
+  assignment; the × on an editing callout removes it.
 
 - **Floor plan riser connections** — Connection mode (**K**) links two boxes:
   click the position that continues up, then the lower position. An arrow
@@ -22,7 +233,52 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   separately; compare only includes merged, pinned, and cropped mechanical
   sheets.
 
+- **Floor plan line overlay families** — Legend types are architectural or
+  mechanical (color, shortcut, and family). The overlay popover groups them
+  with All types, All architectural, and All mechanical. Checking
+  architectural types on a mechanical sheet shows that floor's architectural
+  lines; the separate Architectural lines button is gone.
+
 ### Changed
+
+- **A combined riser can have several connection arrows** — Connection mode
+  no longer replaces the first pair when you link the same box again. A
+  toilet stack labeled B11 and B12 can have one arrow to the B11 box and
+  another to B12 (or three arrows for three ids). Double-click one split
+  box to drop only that branch; the other arrows stay.
+
+- **Changing a mechanical riser type moves the whole stack** — With labels
+  already on a callout, picking a different type (kitchen → toilet) updates
+  that catalog row everywhere: every floor's callout follows, boxes recolor,
+  and a colliding same-number on the new type is merged. Line strokes stay
+  as drawn.
+
+- **Connecting a multi-riser callout asks which stacks continue** — When
+  connection mode links two boxes and only one is labeled with more than one
+  catalog number (e.g. B-11, 12), a prompt lets you pick which one(s) the
+  unlabeled box is. The original callout stays combined; the copy gets only
+  the chosen subset, so a three-riser shaft can split into two-plus-one and
+  later into three distinct stacks. After clicking the source box (saved or
+  a follow overlay), a second click on empty canvas places a same-size ABV
+  copy at that center. The source is the from-below (not ABV) box, so the
+  arrow points at it. A follow overlay is written to this floor as that
+  below box. Follow mode can still hide untagged markup.
+
+- **Follow overlays keep combined riser labels** — A box labeled with more
+  than one catalog id on the floor below (Kitchen B2, B3) overlays as that
+  same combined callout, not only the one id you happened to follow. Approve
+  still writes that one box. Ids already saved on this floor, dismissed, or
+  marked completed are dropped from the overlay.
+
+- **Follow riser overlays are reviewed per box** — Choosing risers still
+  previews boxes from the sheet immediately below (pin-mapped). Unsaved
+  overlays are dashed and editable one at a time: approve keeps that box,
+  dismiss hides it on this floor, and move adjusts it here without changing
+  the floor below. **Save lines** no longer dumps the whole overlay.
+
+- **Floor plan drawing tools** — The Tools group now wraps onto two rows so
+  Select, Line, Rectangle, Circle, Cut, Connection, and Callout take less
+  horizontal space on the edit ribbon.
 
 - **Floor plan markup stroke width** — Line and rectangle strokes now render at
   the chosen screen-pixel width (e.g. 8 px stays 8 px on screen) instead of
@@ -53,6 +309,70 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the cropped plate is gone.
 
 ### Fixed
+
+- **Lines overlay type filter** — Unchecking one line type (for example Heat
+  pump) no longer hides other checked equipment whose boxes were drawn with an
+  architectural stroke color (for example Elec closet or Garbage chute). The
+  overlay now filters by every checked type color, not only colors assigned to
+  the source drawing set’s family.
+
+- **Follow approve survives changing floors** — Approving a followed riser
+  (with or without moving it) only wrote that box into this floor’s unsaved
+  markup. Switching sheets remounts the editor, and the empty first paint could
+  replace that draft. Coming back then showed the dashed overlay again, as if
+  you had never approved. Approve now writes the draft immediately, remounts
+  wait until markup has loaded before persisting, and an empty preload cannot
+  overwrite a draft that already has work.
+
+- **Riser list click pans to the callout** — Clicking a tagged riser in the
+  side panel treated PDF Y as if the page origin were top-left. Horizontal
+  pan was right; vertical pan inverted, so stacks near the middle of the
+  sheet looked roughly centered while stacks nearer the top or bottom landed
+  off-screen. The jump now uses the same Y-flipped canvas space as the pin.
+
+- **Floor 2 Pass 2 labels in the riser list** — Opening a mechanical sheet
+  while Pass 2 was remembered in the ribbon still loaded Pass 1 boxes. Floor 2
+  looked unlabeled and every followed riser showed as unapproved, even though
+  the Pass 2 tags were saved. Markup now waits for the ribbon to hydrate
+  before choosing which pass to draw.
+
+- **Multi-riser callout labels** — Assigning more than one riser to a callout
+  no longer prefixes the label with the draw-tool keyboard shortcut (e.g.
+  `1-B2, B3`). Labels always use the riser type name and the catalog numbers
+  you entered (e.g. `Riser - Kitchen B2, B3`).
+
+- **Follow riser across floor families** — Each mechanical level is often its
+  own family (different crop plates). Follow looks at the floor immediately
+  below in the building, not only a sibling in the same family, so B11 on
+  Floor 1 can overlay onto Floor 2.
+
+- **Floor plan edit pan across drawings** — Switching floors in edit mode kept
+  zoom but walked the sheet down and to the right on every floor. The editor
+  remounts per drawing, so the first viewport measurement was treated as a
+  grow from 0×0 and recentered by half the window. That first size now only
+  seeds the baseline; later real resizes still recenter.
+
+- **Floor plan PDF upload drop zone** — Clicking “browse” in the left-panel
+  upload area no longer scrolls the page upward (worse as the drawing list
+  grows). The plan list scrolls independently with the upload footer pinned,
+  and the hidden file input no longer steals focus. Expanded crop view also
+  recenters when its viewport size changes instead of drifting until you zoom.
+
+- **Floor plan edit ribbon hydration** — The stroke-color dropdown no longer
+  mismatches server HTML on first load. Saved ribbon settings (color, tool,
+  overlays) still restore from localStorage, but only after the client has
+  hydrated, so React does not throw a recoverable hydration error.
+
+- **Mechanical callout catalog editor** — The type/number picker is a real
+  overlay instead of a clipped SVG form, so both fields are readable. Changing
+  the type keeps that choice when you click away; typing a number and clicking
+  the sheet saves it.
+
+- **Floor plan edit ribbon and view persist across drawings** — Switching
+  floors in edit mode no longer resets the tool, stroke width, crop/pin/line
+  visibility, or the zoom. The next sheet stays at the same zoom with the
+  building pin on the same screen pixel, so you keep looking at the same
+  place in the building.
 
 - **Floor plan empty-floor line overlay** — Edit mode no longer paints another
   floor's saved lines onto a sheet that has no markup of its own. That made

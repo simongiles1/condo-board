@@ -6,7 +6,7 @@ import {
 
 const STORAGE_KEY_PREFIX = "floor-plan-annotation-draft:";
 
-type FloorPlanAnnotationDraft = {
+export type FloorPlanAnnotationDraft = {
   annotations: FloorPlanAnnotation[];
   /** Server markup when the draft was last written; detects stale drafts after save. */
   savedBaseline: FloorPlanAnnotation[];
@@ -53,11 +53,26 @@ export function readFloorPlanAnnotationDraft(
   }
 }
 
+/**
+ * True when `next` is an empty snapshot that would erase unsaved markup.
+ * Switching floors remounts the editor with `[]` before the saved (or draft)
+ * markup reloads; that preload must not replace an approve/move draft.
+ */
+export function annotationDraftIsPreloadEmpty(
+  next: FloorPlanAnnotation[],
+  existing: FloorPlanAnnotationDraft | null,
+): boolean {
+  return next.length === 0 && (existing?.annotations.length ?? 0) > 0;
+}
+
 export function writeFloorPlanAnnotationDraft(
   planId: string,
   annotations: FloorPlanAnnotation[],
   savedBaseline: FloorPlanAnnotation[],
 ): void {
+  const existing = readFloorPlanAnnotationDraft(planId);
+  if (annotationDraftIsPreloadEmpty(annotations, existing)) return;
+
   const draft: FloorPlanAnnotationDraft = { annotations, savedBaseline };
   memoryDrafts.set(planId, draft);
   if (typeof sessionStorage === "undefined") return;

@@ -20,7 +20,21 @@ import {
   resolveCompareAnchor,
   resolveCompareReferenceScaleDenominator,
 } from "@/lib/building/floor-plan-align";
-import { annotationsForCompareSheet } from "@/lib/building/floor-plan-compare-annotations";
+import { visibleAnnotationsForCompareSheet } from "@/lib/building/floor-plan-compare-annotations";
+import {
+  parseDrawColorPresets,
+  parseMechanicalMarkupSet,
+  presetsInFamily,
+  strokeColorFilterHasSelection,
+  type DrawColorPreset,
+  type MechanicalMarkupSet,
+  type StrokeColorFilter,
+} from "@/lib/building/floor-plan-annotations";
+import {
+  hydrateFloorPlanEditRibbonFromStorage,
+  readFloorPlanEditRibbonSession,
+  writeFloorPlanEditRibbonSession,
+} from "@/lib/building/floor-plan-edit-session";
 import {
   floorPlanFileUrl,
   floorPlanLabel,
@@ -47,6 +61,7 @@ import {
   FloorPlanFamilyBadge,
 } from "./FloorPlanFamilyBadge";
 import { FloorPlanAnnotationLayer } from "./FloorPlanAnnotationLayer";
+import { MechanicalMarkupSetToggle, LineOverlayControl, RiserLabelsToggle } from "./FloorPlanEditorRibbon";
 import { FloorPlanPdfCanvas } from "./FloorPlanPdfCanvas";
 import { FloorPlanZoomToolbar } from "./FloorPlanZoomToolbar";
 import {
@@ -60,6 +75,17 @@ const FIT_SCALE_MAX = 2.5;
 const SESSION_FIT_SCALE_MAX = 8;
 const ZOOM_MIN = 0.15;
 const ZOOM_MAX = 16;
+
+function filterIncludesMechanical(
+  filter: StrokeColorFilter,
+  presets: DrawColorPreset[],
+): boolean {
+  const mechanical = presetsInFamily(presets, "mechanical");
+  if (mechanical.length === 0) return false;
+  if (filter === "all") return true;
+  const allowed = new Set(filter);
+  return mechanical.some((preset) => allowed.has(preset.color));
+}
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -266,23 +292,54 @@ function CompareSheetAnnotations({
   family,
   plans,
   families,
+  allPlans,
+  allFamilies,
   scale,
   displayZoom = 1,
+  markupSet,
+  colorFilter,
+  linesVisible,
+  showRiserLabels,
 }: {
   plan: FloorPlanDto;
   family: FloorPlanFamilyDto;
   plans: FloorPlanDto[];
   families: FloorPlanFamilyDto[];
+  allPlans: FloorPlanDto[];
+  allFamilies: FloorPlanFamilyDto[];
   scale: number;
   /** Compensates for a parent CSS scale so stroke width stays constant on screen. */
   displayZoom?: number;
+  markupSet?: MechanicalMarkupSet;
+  colorFilter: StrokeColorFilter;
+  linesVisible: boolean;
+  showRiserLabels: boolean;
 }) {
   const pageWidth = family.cropWidthPt ?? 0;
   const pageHeight = family.cropHeightPt ?? 0;
-  const annotations = useMemo(
-    () => annotationsForCompareSheet(plan, family, plans, families),
-    [plan, family, plans, families],
-  );
+  const annotations = useMemo(() => {
+    if (!linesVisible || !strokeColorFilterHasSelection(colorFilter)) return [];
+    return visibleAnnotationsForCompareSheet({
+      plan,
+      family,
+      plans,
+      families,
+      allPlans,
+      allFamilies,
+      markupSet,
+      colorFilter,
+    });
+  }, [
+    plan,
+    family,
+    plans,
+    families,
+    allPlans,
+    allFamilies,
+    markupSet,
+    colorFilter,
+    linesVisible,
+  ]);
   if (annotations.length === 0 || pageWidth <= 0 || pageHeight <= 0) {
     return null;
   }
@@ -305,6 +362,7 @@ function CompareSheetAnnotations({
       drawInteractive={false}
       selectInteractive={false}
       selectable={false}
+      showRiserLabels={showRiserLabels}
     />
   );
 }
@@ -323,6 +381,12 @@ function CompareStack({
   containerSize,
   pinAnchoredLayout = false,
   displayZoom = 1,
+  markupSet,
+  allPlans,
+  allFamilies,
+  colorFilter,
+  linesVisible,
+  showRiserLabels,
   onReadyChange,
 }: {
   plan: FloorPlanDto;
@@ -341,6 +405,12 @@ function CompareStack({
   pinAnchoredLayout?: boolean;
   /** Parent CSS scale applied outside the stack (full-screen compare fit/zoom). */
   displayZoom?: number;
+  markupSet?: MechanicalMarkupSet;
+  allPlans: FloorPlanDto[];
+  allFamilies: FloorPlanFamilyDto[];
+  colorFilter: StrokeColorFilter;
+  linesVisible: boolean;
+  showRiserLabels: boolean;
   onReadyChange?: (allReady: boolean, readyCount: number) => void;
 }) {
   const [readyIds, setReadyIds] = useState<Set<string>>(() => new Set());
@@ -477,8 +547,14 @@ function CompareStack({
                 family={sheetFamily}
                 plans={plans}
                 families={families}
+                allPlans={allPlans}
+                allFamilies={allFamilies}
                 scale={sheetScale}
                 displayZoom={displayZoom}
+                markupSet={markupSet}
+                colorFilter={colorFilter}
+                linesVisible={linesVisible}
+                showRiserLabels={showRiserLabels}
               />
             ) : null}
           </div>
@@ -501,6 +577,9 @@ export function FloorPlanCompareViewer({
   family,
   plans,
   families,
+  allPlans,
+  allFamilies,
+  colorPresets,
   registrationPlanId,
   onionOpacity,
   onOnionOpacity,
@@ -512,6 +591,9 @@ export function FloorPlanCompareViewer({
   family: FloorPlanFamilyDto;
   plans: FloorPlanDto[];
   families: FloorPlanFamilyDto[];
+  allPlans: FloorPlanDto[];
+  allFamilies: FloorPlanFamilyDto[];
+  colorPresets: DrawColorPreset[];
   registrationPlanId: string | null;
   onionOpacity: number;
   onOnionOpacity: (value: number) => void;
@@ -521,6 +603,18 @@ export function FloorPlanCompareViewer({
 }) {
   const [mounted, setMounted] = useState(false);
   const [inlineReady, setInlineReady] = useState(false);
+  const [markupSet, setMarkupSet] = useState<MechanicalMarkupSet>(() =>
+    parseMechanicalMarkupSet(readFloorPlanEditRibbonSession().markupSet),
+  );
+  const [linesVisible, setLinesVisible] = useState(true);
+  const [showRiserLabels, setShowRiserLabels] = useState(
+    () => readFloorPlanEditRibbonSession().showRiserLabels,
+  );
+  const [colorFilter, setColorFilter] = useState<StrokeColorFilter>("all");
+  const parsedColorPresets = useMemo(
+    () => parseDrawColorPresets(colorPresets),
+    [colorPresets],
+  );
   const compareSheets = buildingComparePlans(plans, families);
   const neighbors = buildingCompareNeighbors(plans, families, plan.id);
   const layoutScale = useMemo(
@@ -531,9 +625,18 @@ export function FloorPlanCompareViewer({
   const prevPlan = neighbors.prevId
     ? plans.find((item) => item.id === neighbors.prevId) ?? null
     : null;
+  const showRiserPass =
+    family.kind === "mechanical" ||
+    filterIncludesMechanical(colorFilter, parsedColorPresets);
 
   useEffect(() => {
     setMounted(true);
+  }, []);
+
+  useLayoutEffect(() => {
+    const stored = hydrateFloorPlanEditRibbonFromStorage();
+    setMarkupSet(parseMechanicalMarkupSet(stored.markupSet));
+    setShowRiserLabels(stored.showRiserLabels);
   }, []);
 
   const goTo = useCallback(
@@ -560,8 +663,58 @@ export function FloorPlanCompareViewer({
     return () => window.removeEventListener("keydown", onKey);
   }, [inlineReady, neighbors.prevId, neighbors.nextId, goTo]);
 
+  const handleMarkupSetChange = useCallback((next: MechanicalMarkupSet) => {
+    setMarkupSet(next);
+    const current = readFloorPlanEditRibbonSession();
+    writeFloorPlanEditRibbonSession({ ...current, markupSet: next });
+  }, []);
+
+  const handleShowRiserLabelsChange = useCallback((next: boolean) => {
+    setShowRiserLabels(next);
+    const current = readFloorPlanEditRibbonSession();
+    writeFloorPlanEditRibbonSession({ ...current, showRiserLabels: next });
+  }, []);
+
+  const overlayProps = {
+    allPlans,
+    allFamilies,
+    colorFilter,
+    linesVisible,
+    markupSet,
+    showRiserLabels,
+  };
+
   const controls = (
     <div className="flex flex-wrap items-center gap-4 text-sm text-slate-700">
+      <LineOverlayControl
+        enabled={linesVisible}
+        planId=""
+        plans={[]}
+        colorPresets={parsedColorPresets}
+        colorFilter={colorFilter}
+        onEnabled={setLinesVisible}
+        onPlanId={() => {}}
+        onColorFilter={setColorFilter}
+        title="Show or hide overlay lines by type, independently of which drawings are stacked"
+        zIndex={140}
+      />
+      {showRiserPass ? (
+        <>
+          <RiserLabelsToggle
+            checked={showRiserLabels}
+            onChange={handleShowRiserLabelsChange}
+          />
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Riser pass
+            </span>
+            <MechanicalMarkupSetToggle
+              value={markupSet}
+              onChange={handleMarkupSetChange}
+            />
+          </div>
+        </>
+      ) : null}
       <label className="flex items-center gap-2">
         Onion skin (previous floor)
         <input
@@ -615,6 +768,7 @@ export function FloorPlanCompareViewer({
           registrationPlanId={registrationPlanId}
           onionOpacity={onionOpacity}
           neighbors={neighbors}
+          {...overlayProps}
           onSelectPlan={onSelectPlan}
           onClose={() => onExpandedChange(false)}
           controls={controls}
@@ -634,13 +788,16 @@ export function FloorPlanCompareViewer({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-3">
-        {navButtons(inlineReady)}
-        <span className="text-sm text-slate-500">
-          {inlineReady
-            ? "Flip through every cropped floor in the building. Pins align so plates overlap."
-            : `Preloading cropped sheets…`}
-        </span>
+      <div className="flex shrink-0 flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-3">
+          {navButtons(inlineReady)}
+          <span className="text-sm text-slate-500">
+            {inlineReady
+              ? "Flip through every cropped floor in the building. Pins align so plates overlap."
+              : `Preloading cropped sheets…`}
+          </span>
+        </div>
+        {controls}
       </div>
       <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border border-slate-200 bg-slate-100">
         <CompareStack
@@ -652,6 +809,7 @@ export function FloorPlanCompareViewer({
           registrationPlanId={registrationPlanId}
           scale={layoutScale}
           onionOpacity={onionOpacity}
+          {...overlayProps}
           onReadyChange={(ready) => setInlineReady(ready)}
         />
         {!inlineReady ? (
@@ -662,7 +820,6 @@ export function FloorPlanCompareViewer({
           </div>
         ) : null}
       </div>
-      {controls}
     </div>
   );
 }
@@ -678,6 +835,12 @@ function CompareSession({
   registrationPlanId,
   onionOpacity,
   neighbors,
+  markupSet,
+  allPlans,
+  allFamilies,
+  colorFilter,
+  linesVisible,
+  showRiserLabels,
   onSelectPlan,
   onClose,
   controls,
@@ -691,6 +854,12 @@ function CompareSession({
   registrationPlanId: string | null;
   onionOpacity: number;
   neighbors: { prevId: string | null; nextId: string | null };
+  markupSet?: MechanicalMarkupSet;
+  allPlans: FloorPlanDto[];
+  allFamilies: FloorPlanFamilyDto[];
+  colorFilter: StrokeColorFilter;
+  linesVisible: boolean;
+  showRiserLabels: boolean;
   onSelectPlan: (id: string) => void;
   onClose: () => void;
   controls: ReactNode;
@@ -987,44 +1156,49 @@ function CompareSession({
         aria-labelledby="floor-plan-compare-fullscreen-title"
         className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-200 px-4 py-2">
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <p
-                id="floor-plan-compare-fullscreen-title"
-                className="truncate text-sm font-semibold text-slate-900"
-              >
-                Compare building
-              </p>
-              <p className="truncate text-xs text-slate-500">
-                {allReady
-                  ? `${planLabel} · arrow keys flip floors`
-                  : `Preloading cropped sheets ${readyCount} of ${compareSheets.length}…`}
-              </p>
+        <div className="flex shrink-0 flex-col gap-2 border-b border-slate-200 px-4 py-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <p
+                  id="floor-plan-compare-fullscreen-title"
+                  className="truncate text-sm font-semibold text-slate-900"
+                >
+                  Compare building
+                </p>
+                <p className="truncate text-xs text-slate-500">
+                  {allReady
+                    ? `${planLabel} · arrow keys flip floors`
+                    : `Preloading cropped sheets ${readyCount} of ${compareSheets.length}…`}
+                </p>
+              </div>
+              <FloorPlanFamilyBadge
+                name={family.name}
+                colorClass={familyBadgeColor}
+              />
             </div>
-            <FloorPlanFamilyBadge
-              name={family.name}
-              colorClass={familyBadgeColor}
+            {navButtons(allReady)}
+            <FloorPlanZoomToolbar
+              zoom={zoom}
+              onZoomBy={applyZoom}
+              onReset={resetZoom}
+              resetLabel="100%"
             />
+            <FloorPlanCompareDisplaySettingsButton
+              onClick={() => setSettingsOpen(true)}
+            />
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              aria-label="Exit full screen"
+            >
+              Close
+            </button>
           </div>
-          {navButtons(allReady)}
-          <FloorPlanZoomToolbar
-            zoom={zoom}
-            onZoomBy={applyZoom}
-            onReset={resetZoom}
-            resetLabel="100%"
-          />
-          <FloorPlanCompareDisplaySettingsButton
-            onClick={() => setSettingsOpen(true)}
-          />
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            aria-label="Exit full screen"
-          >
-            Close
-          </button>
+          <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-2">
+            {controls}
+          </div>
         </div>
         <FloorPlanCompareDisplaySettingsDialog
           open={settingsOpen}
@@ -1069,6 +1243,12 @@ function CompareSession({
                     containerSize={activeViewport.containerSize}
                     pinAnchoredLayout
                     displayZoom={activeViewport.displayScale * zoom}
+                    markupSet={markupSet}
+                    allPlans={allPlans}
+                    allFamilies={allFamilies}
+                    colorFilter={colorFilter}
+                    linesVisible={linesVisible}
+                    showRiserLabels={showRiserLabels}
                     onReadyChange={handleReadyChange}
                   />
                   {allReady ? (
@@ -1097,9 +1277,6 @@ function CompareSession({
               </p>
             </div>
           ) : null}
-        </div>
-        <div className="shrink-0 border-t border-slate-200 px-4 py-3">
-          {controls}
         </div>
       </div>
     </div>

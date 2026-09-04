@@ -32,6 +32,18 @@ export type AiUsageRun = {
   outputTokens: number;
   totalTokens: number;
   costUsd: number;
+  /** Per-step token usage when available (e.g. initial minutes vs to-dos). */
+  calls?: GeminiUsageCall[];
+};
+
+/** One row in the AI cost breakdown table (a pipeline stage or processing step). */
+export type AiUsageStageRow = {
+  id: string;
+  label: string;
+  modelName: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
 };
 
 export type AiUsageLog = {
@@ -201,20 +213,25 @@ export function parseStoredAiUsage(
       return null;
     }
 
-    const runs = (parsed as AiUsageLog).runs.filter(
-      (run): run is AiUsageRun =>
-        typeof run === "object" &&
-        run !== null &&
-        typeof run.id === "string" &&
-        typeof run.kind === "string" &&
-        typeof run.label === "string" &&
-        typeof run.ranAt === "string" &&
-        typeof run.modelName === "string" &&
-        typeof run.inputTokens === "number" &&
-        typeof run.outputTokens === "number" &&
-        typeof run.totalTokens === "number" &&
-        typeof run.costUsd === "number",
-    );
+    const runs = (parsed as AiUsageLog).runs
+      .filter(
+        (run): run is AiUsageRun =>
+          typeof run === "object" &&
+          run !== null &&
+          typeof run.id === "string" &&
+          typeof run.kind === "string" &&
+          typeof run.label === "string" &&
+          typeof run.ranAt === "string" &&
+          typeof run.modelName === "string" &&
+          typeof run.inputTokens === "number" &&
+          typeof run.outputTokens === "number" &&
+          typeof run.totalTokens === "number" &&
+          typeof run.costUsd === "number",
+      )
+      .map((run) => ({
+        ...run,
+        calls: parseStoredUsageCalls(run.calls),
+      }));
 
     return { runs };
   } catch {
@@ -243,6 +260,146 @@ export function appendAiUsageRun(
   return serializeAiUsage({ runs });
 }
 
+function parseStoredUsageCalls(value: unknown): GeminiUsageCall[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+
+  const calls = value.filter(
+    (call): call is GeminiUsageCall =>
+      typeof call === "object" &&
+      call !== null &&
+      typeof (call as GeminiUsageCall).step === "string" &&
+      typeof (call as GeminiUsageCall).modelName === "string" &&
+      typeof (call as GeminiUsageCall).inputTokens === "number" &&
+      typeof (call as GeminiUsageCall).outputTokens === "number" &&
+      typeof (call as GeminiUsageCall).totalTokens === "number",
+  );
+
+  return calls.length > 0 ? calls : undefined;
+}
+
+export function formatUsageStepLabel(step: string): string {
+  const known: Record<string, string> = {
+    minutes: "Minutes generation",
+    minutes_continuation: "Minutes continuation",
+    todos: "To-do extraction",
+    generation: "Generation",
+    global_todos_merge: "Global to-dos merge",
+    email_extraction: "Email extraction",
+    page_vision: "Page vision",
+    email_extraction_merge: "Email extraction merge",
+  };
+
+  if (known[step]) return known[step];
+
+  const retryMatch = /^minutes_retry_(\d+)_/.exec(step);
+  if (retryMatch) {
+    const attempt = Number(retryMatch[1]) + 1;
+    const suffix = step.replace(/^minutes_retry_\d+_/, "");
+    const base = known[suffix] ?? suffix.replaceAll("_", " ");
+    return `Minutes retry ${attempt} (${base})`;
+  }
+
+  return step
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+export function groupUsageCallsToStages(
+  calls: GeminiUsageCall[],
+): AiUsageStageRow[] {
+  const groups = new Map<
+    string,
+    {
+      label: string;
+      modelName: string;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+    }
+  >();
+
+  for (const call of calls) {
+    const key = `${call.step}::${call.modelName}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.inputTokens += call.inputTokens;
+      existing.outputTokens += call.outputTokens;
+      existing.totalTokens += call.totalTokens;
+      continue;
+    }
+
+    groups.set(key, {
+      label: formatUsageStepLabel(call.step),
+      modelName: call.modelName,
+      inputTokens: call.inputTokens,
+      outputTokens: call.outputTokens,
+      totalTokens: call.totalTokens,
+    });
+  }
+
+  return [...groups.entries()].map(([key, group]) => ({
+    id: key,
+    ...group,
+  }));
+}
+
+export function flattenAiUsageToStages(
+  log: AiUsageLog | null | undefined,
+): AiUsageStageRow[] {
+  if (!log?.runs.length) return [];
+
+  const stages: AiUsageStageRow[] = [];
+
+  for (const run of log.runs) {
+    if (run.calls?.length) {
+      stages.push(...groupUsageCallsToStages(run.calls));
+      continue;
+    }
+
+    stages.push({
+      id: run.id,
+      label: run.label,
+      modelName: run.modelName,
+      inputTokens: run.inputTokens,
+      outputTokens: run.outputTokens,
+      totalTokens: run.totalTokens,
+    });
+  }
+
+  return stages;
+}
+
+export function sumAiUsageStages(stages: AiUsageStageRow[]): {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  inputCostUsd: number;
+  outputCostUsd: number;
+  costUsd: number;
+} {
+  return stages.reduce(
+    (acc, stage) => {
+      const breakdown = estimateCostBreakdown(stage.modelName, stage);
+      return {
+        inputTokens: acc.inputTokens + stage.inputTokens,
+        outputTokens: acc.outputTokens + stage.outputTokens,
+        totalTokens: acc.totalTokens + stage.totalTokens,
+        inputCostUsd: acc.inputCostUsd + breakdown.inputCostUsd,
+        outputCostUsd: acc.outputCostUsd + breakdown.outputCostUsd,
+        costUsd: acc.costUsd + breakdown.totalCostUsd,
+      };
+    },
+    {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      inputCostUsd: 0,
+      outputCostUsd: 0,
+      costUsd: 0,
+    },
+  );
+}
+
 export function buildInitialProcessingRun(options: {
   id: string;
   ranAt: string;
@@ -261,6 +418,7 @@ export function buildInitialProcessingRun(options: {
     outputTokens: usage.outputTokens,
     totalTokens: usage.totalTokens,
     costUsd: estimateCostUsdForCalls(options.calls),
+    calls: options.calls,
   };
 }
 

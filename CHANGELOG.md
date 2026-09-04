@@ -6,6 +6,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Meetings V2 pipeline alerts** — Halted runs now show rose "Stopped" cards
+  instead of amber warnings, listed newest-first with a Latest badge. Duplicate
+  lastError text that restated the extraction note is omitted. Overview shows a
+  three-column got-vs-expected comparison (this run, PDF page splits, typical
+  semantic topics) so section-shaped DeepSeek output is visible without opening
+  the Pipeline tab.
+
 ### Changed
 
 - **Highlighted unit walls are a 6-inch shell of the labeled room fill** — Asset

@@ -6,7 +6,12 @@ import { MinutesStructuredEditor } from "@/components/MinutesStructuredEditor";
 import { AttendeesEditorDialog } from "@/components/AttendeesEditorDialog";
 import { BoardPackageViewerDialog } from "@/components/BoardPackageViewerDialog";
 import { VttViewerDialog } from "@/components/VttViewerDialog";
+import {
+  AiUsageDialog,
+  AiUsageIconButton,
+} from "@/components/AiUsageDialog";
 import type { EditableAttendance } from "@/lib/minutes/attendance-edit";
+import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
 import { serializeMinutesDoc } from "@/lib/minutes/doc-v2-edits";
 import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
@@ -65,6 +70,7 @@ type MeetingV2Status = {
     title: string;
     itemNumber: string | null;
     itemType: string;
+    sourceSectionId: string | null;
     discussionSummary: string | null;
     confidence: string | null;
     outcome: string | null;
@@ -104,6 +110,25 @@ type MeetingV2Status = {
 };
 
 type V2Tab = "overview" | "review" | "draft" | "pipeline";
+
+const EXPECTED_SEMANTIC_AGENDA_SHAPE: Array<{ title: string; why: string }> = [
+  { title: "Call to Order", why: "Opening procedural item" },
+  { title: "Approval of Previous Minutes — May 19, 2026", why: "Named prior meeting, not a PDF page" },
+  { title: "Kitchen Stack Cleaning Presentation", why: "Named guest/vendor topic" },
+  { title: "Financial Matters — unaudited statements", why: "Board business heading" },
+  { title: "Ratification — insurance renewal", why: "One approval line item, not a page" },
+  { title: "Management Report — BAS system approval", why: "Distinct decision topic" },
+  { title: "In-camera — Unit 2005 chargeback dispute", why: "Named confidential item" },
+  { title: "Date of Next Meeting", why: "Closing procedural item" },
+];
+
+function shouldShowExtractionShapeComparison(issueCode: string): boolean {
+  return (
+    issueCode === "section_shaped_output" ||
+    issueCode === "literal_section_fallback" ||
+    issueCode === "noisy_titles"
+  );
+}
 
 function formatDate(value: string): string {
   const parsed = new Date(value);
@@ -229,6 +254,39 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [autonomyTemperature, setAutonomyTemperature] = useState(0.8);
   const [vttDialogOpen, setVttDialogOpen] = useState(false);
   const [boardPackageDialogOpen, setBoardPackageDialogOpen] = useState(false);
+  const [usageDialogOpen, setUsageDialogOpen] = useState(false);
+  const [usageStages, setUsageStages] = useState<AiUsageStageRow[] | null>(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+
+  useEffect(() => {
+    if (!usageDialogOpen) return;
+
+    let active = true;
+    setUsageLoading(true);
+
+    async function loadUsage() {
+      try {
+        const response = await fetch(`/api/v2/meetings/${meetingId}/ai-usage`, {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const payload = (await response.json()) as { stages: AiUsageStageRow[] };
+        if (active) {
+          setUsageStages(payload.stages ?? []);
+        }
+      } finally {
+        if (active) {
+          setUsageLoading(false);
+        }
+      }
+    }
+
+    void loadUsage();
+
+    return () => {
+      active = false;
+    };
+  }, [meetingId, usageDialogOpen]);
 
   useEffect(() => {
     let active = true;
@@ -333,6 +391,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const readyCount = reviewableItems.filter(
     (item) => item.openQuestions.length === 0 && !item.validation.some(v => v.severity === "error" || v.severity === "warning"),
   ).length;
+  const pipelineHalted = Boolean(
+    status?.meeting.alerts.some((alert) => alert.blocksPipeline || alert.severity === "error"),
+  );
   const pipelineNotStarted =
     displayState === "created" ||
     status?.meeting.pipelineState === "created" ||
@@ -356,8 +417,14 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/80">
                   Meetings V2 Workspace
                 </span>
-                <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${statusTone(displayState)}`}>
-                  {startCase(displayState)}
+                <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${
+                  pipelineHalted
+                    ? "border-rose-300 bg-rose-600 text-white"
+                    : statusTone(displayState)
+                }`}>
+                  {pipelineHalted && displayState !== "failed"
+                    ? `Stopped · ${startCase(displayState)}`
+                    : startCase(displayState)}
                 </span>
               </div>
               <div>
@@ -398,6 +465,11 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 >
                   View Transcript
                 </button>
+                <AiUsageIconButton
+                  tone="inverse"
+                  onClick={() => setUsageDialogOpen(true)}
+                  title="View AI usage and cost"
+                />
                 <button
                   className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={!status?.sources.boardPackage}
@@ -491,6 +563,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
       {status?.meeting.alerts.length ? (
         <MeetingV2AlertsPanel alerts={status.meeting.alerts} />
       ) : null}
+      {status && shouldShowExtractionShapeComparison(status.meeting.extractionQuality.issueCode) ? (
+        <ExtractionShapeComparison status={status} />
+      ) : null}
 
       <div className="space-y-6">
         {loading && !status ? <LoadingWorkspace /> : null}
@@ -528,39 +603,83 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         meetingId={meetingId}
         onClose={() => setBoardPackageDialogOpen(false)}
       />
+      <AiUsageDialog
+        open={usageDialogOpen}
+        stages={usageStages}
+        loading={usageLoading}
+        onClose={() => setUsageDialogOpen(false)}
+      />
     </div>
   );
 }
 
 function MeetingV2AlertsPanel({ alerts }: { alerts: MeetingV2Alert[] }) {
+  const blockedCount = alerts.filter(
+    (alert) => alert.blocksPipeline || alert.severity === "error",
+  ).length;
+
   return (
     <div className="space-y-3">
-      {alerts.map((alert) => (
-        <div
-          key={alert.id}
-          className={`rounded-2xl border px-5 py-4 text-sm ${
-            alert.severity === "error"
-              ? "border-rose-200 bg-rose-50 text-rose-900"
-              : alert.severity === "warning"
-                ? "border-amber-200 bg-amber-50 text-amber-900"
-                : "border-slate-200 bg-slate-50 text-slate-800"
-          }`}
-        >
-          <p className="font-semibold">{alert.title}</p>
-          <p className="mt-2 leading-6">{alert.summary}</p>
-          {alert.likelyCause ? (
-            <p className="mt-3 leading-6">
-              <span className="font-semibold">Likely cause:</span> {alert.likelyCause}
-            </p>
-          ) : null}
-          {alert.recommendedAction ? (
-            <p className="mt-2 leading-6">
-              <span className="font-semibold">Recommended action:</span>{" "}
-              {alert.recommendedAction}
-            </p>
-          ) : null}
+      <div className="flex flex-wrap items-end justify-between gap-3 px-1">
+        <div>
+          <p
+            className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${
+              blockedCount > 0 ? "text-rose-800" : "text-amber-800"
+            }`}
+          >
+            {blockedCount > 0 ? "Pipeline stopped" : "Pipeline notices"}
+          </p>
+          <p className="mt-1 text-sm text-slate-600">
+            Newest first · {alerts.length} {alerts.length === 1 ? "issue" : "issues"}
+          </p>
         </div>
-      ))}
+      </div>
+      {alerts.map((alert, index) => {
+        const stopped = alert.severity === "error" || Boolean(alert.blocksPipeline);
+        return (
+          <div
+            key={alert.id}
+            className={`rounded-2xl border px-5 py-4 text-sm ${
+              stopped
+                ? "border-rose-200 bg-rose-50 text-rose-900"
+                : alert.severity === "warning"
+                  ? "border-amber-200 bg-amber-50 text-amber-900"
+                  : "border-slate-200 bg-slate-50 text-slate-800"
+            }`}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              {index === 0 ? (
+                <span className="rounded-full bg-rose-800 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white">
+                  Latest
+                </span>
+              ) : null}
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                  stopped ? "bg-rose-200 text-rose-950" : "bg-amber-200 text-amber-950"
+                }`}
+              >
+                {stopped ? "Stopped" : startCase(alert.severity)}
+              </span>
+              {alert.occurredAt ? (
+                <span className="text-xs opacity-80">{formatDateTime(alert.occurredAt)}</span>
+              ) : null}
+            </div>
+            <p className="mt-3 font-semibold">{alert.title}</p>
+            <p className="mt-2 leading-6">{alert.summary}</p>
+            {alert.likelyCause ? (
+              <p className="mt-3 leading-6">
+                <span className="font-semibold">Likely cause:</span> {alert.likelyCause}
+              </p>
+            ) : null}
+            {alert.recommendedAction ? (
+              <p className="mt-2 leading-6">
+                <span className="font-semibold">Recommended action:</span>{" "}
+                {alert.recommendedAction}
+              </p>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -660,10 +779,10 @@ function OverviewPanel({
             />
             <HealthCallout
               label="Extraction quality"
-              value={status.meeting.extractionQuality.likelyIncomplete ? "Needs attention" : "Looks healthy"}
+              value={status.meeting.extractionQuality.likelyIncomplete ? "Blocked" : "Looks healthy"}
               tone={
                 status.meeting.extractionQuality.likelyIncomplete
-                  ? "border-amber-200 bg-amber-50 text-amber-900"
+                  ? "border-rose-200 bg-rose-50 text-rose-900"
                   : "border-emerald-200 bg-emerald-50 text-emerald-900"
               }
               note={formatExtractionQualitySummary(status.meeting.extractionQuality)}
@@ -990,12 +1109,6 @@ function AgendaReviewPanel({
 }
 
 function PipelinePanel({ status }: { status: MeetingV2Status }) {
-  const showExtractionComparison =
-    status.meeting.extractionQuality.likelyIncomplete &&
-    (status.meeting.extractionQuality.issueCode === "section_shaped_output" ||
-      status.meeting.extractionQuality.issueCode === "literal_section_fallback" ||
-      status.meeting.extractionQuality.issueCode === "noisy_titles");
-
   return (
     <div className="space-y-6">
       <SectionCard
@@ -1065,34 +1178,86 @@ function PipelinePanel({ status }: { status: MeetingV2Status }) {
           </div>
         </div>
       </SectionCard>
-
-      {showExtractionComparison ? (
-        <SectionCard
-          eyebrow="Extraction audit"
-          title="PDF sections vs extracted agenda items"
-          description="PDF sections are mechanical page/heading splits from ingestion — roughly one per PDF page. Good semantic extraction collapses those into real board topics like “Financial Matters” or individual ratification line items."
-        >
-          <div className="grid gap-4 xl:grid-cols-2">
-            <ExtractionListCard
-              title="PDF sections (ingestion fallback shape)"
-              subtitle={`${status.documentSections.length} sections`}
-              items={status.documentSections.map((section) =>
-                section.startPage === section.endPage
-                  ? `p.${section.startPage}: ${section.title}`
-                  : `pp.${section.startPage}-${section.endPage}: ${section.title}`,
-              )}
-            />
-            <ExtractionListCard
-              title="Extracted agenda items (DeepSeek output)"
-              subtitle={`${status.items.length} items · ${startCase(status.meeting.extractionQuality.extractorUsed)}`}
-              items={status.items.map((item) =>
-                `${item.itemNumber ? `${item.itemNumber}. ` : ""}${item.title}${item.itemType === "agenda_section" ? " (section fallback)" : ""}`,
-              )}
-            />
-          </div>
-        </SectionCard>
-      ) : null}
     </div>
+  );
+}
+
+function normalizeAgendaTitle(title: string): string {
+  return title
+    .trim()
+    .toLowerCase()
+    .replace(/^["“”']+|["“”']+$/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function extractedItemMatchesPdfSection(
+  item: MeetingV2Status["items"][number],
+  sections: MeetingV2Status["documentSections"],
+): boolean {
+  if (item.itemType === "agenda_section") return true;
+  const normalized = normalizeAgendaTitle(item.title);
+  return sections.some((section) => normalizeAgendaTitle(section.title) === normalized);
+}
+
+function ExtractionShapeComparison({ status }: { status: MeetingV2Status }) {
+  const matchCount = status.items.filter((item) =>
+    extractedItemMatchesPdfSection(item, status.documentSections),
+  ).length;
+
+  return (
+    <SectionCard
+      eyebrow="Extraction audit"
+      title="What we got vs what a real agenda looks like"
+      description="PDF sections are mechanical page splits from ingestion (often one per page). A successful DeepSeek run collapses those into board topics — named motions, ratifications, and presentations — not a page-title list."
+    >
+      <div
+        className={`mb-4 rounded-2xl border px-4 py-3 text-sm leading-6 ${
+          matchCount * 2 >= status.items.length && status.items.length > 0
+            ? "border-rose-200 bg-rose-50 text-rose-950"
+            : "border-slate-200 bg-white text-slate-800"
+        }`}
+      >
+        <span className="font-semibold">
+          {matchCount} of {status.items.length} extracted titles
+        </span>{" "}
+        match a PDF section title.
+        {matchCount * 2 >= status.items.length && status.items.length > 0
+          ? " When those numbers are close, extraction returned the page scaffold instead of meeting topics."
+          : " These titles look like board topics rather than page headings — compare the three columns. The run still halted because most items are linked back to PDF sections."}
+      </div>
+      <div className="grid gap-4 xl:grid-cols-3">
+        <ExtractionListCard
+          title="What we got"
+          subtitle={`${status.items.length} extracted items · ${startCase(status.meeting.extractionQuality.extractorUsed)}`}
+          items={status.items.map((item) => ({
+            text: `${item.itemNumber ? `${item.itemNumber}. ` : ""}${item.title}`,
+            badge: extractedItemMatchesPdfSection(item, status.documentSections)
+              ? "Matches PDF section"
+              : undefined,
+            tone: extractedItemMatchesPdfSection(item, status.documentSections) ? "match" : "ok",
+          }))}
+        />
+        <ExtractionListCard
+          title="PDF sections it currently resembles"
+          subtitle={`${status.documentSections.length} page/heading splits`}
+          items={status.documentSections.map((section) => ({
+            text:
+              section.startPage === section.endPage
+                ? `p.${section.startPage}: ${section.title}`
+                : `pp.${section.startPage}-${section.endPage}: ${section.title}`,
+          }))}
+        />
+        <ExtractionListCard
+          title="What it should look like"
+          subtitle="Example semantic topics — not this meeting's list"
+          items={EXPECTED_SEMANTIC_AGENDA_SHAPE.map((example) => ({
+            text: example.title,
+            badge: example.why,
+            tone: "ok",
+          }))}
+        />
+      </div>
+    </SectionCard>
   );
 }
 
@@ -1103,7 +1268,7 @@ function ExtractionListCard({
 }: {
   title: string;
   subtitle: string;
-  items: string[];
+  items: Array<{ text: string; badge?: string; tone?: "match" | "ok" }>;
 }) {
   return (
     <div className="rounded-[1.6rem] border border-slate-200 bg-slate-50 p-5">
@@ -1114,8 +1279,24 @@ function ExtractionListCard({
           <li className="text-slate-500">None yet.</li>
         ) : (
           items.map((item, index) => (
-            <li key={`${index}-${item}`} className="rounded-xl bg-white px-3 py-2">
-              {item}
+            <li
+              key={`${index}-${item.text}`}
+              className={`rounded-xl px-3 py-2 ${
+                item.tone === "match"
+                  ? "border border-rose-200 bg-rose-50 text-rose-950"
+                  : "bg-white"
+              }`}
+            >
+              <span>{item.text}</span>
+              {item.badge ? (
+                <span
+                  className={`mt-1 block text-[11px] font-medium uppercase tracking-[0.12em] ${
+                    item.tone === "match" ? "text-rose-800" : "text-slate-500"
+                  }`}
+                >
+                  {item.badge}
+                </span>
+              ) : null}
             </li>
           ))
         )}

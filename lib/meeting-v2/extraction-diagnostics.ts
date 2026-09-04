@@ -33,7 +33,32 @@ export type MeetingV2Alert = {
   summary: string;
   likelyCause?: string;
   recommendedAction?: string;
+  occurredAt?: string;
+  /** True when this issue halted the run (Resume/Restart required). */
+  blocksPipeline?: boolean;
 };
+
+/** Typical semantic agenda shape — contrast with PDF page/section titles. */
+export const EXPECTED_SEMANTIC_AGENDA_SHAPE: Array<{ title: string; why: string }> = [
+  { title: "Call to Order", why: "Opening procedural item" },
+  { title: "Approval of Previous Minutes — May 19, 2026", why: "Named prior meeting, not a PDF page" },
+  { title: "Kitchen Stack Cleaning Presentation", why: "Named guest/vendor topic" },
+  { title: "Financial Matters — unaudited statements", why: "Board business heading" },
+  { title: "Ratification — insurance renewal", why: "One approval line item, not a page" },
+  { title: "Management Report — BAS system approval", why: "Distinct decision topic" },
+  { title: "In-camera — Unit 2005 chargeback dispute", why: "Named confidential item" },
+  { title: "Date of Next Meeting", why: "Closing procedural item" },
+];
+
+export function shouldShowExtractionShapeComparison(
+  issueCode: ExtractionIssueCode,
+): boolean {
+  return (
+    issueCode === "section_shaped_output" ||
+    issueCode === "literal_section_fallback" ||
+    issueCode === "noisy_titles"
+  );
+}
 
 export type MeetingV2ExtractionQuality = {
   mode: "semantic" | "section_fallback";
@@ -261,12 +286,32 @@ export function analyzeExtractionQuality(options: {
   };
 }
 
+function lastErrorAlreadyCovered(
+  lastError: string,
+  extractionNote: string,
+  alerts: MeetingV2Alert[],
+): boolean {
+  const errorText = lastError.trim();
+  const note = extractionNote.trim();
+  if (!errorText) return true;
+  if (note && (errorText === note || errorText.includes(note) || note.includes(errorText))) {
+    return true;
+  }
+  return alerts.some(
+    (alert) =>
+      alert.summary.includes(errorText) ||
+      Boolean(alert.likelyCause?.includes(errorText)) ||
+      errorText.includes(alert.summary),
+  );
+}
+
 export function buildMeetingV2Alerts(options: {
   extractionQuality: MeetingV2ExtractionQuality;
   integrityNote: string;
   isConsistent: boolean;
   lastError: string | null;
   pipelineState: string;
+  updatedAt?: string;
 }): MeetingV2Alert[] {
   const alerts: MeetingV2Alert[] = [];
   const { extractionQuality, integrityNote, isConsistent, lastError, pipelineState } =
@@ -274,17 +319,27 @@ export function buildMeetingV2Alerts(options: {
   const apiError =
     extractionQuality.extractionRun?.apiError?.trim() ||
     (lastError && /deepseek/i.test(lastError) ? lastError : null);
+  const halted =
+    pipelineState === "failed" ||
+    extractionQuality.likelyIncomplete ||
+    Boolean(lastError?.trim()) ||
+    !isConsistent;
+  const blockingSeverity: MeetingV2Alert["severity"] = halted ? "error" : "warning";
+  const haltOccurredAt =
+    options.updatedAt ?? extractionQuality.extractionRun?.completedAt;
 
   if (!isConsistent && integrityNote.trim()) {
     alerts.push({
       id: "pipeline-progress",
-      severity: pipelineState === "failed" ? "error" : "warning",
-      title: "Pipeline has not finished the current stage",
+      severity: blockingSeverity,
+      title: "Pipeline stopped before this stage finished",
       summary: integrityNote,
       likelyCause:
         "The stored pipeline step does not match the data that has actually been written for this meeting.",
       recommendedAction:
         "Use Resume Pipeline to continue, or Restart from Beginning if the run looks stuck or partially written.",
+      occurredAt: haltOccurredAt,
+      blocksPipeline: halted,
     });
   }
 
@@ -298,6 +353,8 @@ export function buildMeetingV2Alerts(options: {
       likelyCause: apiError ?? lastError ?? "Insufficient balance, quota, or usage limits on the DeepSeek account.",
       recommendedAction:
         "Top up the DeepSeek account, wait a minute for billing to refresh, then click Restart from Beginning.",
+      occurredAt: haltOccurredAt,
+      blocksPipeline: true,
     });
   } else if (extractionQuality.issueCode === "deepseek_api_error") {
     alerts.push({
@@ -309,6 +366,8 @@ export function buildMeetingV2Alerts(options: {
       likelyCause: apiError ?? lastError ?? "DeepSeek returned an error while reading the board package or transcript.",
       recommendedAction:
         "Check production logs for the DeepSeek error, fix the underlying issue, then Restart from Beginning.",
+      occurredAt: haltOccurredAt,
+      blocksPipeline: true,
     });
   } else if (extractionQuality.issueCode === "no_deepseek_key") {
     alerts.push({
@@ -323,71 +382,101 @@ export function buildMeetingV2Alerts(options: {
           : "DEEPSEEK_API_KEY is not configured in this environment.",
       recommendedAction:
         "Add DEEPSEEK_API_KEY to the production environment, redeploy if needed, then Restart from Beginning.",
+      occurredAt: haltOccurredAt,
+      blocksPipeline: true,
     });
   } else if (extractionQuality.issueCode === "literal_section_fallback") {
     alerts.push({
       id: "literal-section-fallback",
-      severity: "warning",
+      severity: blockingSeverity,
       title: "Non-AI section fallback was used",
       summary:
         "Agenda items were built from PDF section/page boundaries instead of from a real agenda topic map.",
       likelyCause:
         "Semantic extraction did not run, or the run was replaced by the section fallback path.",
       recommendedAction:
-        "Confirm DeepSeek is configured and funded, then Restart from Beginning so semantic extraction can run.",
+        "Compare the lists below, confirm DeepSeek is configured and funded, then Restart from Beginning so semantic extraction can run.",
+      occurredAt: haltOccurredAt,
+      blocksPipeline: halted,
     });
   } else if (extractionQuality.issueCode === "section_shaped_output") {
     alerts.push({
       id: "section-shaped-output",
-      severity: "warning",
+      severity: blockingSeverity,
       title: "DeepSeek output still looks like PDF sections",
       summary:
-        "DeepSeek did run, but the agenda list closely mirrors PDF sections rather than distinct board topics.",
+        "DeepSeek did run, but the agenda list closely mirrors PDF page/section titles rather than distinct board topics. The comparison below shows this run next to the PDF splits and the topic shape a successful extraction should return.",
       likelyCause:
         extractionQuality.agendaChunkSnapshots > 0
           ? "The board package may not expose a clear numbered agenda, or the extraction run may have started while DeepSeek was unavailable and left section-shaped results behind."
           : "The board package may not expose a clear numbered agenda for the model to follow.",
       recommendedAction:
-        "Review the board package for a clear agenda outline. If DeepSeek balance was low during the run, top up and Restart from Beginning.",
+        "Use the got-vs-expected comparison below. If the left column matches PDF page titles, Restart from Beginning after confirming DeepSeek is funded and the board package has a real agenda outline.",
+      occurredAt: haltOccurredAt,
+      blocksPipeline: halted,
     });
   } else if (extractionQuality.issueCode === "noisy_titles") {
     alerts.push({
       id: "noisy-titles",
-      severity: "warning",
+      severity: blockingSeverity,
       title: "Extracted agenda titles look noisy or page-derived",
       summary: extractionQuality.note,
       likelyCause:
         "The extractor picked up attachment pages, email boilerplate, or page labels instead of board business topics.",
       recommendedAction:
-        "Review the extracted items, trim the board package if needed, then Restart from Beginning.",
+        "Compare the lists below, trim the board package if needed, then Restart from Beginning.",
+      occurredAt: haltOccurredAt,
+      blocksPipeline: halted,
     });
   } else if (extractionQuality.issueCode === "no_items") {
     alerts.push({
       id: "no-items",
-      severity: "warning",
+      severity: blockingSeverity,
       title: "No agenda items were extracted",
       summary: extractionQuality.note,
       recommendedAction:
         "Confirm source ingestion completed, then Resume Pipeline or Restart from Beginning.",
+      occurredAt: haltOccurredAt,
+      blocksPipeline: halted,
     });
   }
 
-  if (
-    lastError?.trim() &&
-    !alerts.some((alert) => alert.likelyCause?.includes(lastError)) &&
-    !alerts.some((alert) => alert.summary.includes(lastError))
-  ) {
+  const lastErrorText = lastError?.trim() ?? "";
+  if (lastErrorText && !lastErrorAlreadyCovered(lastErrorText, extractionQuality.note, alerts)) {
     alerts.push({
       id: "last-error",
-      severity: pipelineState === "failed" ? "error" : "warning",
+      severity: "error",
       title: "Latest pipeline error",
-      summary: lastError,
+      summary: lastErrorText,
       recommendedAction:
         "Fix the underlying issue, then Resume Pipeline or Restart from Beginning.",
+      occurredAt: haltOccurredAt,
+      blocksPipeline: true,
     });
   }
 
-  return dedupeAlerts(alerts);
+  return sortAlertsNewestFirst(dedupeAlerts(alerts));
+}
+
+const ALERT_RECENCY_RANK: Record<string, number> = {
+  "last-error": 0,
+  "deepseek-billing": 1,
+  "deepseek-api": 1,
+  "no-deepseek-key": 1,
+  "literal-section-fallback": 1,
+  "section-shaped-output": 1,
+  "noisy-titles": 1,
+  "no-items": 1,
+  "pipeline-progress": 2,
+};
+
+function sortAlertsNewestFirst(alerts: MeetingV2Alert[]): MeetingV2Alert[] {
+  return [...alerts].sort((left, right) => {
+    const rightTime = Date.parse(right.occurredAt ?? "") || 0;
+    const leftTime = Date.parse(left.occurredAt ?? "") || 0;
+    if (rightTime !== leftTime) return rightTime - leftTime;
+    return (ALERT_RECENCY_RANK[left.id] ?? 9) - (ALERT_RECENCY_RANK[right.id] ?? 9);
+  });
 }
 
 function dedupeAlerts(alerts: MeetingV2Alert[]): MeetingV2Alert[] {

@@ -38,7 +38,7 @@
     "test:project-phase": "npx tsx --test scripts/test-project-phase.ts",
     "test:project-year-range": "npx tsx --test scripts/test-project-year-range.ts",
     "test:project-identity-review": "npx tsx --test scripts/test-project-identity-review.ts",
-    "test:gemini-pricing": "npx tsx --test scripts/test-gemini-pricing.ts",
+    "test:meeting-v2-alerts": "npx tsx --test scripts/test-meeting-v2-alerts.ts",
     "test:project-board-reports": "npx tsx --test scripts/test-project-board-reports.ts",
     "test:registry-page": "npx tsx --test scripts/test-registry-page.ts",
     "test:extract-artifacts-storage": "npx tsx --test scripts/test-extract-artifacts-storage.ts",

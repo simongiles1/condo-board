@@ -101,6 +101,7 @@ export type MeetingV2Detail = {
     title: string;
     itemNumber: string | null;
     itemType: string;
+    sourceSectionId: string | null;
     discussionSummary: string | null;
     confidence: string | null;
     outcome: string | null;
@@ -677,9 +678,11 @@ function buildMeetingV2Stages(options: {
       label: "Extract",
       status: extractComplete
         ? "complete"
-        : counts.agendaItems > 0
-          ? "in_progress"
-          : "incomplete",
+        : extractionQuality.likelyIncomplete
+          ? "incomplete"
+          : counts.agendaItems > 0
+            ? "in_progress"
+            : "incomplete",
       note: extractionQuality.note,
       progressPercent: extractComplete ? 100 : counts.agendaItems > 0 ? 60 : 0,
     },
@@ -2635,6 +2638,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
     isConsistent,
     lastError: selectedMeeting.lastError,
     pipelineState: selectedMeeting.pipelineState,
+    updatedAt: selectedMeeting.updatedAt,
   });
 
   const transcriptArtifact = sourceArtifacts.find((artifact) => artifact.type === "transcript");
@@ -2683,6 +2687,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         title: item.title,
         itemNumber: item.itemNumber,
         itemType: item.itemType,
+        sourceSectionId: item.sourceSectionId,
         discussionSummary: investigation?.discussionSummary ?? null,
         confidence: investigation?.confidence ?? null,
         outcome: investigation?.outcome ?? null,

@@ -4,31 +4,23 @@ import { useEffect, useMemo } from "react";
 
 import {
   estimateCostBreakdown,
+  flattenAiUsageToStages,
   formatCostUsd,
   formatPricePerMillion,
   formatTokenCount,
   getModelPricing,
-  sumAiUsageRuns,
+  sumAiUsageStages,
   type AiUsageLog,
-  type AiUsageRun,
+  type AiUsageStageRow,
 } from "@/lib/gemini/usage";
 
 type Props = {
   open: boolean;
-  usage: AiUsageLog | null;
+  usage?: AiUsageLog | null;
+  stages?: AiUsageStageRow[] | null;
+  loading?: boolean;
   onClose: () => void;
 };
-
-function formatRanAt(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-  } catch {
-    return iso;
-  }
-}
 
 function TokenCostCell({
   tokenCount,
@@ -56,29 +48,26 @@ function TokenCostCell({
   );
 }
 
-function UsageRunRow({
-  run,
+function UsageStageRow({
+  stage,
   showRatesInCells,
 }: {
-  run: AiUsageRun;
+  stage: AiUsageStageRow;
   showRatesInCells: boolean;
 }) {
-  const breakdown = estimateCostBreakdown(run.modelName, run);
+  const breakdown = estimateCostBreakdown(stage.modelName, stage);
 
   return (
     <tr>
       <td className="px-4 py-3 align-top">
-        <div className="font-medium text-slate-900">{run.label}</div>
-        <div className="mt-0.5 text-xs text-slate-500">
-          {formatRanAt(run.ranAt)}
-        </div>
+        <div className="font-medium text-slate-900">{stage.label}</div>
         <div className="mt-0.5 font-mono text-[11px] text-slate-400">
-          {run.modelName}
+          {stage.modelName}
         </div>
       </td>
       <td className="px-4 py-3 text-right align-top">
         <TokenCostCell
-          tokenCount={run.inputTokens}
+          tokenCount={stage.inputTokens}
           costUsd={breakdown.inputCostUsd}
           ratePerMillion={breakdown.pricing.inputPerMillion}
           showRate={showRatesInCells}
@@ -86,14 +75,14 @@ function UsageRunRow({
       </td>
       <td className="px-4 py-3 text-right align-top">
         <TokenCostCell
-          tokenCount={run.outputTokens}
+          tokenCount={stage.outputTokens}
           costUsd={breakdown.outputCostUsd}
           ratePerMillion={breakdown.pricing.outputPerMillion}
           showRate={showRatesInCells}
         />
       </td>
       <td className="px-4 py-3 text-right align-top font-mono text-slate-800">
-        {formatTokenCount(run.totalTokens)}
+        {formatTokenCount(stage.totalTokens)}
       </td>
       <td className="px-4 py-3 text-right align-top font-mono font-medium text-slate-900">
         {formatCostUsd(breakdown.totalCostUsd)}
@@ -102,7 +91,7 @@ function UsageRunRow({
   );
 }
 
-export function AiUsageDialog({ open, usage, onClose }: Props) {
+export function AiUsageDialog({ open, usage, stages, loading = false, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
 
@@ -114,11 +103,18 @@ export function AiUsageDialog({ open, usage, onClose }: Props) {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
 
-  const runs = usage?.runs ?? [];
-  const totals = useMemo(() => sumAiUsageRuns(runs), [runs]);
+  const resolvedStages = useMemo(() => {
+    if (stages?.length) return stages;
+    return flattenAiUsageToStages(usage);
+  }, [stages, usage]);
+
+  const totals = useMemo(
+    () => sumAiUsageStages(resolvedStages),
+    [resolvedStages],
+  );
   const uniqueModels = useMemo(
-    () => [...new Set(runs.map((run) => run.modelName))],
-    [runs],
+    () => [...new Set(resolvedStages.map((stage) => stage.modelName))],
+    [resolvedStages],
   );
   const headerPricing =
     uniqueModels.length === 1 ? getModelPricing(uniqueModels[0]) : null;
@@ -148,12 +144,16 @@ export function AiUsageDialog({ open, usage, onClose }: Props) {
             AI usage &amp; cost
           </h2>
           <p className="mt-1 text-sm text-slate-600">
-            Token counts and estimated Gemini API cost for each processing run.
+            Token counts and estimated API cost for each processing stage.
           </p>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-          {runs.length === 0 ? (
+          {loading ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+              Loading usage data…
+            </div>
+          ) : resolvedStages.length === 0 ? (
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
               No usage data recorded for this meeting. Newly generated meetings
               track usage automatically; older meetings do not.
@@ -167,7 +167,7 @@ export function AiUsageDialog({ open, usage, onClose }: Props) {
                       scope="col"
                       className="px-4 py-3 text-left font-semibold text-slate-700"
                     >
-                      Run
+                      Stage
                     </th>
                     <th
                       scope="col"
@@ -206,10 +206,10 @@ export function AiUsageDialog({ open, usage, onClose }: Props) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {runs.map((run) => (
-                    <UsageRunRow
-                      key={run.id}
-                      run={run}
+                  {resolvedStages.map((stage) => (
+                    <UsageStageRow
+                      key={stage.id}
+                      stage={stage}
                       showRatesInCells={showRatesInCells}
                     />
                   ))}
@@ -254,11 +254,11 @@ export function AiUsageDialog({ open, usage, onClose }: Props) {
             </div>
           )}
 
-          {runs.length > 0 ? (
+          {resolvedStages.length > 0 ? (
             <p className="mt-4 text-xs text-slate-500">
-              Costs are recalculated from token counts using published Gemini
-              pricing. Retries and continuations during initial processing are
-              included in the initial processing line item.
+              Costs are recalculated from token counts using published model
+              pricing. Retries and continuations are included in their stage
+              rows when recorded.
             </p>
           ) : null}
         </div>
@@ -281,11 +281,18 @@ export function AiUsageIconButton({
   onClick,
   disabled,
   title = "View AI usage and cost",
+  tone = "default",
 }: {
   onClick: () => void;
   disabled?: boolean;
   title?: string;
+  tone?: "default" | "inverse";
 }) {
+  const toneClass =
+    tone === "inverse"
+      ? "border-white/15 bg-white/10 text-white hover:border-white/25 hover:bg-white/15 hover:text-white"
+      : "border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900";
+
   return (
     <button
       type="button"
@@ -293,7 +300,7 @@ export function AiUsageIconButton({
       disabled={disabled}
       title={title}
       aria-label={title}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+      className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${toneClass}`}
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"

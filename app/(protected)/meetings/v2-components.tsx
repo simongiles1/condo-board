@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState, useRef, type ReactNode } from "react";
 import { MinutesStructuredEditor } from "@/components/MinutesStructuredEditor";
 import { AttendeesEditorDialog } from "@/components/AttendeesEditorDialog";
+import { BoardPackageViewerDialog } from "@/components/BoardPackageViewerDialog";
 import { VttViewerDialog } from "@/components/VttViewerDialog";
 import type { EditableAttendance } from "@/lib/minutes/attendance-edit";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
@@ -84,6 +85,22 @@ type MeetingV2Status = {
     createdAt: string;
     updatedAt: string;
   } | null;
+  sources: {
+    transcript: {
+      fileName: string;
+      available: boolean;
+    } | null;
+    boardPackage: {
+      fileName: string;
+      available: boolean;
+      pageCount: number | null;
+    } | null;
+  };
+  documentSections: Array<{
+    title: string;
+    startPage: number;
+    endPage: number;
+  }>;
 };
 
 type V2Tab = "overview" | "review" | "draft" | "pipeline";
@@ -211,6 +228,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [activeTab, setActiveTab] = useState<V2Tab>("overview");
   const [autonomyTemperature, setAutonomyTemperature] = useState(0.8);
   const [vttDialogOpen, setVttDialogOpen] = useState(false);
+  const [boardPackageDialogOpen, setBoardPackageDialogOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -381,6 +399,19 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   View Transcript
                 </button>
                 <button
+                  className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!status?.sources.boardPackage}
+                  onClick={() => setBoardPackageDialogOpen(true)}
+                  type="button"
+                  title={
+                    status?.sources.boardPackage?.fileName
+                      ? `Open ${status.sources.boardPackage.fileName}`
+                      : "No board package on file"
+                  }
+                >
+                  View Board Package
+                </button>
+                <button
                   className="inline-flex items-center rounded-xl bg-teal-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-md transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={runBusy}
                   onClick={handleRunPipeline}
@@ -471,6 +502,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 flaggedCount={flaggedCount}
                 needsClarificationCount={needsClarificationCount}
                 status={status}
+                onViewTranscript={() => setVttDialogOpen(true)}
+                onViewBoardPackage={() => setBoardPackageDialogOpen(true)}
               />
             ) : null}
             {activeTab === "review" ? (
@@ -487,8 +520,13 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
       <VttViewerDialog
         open={vttDialogOpen}
         meetingId={meetingId}
-        fileLabel="transcript.vtt"
+        fileLabel={status?.sources.transcript?.fileName ?? "transcript.vtt"}
         onClose={() => setVttDialogOpen(false)}
+      />
+      <BoardPackageViewerDialog
+        open={boardPackageDialogOpen}
+        meetingId={meetingId}
+        onClose={() => setBoardPackageDialogOpen(false)}
       />
     </div>
   );
@@ -583,11 +621,15 @@ function OverviewPanel({
   needsClarificationCount,
   flaggedCount,
   readyCount,
+  onViewTranscript,
+  onViewBoardPackage,
 }: {
   status: MeetingV2Status;
   needsClarificationCount: number;
   flaggedCount: number;
   readyCount: number;
+  onViewTranscript: () => void;
+  onViewBoardPackage: () => void;
 }) {
   return (
     <div className="space-y-6">
@@ -636,6 +678,50 @@ function OverviewPanel({
               <DiagnosticTile label="Transcript segments" value={String(status.meeting.counts.transcriptSegments)} />
               <DiagnosticTile label="Document pages" value={String(status.meeting.counts.documentPages)} />
               <DiagnosticTile label="Document chunks" value={String(status.meeting.counts.documentChunks)} />
+            </div>
+            <div className="mt-4 space-y-2 rounded-2xl border border-slate-200 bg-white px-4 py-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Uploaded files
+              </p>
+              {status.sources.transcript ? (
+                <button
+                  type="button"
+                  onClick={onViewTranscript}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-left text-sm transition hover:border-slate-300 hover:bg-slate-50"
+                >
+                  <span>
+                    <span className="font-medium text-slate-900">Transcript</span>
+                    <span className="mt-1 block font-mono text-xs text-slate-600">
+                      {status.sources.transcript.fileName}
+                    </span>
+                  </span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-700">
+                    View
+                  </span>
+                </button>
+              ) : null}
+              {status.sources.boardPackage ? (
+                <button
+                  type="button"
+                  onClick={onViewBoardPackage}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-left text-sm transition hover:border-slate-300 hover:bg-slate-50"
+                >
+                  <span>
+                    <span className="font-medium text-slate-900">Board package</span>
+                    <span className="mt-1 block font-mono text-xs text-slate-600">
+                      {status.sources.boardPackage.fileName}
+                      {status.sources.boardPackage.pageCount != null
+                        ? ` · ${status.sources.boardPackage.pageCount} pages`
+                        : ""}
+                    </span>
+                  </span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-700">
+                    View
+                  </span>
+                </button>
+              ) : (
+                <p className="text-sm text-slate-600">No board package on file.</p>
+              )}
             </div>
             <p className="mt-4 text-sm leading-6 text-slate-600">
               This gives the operator a quick sense of whether the uploaded transcript and package were fully carried into the meeting workspace before extraction and review.
@@ -904,6 +990,12 @@ function AgendaReviewPanel({
 }
 
 function PipelinePanel({ status }: { status: MeetingV2Status }) {
+  const showExtractionComparison =
+    status.meeting.extractionQuality.likelyIncomplete &&
+    (status.meeting.extractionQuality.issueCode === "section_shaped_output" ||
+      status.meeting.extractionQuality.issueCode === "literal_section_fallback" ||
+      status.meeting.extractionQuality.issueCode === "noisy_titles");
+
   return (
     <div className="space-y-6">
       <SectionCard
@@ -973,6 +1065,61 @@ function PipelinePanel({ status }: { status: MeetingV2Status }) {
           </div>
         </div>
       </SectionCard>
+
+      {showExtractionComparison ? (
+        <SectionCard
+          eyebrow="Extraction audit"
+          title="PDF sections vs extracted agenda items"
+          description="PDF sections are mechanical page/heading splits from ingestion — roughly one per PDF page. Good semantic extraction collapses those into real board topics like “Financial Matters” or individual ratification line items."
+        >
+          <div className="grid gap-4 xl:grid-cols-2">
+            <ExtractionListCard
+              title="PDF sections (ingestion fallback shape)"
+              subtitle={`${status.documentSections.length} sections`}
+              items={status.documentSections.map((section) =>
+                section.startPage === section.endPage
+                  ? `p.${section.startPage}: ${section.title}`
+                  : `pp.${section.startPage}-${section.endPage}: ${section.title}`,
+              )}
+            />
+            <ExtractionListCard
+              title="Extracted agenda items (DeepSeek output)"
+              subtitle={`${status.items.length} items · ${startCase(status.meeting.extractionQuality.extractorUsed)}`}
+              items={status.items.map((item) =>
+                `${item.itemNumber ? `${item.itemNumber}. ` : ""}${item.title}${item.itemType === "agenda_section" ? " (section fallback)" : ""}`,
+              )}
+            />
+          </div>
+        </SectionCard>
+      ) : null}
+    </div>
+  );
+}
+
+function ExtractionListCard({
+  title,
+  subtitle,
+  items,
+}: {
+  title: string;
+  subtitle: string;
+  items: string[];
+}) {
+  return (
+    <div className="rounded-[1.6rem] border border-slate-200 bg-slate-50 p-5">
+      <p className="text-sm font-semibold text-slate-950">{title}</p>
+      <p className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">{subtitle}</p>
+      <ol className="mt-4 max-h-80 space-y-2 overflow-y-auto text-sm leading-6 text-slate-700">
+        {items.length === 0 ? (
+          <li className="text-slate-500">None yet.</li>
+        ) : (
+          items.map((item, index) => (
+            <li key={`${index}-${item}`} className="rounded-xl bg-white px-3 py-2">
+              {item}
+            </li>
+          ))
+        )}
+      </ol>
     </div>
   );
 }

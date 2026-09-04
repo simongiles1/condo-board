@@ -24,6 +24,7 @@ import {
 } from "@/lib/db/schema";
 import { AGENDA_ITEM_INVESTIGATION_PROMPT } from "@/lib/meeting-v2/investigation-prompts";
 import { AGENDA_ITEM_VALIDATION_PROMPT } from "@/lib/meeting-v2/validation-prompts";
+import { loadMeetingBoardPackageMeta } from "@/lib/meeting-v2/board-package";
 import { extractAgendaItemsWithAi } from "@/lib/meeting-v2/agenda-ai";
 import {
   analyzeExtractionQuality,
@@ -119,6 +120,22 @@ export type MeetingV2Detail = {
     createdAt: string;
     updatedAt: string;
   } | null;
+  sources: {
+    transcript: {
+      fileName: string;
+      available: boolean;
+    } | null;
+    boardPackage: {
+      fileName: string;
+      available: boolean;
+      pageCount: number | null;
+    } | null;
+  };
+  documentSections: Array<{
+    title: string;
+    startPage: number;
+    endPage: number;
+  }>;
 };
 
 function nowIso(): string {
@@ -2532,8 +2549,16 @@ export async function generateMeetingV2Draft(meetingId: string): Promise<{
 
 export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2Detail> {
   const db = getDb();
-  const [meeting, agendaItems, investigations, validationRows, drafts, counts] = await Promise.all([
+  const [meeting, legacyMeeting, agendaItems, investigations, validationRows, drafts, counts, documentSections, sourceArtifacts, boardPackageMeta] = await Promise.all([
     db.select().from(meetingsV2).where(eq(meetingsV2.id, meetingId)),
+    db
+      .select({
+        vttFilePath: meetings.vttFilePath,
+        boardPackageFilePath: meetings.boardPackageFilePath,
+        pdfFilePath: meetings.pdfFilePath,
+      })
+      .from(meetings)
+      .where(eq(meetings.id, meetingId)),
     db
       .select()
       .from(meetingsV2AgendaItems)
@@ -2553,6 +2578,23 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId))
       .orderBy(desc(meetingsV2MinutesDrafts.createdAt)),
     getMeetingV2Counts(meetingId),
+    db
+      .select({
+        title: meetingsV2DocumentSections.title,
+        startPage: meetingsV2DocumentSections.startPage,
+        endPage: meetingsV2DocumentSections.endPage,
+      })
+      .from(meetingsV2DocumentSections)
+      .where(eq(meetingsV2DocumentSections.meetingV2Id, meetingId))
+      .orderBy(asc(meetingsV2DocumentSections.sortOrder)),
+    db
+      .select({
+        type: meetingsV2SourceArtifacts.type,
+        originalFilename: meetingsV2SourceArtifacts.originalFilename,
+      })
+      .from(meetingsV2SourceArtifacts)
+      .where(eq(meetingsV2SourceArtifacts.meetingV2Id, meetingId)),
+    loadMeetingBoardPackageMeta(meetingId),
   ]);
 
   const selectedMeeting = meeting[0];
@@ -2594,6 +2636,16 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
     lastError: selectedMeeting.lastError,
     pipelineState: selectedMeeting.pipelineState,
   });
+
+  const transcriptArtifact = sourceArtifacts.find((artifact) => artifact.type === "transcript");
+  const boardPackageArtifact = sourceArtifacts.find(
+    (artifact) => artifact.type === "board_package",
+  );
+  const legacy = legacyMeeting[0];
+  const uploadRoot = path.resolve(process.cwd(), "uploads", meetingId);
+  const transcriptPath = legacy?.vttFilePath
+    ? path.resolve(process.cwd(), legacy.vttFilePath)
+    : null;
 
   return {
     meeting: {
@@ -2643,6 +2695,30 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       };
     }),
     latestDraft,
+    sources: {
+      transcript: legacy?.vttFilePath
+        ? {
+            fileName:
+              transcriptArtifact?.originalFilename?.trim() ||
+              path.basename(legacy.vttFilePath) ||
+              "transcript.vtt",
+            available: Boolean(transcriptPath?.startsWith(uploadRoot)),
+          }
+        : null,
+      boardPackage:
+        boardPackageMeta.ok && (legacy?.boardPackageFilePath || legacy?.pdfFilePath || boardPackageArtifact)
+          ? {
+              fileName: boardPackageMeta.payload.fileName,
+              available: boardPackageMeta.payload.available,
+              pageCount: boardPackageMeta.payload.pageCount,
+            }
+          : null,
+    },
+    documentSections: documentSections.map((section) => ({
+      title: section.title,
+      startPage: section.startPage,
+      endPage: section.endPage,
+    })),
   };
 }
 

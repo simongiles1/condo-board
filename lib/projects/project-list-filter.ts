@@ -116,7 +116,10 @@ export function matchesProjectListFilters(
   filters: ProjectListFilters,
 ): boolean {
   if (filters.scope !== "all") {
-    const scope = resolveProjectScope(project) ?? "unknown";
+    const scope = resolveProjectScope({
+      location: project.location ?? null,
+      scope: project.scope ?? null,
+    }) ?? "unknown";
     if (scope !== filters.scope) return false;
   }
 

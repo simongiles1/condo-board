@@ -32,6 +32,7 @@ import type {
   ProjectFingerprintListStats,
   ProjectFingerprintSummary,
 } from "@/lib/projects/fingerprint-list";
+import type { ProjectDeniableField } from "@/lib/projects/field-denials";
 import type { ProjectMentionStats } from "@/lib/projects/mention-queue-shared";
 import {
   clampEntityListPage,

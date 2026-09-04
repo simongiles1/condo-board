@@ -1726,15 +1726,48 @@ export const floorPlanSettings = pgTable("floor_plan_settings", {
   registrationPlanId: text("registration_plan_id"),
   /** Floor whose building pin + reference anchor define the pin offset. */
   pinReferencePlanId: text("pin_reference_plan_id"),
-  /** Labeled stroke-color presets for wall markup (JSON array). */
+  /** Labeled stroke-color presets for wall markup (JSON array of color, label, shortcut, family). */
   drawColorPresetsJson: text("draw_color_presets_json"),
+  /** Standardized templates per riser type (JSON dictionary of typeId -> RiserTypeTemplate). */
+  riserTemplatesJson: text("riser_templates_json"),
   updatedAt: text("updated_at").notNull(),
 });
+
+/** Mechanical riser functions (sanitary, storm, …) with legend color and shortcut. */
+export const mechanicalRiserTypes = pgTable("mechanical_riser_types", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  color: text("color").notNull(),
+  shortcut: text("shortcut"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+});
+
+/** Numbered instance of a mechanical riser type, reused across floors. */
+export const mechanicalRisers = pgTable(
+  "mechanical_risers",
+  {
+    id: text("id").primaryKey(),
+    typeId: text("type_id")
+      .notNull()
+      .references(() => mechanicalRiserTypes.id, { onDelete: "restrict" }),
+    label: text("label").notNull(),
+    /** True once this stack has been traced to its top floor. */
+    completed: boolean("completed").notNull().default(false),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    typeLabelUnique: uniqueIndex("mechanical_risers_type_label_idx").on(
+      table.typeId,
+      table.label,
+    ),
+  }),
+);
 
 export const floorPlanFamilies = pgTable("floor_plan_families", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  /** architectural = single-sheet floors; mechanical = east/west pair until merged. */
+  /** architectural | mechanical — either may use single-sheet or east/west uploads until merged. */
   kind: text("kind").notNull().default("architectural"),
   sortOrder: integer("sort_order").notNull().default(0),
   cropWidthPt: real("crop_width_pt"),
@@ -2129,3 +2162,5 @@ export const extractionSourcesRelations = relations(
     }),
   }),
 );
+
+export * from "./schema-v2";

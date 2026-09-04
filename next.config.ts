@@ -19,12 +19,16 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: process.env.SKIP_TYPECHECK === "1",
   },
   productionBrowserSourceMaps: false,
+  serverActions: {
+    bodySizeLimit: "100mb",
+  },
   experimental: {
     // Coolify build dies during "Collecting build traces" on this codebase.
     cpus: 1,
     webpackMemoryOptimizations: true,
     serverSourceMaps: false,
     enablePrerenderSourceMaps: false,
+    middlewareClientMaxBodySize: "100mb",
   },
   // pdfjs-dist is serverExternalPackages; standalone must ship the worker file.
   outputFileTracingIncludes: {

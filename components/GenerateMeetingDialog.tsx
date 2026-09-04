@@ -260,6 +260,7 @@ export function GenerateMeetingDialog({ open, onClose }: Props) {
                 accept=".pdf,application/pdf"
                 label="Reference minutes PDF"
                 hint="Prior minutes for style and tone only."
+                required={false}
               />
             </div>
 

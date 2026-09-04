@@ -428,6 +428,55 @@
       "when": 1788400000000,
       "tag": "0060_floor_plan_reference_anchor",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1788500000000,
+      "tag": "0061_mechanical_risers",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1788600000000,
+      "tag": "0062_mechanical_riser_labels",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1788700000000,
+      "tag": "0063_mechanical_riser_completed",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1788800000000,
+      "tag": "0064_riser_templates",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1788900000000,
+      "tag": "0065_meetings_v2_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1789000000000,
+      "tag": "0066_meetings_v2_repair",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1789100000000,
+      "tag": "0067_meetings_v2_settings",
+      "breakpoints": true
     }
   ]
 }

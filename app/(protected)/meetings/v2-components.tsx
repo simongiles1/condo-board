@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useState, useRef, type ReactNode } from "react";
 import { MinutesStructuredEditor } from "@/components/MinutesStructuredEditor";
 import { AttendeesEditorDialog } from "@/components/AttendeesEditorDialog";
 import { MeetingDocumentsDialog } from "@/components/MeetingDocumentsDialog";
+import { PullMeetingSourcesButton } from "@/components/PullMeetingSourcesButton";
 import {
   AiUsageDialog,
   AiUsageIconButton,
@@ -14,6 +15,7 @@ import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
 import { serializeMinutesDoc } from "@/lib/minutes/doc-v2-edits";
 import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
+import { buildMeetingV2WorkflowProgress, type MeetingV2WorkflowProgress } from "@/lib/meeting-v2/workflow-progress";
 import type {
   MeetingV2Alert,
   MeetingV2ExtractionQuality,
@@ -286,19 +288,23 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     };
   }, [meetingId, usageDialogOpen]);
 
+  const refreshStatus = useCallback(async (active = true) => {
+    const response = await fetch(`/api/v2/meetings/${meetingId}/status`, {
+      cache: "no-store",
+    });
+    if (!response.ok) return;
+    const payload = (await response.json()) as MeetingV2Status;
+    if (active) {
+      setStatus(payload);
+      setLoading(false);
+    }
+  }, [meetingId]);
+
   useEffect(() => {
     let active = true;
 
     async function loadStatus() {
-      const response = await fetch(`/api/v2/meetings/${meetingId}/status`, {
-        cache: "no-store",
-      });
-      if (!response.ok) return;
-      const payload = (await response.json()) as MeetingV2Status;
-      if (active) {
-        setStatus(payload);
-        setLoading(false);
-      }
+      await refreshStatus(active);
     }
 
     void loadStatus();
@@ -310,7 +316,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
       active = false;
       window.clearInterval(interval);
     };
-  }, [meetingId]);
+  }, [meetingId, refreshStatus]);
 
   async function handleRunPipeline() {
     setRunBusy(true);
@@ -362,12 +368,37 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
 
   const progress = status?.meeting.progressPercent ?? 0;
   const displayState = status?.meeting.computedPipelineState ?? status?.meeting.pipelineState ?? "created";
-  const displayStep =
-    status && status.meeting.integrity.isConsistent
+  const reviewableItems = status?.items ?? [];
+  const needsClarificationCount = reviewableItems.filter((item) => item.openQuestions.length > 0).length;
+  const flaggedCount = reviewableItems.filter((item) =>
+    item.validation.some((validation) => validation.severity === "error" || validation.severity === "warning"),
+  ).length;
+  const readyCount = reviewableItems.filter(
+    (item) => item.openQuestions.length === 0 && !item.validation.some(v => v.severity === "error" || v.severity === "warning"),
+  ).length;
+  const workflowProgress = status
+    ? buildMeetingV2WorkflowProgress({
+        pipelineStages: status.meeting.stages.map((stage) => ({
+          key: stage.key,
+          label: stage.label,
+          status: stage.status,
+          note: stage.note,
+        })),
+        agendaItemCount: status.meeting.counts.agendaItems,
+        needsClarificationCount,
+        flaggedCount,
+        draftCount: status.meeting.counts.drafts,
+        hasLatestDraft: Boolean(status.latestDraft),
+      })
+    : null;
+  const displayStep = workflowProgress
+    ? workflowProgress.currentStep
+    : status && status.meeting.integrity.isConsistent
       ? status.meeting.currentStep ?? status.meeting.computedCurrentStep
       : status?.meeting.computedCurrentStep ?? status?.meeting.currentStep ?? "Waiting for first run";
-  const displayProgress =
-    status && status.meeting.integrity.isConsistent
+  const displayProgress = workflowProgress
+    ? workflowProgress.progressPercent
+    : status && status.meeting.integrity.isConsistent
       ? progress
       : status?.meeting.computedPipelineState === "gathering_evidence"
         ? 55
@@ -380,7 +411,18 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               : status?.meeting.computedPipelineState === "ingesting"
                 ? 10
                 : progress;
+  const pipelineHalted = Boolean(
+    status?.meeting.alerts.some((alert) => alert.blocksPipeline || alert.severity === "error"),
+  );
+  const displayLabel = workflowProgress
+    ? pipelineHalted && displayState !== "failed"
+      ? `Stopped · ${workflowProgress.currentLabel}`
+      : workflowProgress.currentLabel
+    : pipelineHalted && displayState !== "failed"
+      ? `Stopped · ${startCase(displayState)}`
+      : startCase(displayState);
   const hasSuccessfulRun = displayState === "validated";
+  const pipelineValidated = hasSuccessfulRun;
   const hasMeetingDocuments = Boolean(
     status?.sources.transcript?.available || status?.sources.boardPackage?.available,
   );
@@ -396,17 +438,6 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         : !status.sources.boardPackage?.available
           ? "Board package is not available on this machine."
           : null;
-  const reviewableItems = status?.items ?? [];
-  const needsClarificationCount = reviewableItems.filter((item) => item.openQuestions.length > 0).length;
-  const flaggedCount = reviewableItems.filter((item) =>
-    item.validation.some((validation) => validation.severity === "error" || validation.severity === "warning"),
-  ).length;
-  const readyCount = reviewableItems.filter(
-    (item) => item.openQuestions.length === 0 && !item.validation.some(v => v.severity === "error" || v.severity === "warning"),
-  ).length;
-  const pipelineHalted = Boolean(
-    status?.meeting.alerts.some((alert) => alert.blocksPipeline || alert.severity === "error"),
-  );
   const pipelineNotStarted =
     displayState === "created" ||
     status?.meeting.pipelineState === "created" ||
@@ -478,9 +509,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                       : "border-white/20 bg-white/10 text-white/90"
                   }`}
                 >
-                  {pipelineHalted && displayState !== "failed"
-                    ? `Stopped · ${startCase(displayState)}`
-                    : startCase(displayState)}
+                  {displayLabel}
                 </span>
               </div>
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
@@ -516,12 +545,21 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 <PipelineActionButton
                   runBusy={runBusy}
                   pipelineNotStarted={pipelineNotStarted}
+                  pipelineValidated={pipelineValidated}
                   disabled={!pipelineSourcesReady}
                   disabledReason={pipelineDisabledReason}
                   onRun={handleRunPipeline}
                   onRestart={handleRestartPipeline}
                 />
               </div>
+              {!pipelineSourcesReady ? (
+                <PullMeetingSourcesButton
+                  meetingId={meetingId}
+                  showWhenSourcesMissing
+                  sourcesMissing={!pipelineSourcesReady}
+                  onPulled={() => void refreshStatus()}
+                />
+              ) : null}
               {status?.latestDraft ? (
                 <a
                   href={`/api/v2/meetings/${meetingId}/draft/file?download=1`}
@@ -590,7 +628,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                     onGenerateDraft={handleGenerateDraft}
                   />
                 ) : null}
-                {activeTab === "pipeline" ? <PipelinePanel status={status} /> : null}
+                {activeTab === "pipeline" ? (
+                  <PipelinePanel status={status} workflowProgress={workflowProgress} />
+                ) : null}
               </>
             ) : (
               <PreRunPanel
@@ -624,6 +664,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
 function PipelineActionButton({
   runBusy,
   pipelineNotStarted,
+  pipelineValidated = false,
   disabled = false,
   disabledReason,
   onRun,
@@ -631,6 +672,7 @@ function PipelineActionButton({
 }: {
   runBusy: boolean;
   pipelineNotStarted: boolean;
+  pipelineValidated?: boolean;
   disabled?: boolean;
   disabledReason?: string | null;
   onRun: () => void;
@@ -660,12 +702,17 @@ function PipelineActionButton({
   const primaryLabel = runBusy
     ? pipelineNotStarted
       ? "Starting..."
-      : "Resuming..."
+      : pipelineValidated
+        ? "Re-running..."
+        : "Resuming..."
     : pipelineNotStarted
       ? "Start Pipeline"
-      : "Resume Pipeline";
+      : pipelineValidated
+        ? "Re-run Pipeline"
+        : "Resume Pipeline";
 
   const title = isDisabled && disabledReason ? disabledReason : undefined;
+  const showDropdown = pipelineValidated || !pipelineNotStarted;
 
   return (
     <div className="relative" ref={containerRef} title={title}>
@@ -681,7 +728,7 @@ function PipelineActionButton({
         </button>
         <button
           className="inline-flex items-center border-l border-teal-600/30 bg-teal-500 px-2 py-2 text-slate-950 transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={isDisabled}
+          disabled={isDisabled || !showDropdown}
           onClick={() => setMenuOpen((open) => !open)}
           type="button"
           aria-expanded={menuOpen}
@@ -692,7 +739,7 @@ function PipelineActionButton({
           <ChevronDownIcon />
         </button>
       </div>
-      {menuOpen ? (
+      {menuOpen && showDropdown ? (
         <div
           role="menu"
           className="absolute right-0 top-full z-50 mt-1 min-w-[12rem] overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
@@ -1300,30 +1347,51 @@ function AgendaReviewPanel({
   );
 }
 
-function PipelinePanel({ status }: { status: MeetingV2Status }) {
+function PipelinePanel({
+  status,
+  workflowProgress,
+}: {
+  status: MeetingV2Status;
+  workflowProgress: MeetingV2WorkflowProgress | null;
+}) {
+  const workflowSteps = workflowProgress?.steps ?? status.meeting.stages.map((stage) => ({
+    key: stage.key,
+    label: stage.label,
+    status: stage.status,
+    note: stage.note,
+    kind: "pipeline" as const,
+  }));
+
   return (
     <div className="space-y-6">
       <SectionCard
         eyebrow="Pipeline"
         title="Stage diagnostics"
-        description="Technical details stay here so the main review workspace can stay focused on the meeting output."
+        description="Automated pipeline stages plus the manual review steps needed before the meeting is fully complete."
       >
-        <div className="grid gap-3 xl:grid-cols-5">
-          {status.meeting.stages.map((stage) => (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {workflowSteps.map((stage) => (
             <div
               key={stage.key}
               className={`rounded-2xl border px-4 py-4 ${stageTone(stage.status)}`}
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-semibold">{stage.label}</div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em]">
-                  {startCase(stage.status)}
+                <div className="flex items-center gap-2">
+                  {stage.kind === "user" ? (
+                    <span className="rounded-full border border-current/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] opacity-80">
+                      Manual
+                    </span>
+                  ) : null}
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em]">
+                    {startCase(stage.status)}
+                  </div>
                 </div>
               </div>
               <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/70">
                 <div
                   className="h-full rounded-full bg-current opacity-70"
-                  style={{ width: `${stage.progressPercent}%` }}
+                  style={{ width: stage.status === "complete" ? "100%" : stage.status === "in_progress" ? "50%" : "0%" }}
                 />
               </div>
               <p className="mt-3 text-sm leading-6">{stage.note}</p>

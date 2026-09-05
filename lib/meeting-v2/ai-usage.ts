@@ -5,6 +5,7 @@ import { meetings } from "@/lib/db/schema";
 import {
   meetingsV2AgendaChunkSnapshots,
   meetingsV2AgendaItemInvestigations,
+  meetingsV2DocumentPages,
 } from "@/lib/db/schema-v2";
 import {
   flattenAiUsageToStages,
@@ -12,6 +13,8 @@ import {
   type AiUsageStageRow,
   type TokenUsage,
 } from "@/lib/gemini/usage";
+import { isLikelyDoclingMarkdown } from "@/lib/meeting-v2/pdf";
+import { MEETING_V2_USAGE_STAGE_DEFINITIONS } from "@/lib/meeting-v2/workflow-progress";
 
 function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback;
@@ -72,6 +75,7 @@ function buildStageRow(options: {
   label: string;
   modelName: string;
   usage: TokenUsage;
+  stageKind?: "pipeline" | "user";
 }): AiUsageStageRow {
   return {
     id: options.id,
@@ -80,6 +84,27 @@ function buildStageRow(options: {
     inputTokens: options.usage.inputTokens,
     outputTokens: options.usage.outputTokens,
     totalTokens: options.usage.totalTokens,
+    stageKind: options.stageKind ?? "pipeline",
+  };
+}
+
+function buildNotApplicableStage(options: {
+  id: string;
+  label: string;
+  stageKind: "pipeline" | "user";
+  modelName?: string;
+  usageDetail?: string;
+}): AiUsageStageRow {
+  return {
+    id: options.id,
+    label: options.label,
+    modelName: options.modelName ?? "N/A",
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    notApplicable: true,
+    stageKind: options.stageKind,
+    usageDetail: options.usageDetail,
   };
 }
 
@@ -87,33 +112,57 @@ export async function loadMeetingV2AiUsageStages(
   meetingId: string,
 ): Promise<AiUsageStageRow[]> {
   const db = getDb();
-  const [legacyMeeting, chunkSnapshots, investigations] = await Promise.all([
-    db
-      .select({ aiUsageJson: meetings.aiUsageJson })
-      .from(meetings)
-      .where(eq(meetings.id, meetingId)),
-    db
-      .select({
-        usageJson: meetingsV2AgendaChunkSnapshots.usageJson,
-      })
-      .from(meetingsV2AgendaChunkSnapshots)
-      .where(eq(meetingsV2AgendaChunkSnapshots.meetingV2Id, meetingId)),
-    db
-      .select({
-        modelName: meetingsV2AgendaItemInvestigations.modelName,
-        usageJson: meetingsV2AgendaItemInvestigations.usageJson,
-      })
-      .from(meetingsV2AgendaItemInvestigations)
-      .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
-  ]);
+  const [legacyMeeting, chunkSnapshots, investigations, documentPages] =
+    await Promise.all([
+      db
+        .select({ aiUsageJson: meetings.aiUsageJson })
+        .from(meetings)
+        .where(eq(meetings.id, meetingId)),
+      db
+        .select({
+          usageJson: meetingsV2AgendaChunkSnapshots.usageJson,
+        })
+        .from(meetingsV2AgendaChunkSnapshots)
+        .where(eq(meetingsV2AgendaChunkSnapshots.meetingV2Id, meetingId)),
+      db
+        .select({
+          modelName: meetingsV2AgendaItemInvestigations.modelName,
+          usageJson: meetingsV2AgendaItemInvestigations.usageJson,
+        })
+        .from(meetingsV2AgendaItemInvestigations)
+        .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
+      db
+        .select({
+          extractedText: meetingsV2DocumentPages.extractedText,
+        })
+        .from(meetingsV2DocumentPages)
+        .where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
+    ]);
 
-  const stages: AiUsageStageRow[] = [];
+  const usageByStageId = new Map<string, AiUsageStageRow>();
 
   const initialStages = flattenAiUsageToStages(
     parseStoredAiUsage(legacyMeeting[0]?.aiUsageJson),
   );
-  if (initialStages.length > 0) {
-    stages.push(...initialStages);
+  for (const stage of initialStages) {
+    usageByStageId.set(stage.id, stage);
+  }
+
+  const doclingPageCount = documentPages.filter((page) =>
+    isLikelyDoclingMarkdown(page.extractedText),
+  ).length;
+
+  if (doclingPageCount > 0) {
+    usageByStageId.set(
+      "ingest",
+      buildNotApplicableStage({
+        id: "ingest",
+        label: "Ingest",
+        stageKind: "pipeline",
+        modelName: "IBM Docling",
+        usageDetail: `${doclingPageCount} page${doclingPageCount === 1 ? "" : "s"} processed`,
+      }),
+    );
   }
 
   const extractionUsages = chunkSnapshots
@@ -122,12 +171,14 @@ export async function loadMeetingV2AiUsageStages(
 
   if (extractionUsages.length > 0) {
     const usage = sumTokenUsages(extractionUsages);
-    stages.push(
+    usageByStageId.set(
+      "extract",
       buildStageRow({
-        id: "agenda-extraction",
-        label: "Agenda extraction",
+        id: "extract",
+        label: "Extract",
         modelName: "deepseek-v4-flash",
         usage,
+        stageKind: "pipeline",
       }),
     );
   }
@@ -150,15 +201,42 @@ export async function loadMeetingV2AiUsageStages(
   }
 
   if (investigationUsages.length > 0) {
-    stages.push(
+    usageByStageId.set(
+      "investigate",
       buildStageRow({
-        id: "item-investigation",
-        label: "Item investigation",
+        id: "investigate",
+        label: "Investigate",
         modelName: investigationModel,
         usage: sumTokenUsages(investigationUsages),
+        stageKind: "pipeline",
       }),
     );
   }
 
-  return stages;
+  return MEETING_V2_USAGE_STAGE_DEFINITIONS.map((stage) => {
+    const recorded = usageByStageId.get(stage.id);
+    if (recorded && !recorded.notApplicable) {
+      return {
+        ...recorded,
+        id: stage.id,
+        label: stage.label,
+        stageKind: stage.kind,
+      };
+    }
+    if (recorded?.notApplicable) {
+      return {
+        ...recorded,
+        id: stage.id,
+        label: stage.label,
+        stageKind: stage.kind,
+      };
+    }
+    return buildNotApplicableStage({
+      id: stage.id,
+      label: stage.label,
+      stageKind: stage.kind,
+      usageDetail:
+        stage.kind === "user" ? "Manual step — no API usage" : undefined,
+    });
+  });
 }

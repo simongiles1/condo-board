@@ -58,6 +58,38 @@ function UsageStageRow({
   stage: AiUsageStageRow;
   showRatesInCells: boolean;
 }) {
+  if (stage.notApplicable) {
+    const subtitle =
+      stage.stageKind === "user"
+        ? "Manual"
+        : stage.modelName !== "N/A"
+          ? stage.modelName
+          : "No LLM usage";
+
+    return (
+      <tr className="text-slate-500">
+        <td className="px-4 py-3 align-top">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium text-slate-700">{stage.label}</span>
+            {stage.stageKind === "user" ? (
+              <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                Manual
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-0.5 text-[11px] text-slate-500">{subtitle}</div>
+          {stage.usageDetail ? (
+            <div className="mt-1 text-[11px] font-medium text-slate-600">{stage.usageDetail}</div>
+          ) : null}
+        </td>
+        <td className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</td>
+        <td className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</td>
+        <td className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</td>
+        <td className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</td>
+      </tr>
+    );
+  }
+
   const breakdown = estimateCostBreakdown(stage.modelName, stage);
 
   return (
@@ -162,7 +194,7 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
     [resolvedStages],
   );
   const uniqueModels = useMemo(
-    () => [...new Set(resolvedStages.map((stage) => stage.modelName))],
+    () => [...new Set(resolvedStages.filter((stage) => !stage.notApplicable).map((stage) => stage.modelName))],
     [resolvedStages],
   );
   const headerPricing =
@@ -194,7 +226,7 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
           </h2>
           <p className="mt-1 text-sm text-slate-600">
             {activeTab === "usage"
-              ? "Token counts and estimated API cost for each processing stage."
+              ? "All seven workflow steps — token costs for automated stages, manual steps marked N/A."
               : "IBM watsonx Docling trial keys loaded from .env.local and their spend."}
           </p>
           <div
@@ -342,8 +374,9 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
           {resolvedStages.length > 0 ? (
             <p className="mt-4 text-xs text-slate-500">
               Costs are recalculated from token counts using published model
-              pricing. Retries and continuations are included in their stage
-              rows when recorded.
+              pricing. Ingest Docling page counts appear when markdown extraction
+              was stored; dollar cost for Docling is on the WatsonX tab. Manual
+              review steps have no API usage.
             </p>
           ) : null}
             </>

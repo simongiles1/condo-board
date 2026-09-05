@@ -50,6 +50,15 @@ export function inferHeadingFromMarkdown(markdown: string): string | null {
   return inferHeading(lines);
 }
 
+export function isLikelyDoclingMarkdown(text: string): boolean {
+  const sample = text.trim();
+  if (!sample) return false;
+  if (/^#{1,6}\s+\S/m.test(sample)) return true;
+  if (/^\|[^\n]+\|/m.test(sample) && /\|[\s:|-]+\|/.test(sample)) return true;
+  if (sample.includes("<!-- image -->")) return true;
+  return false;
+}
+
 export function isEmailAttachmentPage(text: string): boolean {
   const slice = text.slice(0, 1200);
   const hasFrom = /\b(From|De)\s*:[^\n]+@[^\n]+/i.test(slice);

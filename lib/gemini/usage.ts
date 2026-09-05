@@ -44,6 +44,12 @@ export type AiUsageStageRow = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** When true, this stage has no recorded LLM token usage (row shows N/A). */
+  notApplicable?: boolean;
+  /** Pipeline vs manual review step — mirrors the seven-step workflow. */
+  stageKind?: "pipeline" | "user";
+  /** Non-token detail (e.g. Docling page count). */
+  usageDetail?: string;
 };
 
 export type AiUsageLog = {
@@ -377,7 +383,8 @@ export function sumAiUsageStages(stages: AiUsageStageRow[]): {
   outputCostUsd: number;
   costUsd: number;
 } {
-  return stages.reduce(
+  const billableStages = stages.filter((stage) => !stage.notApplicable);
+  return billableStages.reduce(
     (acc, stage) => {
       const breakdown = estimateCostBreakdown(stage.modelName, stage);
       return {

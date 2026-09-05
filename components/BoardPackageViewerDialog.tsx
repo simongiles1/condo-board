@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { MarkdownPreview } from "@/components/MarkdownPreview";
+import { PullMeetingSourcesButton } from "@/components/PullMeetingSourcesButton";
 import { ZoomablePdfViewer } from "@/components/ZoomablePdfViewer";
 
 type BoardPackageMeta = {
@@ -177,7 +178,12 @@ export function BoardPackageViewerDialog({
         <p className={`text-sm text-slate-600 ${embedded ? "px-4 py-3" : ""}`}>Loading board package…</p>
       ) : error ? (
         <div className={`rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 ${embedded ? "mx-4 my-3" : ""}`}>
-          {error}
+          <p>{error}</p>
+          <PullMeetingSourcesButton
+            meetingId={meetingId}
+            className="mt-3"
+            onPulled={() => window.location.reload()}
+          />
         </div>
       ) : formatTab === "pdf" && meta?.available ? (
         <ZoomablePdfViewer

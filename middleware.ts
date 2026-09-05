@@ -34,12 +34,29 @@ function isPublicPath(pathname: string) {
   );
 }
 
+function isAuthorizedInternalFilePull(request: NextRequest): boolean {
+  const expected = process.env.FILE_PULL_TOKEN?.trim();
+  if (!expected) return false;
+  const header = request.headers.get("authorization")?.trim();
+  if (!header?.toLowerCase().startsWith("bearer ")) return false;
+  const provided = header.slice("bearer ".length).trim();
+  return Boolean(provided && provided === expected);
+}
+
 export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  if (pathname.startsWith("/api/internal/")) {
+    if (isAuthorizedInternalFilePull(request)) {
+      return NextResponse.next();
+    }
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   if (!isAuthEnabled()) {
     return NextResponse.next();
   }
 
-  const { pathname } = request.nextUrl;
   if (isPublicPath(pathname)) {
     return NextResponse.next();
   }

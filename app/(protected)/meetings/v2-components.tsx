@@ -1086,6 +1086,25 @@ function AgendaReviewPanel({
 
   const canReviewItems = status.meeting.computedPipelineState === "validated";
 
+  const sortedItems = [...status.items].sort((a, b) => {
+    const aQuestions = a.openQuestions.length;
+    const bQuestions = b.openQuestions.length;
+    if (aQuestions !== bQuestions) return bQuestions - aQuestions;
+
+    const aFlags = a.validation.filter(
+      (validation) => validation.severity === "error" || validation.severity === "warning",
+    ).length;
+    const bFlags = b.validation.filter(
+      (validation) => validation.severity === "error" || validation.severity === "warning",
+    ).length;
+    if (aFlags !== bFlags) return bFlags - aFlags;
+
+    const aNum = a.itemNumber ? Number.parseFloat(a.itemNumber) : Number.NaN;
+    const bNum = b.itemNumber ? Number.parseFloat(b.itemNumber) : Number.NaN;
+    if (!Number.isNaN(aNum) && !Number.isNaN(bNum) && aNum !== bNum) return aNum - bNum;
+    return a.title.localeCompare(b.title);
+  });
+
   if (!canReviewItems) {
     return (
       <SectionCard
@@ -1107,16 +1126,29 @@ function AgendaReviewPanel({
       description="This is the primary working area for V2. Review one item at a time, answer clarifications when needed, and re-run only the affected item."
     >
       <div className="space-y-4">
-        {status.items.map((item) => {
+        {sortedItems.map((item) => {
           const isOpen = openItemId === item.id;
           const hasFlags = item.validation.some(v => v.severity === "error" || v.severity === "warning");
+          const flagCount = item.validation.filter(
+            (validation) => validation.severity === "error" || validation.severity === "warning",
+          ).length;
+          const openQuestionCount = item.openQuestions.length;
+          const hasErrorFlags = item.validation.some((validation) => validation.severity === "error");
           return (
             <div
               key={item.id}
-              className="overflow-hidden rounded-[1.6rem] border border-slate-200 bg-slate-50"
+              className={`overflow-hidden rounded-[1.6rem] border bg-slate-50 ${
+                openQuestionCount > 0
+                  ? "border-amber-300 ring-1 ring-amber-100"
+                  : flagCount > 0
+                    ? hasErrorFlags
+                      ? "border-rose-300 ring-1 ring-rose-100"
+                      : "border-amber-200"
+                    : "border-slate-200"
+              }`}
             >
               <button
-                className="flex w-full flex-col gap-4 px-5 py-5 text-left transition hover:bg-slate-100/70 lg:flex-row lg:items-start lg:justify-between"
+                className="flex w-full flex-col gap-2 px-5 py-5 text-left transition hover:bg-slate-100/70"
                 onClick={() => setOpenItemId((current) => (current === item.id ? null : item.id))}
                 type="button"
               >
@@ -1132,15 +1164,26 @@ function AgendaReviewPanel({
                     <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-600">
                       {item.confidence ? startCase(item.confidence) : "Unknown Confidence"}
                     </span>
+                    {openQuestionCount > 0 ? (
+                      <span className="rounded-full border border-amber-300 bg-amber-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-950">
+                        {openQuestionCount} Open {openQuestionCount === 1 ? "Question" : "Questions"}
+                      </span>
+                    ) : null}
+                    {flagCount > 0 ? (
+                      <span
+                        className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
+                          hasErrorFlags
+                            ? "border-rose-300 bg-rose-100 text-rose-950"
+                            : "border-amber-300 bg-amber-50 text-amber-950"
+                        }`}
+                      >
+                        {flagCount} {flagCount === 1 ? "Flag" : "Flags"}
+                      </span>
+                    ) : null}
                   </div>
                   <p className="max-w-3xl text-sm leading-6 text-slate-600">
                     {item.discussionSummary ?? "No investigation summary yet."}
                   </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  <span>{item.openQuestions.length} open</span>
-                  <span>{item.validation.filter(v => v.severity === "error" || v.severity === "warning").length} flags</span>
-                  <span>{isOpen ? "Collapse" : "Expand"}</span>
                 </div>
               </button>
 

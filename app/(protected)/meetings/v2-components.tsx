@@ -427,8 +427,12 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         </span>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-4 py-4 text-white">
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div
+          className={`border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-4 py-4 text-white rounded-t-2xl ${
+            hasSuccessfulRun ? "" : "rounded-b-2xl border-b-0"
+          }`}
+        >
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="shrink-0 space-y-2">
               <div>
@@ -531,7 +535,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         </div>
 
         {hasSuccessfulRun ? (
-          <div className="px-3 py-2 sm:px-4">
+          <div className="rounded-b-2xl px-3 py-2 sm:px-4">
             <div className="flex flex-wrap gap-1.5 rounded-xl bg-slate-50 p-1">
               {([
                 ["overview", "Overview"],
@@ -691,7 +695,7 @@ function PipelineActionButton({
       {menuOpen ? (
         <div
           role="menu"
-          className="absolute right-0 top-full z-10 mt-1 min-w-[12rem] overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+          className="absolute right-0 top-full z-50 mt-1 min-w-[12rem] overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
           <button
             role="menuitem"

@@ -9,3 +9,4 @@ tmp/
 __pycache__/
 *.pyc
 tsconfig.tsbuildinfo
+playground

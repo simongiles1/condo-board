@@ -272,9 +272,9 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   }
 
   // 6. DATE OF NEXT MEETING
-  if (doc.dateOfNextMeeting) {
-    lines.push("## 6. DATE OF NEXT MEETING");
-    lines.push("");
+  lines.push("## 6. DATE OF NEXT MEETING");
+  lines.push("");
+  if (doc.dateOfNextMeeting && (doc.dateOfNextMeeting.date || doc.dateOfNextMeeting.time)) {
     const d = (doc.dateOfNextMeeting || {}).date
       ? formatMeetingDateDisplay((doc.dateOfNextMeeting || {}).date)
       : "";
@@ -283,18 +283,22 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
     lines.push(
       `The next meeting of the Board of Directors will be held${loc ? ` ${loc}` : " virtually"}${d ? ` on ${d}` : ""}${t ? ` commencing at ${t.replace(/\.+$/, "")}.` : "."}`,
     );
-    lines.push("");
+  } else {
+    lines.push("The date of the next Board meeting is to be determined.");
   }
+  lines.push("");
 
   // 7. MEETING CONCLUSION
+  lines.push("## 7. MEETING CONCLUSION");
+  lines.push("");
   if (doc.termination?.time) {
-    lines.push("## 7. MEETING CONCLUSION");
-    lines.push("");
     lines.push(
       `There being no further business to discuss, the meeting was unanimously concluded at ${(doc.termination || {}).time.replace(/\.+$/, "")}.`,
     );
-    lines.push("");
+  } else {
+    lines.push("There being no further business to discuss, the meeting was concluded.");
   }
+  lines.push("");
 
   // Post-termination sections (e.g. 8. BUDGET DISCUSSION)
   (doc.postTerminationSections || []).forEach((section, idx) => {

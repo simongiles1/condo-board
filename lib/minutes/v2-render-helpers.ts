@@ -95,14 +95,8 @@ export function renderMotionLines(motion: MotionV2): RenderedMotionLines {
 }
 
 export function renderActionLine(action: ActionItemV2): string {
-  const assignee = action.assignee.trim();
-  let desc = action.taskDescription.trim();
-  
-  if (assignee && desc.toLowerCase().startsWith(assignee.toLowerCase())) {
-    desc = desc.substring(assignee.length).trim();
-  }
-  
-  return `**Action: ${assignee} ${desc}**`.replace(/\s+/g, " ");
+  const desc = action.taskDescription.trim();
+  return `**Action: ${desc}**`.replace(/\s+/g, " ");
 }
 
 /** Status values suppressed entirely from the rendered document. */
@@ -137,9 +131,8 @@ export function renderInlineStatusMarkdown(status: string | undefined): string {
 }
 
 /**
- * Concatenated " Action: ... [Pending.]" tail joined by single spaces, with no
- * leading/trailing whitespace. Callers prepend a space when joining to the
- * preceding body text.
+ * Concatenated " Action: ... [Pending.]" tail joined by newlines.
+ * Callers prepend a double newline when joining to the preceding body text.
  */
 export function inlineAgendaItemSuffixMarkdown(item: AgendaItemV2): string {
   const parts: string[] = [];
@@ -148,14 +141,14 @@ export function inlineAgendaItemSuffixMarkdown(item: AgendaItemV2): string {
   }
   const statusPart = renderInlineStatusMarkdown(item.status);
   if (statusPart) parts.push(statusPart);
-  return parts.join(" ");
+  return parts.join("\n\n");
 }
 
-/** Glue summary and inline tail with a single space, tolerating empties. */
+/** Glue summary and inline tail with newlines, tolerating empties. */
 export function joinSummaryWithTail(summary: string, tail: string): string {
   if (!summary) return tail;
   if (!tail) return summary;
-  return `${summary} ${tail}`;
+  return `${summary}\n\n${tail}`;
 }
 
 export type AgendaRenderOptions = {

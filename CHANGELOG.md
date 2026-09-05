@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Build-out progress modal mobile layout** — On small screens the Gantt chart now uses the full modal height with narrower columns and horizontal scroll. The details sidebar is hidden; tapping any timeline row or phase bar opens a bottom sheet with the item summary and remaining work.
+
 - **Meetings V2 workspace UI cleanup** — Tightened vertical spacing across the detail page header, cards, and alerts. Tabs (Overview, Agenda Review, Draft Preview, Pipeline) now appear only after a successful validated run; incomplete or stopped runs show a compact pre-run status panel instead of misleading readiness metrics. Combined Meeting Readiness and Health Summary into a single overview card. Merged View Transcript and View Board Package into a tabbed Meeting Documents dialog. Replaced separate Resume/Restart buttons with a split pipeline action control. Moved Generate Draft into the Draft Preview tab with clearer labeling. Pipeline start/resume is disabled when transcript or board package files are missing locally. Header layout: workspace badge beside back link; three-column header with progress centered and action controls stacked in a right column.
 
 - **AI usage dialog WatsonX tab** — The AI usage & cost popup now has Usage and WatsonX tabs. WatsonX shows IBM watsonx Docling trial key slots, spend, and .env.local variable reference.

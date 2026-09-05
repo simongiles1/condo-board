@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { BuildoutIcon } from "@/components/nav-icons";
@@ -79,6 +86,35 @@ function formatCount(value: number): string {
   return value.toLocaleString("en-CA");
 }
 
+const LG_MEDIA_QUERY = "(min-width: 1024px)";
+
+function subscribeMediaQuery(query: string, onStoreChange: () => void) {
+  const media = window.matchMedia(query);
+  media.addEventListener("change", onStoreChange);
+  return () => media.removeEventListener("change", onStoreChange);
+}
+
+function getMediaQuerySnapshot(query: string) {
+  return window.matchMedia(query).matches;
+}
+
+function useIsLgUp() {
+  return useSyncExternalStore(
+    (onStoreChange) => subscribeMediaQuery(LG_MEDIA_QUERY, onStoreChange),
+    () => getMediaQuerySnapshot(LG_MEDIA_QUERY),
+    () => false,
+  );
+}
+
+const PHASE_HEADER_SHORT: Record<BuildoutSequenceKind, string> = {
+  now: "Now",
+  parallel: "Par.",
+  blocked: "Blk",
+  after: "Next",
+  later: "Later",
+  deferred: "Park",
+};
+
 export function BuildoutProgressButton({
   collapsed,
 }: {
@@ -130,17 +166,34 @@ function BuildoutProgressDialog({
 }) {
   const titleId = useId();
   const [mounted, setMounted] = useState(false);
+  const isLgUp = useIsLgUp();
   const stageCounts = countByStatus(BUILDOUT_STAGES);
   const gantt = useMemo(() => buildoutGanttRows(), []);
   const defaultSelection = gantt.playbook[0]?.id ?? gantt.stages[0]?.id ?? null;
-  const [selectedId, setSelectedId] = useState<string | null>(defaultSelection);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detailSheetOpen, setDetailSheetOpen] = useState(false);
 
   const allRows = useMemo(
     () => [...gantt.playbook, ...gantt.stages, ...gantt.backlog],
     [gantt],
   );
   const selected =
-    allRows.find((row) => row.id === selectedId) ?? gantt.playbook[0] ?? null;
+    allRows.find((row) => row.id === selectedId) ??
+    (isLgUp ? (gantt.playbook[0] ?? null) : null);
+
+  const handleSelect = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      if (!isLgUp) {
+        setDetailSheetOpen(true);
+      }
+    },
+    [isLgUp],
+  );
+
+  const closeDetailSheet = useCallback(() => {
+    setDetailSheetOpen(false);
+  }, []);
 
   useEffect(() => {
     setMounted(true);
@@ -150,10 +203,13 @@ function BuildoutProgressDialog({
     if (!open) return;
 
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (!isLgUp && detailSheetOpen) {
+        closeDetailSheet();
+        return;
       }
+      onClose();
     }
 
     const previousOverflow = document.body.style.overflow;
@@ -163,12 +219,19 @@ function BuildoutProgressDialog({
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open, onClose]);
+  }, [open, onClose, isLgUp, detailSheetOpen, closeDetailSheet]);
 
   useEffect(() => {
     if (!open) return;
-    setSelectedId(defaultSelection);
-  }, [open, defaultSelection]);
+    setDetailSheetOpen(false);
+    setSelectedId(isLgUp ? defaultSelection : null);
+  }, [open, defaultSelection, isLgUp]);
+
+  useEffect(() => {
+    if (isLgUp) {
+      setDetailSheetOpen(false);
+    }
+  }, [isLgUp]);
 
   if (!open || !mounted) return null;
 
@@ -180,9 +243,9 @@ function BuildoutProgressDialog({
         aria-labelledby={titleId}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="shrink-0 border-b border-slate-200 px-4 py-3 sm:px-5">
-          <div className="flex flex-wrap items-start gap-3">
-            <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 ring-1 ring-amber-200">
+        <div className="shrink-0 border-b border-slate-200 px-3 py-2.5 sm:px-5 sm:py-3">
+          <div className="flex items-start gap-2 sm:gap-3">
+            <span className="hidden shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 ring-1 ring-amber-200 sm:inline-flex">
               Dev Tools
             </span>
             <div className="min-w-0 flex-1">
@@ -192,35 +255,39 @@ function BuildoutProgressDialog({
               >
                 Build-out progress
               </h2>
-              <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
+              <p className="mt-0.5 hidden text-xs text-slate-500 sm:block sm:text-sm">
                 Execution timeline and harvest inventory. Reviewed{" "}
                 {BUILDOUT_REVIEWED_ON}. Live coverage stays on the extraction
                 calendar.
+              </p>
+              <p className="mt-0.5 text-[11px] text-slate-500 sm:hidden">
+                Tap a row for details · reviewed {BUILDOUT_REVIEWED_ON}
               </p>
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              className="shrink-0 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
               aria-label="Close"
             >
               Close
             </button>
           </div>
           <StageMeter counts={stageCounts} />
-          <CoverageSnapshot />
+          <CoverageSnapshot className="hidden sm:block" />
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-          <div className="min-h-0 flex-1 overflow-hidden border-b border-slate-200 lg:border-b-0 lg:border-r">
+          <div className="min-h-0 flex-1 overflow-hidden lg:border-r lg:border-slate-200">
             <BuildoutGanttChart
               gantt={gantt}
               selectedId={selected?.id ?? null}
-              onSelect={setSelectedId}
+              onSelect={handleSelect}
+              compact={!isLgUp}
             />
           </div>
 
-          <aside className="flex w-full shrink-0 flex-col bg-slate-50/70 lg:w-[22rem] xl:w-[26rem]">
+          <aside className="hidden w-[22rem] shrink-0 flex-col bg-slate-50/70 lg:flex xl:w-[26rem]">
             <div className="border-b border-slate-200/80 px-4 py-3">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                 Details
@@ -239,14 +306,68 @@ function BuildoutProgressDialog({
           </aside>
         </div>
       </div>
+
+      {!isLgUp && selected && detailSheetOpen ? (
+        <MobileDetailSheet row={selected} onClose={closeDetailSheet} />
+      ) : null}
     </div>,
     document.body,
   );
 }
 
-function CoverageSnapshot() {
+function MobileDetailSheet({
+  row,
+  onClose,
+}: {
+  row: BuildoutGanttRow;
+  onClose: () => void;
+}) {
+  const titleId = useId();
+
   return (
-    <p className="mt-3 text-xs leading-relaxed text-slate-500">
+    <>
+      <button
+        type="button"
+        aria-label="Close details"
+        className="fixed inset-0 z-[110] bg-black/30 lg:hidden"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="fixed inset-x-0 bottom-0 z-[120] flex max-h-[min(78vh,32rem)] flex-col rounded-t-2xl border-t border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-out lg:hidden"
+        style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+      >
+        <div className="flex shrink-0 justify-center pt-2">
+          <div className="h-1 w-10 rounded-full bg-slate-300" aria-hidden />
+        </div>
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-2.5">
+          <p
+            id={titleId}
+            className="text-[10px] font-semibold uppercase tracking-wide text-slate-500"
+          >
+            Details
+          </p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg px-2 py-1 text-sm font-medium text-slate-600 hover:bg-slate-100"
+          >
+            Close
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+          <GanttDetailPanel row={row} />
+        </div>
+      </div>
+    </>
+  );
+}
+
+function CoverageSnapshot({ className = "" }: { className?: string }) {
+  return (
+    <p className={`mt-3 text-xs leading-relaxed text-slate-500 ${className}`}>
       Snapshot {BUILDOUT_COVERAGE_SNAPSHOT.asOf}: contacts{" "}
       {formatCount(BUILDOUT_COVERAGE_SNAPSHOT.contactsExtracted)} /{" "}
       {formatCount(BUILDOUT_COVERAGE_SNAPSHOT.emails)}
@@ -272,12 +393,15 @@ function BuildoutGanttChart({
   gantt,
   selectedId,
   onSelect,
+  compact = false,
 }: {
   gantt: ReturnType<typeof buildoutGanttRows>;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  compact?: boolean;
 }) {
-  const labelWidth = "minmax(18rem, 28rem)";
+  const labelWidth = compact ? "minmax(9.5rem, 11rem)" : "minmax(18rem, 28rem)";
+  const phaseWidth = compact ? "minmax(3.25rem, 1fr)" : "minmax(6rem, 1fr)";
   const allRows = [...gantt.playbook, ...gantt.stages, ...gantt.backlog];
   const activePhases = BUILDOUT_GANTT_PHASE_ORDER.filter((phase) =>
     allRows.some((row) => row.phases.includes(phase)),
@@ -285,28 +409,35 @@ function BuildoutGanttChart({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-slate-100 bg-white px-3 py-2 sm:px-4">
+      <div className="shrink-0 border-b border-slate-100 bg-white px-3 py-1.5 sm:px-4 sm:py-2">
         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
           Execution timeline
         </p>
+        {compact ? (
+          <p className="mt-0.5 text-[10px] text-slate-400">
+            Scroll horizontally for phase columns
+          </p>
+        ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
         <div
           className="grid min-w-full"
           style={{
-            gridTemplateColumns: `${labelWidth} repeat(${activePhases.length}, minmax(6rem, 1fr))`,
+            gridTemplateColumns: `${labelWidth} repeat(${activePhases.length}, ${phaseWidth})`,
           }}
         >
-          <div className="sticky left-0 z-20 border-b border-r border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+          <div className="sticky left-0 z-20 border-b border-r border-slate-200 bg-slate-50 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 sm:px-3 sm:py-2">
             Workstream
           </div>
           {activePhases.map((phase) => (
             <div
               key={phase}
-              className={`sticky top-0 z-10 border-b border-slate-200 px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wide ${PHASE_HEADER[phase]}`}
+              className={`sticky top-0 z-10 border-b border-slate-200 px-1 py-1.5 text-center text-[9px] font-semibold uppercase tracking-wide sm:px-2 sm:py-2 sm:text-[10px] ${PHASE_HEADER[phase]}`}
             >
-              {BUILDOUT_SEQUENCE_KIND_LABEL[phase]}
+              {compact
+                ? PHASE_HEADER_SHORT[phase]
+                : BUILDOUT_SEQUENCE_KIND_LABEL[phase]}
             </div>
           ))}
 
@@ -318,6 +449,7 @@ function BuildoutGanttChart({
               phases={activePhases}
               selected={row.id === selectedId}
               onSelect={onSelect}
+              compact={compact}
             />
           ))}
 
@@ -329,6 +461,7 @@ function BuildoutGanttChart({
               phases={activePhases}
               selected={row.id === selectedId}
               onSelect={onSelect}
+              compact={compact}
             />
           ))}
 
@@ -340,6 +473,7 @@ function BuildoutGanttChart({
               phases={activePhases}
               selected={row.id === selectedId}
               onSelect={onSelect}
+              compact={compact}
             />
           ))}
         </div>
@@ -364,27 +498,28 @@ function GanttRow({
   phases,
   selected,
   onSelect,
+  compact = false,
 }: {
   row: BuildoutGanttRow;
   phases: readonly BuildoutSequenceKind[];
   selected: boolean;
   onSelect: (id: string) => void;
+  compact?: boolean;
 }) {
   const phaseSet = new Set(row.phases);
+  const rowHighlight = selected
+    ? "bg-amber-50 ring-1 ring-inset ring-amber-200"
+    : "bg-white hover:bg-slate-50 active:bg-slate-100";
 
   return (
     <>
       <button
         type="button"
         onClick={() => onSelect(row.id)}
-        className={`sticky left-0 z-10 flex min-h-[2.35rem] items-center gap-2 border-b border-r border-slate-200 px-3 py-1.5 text-left transition ${
-          selected
-            ? "bg-amber-50 ring-1 ring-inset ring-amber-200"
-            : "bg-white hover:bg-slate-50"
-        }`}
+        className={`sticky left-0 z-10 flex min-h-[2.15rem] items-center gap-1.5 border-b border-r border-slate-200 px-2 py-1 text-left transition sm:min-h-[2.35rem] sm:gap-2 sm:px-3 sm:py-1.5 ${rowHighlight}`}
       >
         {row.sequenceOrder ? (
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-[10px] font-semibold tabular-nums text-amber-900">
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-100 text-[9px] font-semibold tabular-nums text-amber-900 sm:h-5 sm:w-5 sm:text-[10px]">
             {row.sequenceOrder}
           </span>
         ) : row.status ? (
@@ -393,10 +528,12 @@ function GanttRow({
           />
         ) : null}
         <span className="min-w-0">
-          <span className="block text-xs font-semibold leading-snug text-slate-900">
+          <span
+            className={`block font-semibold leading-snug text-slate-900 ${compact ? "text-[11px]" : "text-xs"}`}
+          >
             {row.label}
           </span>
-          {row.subtitle ? (
+          {row.subtitle && !compact ? (
             <span className="mt-0.5 block text-[10px] leading-snug text-slate-500">
               {row.subtitle}
             </span>
@@ -405,28 +542,31 @@ function GanttRow({
       </button>
 
       {phases.map((phase) => (
-        <div
+        <button
           key={`${row.id}-${phase}`}
-          className={`relative min-h-[2.35rem] border-b border-slate-200 ${PHASE_COLUMN[phase]} ${
-            selected ? "bg-amber-50/40" : ""
+          type="button"
+          onClick={() => onSelect(row.id)}
+          aria-label={`${row.label} · ${BUILDOUT_SEQUENCE_KIND_LABEL[phase]}`}
+          className={`relative min-h-[2.15rem] border-b border-slate-200 text-left sm:min-h-[2.35rem] ${PHASE_COLUMN[phase]} ${
+            selected ? "bg-amber-50/40" : "hover:bg-white/40 active:bg-white/60"
           }`}
         >
           {phaseSet.has(phase) ? (
-            <div className="absolute inset-x-1.5 inset-y-2 flex items-center">
+            <div className="absolute inset-x-1 inset-y-1.5 flex items-center sm:inset-x-1.5 sm:inset-y-2">
               {row.rowKind === "playbook" ? (
                 <div
-                  className={`h-2.5 w-full rounded-full shadow-sm ring-1 ring-inset ring-white/60 ${PLAYBOOK_BAR[phase]}`}
+                  className={`h-2 w-full rounded-full shadow-sm ring-1 ring-inset ring-white/60 sm:h-2.5 ${PLAYBOOK_BAR[phase]}`}
                   title={row.label}
                 />
               ) : row.status ? (
                 <div
-                  className={`h-2.5 w-full rounded-full shadow-sm ring-1 ring-inset ring-white/50 ${STATUS_BAR[row.status]}`}
+                  className={`h-2 w-full rounded-full shadow-sm ring-1 ring-inset ring-white/50 sm:h-2.5 ${STATUS_BAR[row.status]}`}
                   title={`${row.label} · ${BUILDOUT_STATUS_LABEL[row.status]}`}
                 />
               ) : null}
             </div>
           ) : null}
-        </div>
+        </button>
       ))}
     </>
   );

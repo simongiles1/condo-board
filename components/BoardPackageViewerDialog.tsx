@@ -14,9 +14,16 @@ type Props = {
   open: boolean;
   meetingId: string;
   onClose: () => void;
+  /** When true, renders only the viewer body (no modal shell). */
+  embedded?: boolean;
 };
 
-export function BoardPackageViewerDialog({ open, meetingId, onClose }: Props) {
+export function BoardPackageViewerDialog({
+  open,
+  meetingId,
+  onClose,
+  embedded = false,
+}: Props) {
   const [meta, setMeta] = useState<BoardPackageMeta | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -97,6 +104,49 @@ export function BoardPackageViewerDialog({ open, meetingId, onClose }: Props) {
         : `${Math.max(1, Math.round(meta.sizeBytes / 1024))} KB`
       : null;
 
+  const contentBlock = (
+    <div className={`min-h-0 flex-1 overflow-hidden ${embedded ? "px-4 py-3" : "px-6 py-5"}`}>
+      {loading ? (
+        <p className="text-sm text-slate-600">Loading board package…</p>
+      ) : error ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          {error}
+        </div>
+      ) : previewUrl ? (
+        <iframe
+          title={`Board package: ${meta?.fileName ?? "board-package.pdf"}`}
+          src={previewUrl}
+          className={`w-full rounded-xl border border-slate-200 bg-slate-50 ${
+            embedded ? "h-[min(60vh,560px)]" : "h-[min(70vh,720px)]"
+          }`}
+        />
+      ) : (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          Board package preview is not available on this server.
+        </div>
+      )}
+    </div>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex h-full flex-col">
+        <div className="border-b border-slate-100 px-4 py-3">
+          <p className="font-mono text-sm text-slate-600">
+            {meta?.fileName ?? "board-package.pdf"}
+          </p>
+          {meta ? (
+            <p className="mt-1 text-xs text-slate-500">
+              {meta.pageCount != null ? `${meta.pageCount} pages` : "Page count unknown"}
+              {sizeLabel ? ` · ${sizeLabel}` : ""}
+            </p>
+          ) : null}
+        </div>
+        {contentBlock}
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <button
@@ -143,25 +193,7 @@ export function BoardPackageViewerDialog({ open, meetingId, onClose }: Props) {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-hidden px-6 py-5">
-          {loading ? (
-            <p className="text-sm text-slate-600">Loading board package…</p>
-          ) : error ? (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              {error}
-            </div>
-          ) : previewUrl ? (
-            <iframe
-              title={`Board package: ${meta?.fileName ?? "board-package.pdf"}`}
-              src={previewUrl}
-              className="h-[min(70vh,720px)] w-full rounded-xl border border-slate-200 bg-slate-50"
-            />
-          ) : (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              Board package preview is not available on this server.
-            </div>
-          )}
-        </div>
+        {contentBlock}
 
         <div className="flex justify-end border-t border-slate-100 px-6 py-4">
           <button

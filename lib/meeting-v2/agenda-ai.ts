@@ -65,6 +65,7 @@ Important rules:
 - Preserve exact factual details when they matter to the business issue, especially money amounts, rates, balances, unit numbers, contract terms, deadlines, and dates.
 - Do not create one topic per attachment page.
 - Use the package as the source of truth for official agenda topics.
+- Maintain topics in the exact chronological order of the official meeting agenda as presented in the package (e.g. Item 1 before Item 2, sub-items in their original outline order). Do not reorder topics alphabetically.
 - When the package shows one umbrella heading with numbered or lettered sub-items, create one topic per real sub-item instead of one umbrella topic.
 - When guest presenters lead substantial opening discussion before regular board business, keep those as distinct presentation topics instead of folding them into later management report items.
 - Use the transcript to enrich existing package topics and to add extraTopics only when they are genuinely separate.
@@ -734,12 +735,15 @@ function normalizeWorkflowState(value: unknown, fallback: WorkflowState): Workfl
 }
 
 function sortTopics(topics: WorkflowTopic[]): WorkflowTopic[] {
-  return [...topics].sort((left, right) => {
-    const leftPage = left.sourcePages[0] ?? Number.MAX_SAFE_INTEGER;
-    const rightPage = right.sourcePages[0] ?? Number.MAX_SAFE_INTEGER;
-    if (leftPage !== rightPage) return leftPage - rightPage;
-    return left.title.localeCompare(right.title);
-  });
+  return topics
+    .map((topic, originalIndex) => ({ topic, originalIndex }))
+    .sort((left, right) => {
+      const leftPage = left.topic.sourcePages[0] ?? Number.MAX_SAFE_INTEGER;
+      const rightPage = right.topic.sourcePages[0] ?? Number.MAX_SAFE_INTEGER;
+      if (leftPage !== rightPage) return leftPage - rightPage;
+      return left.originalIndex - right.originalIndex;
+    })
+    .map(({ topic }) => topic);
 }
 
 async function getAgendaResumeCheckpoint(meetingId: string): Promise<{

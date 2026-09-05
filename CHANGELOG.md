@@ -6,7 +6,19 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Meetings V2 workspace UI cleanup** — Tightened vertical spacing across the detail page header, cards, and alerts. Tabs (Overview, Agenda Review, Draft Preview, Pipeline) now appear only after a successful validated run; incomplete or stopped runs show a compact pre-run status panel instead of misleading readiness metrics. Combined Meeting Readiness and Health Summary into a single overview card. Merged View Transcript and View Board Package into a tabbed Meeting Documents dialog. Replaced separate Resume/Restart buttons with a split pipeline action control. Moved Generate Draft into the Draft Preview tab with clearer labeling. Pipeline start/resume is disabled when transcript or board package files are missing locally. Header layout: workspace badge beside back link; three-column header with progress centered and action controls stacked in a right column.
+
+### Added
+
+- **Meetings V2 selective Docling extraction** — Integrated IBM Watsonx Docling into board package ingestion for the core meeting agenda and management report pages (first 10–20 pages, before email attachments). Provides high-fidelity Markdown and structured headings for agenda items, bid tables, and financials, while leaving the remaining 180+ email attachment pages to fast local PDF parsing.
+
 ### Fixed
+
+- **Meetings V2 extraction quality false-positive stop** — Fixed heuristic detector in `analyzeExtractionQuality` where valid DeepSeek agenda items were falsely flagged as `section_shaped_output` solely because `sourceSectionId` was attached. The detector now compares extracted titles against PDF section titles and verifies `itemType === "agenda_section"`.
+
+- **Meetings V2 agenda item ordering** — Removed alphabetical title tie-breaker in `sortTopics()`. Extracted agenda topics discovered on the same page now strictly preserve their original document encounter sequence rather than being alphabetized.
 
 - **Meetings V2 pipeline alerts** — Halted runs now show rose "Stopped" cards
   instead of amber warnings, listed newest-first with a Latest badge. Duplicate

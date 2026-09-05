@@ -750,6 +750,7 @@ export async function assessMeetingV2Extraction(
   return analyzeExtractionQuality({
     agendaItems,
     documentSectionCount: sectionCount.length,
+    documentSections: sectionCount.map((s) => ({ title: s.title })),
     extractionRun: settings.extractionRun ?? null,
     agendaChunkSnapshots,
     deepSeekKeyConfigured: isDeepSeekKeyConfigured(),
@@ -904,6 +905,8 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
 
   const pdfExtract = await extractPdfPagesWithText(boardPackageBuffer, {
     startPage: existingPageCount + 1,
+    pdfPath: boardPackagePath,
+    maxDoclingPages: 20,
     onPage: async (page, totalPages) => {
       await db.insert(meetingsV2DocumentPages).values({
         id: randomUUID(),

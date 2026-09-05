@@ -1,6 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { convertPagesWithIbmDocling, listIbmDoclingCredentials } from "@/lib/email/docling-ibm";
 import { maybeCleanupPdfPagesWithDeepSeek } from "@/lib/meeting-v2/pdf-deepseek";
 
 type PdfTextItem = {
@@ -9,7 +10,7 @@ type PdfTextItem = {
   width?: number;
 };
 
-type PdfPageText = {
+export type PdfPageText = {
   pageNumber: number;
   heading: string | null;
   text: string;
@@ -23,7 +24,7 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function inferHeading(lines: string[]): string | null {
+export function inferHeading(lines: string[]): string | null {
   for (const rawLine of lines) {
     const line = normalizeWhitespace(rawLine);
     if (!line) continue;
@@ -32,6 +33,29 @@ function inferHeading(lines: string[]): string | null {
     return line;
   }
   return null;
+}
+
+export function inferHeadingFromMarkdown(markdown: string): string | null {
+  const lines = markdown.split("\n");
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const headerMatch = line.match(/^#{1,4}\s+(.+)$/);
+    if (headerMatch) {
+      const heading = normalizeWhitespace(headerMatch[1] ?? "");
+      if (heading && heading.length <= 140 && !/^\d+$/.test(heading)) {
+        return heading;
+      }
+    }
+  }
+  return inferHeading(lines);
+}
+
+export function isEmailAttachmentPage(text: string): boolean {
+  const slice = text.slice(0, 1200);
+  const hasFrom = /\b(From|De)\s*:[^\n]+@[^\n]+/i.test(slice);
+  const hasSent = /\b(Sent|Date|Envoyé)\s*:[^\n]+/i.test(slice);
+  const hasSubject = /\b(Subject|Objet)\s*:[^\n]+/i.test(slice);
+  return hasFrom && hasSent && hasSubject;
 }
 
 function buildPageText(items: PdfTextItem[]): { text: string; heading: string | null } {
@@ -93,26 +117,16 @@ async function loadPdfJs() {
   };
 }
 
-export async function extractPdfPagesWithText(buffer: Buffer): Promise<{
-  pageCount: number;
-  pages: PdfPageText[];
-}>;
+export type ExtractPdfPagesOptions = {
+  startPage?: number;
+  pdfPath?: string;
+  maxDoclingPages?: number;
+  onPage?: (page: PdfPageText, totalPages: number) => Promise<void> | void;
+};
+
 export async function extractPdfPagesWithText(
   buffer: Buffer,
-  options: {
-    startPage?: number;
-    onPage?: (page: PdfPageText, totalPages: number) => Promise<void> | void;
-  },
-): Promise<{
-  pageCount: number;
-  pages: PdfPageText[];
-}>;
-export async function extractPdfPagesWithText(
-  buffer: Buffer,
-  options?: {
-    startPage?: number;
-    onPage?: (page: PdfPageText, totalPages: number) => Promise<void> | void;
-  },
+  options?: ExtractPdfPagesOptions,
 ): Promise<{
   pageCount: number;
   pages: PdfPageText[];
@@ -126,18 +140,77 @@ export async function extractPdfPagesWithText(
 
   const pages: PdfPageText[] = [];
   const startPage = Math.max(1, options?.startPage ?? 1);
+  const maxDoclingPages = Math.min(doc.numPages, options?.maxDoclingPages ?? 20);
 
-  for (let pageNumber = startPage; pageNumber <= doc.numPages; pageNumber += 1) {
-    const page = await doc.getPage(pageNumber);
+  // Fast pre-pass with pdfjs for core pages (up to maxDoclingPages) to inspect structure & detect email cutoff
+  const rawCorePages: PdfPageText[] = [];
+  for (let p = 1; p <= maxDoclingPages; p += 1) {
+    const page = await doc.getPage(p);
     const content = await page.getTextContent({ disableCombineTextItems: false });
     const { text, heading } = buildPageText(content.items as PdfTextItem[]);
-    const rawPage = {
-      pageNumber,
-      heading,
-      text,
-    };
-    const [cleanedPage] = await maybeCleanupPdfPagesWithDeepSeek([rawPage]);
-    const finalPage = cleanedPage ?? rawPage;
+    rawCorePages.push({ pageNumber: p, heading, text });
+  }
+
+  // Detect where the core agenda/report ends and email attachments begin
+  let doclingCutoff = maxDoclingPages;
+  for (const page of rawCorePages) {
+    if (page.pageNumber >= 4 && isEmailAttachmentPage(page.text)) {
+      doclingCutoff = page.pageNumber - 1;
+      break;
+    }
+  }
+  doclingCutoff = Math.max(Math.min(doc.numPages, 2), doclingCutoff);
+
+  // Select core pages for Docling extraction
+  const doclingPageNumbers: number[] = [];
+  if (options?.pdfPath && listIbmDoclingCredentials().length > 0) {
+    for (let p = startPage; p <= doclingCutoff; p += 1) {
+      doclingPageNumbers.push(p);
+    }
+  }
+
+  const doclingMap = new Map<number, string>();
+  if (doclingPageNumbers.length > 0 && options?.pdfPath) {
+    try {
+      const result = await convertPagesWithIbmDocling({
+        pdfPath: options.pdfPath,
+        pages: doclingPageNumbers,
+        filename: path.basename(options.pdfPath),
+      });
+      for (const p of result.pages) {
+        doclingMap.set(p.pageNo, p.markdown);
+      }
+    } catch (error) {
+      console.warn(
+        "[meeting-v2/pdf] IBM Docling extraction failed, falling back to pdfjs text:",
+        error,
+      );
+    }
+  }
+
+  // Sequential emission of all pages
+  for (let pageNumber = startPage; pageNumber <= doc.numPages; pageNumber += 1) {
+    let finalPage: PdfPageText;
+    const doclingMd = doclingMap.get(pageNumber);
+    if (doclingMd) {
+      finalPage = {
+        pageNumber,
+        heading: inferHeadingFromMarkdown(doclingMd),
+        text: doclingMd,
+      };
+    } else {
+      const cached = rawCorePages.find((p) => p.pageNumber === pageNumber);
+      const rawPage =
+        cached ??
+        (await (async () => {
+          const page = await doc.getPage(pageNumber);
+          const content = await page.getTextContent({ disableCombineTextItems: false });
+          const { text, heading } = buildPageText(content.items as PdfTextItem[]);
+          return { pageNumber, heading, text };
+        })());
+      const [cleanedPage] = await maybeCleanupPdfPagesWithDeepSeek([rawPage]);
+      finalPage = cleanedPage ?? rawPage;
+    }
     pages.push(finalPage);
     await options?.onPage?.(finalPage, doc.numPages);
   }

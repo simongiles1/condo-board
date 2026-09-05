@@ -162,6 +162,7 @@ export async function getMeetingV2AgendaChunkSnapshotCount(
 export function analyzeExtractionQuality(options: {
   agendaItems: AgendaItemForQuality[];
   documentSectionCount: number;
+  documentSections?: Array<{ title: string }>;
   extractionRun: MeetingV2ExtractionRun | null;
   agendaChunkSnapshots: number;
   deepSeekKeyConfigured: boolean;
@@ -170,6 +171,7 @@ export function analyzeExtractionQuality(options: {
   const {
     agendaItems,
     documentSectionCount,
+    documentSections,
     extractionRun,
     agendaChunkSnapshots,
     deepSeekKeyConfigured,
@@ -192,15 +194,33 @@ export function analyzeExtractionQuality(options: {
       /^["“”']?[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(title)
     );
   }).length;
-  const sourcedFromSections = agendaItems.filter((item) => item.sourceSectionId).length;
   const sectionFallbackItemCount = agendaItems.filter(
     (item) => item.itemType === "agenda_section",
   ).length;
+
+  const normalizeTitleForComparison = (val: string) =>
+    val.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+  const matchingSectionTitleCount =
+    documentSections && documentSections.length > 0
+      ? agendaItems.filter((item) => {
+          const itemNorm = normalizeTitleForComparison(item.title);
+          if (!itemNorm) return false;
+          return documentSections.some(
+            (section) => normalizeTitleForComparison(section.title) === itemNorm,
+          );
+        }).length
+      : 0;
+
+  // A run is only section-fallback shaped if its items were tagged as agenda_section
+  // or if the majority of extracted titles literally match document section page headings.
+  // sourceSectionId presence alone is normal and desirable for grounded topics.
   const sectionFallbackLikely =
-    documentSectionCount > 0 &&
     agendaItems.length > 0 &&
-    agendaItems.length >= Math.max(3, Math.floor(documentSectionCount * 0.9)) &&
-    sourcedFromSections >= Math.max(1, Math.floor(agendaItems.length * 0.9));
+    (sectionFallbackItemCount >= Math.max(1, Math.floor(agendaItems.length * 0.5)) ||
+      (documentSections !== undefined &&
+        documentSections.length > 0 &&
+        matchingSectionTitleCount >= Math.max(3, Math.floor(agendaItems.length * 0.5))));
 
   const inferredExtractor: MeetingV2ExtractionQuality["extractorUsed"] =
     extractionRun?.extractor ??

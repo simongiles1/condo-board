@@ -21,6 +21,8 @@ type Props = {
   open: boolean;
   fileLabel: string;
   onClose: () => void;
+  /** When true, renders only the viewer body (no modal shell). */
+  embedded?: boolean;
 } & (
   | { meetingId: string; vttContent?: never; localFileName?: never }
   | { meetingId?: never; vttContent: string; localFileName?: string }
@@ -33,6 +35,7 @@ export function VttViewerDialog({
   localFileName,
   fileLabel,
   onClose,
+  embedded = false,
 }: Props) {
   const [rawContent, setRawContent] = useState<string | null>(null);
   const [readableContent, setReadableContent] = useState<string | null>(null);
@@ -229,21 +232,10 @@ export function VttViewerDialog({
         ? "No matches"
         : `${currentMatchIndex + 1} of ${totalMatches}`;
 
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <button
-        type="button"
-        className="absolute inset-0 bg-slate-900/40"
-        onClick={onClose}
-        aria-label="Close dialog"
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="vtt-viewer-title"
-        className="relative flex max-h-[90vh] w-full max-w-4xl flex-col rounded-3xl border border-slate-200 bg-white shadow-xl"
-      >
-        <div className="border-b border-slate-100 px-6 py-5">
+  const headerBlock = (
+    <div className={embedded ? "border-b border-slate-100 px-4 py-3" : "border-b border-slate-100 px-6 py-5"}>
+      {!embedded ? (
+        <>
           <h2
             id="vtt-viewer-title"
             className="text-xl font-semibold text-slate-900"
@@ -253,9 +245,13 @@ export function VttViewerDialog({
           <p className="mt-1 font-mono text-sm text-slate-600">
             {fileName ?? fileLabel}
           </p>
+        </>
+      ) : (
+        <p className="font-mono text-sm text-slate-600">{fileName ?? fileLabel}</p>
+      )}
 
-          {!loading && !error && (
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+      {!loading && !error && (
+        <div className={`${embedded ? "mt-3" : "mt-4"} flex flex-wrap items-center justify-between gap-3`}>
               <div
                 className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1"
                 role="tablist"
@@ -365,12 +361,14 @@ export function VttViewerDialog({
               </div>
             </div>
           )}
-        </div>
+    </div>
+  );
 
-        <div
-          ref={scrollContainerRef}
-          className="min-h-0 flex-1 overflow-y-auto px-6 py-5"
-        >
+  const bodyBlock = (
+    <div
+      ref={scrollContainerRef}
+      className={`min-h-0 flex-1 overflow-y-auto ${embedded ? "max-h-[min(60vh,560px)] px-4 py-3" : "px-6 py-5"}`}
+    >
           {loading ? (
             <p className="text-sm text-slate-600">Loading transcript…</p>
           ) : error ? (
@@ -400,6 +398,33 @@ export function VttViewerDialog({
             </pre>
           )}
         </div>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex h-full flex-col">
+        {headerBlock}
+        {bodyBlock}
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <button
+        type="button"
+        className="absolute inset-0 bg-slate-900/40"
+        onClick={onClose}
+        aria-label="Close dialog"
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="vtt-viewer-title"
+        className="relative flex max-h-[90vh] w-full max-w-4xl flex-col rounded-3xl border border-slate-200 bg-white shadow-xl"
+      >
+        {headerBlock}
+        {bodyBlock}
 
         <div className="flex justify-end border-t border-slate-100 px-6 py-4">
           <button

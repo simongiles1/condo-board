@@ -4,8 +4,7 @@ import Link from "next/link";
 import { useEffect, useState, useRef, type ReactNode } from "react";
 import { MinutesStructuredEditor } from "@/components/MinutesStructuredEditor";
 import { AttendeesEditorDialog } from "@/components/AttendeesEditorDialog";
-import { BoardPackageViewerDialog } from "@/components/BoardPackageViewerDialog";
-import { VttViewerDialog } from "@/components/VttViewerDialog";
+import { MeetingDocumentsDialog } from "@/components/MeetingDocumentsDialog";
 import {
   AiUsageDialog,
   AiUsageIconButton,
@@ -252,8 +251,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [runBusy, setRunBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<V2Tab>("overview");
   const [autonomyTemperature, setAutonomyTemperature] = useState(0.8);
-  const [vttDialogOpen, setVttDialogOpen] = useState(false);
-  const [boardPackageDialogOpen, setBoardPackageDialogOpen] = useState(false);
+  const [documentsDialogOpen, setDocumentsDialogOpen] = useState(false);
   const [usageDialogOpen, setUsageDialogOpen] = useState(false);
   const [usageStages, setUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
@@ -382,7 +380,22 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               : status?.meeting.computedPipelineState === "ingesting"
                 ? 10
                 : progress;
-  const canGenerateDraft = displayState === "validated";
+  const hasSuccessfulRun = displayState === "validated";
+  const hasMeetingDocuments = Boolean(
+    status?.sources.transcript?.available || status?.sources.boardPackage?.available,
+  );
+  const pipelineSourcesReady = Boolean(
+    status?.sources.transcript?.available && status?.sources.boardPackage?.available,
+  );
+  const pipelineDisabledReason = !status
+    ? "Loading meeting sources…"
+    : !status.sources.transcript?.available && !status.sources.boardPackage?.available
+      ? "Transcript and board package are not available on this machine."
+      : !status.sources.transcript?.available
+        ? "Transcript file is not available on this machine."
+        : !status.sources.boardPackage?.available
+          ? "Board package is not available on this machine."
+          : null;
   const reviewableItems = status?.items ?? [];
   const needsClarificationCount = reviewableItems.filter((item) => item.openQuestions.length > 0).length;
   const flaggedCount = reviewableItems.filter((item) =>
@@ -400,164 +413,144 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     status?.meeting.currentStep === "Ready to start";
 
   return (
-    <div className="space-y-6">
-      <Link
-        href="/operations/meetings?v=2"
-        className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-900"
-      >
-        <span>&larr;</span>
-        <span>Back to V2 meetings</span>
-      </Link>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <Link
+          href="/operations/meetings?v=2"
+          className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-900"
+        >
+          <span>&larr;</span>
+          <span>Back to V2 meetings</span>
+        </Link>
+        <span className="rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-600">
+          Meetings V2 Workspace
+        </span>
+      </div>
 
-      <div className="overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-6 py-6 text-white">
-          <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/80">
-                  Meetings V2 Workspace
-                </span>
-                <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${
-                  pipelineHalted
-                    ? "border-rose-300 bg-rose-600 text-white"
-                    : statusTone(displayState)
-                }`}>
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-4 py-4 text-white">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="shrink-0 space-y-2">
+              <div>
+                <h1 className="text-xl font-semibold tracking-tight">
+                  {status?.meeting.title ?? "Loading meeting"}
+                </h1>
+                <p className="mt-0.5 text-sm text-white/65">
+                  {status ? formatDate(status.meeting.meetingDate) : "Loading date"}
+                </p>
+              </div>
+              <div className="flex flex-col gap-0.5 pt-1">
+                <label htmlFor="temp-slider" className="text-[10px] font-semibold uppercase tracking-wider text-white/70">
+                  AI Autonomy: {autonomyTemperature.toFixed(1)}
+                </label>
+                <input
+                  id="temp-slider"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={autonomyTemperature}
+                  onChange={(e) => setAutonomyTemperature(parseFloat(e.target.value))}
+                  className="w-28 accent-teal-400"
+                  title="0 = Always ask user | 1 = Fully autonomous"
+                />
+              </div>
+              {hasSuccessfulRun ? (
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <SummaryStat label="Agenda Items" value={String(status?.meeting.counts.agendaItems ?? 0)} />
+                  <SummaryStat label="Items Flagged" value={String(flaggedCount)} />
+                  <SummaryStat label="Latest Drafts" value={String(status?.meeting.counts.drafts ?? 0)} />
+                </div>
+              ) : null}
+            </div>
+
+            <div className="w-full max-w-md rounded-xl border border-white/10 bg-black/15 p-3 xl:mx-4 xl:flex-1">
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-sm font-medium text-white/80">Current Progress</span>
+                <span
+                  className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                    pipelineHalted
+                      ? "border-rose-300 bg-rose-600 text-white"
+                      : "border-white/20 bg-white/10 text-white/90"
+                  }`}
+                >
                   {pipelineHalted && displayState !== "failed"
                     ? `Stopped · ${startCase(displayState)}`
                     : startCase(displayState)}
                 </span>
               </div>
-              <div>
-                <h1 className="text-2xl font-semibold tracking-tight">
-                  {status?.meeting.title ?? "Loading meeting"}
-                </h1>
-                <p className="mt-1 text-sm text-white/65">
-                  {status ? formatDate(status.meeting.meetingDate) : "Loading date"}
-                </p>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full rounded-full bg-teal-400 transition-all"
+                  style={{ width: `${displayProgress}%` }}
+                />
               </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <SummaryStat label="Agenda Items" value={String(status?.meeting.counts.agendaItems ?? 0)} />
-                <SummaryStat label="Items Flagged" value={String(flaggedCount)} />
-                <SummaryStat label="Latest Drafts" value={String(status?.meeting.counts.drafts ?? 0)} />
+              <div className="mt-2 flex items-end justify-between gap-3">
+                <p className="text-xs text-white/70">{displayStep}</p>
+                <span className="shrink-0 text-sm font-semibold tabular-nums text-white/90">
+                  {displayProgress}%
+                </span>
               </div>
             </div>
 
-            <div className="flex flex-col gap-3 xl:items-end">
-              <div className="flex flex-wrap gap-3 items-center">
-                <div className="flex flex-col gap-1 mr-2">
-                  <label htmlFor="temp-slider" className="text-[11px] font-semibold uppercase tracking-wider text-white/70">
-                    AI Autonomy: {autonomyTemperature.toFixed(1)}
-                  </label>
-                  <input 
-                    id="temp-slider"
-                    type="range" 
-                    min="0" max="1" step="0.1"
-                    value={autonomyTemperature}
-                    onChange={(e) => setAutonomyTemperature(parseFloat(e.target.value))}
-                    className="w-32 accent-teal-400" 
-                    title="0 = Always ask user | 1 = Fully autonomous"
-                  />
-                </div>
+            <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
+              {hasMeetingDocuments ? (
                 <button
-                  className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15"
-                  onClick={() => setVttDialogOpen(true)}
+                  className="inline-flex items-center justify-center rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
+                  onClick={() => setDocumentsDialogOpen(true)}
                   type="button"
                 >
-                  View Transcript
+                  Meeting Documents
                 </button>
+              ) : null}
+              <div className="flex items-center gap-2">
                 <AiUsageIconButton
                   tone="inverse"
                   onClick={() => setUsageDialogOpen(true)}
                   title="View AI usage and cost"
                 />
-                <button
-                  className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!status?.sources.boardPackage}
-                  onClick={() => setBoardPackageDialogOpen(true)}
-                  type="button"
-                  title={
-                    status?.sources.boardPackage?.fileName
-                      ? `Open ${status.sources.boardPackage.fileName}`
-                      : "No board package on file"
-                  }
-                >
-                  View Board Package
-                </button>
-                <button
-                  className="inline-flex items-center rounded-xl bg-teal-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-md transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={runBusy}
-                  onClick={handleRunPipeline}
-                  type="button"
-                >
-                  {runBusy
-                    ? pipelineNotStarted
-                      ? "Starting..."
-                      : "Resuming..."
-                    : pipelineNotStarted
-                      ? "Start Pipeline"
-                      : "Resume Pipeline"}
-                </button>
-                <button
-                  className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={runBusy}
-                  onClick={handleRestartPipeline}
-                  type="button"
-                >
-                  {runBusy ? "Restarting..." : "Restart from Beginning"}
-                </button>
-                <button
-                  className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!canGenerateDraft || draftBusy}
-                  onClick={handleGenerateDraft}
-                  type="button"
-                >
-                  {draftBusy ? "Generating..." : "Generate Draft"}
-                </button>
-                {status?.latestDraft ? (
-                  <a
-                    href={`/api/v2/meetings/${meetingId}/draft/file?download=1`}
-                    className="inline-flex items-center rounded-xl border border-white/15 bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-100"
-                  >
-                    Download PDF
-                  </a>
-                ) : null}
+                <PipelineActionButton
+                  runBusy={runBusy}
+                  pipelineNotStarted={pipelineNotStarted}
+                  disabled={!pipelineSourcesReady}
+                  disabledReason={pipelineDisabledReason}
+                  onRun={handleRunPipeline}
+                  onRestart={handleRestartPipeline}
+                />
               </div>
-              <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-black/15 p-4">
-                <div className="flex items-center justify-between gap-4 text-sm text-white/80">
-                  <span className="font-medium">Current Progress</span>
-                  <span>{displayProgress}%</span>
-                </div>
-                <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full rounded-full bg-teal-400 transition-all"
-                    style={{ width: `${displayProgress}%` }}
-                  />
-                </div>
-                <p className="mt-3 text-sm text-white/70">{displayStep}</p>
-              </div>
+              {status?.latestDraft ? (
+                <a
+                  href={`/api/v2/meetings/${meetingId}/draft/file?download=1`}
+                  className="inline-flex items-center justify-center rounded-lg border border-white/15 bg-white px-3 py-2 text-sm font-semibold text-slate-900 transition hover:bg-slate-100"
+                >
+                  Download PDF
+                </a>
+              ) : null}
             </div>
           </div>
         </div>
 
-        <div className="px-4 py-4 sm:px-6">
-          <div className="flex flex-wrap gap-2 rounded-2xl bg-slate-50 p-2">
-            {([
-              ["overview", "Overview"],
-              ["review", "Agenda Review"],
-              ["draft", "Draft Preview"],
-              ["pipeline", "Pipeline"],
-            ] as Array<[V2Tab, string]>).map(([tab, label]) => (
-              <button
-                key={tab}
-                className={`rounded-xl px-4 py-2 text-sm font-medium transition ${tabTone(activeTab === tab)}`}
-                onClick={() => setActiveTab(tab)}
-                type="button"
-              >
-                {label}
-              </button>
-            ))}
+        {hasSuccessfulRun ? (
+          <div className="px-3 py-2 sm:px-4">
+            <div className="flex flex-wrap gap-1.5 rounded-xl bg-slate-50 p-1">
+              {([
+                ["overview", "Overview"],
+                ["review", "Agenda Review"],
+                ["draft", "Draft Preview"],
+                ["pipeline", "Pipeline"],
+              ] as Array<[V2Tab, string]>).map(([tab, label]) => (
+                <button
+                  key={tab}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${tabTone(activeTab === tab)}`}
+                  onClick={() => setActiveTab(tab)}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
 
       {status?.meeting.alerts.length ? (
@@ -567,41 +560,52 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         <ExtractionShapeComparison status={status} />
       ) : null}
 
-      <div className="space-y-6">
+      <div className="space-y-4">
         {loading && !status ? <LoadingWorkspace /> : null}
         {status ? (
           <>
-            {activeTab === "overview" ? (
-              <OverviewPanel
-                readyCount={readyCount}
-                flaggedCount={flaggedCount}
-                needsClarificationCount={needsClarificationCount}
+            {hasSuccessfulRun ? (
+              <>
+                {activeTab === "overview" ? (
+                  <OverviewPanel
+                    readyCount={readyCount}
+                    flaggedCount={flaggedCount}
+                    needsClarificationCount={needsClarificationCount}
+                    status={status}
+                    onOpenDocuments={() => setDocumentsDialogOpen(true)}
+                  />
+                ) : null}
+                {activeTab === "review" ? (
+                  <AgendaReviewPanel meetingId={meetingId} status={status} />
+                ) : null}
+                {activeTab === "draft" ? (
+                  <DraftWorkspacePanel
+                    meetingId={meetingId}
+                    draft={status.latestDraft}
+                    draftBusy={draftBusy}
+                    onGenerateDraft={handleGenerateDraft}
+                  />
+                ) : null}
+                {activeTab === "pipeline" ? <PipelinePanel status={status} /> : null}
+              </>
+            ) : (
+              <PreRunPanel
                 status={status}
-                onViewTranscript={() => setVttDialogOpen(true)}
-                onViewBoardPackage={() => setBoardPackageDialogOpen(true)}
+                pipelineHalted={pipelineHalted}
+                onOpenDocuments={() => setDocumentsDialogOpen(true)}
               />
-            ) : null}
-            {activeTab === "review" ? (
-              <AgendaReviewPanel meetingId={meetingId} status={status} />
-            ) : null}
-            {activeTab === "draft" ? (
-              <DraftWorkspacePanel meetingId={meetingId} draft={status.latestDraft} />
-            ) : null}
-            {activeTab === "pipeline" ? <PipelinePanel status={status} /> : null}
+            )}
           </>
         ) : null}
       </div>
 
-      <VttViewerDialog
-        open={vttDialogOpen}
+      <MeetingDocumentsDialog
+        open={documentsDialogOpen}
         meetingId={meetingId}
-        fileLabel={status?.sources.transcript?.fileName ?? "transcript.vtt"}
-        onClose={() => setVttDialogOpen(false)}
-      />
-      <BoardPackageViewerDialog
-        open={boardPackageDialogOpen}
-        meetingId={meetingId}
-        onClose={() => setBoardPackageDialogOpen(false)}
+        transcriptFileName={status?.sources.transcript?.fileName}
+        hasTranscript={Boolean(status?.sources.transcript?.available)}
+        hasBoardPackage={Boolean(status?.sources.boardPackage?.available)}
+        onClose={() => setDocumentsDialogOpen(false)}
       />
       <AiUsageDialog
         open={usageDialogOpen}
@@ -613,23 +617,124 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   );
 }
 
+function PipelineActionButton({
+  runBusy,
+  pipelineNotStarted,
+  disabled = false,
+  disabledReason,
+  onRun,
+  onRestart,
+}: {
+  runBusy: boolean;
+  pipelineNotStarted: boolean;
+  disabled?: boolean;
+  disabledReason?: string | null;
+  onRun: () => void;
+  onRestart: () => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isDisabled = runBusy || disabled;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (isDisabled) setMenuOpen(false);
+  }, [isDisabled]);
+
+  const primaryLabel = runBusy
+    ? pipelineNotStarted
+      ? "Starting..."
+      : "Resuming..."
+    : pipelineNotStarted
+      ? "Start Pipeline"
+      : "Resume Pipeline";
+
+  const title = isDisabled && disabledReason ? disabledReason : undefined;
+
+  return (
+    <div className="relative" ref={containerRef} title={title}>
+      <div className="inline-flex overflow-hidden rounded-lg shadow-md">
+        <button
+          className="inline-flex items-center bg-teal-500 px-3 py-2 text-sm font-semibold text-slate-950 transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={isDisabled}
+          onClick={onRun}
+          type="button"
+          title={title}
+        >
+          {primaryLabel}
+        </button>
+        <button
+          className="inline-flex items-center border-l border-teal-600/30 bg-teal-500 px-2 py-2 text-slate-950 transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={isDisabled}
+          onClick={() => setMenuOpen((open) => !open)}
+          type="button"
+          aria-expanded={menuOpen}
+          aria-haspopup="menu"
+          aria-label="More pipeline actions"
+          title={title}
+        >
+          <ChevronDownIcon />
+        </button>
+      </div>
+      {menuOpen ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-10 mt-1 min-w-[12rem] overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+        >
+          <button
+            role="menuitem"
+            type="button"
+            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+            onClick={() => {
+              setMenuOpen(false);
+              onRestart();
+            }}
+          >
+            Restart from Beginning
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg aria-hidden className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+    </svg>
+  );
+}
+
 function MeetingV2AlertsPanel({ alerts }: { alerts: MeetingV2Alert[] }) {
   const blockedCount = alerts.filter(
     (alert) => alert.blocksPipeline || alert.severity === "error",
   ).length;
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-end justify-between gap-3 px-1">
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-end justify-between gap-2 px-1">
         <div>
           <p
-            className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${
+            className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${
               blockedCount > 0 ? "text-rose-800" : "text-amber-800"
             }`}
           >
             {blockedCount > 0 ? "Pipeline stopped" : "Pipeline notices"}
           </p>
-          <p className="mt-1 text-sm text-slate-600">
+          <p className="mt-0.5 text-xs text-slate-600">
             Newest first · {alerts.length} {alerts.length === 1 ? "issue" : "issues"}
           </p>
         </div>
@@ -639,7 +744,7 @@ function MeetingV2AlertsPanel({ alerts }: { alerts: MeetingV2Alert[] }) {
         return (
           <div
             key={alert.id}
-            className={`rounded-2xl border px-5 py-4 text-sm ${
+            className={`rounded-xl border px-4 py-3 text-sm ${
               stopped
                 ? "border-rose-200 bg-rose-50 text-rose-900"
                 : alert.severity === "warning"
@@ -664,8 +769,8 @@ function MeetingV2AlertsPanel({ alerts }: { alerts: MeetingV2Alert[] }) {
                 <span className="text-xs opacity-80">{formatDateTime(alert.occurredAt)}</span>
               ) : null}
             </div>
-            <p className="mt-3 font-semibold">{alert.title}</p>
-            <p className="mt-2 leading-6">{alert.summary}</p>
+            <p className="mt-2 font-semibold">{alert.title}</p>
+            <p className="mt-1.5 leading-5">{alert.summary}</p>
             {alert.likelyCause ? (
               <p className="mt-3 leading-6">
                 <span className="font-semibold">Likely cause:</span> {alert.likelyCause}
@@ -703,9 +808,9 @@ function formatExtractionQualitySummary(quality: MeetingV2ExtractionQuality): st
 
 function SummaryStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/55">{label}</div>
-      <div className="mt-1 text-xl font-semibold text-white">{value}</div>
+    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/55">{label}</div>
+      <div className="mt-0.5 text-lg font-semibold text-white">{value}</div>
     </div>
   );
 }
@@ -715,23 +820,110 @@ function SectionCard({
   title,
   description,
   children,
+  compact = false,
 }: {
   eyebrow?: string;
   title: string;
   description?: string;
   children: ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="mb-5 space-y-2">
+    <div className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${compact ? "p-4" : "p-5"}`}>
+      <div className={`space-y-1 ${compact ? "mb-3" : "mb-4"}`}>
         {eyebrow ? (
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{eyebrow}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{eyebrow}</p>
         ) : null}
-        <h2 className="text-xl font-semibold tracking-tight text-slate-950">{title}</h2>
-        {description ? <p className="text-sm leading-6 text-slate-600">{description}</p> : null}
+        <h2 className="text-lg font-semibold tracking-tight text-slate-950">{title}</h2>
+        {description ? <p className="text-sm leading-5 text-slate-600">{description}</p> : null}
       </div>
       {children}
     </div>
+  );
+}
+
+function PreRunPanel({
+  status,
+  pipelineHalted,
+  onOpenDocuments,
+}: {
+  status: MeetingV2Status;
+  pipelineHalted: boolean;
+  onOpenDocuments: () => void;
+}) {
+  const hasDocuments = Boolean(
+    status.sources.transcript?.available || status.sources.boardPackage?.available,
+  );
+
+  return (
+    <SectionCard
+      eyebrow="Status"
+      title={pipelineHalted ? "Pipeline stopped" : "Pipeline not complete"}
+      description={
+        pipelineHalted
+          ? "The pipeline did not finish successfully. Review the alerts above, then resume or restart the run."
+          : "The meeting workspace is set up but the pipeline has not reached validation yet. Start or resume the run to continue."
+      }
+      compact
+    >
+      <div className="grid gap-3 md:grid-cols-2">
+        <HealthCallout
+          label="Pipeline status"
+          value={startCase(status.meeting.computedPipelineState)}
+          tone={statusTone(status.meeting.computedPipelineState)}
+          note={status.meeting.computedCurrentStep}
+        />
+        <HealthCallout
+          label="Extraction quality"
+          value={
+            status.meeting.extractionQuality.likelyIncomplete || pipelineHalted
+              ? "Needs attention"
+              : "In progress"
+          }
+          tone={
+            status.meeting.extractionQuality.likelyIncomplete || pipelineHalted
+              ? "border-amber-200 bg-amber-50 text-amber-900"
+              : "border-slate-200 bg-slate-50 text-slate-700"
+          }
+          note={formatExtractionQualitySummary(status.meeting.extractionQuality)}
+        />
+      </div>
+
+      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+          Source files
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-600">
+          {status.sources.transcript ? (
+            <span className="rounded-md bg-white px-2 py-1 font-mono text-xs">
+              {status.sources.transcript.fileName}
+            </span>
+          ) : null}
+          {status.sources.boardPackage ? (
+            <span className="rounded-md bg-white px-2 py-1 font-mono text-xs">
+              {status.sources.boardPackage.fileName}
+            </span>
+          ) : null}
+          {!hasDocuments ? <span>No documents on file.</span> : null}
+        </div>
+        {hasDocuments ? (
+          <button
+            type="button"
+            onClick={onOpenDocuments}
+            className="mt-2 text-sm font-medium text-teal-700 hover:text-teal-800"
+          >
+            Open meeting documents &rarr;
+          </button>
+        ) : null}
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <DiagnosticTile label="Transcript segments" value={String(status.meeting.counts.transcriptSegments)} />
+        <DiagnosticTile label="Document pages" value={String(status.meeting.counts.documentPages)} />
+        <DiagnosticTile label="Agenda items extracted" value={String(status.meeting.counts.agendaItems)} />
+        <DiagnosticTile label="Source artifacts" value={String(status.meeting.counts.sourceArtifacts)} />
+      </div>
+    </SectionCard>
   );
 }
 
@@ -740,116 +932,69 @@ function OverviewPanel({
   needsClarificationCount,
   flaggedCount,
   readyCount,
-  onViewTranscript,
-  onViewBoardPackage,
+  onOpenDocuments,
 }: {
   status: MeetingV2Status;
   needsClarificationCount: number;
   flaggedCount: number;
   readyCount: number;
-  onViewTranscript: () => void;
-  onViewBoardPackage: () => void;
+  onOpenDocuments: () => void;
 }) {
+  const hasDocuments = Boolean(
+    status.sources.transcript?.available || status.sources.boardPackage?.available,
+  );
+
   return (
-    <div className="space-y-6">
-      <SectionCard
-        eyebrow="Workflow"
-        title="Meeting Readiness"
-        description="This workspace follows the meeting from ingestion through review. The summary below keeps the operational state visible without pushing the document work off the page."
-      >
-        <div className="grid gap-4 lg:grid-cols-3">
-          <MetricTile label="Needs clarification" value={String(needsClarificationCount)} detail="Agenda items with open questions for the user." />
-          <MetricTile label="Review required" value={String(flaggedCount)} detail="Items with validator warnings or errors." />
-          <MetricTile label="Ready items" value={String(readyCount)} detail="Items with no open questions and no validation flags." />
+    <SectionCard
+      eyebrow="Overview"
+      title="Meeting status & readiness"
+      description="Pipeline health, source coverage, and review readiness in one place."
+      compact
+    >
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <HealthCallout
+            label="Pipeline status"
+            value={startCase(status.meeting.computedPipelineState)}
+            tone={statusTone(status.meeting.computedPipelineState)}
+            note={status.meeting.computedCurrentStep}
+          />
+          <HealthCallout
+            label="Extraction quality"
+            value={status.meeting.extractionQuality.likelyIncomplete ? "Blocked" : "Looks healthy"}
+            tone={
+              status.meeting.extractionQuality.likelyIncomplete
+                ? "border-rose-200 bg-rose-50 text-rose-900"
+                : "border-emerald-200 bg-emerald-50 text-emerald-900"
+            }
+            note={formatExtractionQualitySummary(status.meeting.extractionQuality)}
+          />
         </div>
-      </SectionCard>
 
-      <SectionCard
-        eyebrow="Current State"
-        title="Health Summary"
-        description="A compact reading of the current run so someone opening the page can immediately tell whether the meeting is still processing, review-ready, or blocked."
-      >
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-          <div className="grid gap-4 md:grid-cols-2">
-            <HealthCallout
-              label="Pipeline status"
-              value={startCase(status.meeting.computedPipelineState)}
-              tone={statusTone(status.meeting.computedPipelineState)}
-              note={status.meeting.computedCurrentStep}
-            />
-            <HealthCallout
-              label="Extraction quality"
-              value={status.meeting.extractionQuality.likelyIncomplete ? "Blocked" : "Looks healthy"}
-              tone={
-                status.meeting.extractionQuality.likelyIncomplete
-                  ? "border-rose-200 bg-rose-50 text-rose-900"
-                  : "border-emerald-200 bg-emerald-50 text-emerald-900"
-              }
-              note={formatExtractionQualitySummary(status.meeting.extractionQuality)}
-            />
-          </div>
-          <div className="rounded-[1.6rem] border border-slate-200 bg-slate-50 p-5">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Source Coverage
-            </p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <DiagnosticTile label="Source artifacts" value={String(status.meeting.counts.sourceArtifacts)} />
-              <DiagnosticTile label="Transcript segments" value={String(status.meeting.counts.transcriptSegments)} />
-              <DiagnosticTile label="Document pages" value={String(status.meeting.counts.documentPages)} />
-              <DiagnosticTile label="Document chunks" value={String(status.meeting.counts.documentChunks)} />
-            </div>
-            <div className="mt-4 space-y-2 rounded-2xl border border-slate-200 bg-white px-4 py-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Uploaded files
-              </p>
-              {status.sources.transcript ? (
-                <button
-                  type="button"
-                  onClick={onViewTranscript}
-                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-left text-sm transition hover:border-slate-300 hover:bg-slate-50"
-                >
-                  <span>
-                    <span className="font-medium text-slate-900">Transcript</span>
-                    <span className="mt-1 block font-mono text-xs text-slate-600">
-                      {status.sources.transcript.fileName}
-                    </span>
-                  </span>
-                  <span className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-700">
-                    View
-                  </span>
-                </button>
-              ) : null}
-              {status.sources.boardPackage ? (
-                <button
-                  type="button"
-                  onClick={onViewBoardPackage}
-                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-left text-sm transition hover:border-slate-300 hover:bg-slate-50"
-                >
-                  <span>
-                    <span className="font-medium text-slate-900">Board package</span>
-                    <span className="mt-1 block font-mono text-xs text-slate-600">
-                      {status.sources.boardPackage.fileName}
-                      {status.sources.boardPackage.pageCount != null
-                        ? ` · ${status.sources.boardPackage.pageCount} pages`
-                        : ""}
-                    </span>
-                  </span>
-                  <span className="text-xs font-semibold uppercase tracking-[0.14em] text-teal-700">
-                    View
-                  </span>
-                </button>
-              ) : (
-                <p className="text-sm text-slate-600">No board package on file.</p>
-              )}
-            </div>
-            <p className="mt-4 text-sm leading-6 text-slate-600">
-              This gives the operator a quick sense of whether the uploaded transcript and package were fully carried into the meeting workspace before extraction and review.
-            </p>
-          </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <MetricTile label="Needs clarification" value={String(needsClarificationCount)} detail="Open questions." />
+          <MetricTile label="Review required" value={String(flaggedCount)} detail="Validation flags." />
+          <MetricTile label="Ready items" value={String(readyCount)} detail="No flags or questions." />
         </div>
-      </SectionCard>
+      </div>
 
-    </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <DiagnosticTile label="Source artifacts" value={String(status.meeting.counts.sourceArtifacts)} />
+        <DiagnosticTile label="Transcript segments" value={String(status.meeting.counts.transcriptSegments)} />
+        <DiagnosticTile label="Document pages" value={String(status.meeting.counts.documentPages)} />
+        <DiagnosticTile label="Document chunks" value={String(status.meeting.counts.documentChunks)} />
+      </div>
+
+      {hasDocuments ? (
+        <button
+          type="button"
+          onClick={onOpenDocuments}
+          className="mt-3 text-sm font-medium text-teal-700 hover:text-teal-800"
+        >
+          Open meeting documents &rarr;
+        </button>
+      ) : null}
+    </SectionCard>
   );
 }
 
@@ -863,10 +1008,10 @@ function MetricTile({
   detail: string;
 }) {
   return (
-    <div className="rounded-2xl bg-slate-50 px-5 py-4">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</p>
-      <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{value}</p>
-      <p className="mt-2 text-sm leading-6 text-slate-600">{detail}</p>
+    <div className="rounded-xl bg-slate-50 px-3 py-2.5">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+      <p className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
+      <p className="mt-1 text-xs leading-5 text-slate-600">{detail}</p>
     </div>
   );
 }
@@ -883,10 +1028,10 @@ function HealthCallout({
   note: string;
 }) {
   return (
-    <div className={`rounded-2xl border px-5 py-4 ${tone}`}>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-80">{label}</p>
-      <p className="mt-2 text-xl font-semibold">{value}</p>
-      <p className="mt-2 text-sm leading-6 opacity-90">{note}</p>
+    <div className={`rounded-xl border px-3 py-2.5 ${tone}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] opacity-80">{label}</p>
+      <p className="mt-1 text-lg font-semibold">{value}</p>
+      <p className="mt-1 text-xs leading-5 opacity-90">{note}</p>
     </div>
   );
 }
@@ -1307,11 +1452,11 @@ function ExtractionListCard({
 
 function DiagnosticTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl bg-white px-4 py-3 shadow-sm">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+    <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
         {startCase(label)}
       </div>
-      <div className="mt-2 text-xl font-semibold text-slate-950">{value}</div>
+      <div className="mt-1 text-lg font-semibold text-slate-950">{value}</div>
     </div>
   );
 }
@@ -1319,36 +1464,58 @@ function DiagnosticTile({ label, value }: { label: string; value: string }) {
 function DraftWorkspacePanel({
   meetingId,
   draft,
+  draftBusy,
+  onGenerateDraft,
 }: {
   meetingId: string;
   draft: MeetingV2Status["latestDraft"] | null;
+  draftBusy: boolean;
+  onGenerateDraft: () => void;
 }) {
   const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
   return (
     <SectionCard
       eyebrow="Draft"
-      title={
-        <div className="flex items-center justify-between">
-          <span>Minutes draft</span>
-          <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-            <button
-              onClick={() => setEditorMode("edit")}
-              className={`px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${editorMode === "edit" ? "bg-teal-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-            >
-              Editor
-            </button>
-            <button
-              onClick={() => setEditorMode("preview")}
-              className={`border-l border-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${editorMode === "preview" ? "bg-teal-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-            >
-              PDF Preview
-            </button>
-          </div>
-        </div>
-      }
-      description="Edit the generated minutes directly, or toggle to the PDF preview to see the final layout."
+      title="Minutes draft"
+      description="After validation, generate a formatted minutes document from the pipeline output. Edit here or preview the PDF layout."
+      compact
     >
-      <DraftPreviewBody meetingId={meetingId} draft={draft} mode={editorMode} heightClassName="h-[70dvh] min-h-[42rem]" />
+      {!draft ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center">
+          <p className="text-sm text-slate-600">
+            No draft has been generated yet. The pipeline builds the content during validation — this step formats it into editable minutes.
+          </p>
+          <button
+            type="button"
+            onClick={onGenerateDraft}
+            disabled={draftBusy}
+            className="mt-3 inline-flex items-center rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {draftBusy ? "Generating..." : "Generate minutes draft"}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-sm text-slate-600">Edit the draft or preview the PDF layout.</span>
+            <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              <button
+                onClick={() => setEditorMode("edit")}
+                className={`px-3 py-1 text-xs font-semibold uppercase tracking-wider transition ${editorMode === "edit" ? "bg-teal-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+              >
+                Editor
+              </button>
+              <button
+                onClick={() => setEditorMode("preview")}
+                className={`border-l border-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wider transition ${editorMode === "preview" ? "bg-teal-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+              >
+                PDF Preview
+              </button>
+            </div>
+          </div>
+          <DraftPreviewBody meetingId={meetingId} draft={draft} mode={editorMode} heightClassName="h-[65dvh] min-h-[32rem]" />
+        </>
+      )}
     </SectionCard>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { BuildoutIcon } from "@/components/nav-icons";
 import {
@@ -128,6 +129,7 @@ function BuildoutProgressDialog({
   onClose: () => void;
 }) {
   const titleId = useId();
+  const [mounted, setMounted] = useState(false);
   const stageCounts = countByStatus(BUILDOUT_STAGES);
   const gantt = useMemo(() => buildoutGanttRows(), []);
   const defaultSelection = gantt.playbook[0]?.id ?? gantt.stages[0]?.id ?? null;
@@ -141,14 +143,26 @@ function BuildoutProgressDialog({
     allRows.find((row) => row.id === selectedId) ?? gantt.playbook[0] ?? null;
 
   useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
     if (!open) return;
 
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
     }
 
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [open, onClose]);
 
   useEffect(() => {
@@ -156,35 +170,29 @@ function BuildoutProgressDialog({
     setSelectedId(defaultSelection);
   }, [open, defaultSelection]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-5">
-      <button
-        type="button"
-        className="absolute inset-0 bg-slate-900/45"
-        onClick={onClose}
-        aria-label="Close dialog"
-      />
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex flex-col bg-white">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="relative flex h-[min(94dvh,56rem)] w-full max-w-[min(96vw,76rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+        className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="shrink-0 border-b border-slate-100 px-5 py-4 sm:px-6">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-700/80">
-                Dev Tools
-              </p>
+        <div className="shrink-0 border-b border-slate-200 px-4 py-3 sm:px-5">
+          <div className="flex flex-wrap items-start gap-3">
+            <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 ring-1 ring-amber-200">
+              Dev Tools
+            </span>
+            <div className="min-w-0 flex-1">
               <h2
                 id={titleId}
-                className="mt-1 text-xl font-semibold text-slate-900"
+                className="text-sm font-semibold text-slate-900 sm:text-base"
               >
                 Build-out progress
               </h2>
-              <p className="mt-1 max-w-3xl text-sm text-slate-600">
+              <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
                 Execution timeline and harvest inventory. Reviewed{" "}
                 {BUILDOUT_REVIEWED_ON}. Live coverage stays on the extraction
                 calendar.
@@ -193,10 +201,10 @@ function BuildoutProgressDialog({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
               aria-label="Close"
             >
-              ✕
+              Close
             </button>
           </div>
           <StageMeter counts={stageCounts} />
@@ -204,7 +212,7 @@ function BuildoutProgressDialog({
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-          <div className="min-h-0 flex-1 overflow-hidden border-b border-slate-100 lg:border-b-0 lg:border-r">
+          <div className="min-h-0 flex-1 overflow-hidden border-b border-slate-200 lg:border-b-0 lg:border-r">
             <BuildoutGanttChart
               gantt={gantt}
               selectedId={selected?.id ?? null}
@@ -212,7 +220,7 @@ function BuildoutProgressDialog({
             />
           </div>
 
-          <aside className="flex w-full shrink-0 flex-col bg-slate-50/70 lg:w-[22rem] xl:w-[24rem]">
+          <aside className="flex w-full shrink-0 flex-col bg-slate-50/70 lg:w-[22rem] xl:w-[26rem]">
             <div className="border-b border-slate-200/80 px-4 py-3">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                 Details
@@ -231,7 +239,8 @@ function BuildoutProgressDialog({
           </aside>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -268,7 +277,7 @@ function BuildoutGanttChart({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const labelWidth = "minmax(11rem, 16rem)";
+  const labelWidth = "minmax(18rem, 28rem)";
   const allRows = [...gantt.playbook, ...gantt.stages, ...gantt.backlog];
   const activePhases = BUILDOUT_GANTT_PHASE_ORDER.filter((phase) =>
     allRows.some((row) => row.phases.includes(phase)),
@@ -284,9 +293,9 @@ function BuildoutGanttChart({
 
       <div className="min-h-0 flex-1 overflow-auto">
         <div
-          className="grid min-w-[52rem]"
+          className="grid min-w-full"
           style={{
-            gridTemplateColumns: `${labelWidth} repeat(${activePhases.length}, minmax(5.5rem, 1fr))`,
+            gridTemplateColumns: `${labelWidth} repeat(${activePhases.length}, minmax(6rem, 1fr))`,
           }}
         >
           <div className="sticky left-0 z-20 border-b border-r border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
@@ -384,11 +393,11 @@ function GanttRow({
           />
         ) : null}
         <span className="min-w-0">
-          <span className="block truncate text-xs font-semibold text-slate-900">
+          <span className="block text-xs font-semibold leading-snug text-slate-900">
             {row.label}
           </span>
           {row.subtitle ? (
-            <span className="block truncate text-[10px] text-slate-500">
+            <span className="mt-0.5 block text-[10px] leading-snug text-slate-500">
               {row.subtitle}
             </span>
           ) : null}

@@ -205,6 +205,7 @@ Transcript rules:
 - Keep aliases and notes minimal. Only include them when they will help later retrieval.
 - If the matter concerns a specific suite/unit, owner dispute, chargeback, legal letter, records request, incident, complaint, or personnel issue, mark visibility as RESTRICTED.
 - Use aliases for shorthand names, partial names, speaker phrasing, contractor names, and abbreviations that may help later evidence retrieval.
+- Pay close attention to how vendor and personnel names are spelled in the package context. If the transcript uses a phonetic or shorthand name (e.g., 'InWave' instead of 'Enwave'), rely on the exact legal name from the package.
 - Use confidenceReason for one short sentence explaining confidence.
 - Use evidenceStrength to describe how directly this chunk supports the topic.
 - Use openQuestions for unresolved ambiguity only.

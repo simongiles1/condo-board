@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { IbmDoclingSpendPanel, type IbmDoclingSpendSummary } from "@/components/IbmDoclingSpendPanel";
 import {
   estimateCostBreakdown,
   flattenAiUsageToStages,
@@ -13,6 +14,8 @@ import {
   type AiUsageLog,
   type AiUsageStageRow,
 } from "@/lib/gemini/usage";
+
+type DialogTab = "usage" | "watsonx";
 
 type Props = {
   open: boolean;
@@ -92,8 +95,16 @@ function UsageStageRow({
 }
 
 export function AiUsageDialog({ open, usage, stages, loading = false, onClose }: Props) {
+  const [activeTab, setActiveTab] = useState<DialogTab>("usage");
+  const [watsonxSummary, setWatsonxSummary] = useState<IbmDoclingSpendSummary | null>(null);
+  const [watsonxLoading, setWatsonxLoading] = useState(false);
+  const [watsonxError, setWatsonxError] = useState<string | null>(null);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setActiveTab("usage");
+      return;
+    }
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") onClose();
@@ -102,6 +113,44 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open || activeTab !== "watsonx") return;
+
+    let cancelled = false;
+    setWatsonxLoading(true);
+    setWatsonxError(null);
+
+    async function loadWatsonxSummary() {
+      try {
+        const response = await fetch("/api/analysis/docling-backfill/ibm-spend");
+        const payload = (await response.json()) as IbmDoclingSpendSummary & { error?: string };
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Could not load WatsonX key information.");
+        }
+        if (!cancelled) {
+          setWatsonxSummary(payload);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setWatsonxError(
+            error instanceof Error ? error.message : "Could not load WatsonX key information.",
+          );
+          setWatsonxSummary(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setWatsonxLoading(false);
+        }
+      }
+    }
+
+    void loadWatsonxSummary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, activeTab]);
 
   const resolvedStages = useMemo(() => {
     if (stages?.length) return stages;
@@ -144,11 +193,47 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
             AI usage &amp; cost
           </h2>
           <p className="mt-1 text-sm text-slate-600">
-            Token counts and estimated API cost for each processing stage.
+            {activeTab === "usage"
+              ? "Token counts and estimated API cost for each processing stage."
+              : "IBM watsonx Docling trial keys loaded from .env.local and their spend."}
           </p>
+          <div
+            className="mt-4 inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1"
+            role="tablist"
+            aria-label="AI usage views"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "usage"}
+              onClick={() => setActiveTab("usage")}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                activeTab === "usage"
+                  ? "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Usage
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "watsonx"}
+              onClick={() => setActiveTab("watsonx")}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                activeTab === "watsonx"
+                  ? "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              WatsonX
+            </button>
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          {activeTab === "usage" ? (
+            <>
           {loading ? (
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
               Loading usage data…
@@ -261,6 +346,37 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
               rows when recorded.
             </p>
           ) : null}
+            </>
+          ) : watsonxLoading ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+              Loading WatsonX key information…
+            </div>
+          ) : watsonxError ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+              {watsonxError}
+            </div>
+          ) : watsonxSummary ? (
+            <div className="space-y-4">
+              <IbmDoclingSpendPanel summary={watsonxSummary} />
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                <p className="font-medium text-slate-900">Environment variables</p>
+                <ul className="mt-2 space-y-1 font-mono text-xs text-slate-600">
+                  <li>DOCLING_IBM_URL — hosted watsonx Docling base URL</li>
+                  <li>DOCLING_IBM_API_KEY — primary trial API key</li>
+                  <li>DOCLING_IBM_URL_2 / DOCLING_IBM_API_KEY_2 — extra trial slots (_3, _4)</li>
+                  <li>DOCLING_IBM_USD_PER_PAGE — billed rate (default $0.004/page)</li>
+                </ul>
+                <p className="mt-3 text-xs text-slate-500">
+                  Keys are read from .env.local on this machine. If URL_N is omitted, key N reuses
+                  DOCLING_IBM_URL.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+              No WatsonX key information available.
+            </div>
+          )}
         </div>
 
         <div className="flex justify-end border-t border-slate-100 px-6 py-4">

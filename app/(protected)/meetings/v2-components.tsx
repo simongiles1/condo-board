@@ -257,6 +257,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [usageDialogOpen, setUsageDialogOpen] = useState(false);
   const [usageStages, setUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
+  const statusRequestInFlight = useRef(false);
 
   useEffect(() => {
     if (!usageDialogOpen) return;
@@ -289,14 +290,30 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   }, [meetingId, usageDialogOpen]);
 
   const refreshStatus = useCallback(async (active = true) => {
-    const response = await fetch(`/api/v2/meetings/${meetingId}/status`, {
-      cache: "no-store",
-    });
-    if (!response.ok) return;
-    const payload = (await response.json()) as MeetingV2Status;
-    if (active) {
-      setStatus(payload);
-      setLoading(false);
+    if (statusRequestInFlight.current) return;
+    statusRequestInFlight.current = true;
+    try {
+      const response = await fetch(`/api/v2/meetings/${meetingId}/status`, {
+        cache: "no-store",
+      });
+      if (!response.ok) return;
+      const payload = (await response.json()) as MeetingV2Status;
+      if (active) {
+        setStatus((current) => {
+          const currentDraft = current?.latestDraft;
+          const nextDraft = payload.latestDraft;
+          if (currentDraft && nextDraft && currentDraft.id === nextDraft.id && currentDraft.json !== null) {
+            return {
+              ...payload,
+              latestDraft: currentDraft,
+            };
+          }
+          return payload;
+        });
+        setLoading(false);
+      }
+    } finally {
+      statusRequestInFlight.current = false;
     }
   }, [meetingId]);
 
@@ -309,14 +326,41 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
 
     void loadStatus();
     const interval = window.setInterval(() => {
-      void loadStatus();
-    }, 2000);
+      if (document.visibilityState === "visible") {
+        void loadStatus();
+      }
+    }, 10000);
 
     return () => {
       active = false;
       window.clearInterval(interval);
     };
   }, [meetingId, refreshStatus]);
+
+  useEffect(() => {
+    const draftId = status?.latestDraft?.id;
+    const draftJson = status?.latestDraft?.json;
+    if (activeTab !== "draft" || !draftId || draftJson !== null) return;
+
+    let active = true;
+    async function loadDraft() {
+      const response = await fetch(`/api/v2/meetings/${meetingId}/draft`, {
+        cache: "no-store",
+      });
+      if (!response.ok || !active) return;
+      const payload = (await response.json()) as {
+        draft: MeetingV2Status["latestDraft"];
+      };
+      if (payload.draft && active) {
+        setStatus((current) => (current ? { ...current, latestDraft: payload.draft } : current));
+      }
+    }
+
+    void loadDraft();
+    return () => {
+      active = false;
+    };
+  }, [activeTab, meetingId, status?.latestDraft?.id, status?.latestDraft?.json]);
 
   async function handleRunPipeline() {
     setRunBusy(true);

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2AgendaChunkSnapshots } from "@/lib/db/schema";
@@ -153,10 +153,10 @@ export async function getMeetingV2AgendaChunkSnapshotCount(
 ): Promise<number> {
   const db = getDb();
   const rows = await db
-    .select({ id: meetingsV2AgendaChunkSnapshots.id })
+    .select({ value: count() })
     .from(meetingsV2AgendaChunkSnapshots)
     .where(eq(meetingsV2AgendaChunkSnapshots.meetingV2Id, meetingId));
-  return rows.length;
+  return rows[0]?.value ?? 0;
 }
 
 export function analyzeExtractionQuality(options: {

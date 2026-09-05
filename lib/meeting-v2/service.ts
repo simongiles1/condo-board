@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
 
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
 import { getDb } from "@/lib/db";
@@ -117,6 +117,7 @@ export type MeetingV2Detail = {
     id: string;
     title: string;
     contentMarkdown: string;
+    json: string | null;
     format: string;
     createdAt: string;
     updatedAt: string;
@@ -547,29 +548,29 @@ export async function getMeetingV2Counts(meetingId: string): Promise<{
     validations,
     drafts,
   ] = await Promise.all([
-    db.select().from(meetingsV2SourceArtifacts).where(eq(meetingsV2SourceArtifacts.meetingV2Id, meetingId)),
-    db.select().from(meetingsV2TranscriptSegments).where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId)),
-    db.select().from(meetingsV2DocumentPages).where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
-    db.select().from(meetingsV2DocumentSections).where(eq(meetingsV2DocumentSections.meetingV2Id, meetingId)),
-    db.select().from(meetingsV2DocumentChunks).where(eq(meetingsV2DocumentChunks.meetingV2Id, meetingId)),
-    db.select().from(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId)),
-    db.select().from(meetingsV2AgendaItemContexts).where(eq(meetingsV2AgendaItemContexts.meetingV2Id, meetingId)),
-    db.select().from(meetingsV2AgendaItemInvestigations).where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
-    db.select().from(meetingsV2ValidationResults).where(eq(meetingsV2ValidationResults.meetingV2Id, meetingId)),
-    db.select().from(meetingsV2MinutesDrafts).where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId)),
+    db.select({ value: count() }).from(meetingsV2SourceArtifacts).where(eq(meetingsV2SourceArtifacts.meetingV2Id, meetingId)),
+    db.select({ value: count() }).from(meetingsV2TranscriptSegments).where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId)),
+    db.select({ value: count() }).from(meetingsV2DocumentPages).where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
+    db.select({ value: count() }).from(meetingsV2DocumentSections).where(eq(meetingsV2DocumentSections.meetingV2Id, meetingId)),
+    db.select({ value: count() }).from(meetingsV2DocumentChunks).where(eq(meetingsV2DocumentChunks.meetingV2Id, meetingId)),
+    db.select({ value: count() }).from(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId)),
+    db.select({ value: count() }).from(meetingsV2AgendaItemContexts).where(eq(meetingsV2AgendaItemContexts.meetingV2Id, meetingId)),
+    db.select({ value: count() }).from(meetingsV2AgendaItemInvestigations).where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
+    db.select({ value: count() }).from(meetingsV2ValidationResults).where(eq(meetingsV2ValidationResults.meetingV2Id, meetingId)),
+    db.select({ value: count() }).from(meetingsV2MinutesDrafts).where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId)),
   ]);
 
   return {
-    sourceArtifacts: sourceArtifacts.length,
-    transcriptSegments: transcriptSegments.length,
-    documentPages: documentPages.length,
-    documentSections: documentSections.length,
-    documentChunks: documentChunks.length,
-    agendaItems: agendaItems.length,
-    evidenceContexts: evidenceContexts.length,
-    investigations: investigations.length,
-    validations: validations.length,
-    drafts: drafts.length,
+    sourceArtifacts: sourceArtifacts[0]?.value ?? 0,
+    transcriptSegments: transcriptSegments[0]?.value ?? 0,
+    documentPages: documentPages[0]?.value ?? 0,
+    documentSections: documentSections[0]?.value ?? 0,
+    documentChunks: documentChunks[0]?.value ?? 0,
+    agendaItems: agendaItems[0]?.value ?? 0,
+    evidenceContexts: evidenceContexts[0]?.value ?? 0,
+    investigations: investigations[0]?.value ?? 0,
+    validations: validations[0]?.value ?? 0,
+    drafts: drafts[0]?.value ?? 0,
   };
 }
 
@@ -2566,23 +2567,48 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       .from(meetings)
       .where(eq(meetings.id, meetingId)),
     db
-      .select()
+      .select({
+        id: meetingsV2AgendaItems.id,
+        title: meetingsV2AgendaItems.title,
+        itemNumber: meetingsV2AgendaItems.itemNumber,
+        itemType: meetingsV2AgendaItems.itemType,
+        sourceSectionId: meetingsV2AgendaItems.sourceSectionId,
+      })
       .from(meetingsV2AgendaItems)
       .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId))
       .orderBy(asc(meetingsV2AgendaItems.sortOrder)),
     db
-      .select()
+      .select({
+        agendaItemId: meetingsV2AgendaItemInvestigations.agendaItemId,
+        discussionSummary: meetingsV2AgendaItemInvestigations.discussionSummary,
+        confidence: meetingsV2AgendaItemInvestigations.confidence,
+        outcome: meetingsV2AgendaItemInvestigations.outcome,
+        openQuestionsJson: meetingsV2AgendaItemInvestigations.openQuestionsJson,
+        userAnswersJson: meetingsV2AgendaItemInvestigations.userAnswersJson,
+      })
       .from(meetingsV2AgendaItemInvestigations)
       .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
     db
-      .select()
+      .select({
+        agendaItemId: meetingsV2ValidationResults.agendaItemId,
+        severity: meetingsV2ValidationResults.severity,
+        code: meetingsV2ValidationResults.code,
+        message: meetingsV2ValidationResults.message,
+      })
       .from(meetingsV2ValidationResults)
       .where(eq(meetingsV2ValidationResults.meetingV2Id, meetingId)),
     db
-      .select()
+      .select({
+        id: meetingsV2MinutesDrafts.id,
+        title: meetingsV2MinutesDrafts.title,
+        format: meetingsV2MinutesDrafts.format,
+        createdAt: meetingsV2MinutesDrafts.createdAt,
+        updatedAt: meetingsV2MinutesDrafts.updatedAt,
+      })
       .from(meetingsV2MinutesDrafts)
       .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId))
-      .orderBy(desc(meetingsV2MinutesDrafts.createdAt)),
+      .orderBy(desc(meetingsV2MinutesDrafts.createdAt))
+      .limit(1),
     getMeetingV2Counts(meetingId),
     db
       .select({
@@ -2612,8 +2638,8 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       ? {
         id: drafts[0].id,
         title: drafts[0].title,
-        contentMarkdown: drafts[0].contentMarkdown,
-        json: drafts[0].summaryJson,
+        contentMarkdown: "",
+        json: null,
         format: drafts[0].format,
         createdAt: drafts[0].createdAt,
         updatedAt: drafts[0].updatedAt,
@@ -2624,7 +2650,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
   const stages = buildMeetingV2Stages({
     counts: {
       ...counts,
-      drafts: drafts.length,
+      drafts: counts.drafts,
     },
     extractionQuality,
   });
@@ -2728,6 +2754,33 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       endPage: section.endPage,
     })),
   };
+}
+
+export async function loadLatestMeetingV2Draft(meetingId: string): Promise<{
+  id: string;
+  title: string;
+  contentMarkdown: string;
+  json: string | null;
+  format: string;
+  createdAt: string;
+  updatedAt: string;
+} | null> {
+  const db = getDb();
+  const [draft] = await db
+    .select({
+      id: meetingsV2MinutesDrafts.id,
+      title: meetingsV2MinutesDrafts.title,
+      contentMarkdown: meetingsV2MinutesDrafts.contentMarkdown,
+      json: meetingsV2MinutesDrafts.summaryJson,
+      format: meetingsV2MinutesDrafts.format,
+      createdAt: meetingsV2MinutesDrafts.createdAt,
+      updatedAt: meetingsV2MinutesDrafts.updatedAt,
+    })
+    .from(meetingsV2MinutesDrafts)
+    .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId))
+    .orderBy(desc(meetingsV2MinutesDrafts.createdAt))
+    .limit(1);
+  return draft ?? null;
 }
 
 export async function rerunAgendaItem(meetingId: string, agendaItemId: string): Promise<void> {

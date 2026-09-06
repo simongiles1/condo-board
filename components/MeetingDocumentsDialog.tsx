@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { BoardPackageViewerDialog } from "@/components/BoardPackageViewerDialog";
 import { VttViewerDialog } from "@/components/VttViewerDialog";
@@ -29,11 +29,17 @@ export function MeetingDocumentsDialog({
   const [activeTab, setActiveTab] = useState<DocTab>(
     initialTab ?? (hasTranscript ? "transcript" : "boardPackage"),
   );
+  const tabInitializedRef = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      tabInitializedRef.current = false;
+      return;
+    }
+    if (tabInitializedRef.current) return;
+    tabInitializedRef.current = true;
     setActiveTab(initialTab ?? (hasTranscript ? "transcript" : "boardPackage"));
-  }, [open, initialTab, hasTranscript]);
+  }, [open, initialTab, hasTranscript, hasBoardPackage]);
 
   if (!open) return null;
 

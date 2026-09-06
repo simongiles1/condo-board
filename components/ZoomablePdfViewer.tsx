@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { getPdfPageCount } from "@/lib/pdf/pdf-page-count";
 import {
@@ -35,11 +35,19 @@ export function ZoomablePdfViewer({ url, className }: Props) {
   const [pageWidthPt, setPageWidthPt] = useState<number | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
 
+  const effectiveScale = (() => {
+    if (!fitWidth || !pageWidthPt || viewportWidth <= 0) return scale;
+    const padding = 32;
+    const available = Math.max(200, viewportWidth - padding);
+    return Math.min(MAX_SCALE, Math.max(MIN_SCALE, available / pageWidthPt));
+  })();
+
   useEffect(() => {
     let cancelled = false;
     setPdfData(null);
     setPage(1);
     setPageCount(0);
+    setPageWidthPt(null);
     setLoadingPdf(true);
     setRenderingPage(false);
     setErrorMessage(null);
@@ -72,13 +80,6 @@ export function ZoomablePdfViewer({ url, className }: Props) {
     };
   }, [url]);
 
-  const resolveScale = useCallback(() => {
-    if (!fitWidth || !pageWidthPt || viewportWidth <= 0) return scale;
-    const padding = 32;
-    const available = Math.max(200, viewportWidth - padding);
-    return Math.min(MAX_SCALE, Math.max(MIN_SCALE, available / pageWidthPt));
-  }, [fitWidth, pageWidthPt, scale, viewportWidth]);
-
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!pdfData || !canvas) return;
@@ -86,14 +87,13 @@ export function ZoomablePdfViewer({ url, className }: Props) {
     let cancelled = false;
     setRenderingPage(true);
     setErrorMessage(null);
-    const effectiveScale = resolveScale();
     cancelPdfCanvasRender(canvas);
 
     renderPdfPageToCanvas(pdfData, page, canvas, effectiveScale)
       .then((info) => {
         if (cancelled) return;
         if (info?.pageWidthPt) {
-          setPageWidthPt(info.pageWidthPt);
+          setPageWidthPt((current) => current ?? info.pageWidthPt);
         }
         setRenderingPage(false);
       })
@@ -108,19 +108,21 @@ export function ZoomablePdfViewer({ url, className }: Props) {
       cancelled = true;
       cancelPdfCanvasRender(canvas);
     };
-  }, [pdfData, page, scale, fitWidth, pageWidthPt, viewportWidth]);
+  }, [pdfData, page, effectiveScale]);
 
   useEffect(() => {
+    if (loadingPdf) return;
     const element = scrollRef.current;
     if (!element) return;
 
     const observer = new ResizeObserver(() => {
-      setViewportWidth(element.clientWidth);
+      const nextWidth = element.clientWidth;
+      setViewportWidth((current) => (current === nextWidth ? current : nextWidth));
     });
     observer.observe(element);
     setViewportWidth(element.clientWidth);
     return () => observer.disconnect();
-  }, [pdfData]);
+  }, [loadingPdf]);
 
   useEffect(() => {
     function onFullscreenChange() {
@@ -153,7 +155,7 @@ export function ZoomablePdfViewer({ url, className }: Props) {
     setFitWidth(true);
   }
 
-  const displayScale = Math.round(resolveScale() * 100);
+  const displayScale = Math.round(effectiveScale * 100);
 
   if (loadingPdf) {
     return (
@@ -248,15 +250,15 @@ export function ZoomablePdfViewer({ url, className }: Props) {
         ref={scrollRef}
         className={`min-h-0 flex-1 overflow-auto p-4 ${isFullscreen ? "h-[calc(100vh-3rem)]" : ""}`}
       >
-        <div ref={containerRef} className="mx-auto flex w-max min-w-full justify-center">
+        <div ref={containerRef} className="relative mx-auto flex w-max min-w-full justify-center">
           {renderingPage ? (
-            <div className="flex min-h-[24rem] items-center justify-center text-sm text-slate-600">
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-100/80 text-sm text-slate-600">
               Rendering page…
             </div>
           ) : null}
           <canvas
             ref={canvasRef}
-            className={`rounded border border-slate-300 bg-white shadow-sm ${renderingPage ? "hidden" : ""}`}
+            className="rounded border border-slate-300 bg-white shadow-sm"
           />
         </div>
       </div>

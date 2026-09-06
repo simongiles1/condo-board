@@ -258,6 +258,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [usageStages, setUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const statusRequestInFlight = useRef(false);
+  const statusAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!usageDialogOpen) return;
@@ -291,10 +292,17 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
 
   const refreshStatus = useCallback(async (active = true) => {
     if (statusRequestInFlight.current) return;
+    if (typeof document !== "undefined" && document.hidden) return;
+
     statusRequestInFlight.current = true;
+    statusAbortRef.current?.abort();
+    const controller = new AbortController();
+    statusAbortRef.current = controller;
+
     try {
       const response = await fetch(`/api/v2/meetings/${meetingId}/status`, {
         cache: "no-store",
+        signal: controller.signal,
       });
       if (!response.ok) return;
       const payload = (await response.json()) as MeetingV2Status;
@@ -312,6 +320,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         });
         setLoading(false);
       }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      console.error("[MeetingV2Detail] status refresh failed:", error);
     } finally {
       statusRequestInFlight.current = false;
     }
@@ -324,6 +335,12 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
       await refreshStatus(active);
     }
 
+    function onVisibilityChange() {
+      if (!document.hidden) {
+        void loadStatus();
+      }
+    }
+
     void loadStatus();
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") {
@@ -331,9 +348,13 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
       }
     }, 10000);
 
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     return () => {
       active = false;
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      statusAbortRef.current?.abort();
     };
   }, [meetingId, refreshStatus]);
 

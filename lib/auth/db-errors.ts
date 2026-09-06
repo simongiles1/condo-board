@@ -59,6 +59,22 @@ export function formatAuthDbError(
   }
 
   if (
+    message.includes("timeout exceeded when trying to connect") ||
+    message.includes("Connection terminated due to connection timeout")
+  ) {
+    const isLocalDev =
+      process.env.NODE_ENV === "development" ||
+      (process.env.COND_BOARD_POSTGRES_URL?.trim() ||
+        process.env.DATABASE_URL?.trim() ||
+        ""
+      ).includes("localhost");
+    if (isLocalDev) {
+      return "Database connection timed out. Close other app tabs (especially Meeting V2), restart `npm run dev`, then try again.";
+    }
+    return "Database connection timed out. Try again in a moment.";
+  }
+
+  if (
     message.includes("ECONNREFUSED") ||
     message.includes("ENOTFOUND") ||
     message.includes("getaddrinfo")

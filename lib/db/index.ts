@@ -66,11 +66,11 @@ function getPool(): Pool {
   }
   if (!globalForDb.pool) {
     const isDev = process.env.NODE_ENV === "development";
-    // Supabase session pooler caps at pool_size (often 15). Dev HMR, auth,
-    // and parallel page/API work can open many handles; keep the app pool small.
+    // Supabase session pooler caps at pool_size (often 15). Keep production
+    // modest; dev needs more headroom for HMR plus parallel API handlers.
     globalForDb.pool = new Pool({
       ...postgresPoolOptions(connectionString),
-      max: isDev ? 3 : 8,
+      max: isDev ? 10 : 8,
       idleTimeoutMillis: isDev ? 10_000 : 30_000,
       connectionTimeoutMillis: 20_000,
       allowExitOnIdle: isDev,

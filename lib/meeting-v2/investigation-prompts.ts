@@ -14,8 +14,8 @@ Your task is to determine, from the provided agenda item plus prepared context a
 
 Important rules:
 
-- Transcript is authoritative for what was actually discussed and decided.
-- Board package is authoritative for names, amounts, quote details, and agenda framing.
+- Transcript is authoritative for what was actually discussed, decided, and all details (including names, amounts, and contractors) when there is a discrepancy.
+- Board package provides baseline names, amounts, quote details, and agenda framing, but MUST be overridden by the transcript if the transcript mentions different details or prior approvals.
 - The prepared context bundle is your primary evidence set and should usually be enough.
 - Start from the prepared context bundle alone before considering any tool use.
 - Treat the prepared context as already-curated evidence around this item, not as a hint to go re-explore the meeting.

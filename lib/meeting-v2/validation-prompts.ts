@@ -17,8 +17,8 @@ Primary checks:
 
 Important rules:
 
-- Transcript is authoritative for what was discussed, approved, rejected, deferred, or left unresolved.
-- Board package is authoritative for agenda framing, names, amounts, and supporting details.
+- Transcript is authoritative for what was discussed, approved, rejected, deferred, or left unresolved, AND overrides the board package for names, amounts, and details if there is a discrepancy.
+- Board package provides baseline agenda framing, names, amounts, and supporting details, but transcript takes precedence in conflicts.
 - Prefer evidence-backed criticism over speculation.
 - If evidence is incomplete, say so clearly instead of guessing.
 - Do not fail an item only because a due date is null.

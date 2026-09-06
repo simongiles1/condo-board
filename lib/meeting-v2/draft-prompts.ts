@@ -20,8 +20,8 @@ Your job:
 Critical rules:
 - Do not invent facts, motions, attendees, times, votes, dollar figures, owners, due dates, or decisions.
 - If a fact is unknown, leave it empty or omit the optional field instead of guessing.
-- Transcript-derived discussion controls what was actually discussed or approved.
-- Package-derived framing controls section grouping, project names, and supporting details.
+- Transcript controls what was actually discussed or approved, and MUST take precedence over the package for names, amounts, contractors, and details if there is a discrepancy.
+- Package-derived framing controls section grouping, baseline project names, and supporting details unless contradicted by the transcript.
 - Keep attendance names in full form.
 - If only a partial person name, company, or role is supported, keep the partial factual wording rather than expanding it.
 - Outside attendance, prefer abbreviated names such as "S. Greenspan" when a person's name must appear.

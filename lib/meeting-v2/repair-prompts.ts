@@ -7,8 +7,8 @@ Important rules:
 - Make the smallest necessary changes.
 - Preserve conclusions that are already supported.
 - Change any field that the validation findings correctly identify as too strong, incomplete, or internally inconsistent.
-- Transcript is authoritative for what was discussed, approved, rejected, deferred, or left unresolved.
-- Board package is authoritative for agenda framing, names, amounts, and supporting details.
+- Transcript is authoritative for what was discussed, approved, rejected, deferred, or left unresolved, AND overrides the board package for names, amounts, and details if there is a discrepancy.
+- Board package provides baseline agenda framing, names, amounts, and supporting details, but transcript takes precedence in conflicts.
 - A package or email approval can prove that a prior approval happened, but it does not automatically prove that an in-meeting ratification vote was explicit in the prepared evidence.
 - If approval or rejection is not explicit in the evidence, do not overstate it.
 - If approval or rejection is only implied by meeting flow and not explicitly stated, do not use APPROVED or REJECTED.

@@ -127,6 +127,8 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
       return;
     }
 
+    setLoading(true);
+
     const formData = new FormData(event.currentTarget);
     formData.delete("boardPackage");
 
@@ -134,6 +136,7 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
       const trimmed = await buildTrimmedBoardPackage(boardPackageSelection);
       formData.append("boardPackage", trimmed);
     } catch (e) {
+      setLoading(false);
       setError(
         e instanceof Error ? e.message : "Could not trim board package PDF.",
       );
@@ -141,7 +144,6 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
     }
 
     try {
-      setLoading(true);
       const response = await fetch("/api/v2/meetings/upload", {
         method: "POST",
         body: formData,
@@ -157,15 +159,14 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
       }
 
       const payload = (await response.json()) as { id: string };
-      resetForm();
+      sessionStorage.setItem(`meeting-v2-fresh:${payload.id}`, "1");
       onClose();
       router.push(`/operations/meetings/v2/${payload.id}`);
-      router.refresh();
+      resetForm();
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "Unexpected server error.",
       );
-    } finally {
       setLoading(false);
     }
   }
@@ -204,7 +205,7 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
           </p>
         </div>
 
-        <div className="min-h-0 overflow-y-auto px-6 py-5">
+        <div className="min-h-0 overflow-y-auto overflow-anchor-none px-6 py-5">
           <form key={formKey} className="space-y-6" onSubmit={submit}>
             <div className="grid gap-6 md:grid-cols-2">
               <div className="space-y-2">

@@ -642,11 +642,56 @@ export function deriveMeetingV2ComputedStatus(counts: {
   };
 }
 
+export function isMeetingV2PipelineNotStarted(pipelineState: string): boolean {
+  return pipelineState === "created";
+}
+
 function buildMeetingV2Stages(options: {
   counts: MeetingV2Detail["meeting"]["counts"];
   extractionQuality: MeetingV2ExtractionQuality;
+  pipelineNotStarted?: boolean;
 }): MeetingV2Detail["meeting"]["stages"] {
-  const { counts, extractionQuality } = options;
+  const { counts, extractionQuality, pipelineNotStarted = false } = options;
+
+  if (pipelineNotStarted) {
+    return [
+      {
+        key: "ingest",
+        label: "Ingest",
+        status: "incomplete",
+        note: "Transcript and board package will be processed when you start the pipeline.",
+        progressPercent: 0,
+      },
+      {
+        key: "extract",
+        label: "Extract",
+        status: "incomplete",
+        note: "Agenda extraction has not run yet.",
+        progressPercent: 0,
+      },
+      {
+        key: "evidence",
+        label: "Evidence",
+        status: "incomplete",
+        note: "Evidence gathering starts after agenda extraction.",
+        progressPercent: 0,
+      },
+      {
+        key: "investigate",
+        label: "Investigate",
+        status: "incomplete",
+        note: "Investigation starts after evidence is gathered.",
+        progressPercent: 0,
+      },
+      {
+        key: "validate",
+        label: "Validate",
+        status: "incomplete",
+        note: "Validation runs after investigation completes.",
+        progressPercent: 0,
+      },
+    ];
+  }
   const ingestComplete =
     counts.sourceArtifacts > 0 &&
     counts.transcriptSegments > 0 &&
@@ -721,6 +766,7 @@ export async function assessMeetingV2Extraction(
     meeting?: typeof meetingsV2.$inferSelect;
     agendaItems?: Array<{ title: string; sourceSectionId: string | null; itemType: string }>;
     documentSections?: Array<{ title: string }>;
+    pipelineNotStarted?: boolean;
   },
 ): Promise<MeetingV2ExtractionQuality> {
   const db = getDb();
@@ -753,6 +799,9 @@ export async function assessMeetingV2Extraction(
   const settings = readMeetingV2Settings(
     selectedMeeting?.settings as MeetingV2Settings | null | undefined,
   );
+  const pipelineNotStarted =
+    preloaded?.pipelineNotStarted ??
+    isMeetingV2PipelineNotStarted(selectedMeeting?.pipelineState ?? "created");
 
   return analyzeExtractionQuality({
     agendaItems,
@@ -762,6 +811,7 @@ export async function assessMeetingV2Extraction(
     agendaChunkSnapshots,
     deepSeekKeyConfigured: isDeepSeekKeyConfigured(),
     lastError: selectedMeeting?.lastError ?? null,
+    pipelineNotStarted,
   });
 }
 
@@ -2652,10 +2702,12 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       }
     : null;
   const computed = deriveMeetingV2ComputedStatus(counts);
+  const pipelineNotStarted = isMeetingV2PipelineNotStarted(selectedMeeting.pipelineState);
   const extractionQuality = await assessMeetingV2Extraction(meetingId, {
     meeting: selectedMeeting,
     agendaItems,
     documentSections,
+    pipelineNotStarted,
   });
   const stages = buildMeetingV2Stages({
     counts: {
@@ -2663,14 +2715,23 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       drafts: counts.drafts,
     },
     extractionQuality,
+    pipelineNotStarted,
   });
-  const computedPipelineState = computed.pipelineState;
-  const computedCurrentStep = computed.currentStep;
-  const integrityNote = computed.note;
-  const isConsistent =
+  let computedPipelineState = computed.pipelineState;
+  let computedCurrentStep = computed.currentStep;
+  let integrityNote = computed.note;
+  let isConsistent =
     computed.isConsistent &&
     computedPipelineState === selectedMeeting.pipelineState &&
     computedCurrentStep === (selectedMeeting.currentStep ?? computedCurrentStep);
+
+  if (pipelineNotStarted) {
+    computedPipelineState = "created";
+    computedCurrentStep = selectedMeeting.currentStep ?? "Ready to start";
+    integrityNote = "";
+    isConsistent = true;
+  }
+
   const alerts = buildMeetingV2Alerts({
     extractionQuality,
     integrityNote,

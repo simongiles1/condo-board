@@ -19,6 +19,29 @@ import { formatPageList, parsePageRangeInput } from "@/lib/pdf/page-selection";
 
 export type { BoardPackageSelection };
 
+const PREVIEW_CANVAS_MAX_HEIGHT_PX = 200;
+
+function limitCanvasDisplaySize(
+  canvas: HTMLCanvasElement,
+  maxHeightPx: number,
+): void {
+  if (!canvas.width || !canvas.height) return;
+
+  const parentWidth = canvas.parentElement?.clientWidth ?? canvas.width;
+  const maxWidth = Math.max(1, parentWidth - 24);
+  const ratio = canvas.width / canvas.height;
+
+  let displayWidth = Math.min(canvas.width, maxWidth);
+  let displayHeight = displayWidth / ratio;
+  if (displayHeight > maxHeightPx) {
+    displayHeight = maxHeightPx;
+    displayWidth = displayHeight * ratio;
+  }
+
+  canvas.style.width = `${Math.floor(displayWidth)}px`;
+  canvas.style.height = `${Math.floor(displayHeight)}px`;
+}
+
 type Props = {
   disabled?: boolean;
   label?: string;
@@ -135,7 +158,9 @@ export function BoardPackagePageSelector({
   const setPages = useCallback((pages: number[]) => {
     setSelected(new Set(pages));
     if (pages.length > 0) {
-      setPreviewPage(pages[0]);
+      setPreviewPage((current) =>
+        pages.includes(current) ? current : pages[0],
+      );
     }
   }, []);
 
@@ -157,7 +182,8 @@ export function BoardPackagePageSelector({
     async function render() {
       const canvas = canvasRef.current;
       if (!canvas || !pdfBytes) return;
-      await renderPdfPageToCanvas(pdfBytes, previewPage, canvas);
+      await renderPdfPageToCanvas(pdfBytes, previewPage, canvas, 1);
+      limitCanvasDisplaySize(canvas, PREVIEW_CANVAS_MAX_HEIGHT_PX);
     }
 
     void render().catch(() => {
@@ -274,6 +300,7 @@ export function BoardPackagePageSelector({
               <button
                 type="button"
                 disabled={disabled}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={applyRange}
                 className="rounded-lg bg-teal-600 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
               >
@@ -285,34 +312,32 @@ export function BoardPackagePageSelector({
             <p className="text-xs text-red-700">{rangeError}</p>
           ) : null}
 
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-            <div className="flex max-h-72 flex-col rounded-xl border border-slate-200 bg-white">
+          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+            <div className="flex h-72 flex-col rounded-xl border border-slate-200 bg-white">
               <div className="border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Pages to include
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
                 <ul className="grid grid-cols-4 gap-1 sm:grid-cols-6 md:grid-cols-8">
                   {Array.from({ length: pageCount }, (_, i) => i + 1).map(
                     (page) => {
                       const on = selected.has(page);
                       return (
                         <li key={page}>
-                          <label
-                            className={`flex cursor-pointer items-center justify-center rounded-md border px-1 py-1.5 text-xs font-mono transition ${
+                          <button
+                            type="button"
+                            disabled={disabled}
+                            aria-pressed={on}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => togglePage(page)}
+                            className={`flex w-full cursor-pointer items-center justify-center rounded-md border px-1 py-1.5 text-xs font-mono transition ${
                               on
                                 ? "border-teal-500 bg-teal-50 text-teal-900"
                                 : "border-slate-200 bg-slate-50 text-slate-500 line-through decoration-slate-400"
-                            } ${previewPage === page ? "ring-2 ring-teal-300" : ""}`}
+                            } ${previewPage === page ? "ring-2 ring-teal-300" : ""} disabled:cursor-not-allowed disabled:opacity-50`}
                           >
-                            <input
-                              type="checkbox"
-                              className="sr-only"
-                              checked={on}
-                              disabled={disabled}
-                              onChange={() => togglePage(page)}
-                            />
                             {page}
-                          </label>
+                          </button>
                         </li>
                       );
                     },
@@ -324,7 +349,7 @@ export function BoardPackagePageSelector({
               </p>
             </div>
 
-            <div className="flex flex-col rounded-xl border border-slate-200 bg-white">
+            <div className="flex h-72 flex-col rounded-xl border border-slate-200 bg-white">
               <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
                 <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Preview
@@ -333,6 +358,7 @@ export function BoardPackagePageSelector({
                   <button
                     type="button"
                     disabled={disabled || previewPage <= 1}
+                    onMouseDown={(event) => event.preventDefault()}
                     onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
                     className="rounded border border-slate-300 px-2 py-0.5 text-xs disabled:opacity-40"
                   >
@@ -344,6 +370,7 @@ export function BoardPackagePageSelector({
                   <button
                     type="button"
                     disabled={disabled || previewPage >= pageCount}
+                    onMouseDown={(event) => event.preventDefault()}
                     onClick={() =>
                       setPreviewPage((p) => Math.min(pageCount, p + 1))
                     }
@@ -353,8 +380,8 @@ export function BoardPackagePageSelector({
                   </button>
                 </div>
               </div>
-              <div className="flex min-h-[200px] flex-1 items-start justify-center overflow-auto bg-slate-100 p-3">
-                <canvas ref={canvasRef} className="max-w-full shadow-md" />
+              <div className="flex h-52 min-h-0 items-start justify-center overflow-auto overscroll-contain bg-slate-100 p-3">
+                <canvas ref={canvasRef} className="block shadow-md" />
               </div>
             </div>
           </div>

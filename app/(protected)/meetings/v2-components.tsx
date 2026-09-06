@@ -10,6 +10,7 @@ import {
   AiUsageDialog,
   AiUsageIconButton,
 } from "@/components/AiUsageDialog";
+import { DeleteMeetingButton } from "@/components/DeleteMeetingButton";
 import type { EditableAttendance } from "@/lib/minutes/attendance-edit";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
@@ -262,12 +263,20 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [usageStages, setUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [pollWindowUntil, setPollWindowUntil] = useState<number | null>(null);
-  const statusRequestInFlight = useRef(false);
+  const statusRequestSeq = useRef(0);
   const statusAbortRef = useRef<AbortController | null>(null);
 
   const kickPollWindow = useCallback((durationMs = 120_000) => {
     setPollWindowUntil(Date.now() + durationMs);
   }, []);
+
+  useEffect(() => {
+    const freshKey = `meeting-v2-fresh:${meetingId}`;
+    if (sessionStorage.getItem(freshKey)) {
+      sessionStorage.removeItem(freshKey);
+      kickPollWindow(60_000);
+    }
+  }, [kickPollWindow, meetingId]);
 
   useEffect(() => {
     if (!usageDialogOpen) return;
@@ -299,51 +308,65 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     };
   }, [meetingId, usageDialogOpen]);
 
-  const refreshStatus = useCallback(async (active = true) => {
-    if (statusRequestInFlight.current) return;
-    if (typeof document !== "undefined" && document.hidden) return;
+  const refreshStatus = useCallback(
+    async (options?: { active?: boolean; allowHidden?: boolean }) => {
+      const active = options?.active ?? true;
+      const allowHidden = options?.allowHidden ?? false;
+      if (typeof document !== "undefined" && document.hidden && !allowHidden) return;
 
-    statusRequestInFlight.current = true;
-    statusAbortRef.current?.abort();
-    const controller = new AbortController();
-    statusAbortRef.current = controller;
+      const seq = ++statusRequestSeq.current;
+      statusAbortRef.current?.abort();
+      const controller = new AbortController();
+      statusAbortRef.current = controller;
 
-    try {
-      const response = await fetch(`/api/v2/meetings/${meetingId}/status`, {
-        cache: "no-store",
-        signal: controller.signal,
-      });
-      if (!response.ok) return;
-      const payload = (await response.json()) as MeetingV2Status;
-      if (active) {
-        setStatus((current) => {
-          const currentDraft = current?.latestDraft;
-          const nextDraft = payload.latestDraft;
-          if (currentDraft && nextDraft && currentDraft.id === nextDraft.id && currentDraft.json !== null) {
-            return {
-              ...payload,
-              latestDraft: currentDraft,
-            };
-          }
-          return payload;
+      try {
+        const response = await fetch(`/api/v2/meetings/${meetingId}/status`, {
+          cache: "no-store",
+          signal: controller.signal,
         });
-        setLoading(false);
+        if (seq !== statusRequestSeq.current) return;
+        if (!response.ok) {
+          if (active) setLoading(false);
+          return;
+        }
+        const payload = (await response.json()) as MeetingV2Status;
+        if (seq !== statusRequestSeq.current) return;
+        if (active) {
+          setStatus((current) => {
+            const currentDraft = current?.latestDraft;
+            const nextDraft = payload.latestDraft;
+            if (currentDraft && nextDraft && currentDraft.id === nextDraft.id && currentDraft.json !== null) {
+              return {
+                ...payload,
+                latestDraft: currentDraft,
+              };
+            }
+            return payload;
+          });
+          setLoading(false);
+        }
+      } catch (error) {
+        if (seq !== statusRequestSeq.current) return;
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        console.error("[MeetingV2Detail] status refresh failed:", error);
+        if (active) setLoading(false);
       }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      console.error("[MeetingV2Detail] status refresh failed:", error);
-    } finally {
-      statusRequestInFlight.current = false;
-    }
-  }, [meetingId]);
+    },
+    [meetingId],
+  );
 
   const pipelineState =
     status?.meeting.pipelineState ?? status?.meeting.computedPipelineState ?? "created";
-  const pipelineHalted = Boolean(
-    status?.meeting.alerts.some(
-      (alert) => alert.blocksPipeline || alert.severity === "error",
-    ),
-  );
+  const pipelineNotStarted =
+    status?.meeting.pipelineState === "created" ||
+    status?.meeting.currentStep === "Ready to start";
+  const pipelineHalted =
+    !pipelineNotStarted &&
+    Boolean(
+      status?.meeting.alerts.some(
+        (alert) => alert.blocksPipeline || alert.severity === "error",
+      ),
+    );
   const awaitingBackgroundWork =
     runBusy ||
     draftBusy ||
@@ -368,8 +391,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   useEffect(() => {
     let active = true;
 
-    async function loadStatus() {
-      await refreshStatus(active);
+    async function loadStatus(allowHidden = false) {
+      await refreshStatus({ active, allowHidden });
     }
 
     function onVisibilityChange() {
@@ -378,7 +401,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
       }
     }
 
-    void loadStatus();
+    void loadStatus(true);
 
     if (!shouldPollStatus) {
       document.addEventListener("visibilitychange", onVisibilityChange);
@@ -481,8 +504,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   }
 
   const progress = status?.meeting.progressPercent ?? 0;
-  const displayState =
-    status?.meeting.computedPipelineState ?? status?.meeting.pipelineState ?? "created";
+  const displayState = pipelineNotStarted
+    ? "created"
+    : status?.meeting.computedPipelineState ?? status?.meeting.pipelineState ?? "created";
   const reviewableItems = status?.items ?? [];
   const needsClarificationCount = reviewableItems.filter((item) => item.openQuestions.length > 0).length;
   const flaggedCount = reviewableItems.filter((item) =>
@@ -506,12 +530,16 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         hasLatestDraft: Boolean(status.latestDraft),
       })
     : null;
-  const displayStep = workflowProgress
+  const displayStep = pipelineNotStarted
+    ? "Transcript and board package uploaded. Start the pipeline when you are ready."
+    : workflowProgress
     ? workflowProgress.currentStep
     : status && status.meeting.integrity.isConsistent
       ? status.meeting.currentStep ?? status.meeting.computedCurrentStep
       : status?.meeting.computedCurrentStep ?? status?.meeting.currentStep ?? "Waiting for first run";
-  const displayProgress = workflowProgress
+  const displayProgress = pipelineNotStarted
+    ? 0
+    : workflowProgress
     ? workflowProgress.progressPercent
     : status && status.meeting.integrity.isConsistent
       ? progress
@@ -526,7 +554,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               : status?.meeting.computedPipelineState === "ingesting"
                 ? 10
                 : progress;
-  const displayLabel = workflowProgress
+  const displayLabel = pipelineNotStarted
+    ? "Ready to start"
+    : workflowProgress
     ? pipelineHalted && displayState !== "failed"
       ? `Stopped · ${workflowProgress.currentLabel}`
       : workflowProgress.currentLabel
@@ -550,10 +580,6 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         : !status.sources.boardPackage?.available
           ? "Board package is not available on this machine."
           : null;
-  const pipelineNotStarted =
-    displayState === "created" ||
-    status?.meeting.pipelineState === "created" ||
-    status?.meeting.currentStep === "Ready to start";
 
   return (
     <div className="space-y-3">
@@ -618,7 +644,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
                     pipelineHalted
                       ? "border-rose-300 bg-rose-600 text-white"
-                      : "border-white/20 bg-white/10 text-white/90"
+                      : pipelineNotStarted
+                        ? "border-teal-200 bg-teal-500/90 text-white"
+                        : "border-white/20 bg-white/10 text-white/90"
                   }`}
                 >
                   {displayLabel}
@@ -654,6 +682,15 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   onClick={() => setUsageDialogOpen(true)}
                   title="View AI usage and cost"
                 />
+                {status ? (
+                  <DeleteMeetingButton
+                    meetingId={meetingId}
+                    meetingTitle={status.meeting.title}
+                    redirectTo="/operations/meetings"
+                    apiVersion="v2"
+                    tone="inverse"
+                  />
+                ) : null}
                 <PipelineActionButton
                   runBusy={runBusy}
                   pipelineNotStarted={pipelineNotStarted}
@@ -751,6 +788,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
             ) : (
               <PreRunPanel
                 status={status}
+                pipelineNotStarted={pipelineNotStarted}
                 pipelineHalted={pipelineHalted}
                 onOpenDocuments={() => setDocumentsDialogOpen(true)}
               />
@@ -1011,10 +1049,12 @@ function SectionCard({
 
 function PreRunPanel({
   status,
+  pipelineNotStarted,
   pipelineHalted,
   onOpenDocuments,
 }: {
   status: MeetingV2Status;
+  pipelineNotStarted: boolean;
   pipelineHalted: boolean;
   onOpenDocuments: () => void;
 }) {
@@ -1025,34 +1065,56 @@ function PreRunPanel({
   return (
     <SectionCard
       eyebrow="Status"
-      title={pipelineHalted ? "Pipeline stopped" : "Pipeline not complete"}
+      title={
+        pipelineNotStarted
+          ? "Ready to start"
+          : pipelineHalted
+            ? "Pipeline stopped"
+            : "Pipeline not complete"
+      }
       description={
-        pipelineHalted
-          ? "The pipeline did not finish successfully. Review the alerts above, then resume or restart the run."
-          : "The meeting workspace is set up but the pipeline has not reached validation yet. Start or resume the run to continue."
+        pipelineNotStarted
+          ? "Your transcript and board package are uploaded. Click Start Pipeline when you are ready."
+          : pipelineHalted
+            ? "The pipeline did not finish successfully. Review the alerts above, then resume or restart the run."
+            : "The meeting workspace is set up but the pipeline has not reached validation yet. Start or resume the run to continue."
       }
       compact
     >
       <div className="grid gap-3 md:grid-cols-2">
         <HealthCallout
           label="Pipeline status"
-          value={startCase(status.meeting.computedPipelineState)}
-          tone={statusTone(status.meeting.computedPipelineState)}
-          note={status.meeting.computedCurrentStep}
+          value={
+            pipelineNotStarted ? "Ready to start" : startCase(status.meeting.computedPipelineState)
+          }
+          tone={pipelineNotStarted ? statusTone("created") : statusTone(status.meeting.computedPipelineState)}
+          note={
+            pipelineNotStarted
+              ? "The automated pipeline has not started yet."
+              : status.meeting.computedCurrentStep
+          }
         />
         <HealthCallout
           label="Extraction quality"
           value={
-            status.meeting.extractionQuality.likelyIncomplete || pipelineHalted
-              ? "Needs attention"
-              : "In progress"
+            pipelineNotStarted
+              ? "Not started"
+              : status.meeting.extractionQuality.likelyIncomplete || pipelineHalted
+                ? "Needs attention"
+                : "In progress"
           }
           tone={
-            status.meeting.extractionQuality.likelyIncomplete || pipelineHalted
-              ? "border-amber-200 bg-amber-50 text-amber-900"
-              : "border-slate-200 bg-slate-50 text-slate-700"
+            pipelineNotStarted
+              ? "border-slate-200 bg-slate-50 text-slate-700"
+              : status.meeting.extractionQuality.likelyIncomplete || pipelineHalted
+                ? "border-amber-200 bg-amber-50 text-amber-900"
+                : "border-slate-200 bg-slate-50 text-slate-700"
           }
-          note={formatExtractionQualitySummary(status.meeting.extractionQuality)}
+          note={
+            pipelineNotStarted
+              ? "Agenda extraction runs after you start the pipeline."
+              : formatExtractionQualitySummary(status.meeting.extractionQuality)
+          }
         />
       </div>
 

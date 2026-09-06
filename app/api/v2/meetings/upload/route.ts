@@ -4,7 +4,7 @@ import { mkdir, rm, writeFile } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { meetings, meetingsV2 } from "@/lib/db/schema";
@@ -116,11 +116,18 @@ export async function POST(req: Request) {
       updatedAt: createdAt,
     });
 
-    await seedMeetingV2TranscriptSegments({
-      meetingId,
-      transcriptText: vttBuffer.toString("utf8"),
-      storagePath: path.relative(process.cwd(), vttAbsolute).replace(/\\/g, "/"),
-      originalFilename: transcriptFile.name,
+    after(async () => {
+      try {
+        await seedMeetingV2TranscriptSegments({
+          meetingId,
+          transcriptText: vttBuffer.toString("utf8"),
+          storagePath: path.relative(process.cwd(), vttAbsolute).replace(/\\/g, "/"),
+          originalFilename: transcriptFile.name,
+        });
+        console.info("[meetings:v2:upload] transcript seeded", { meetingId });
+      } catch (error) {
+        console.error("[meetings:v2:upload] transcript seed failed", { meetingId, error });
+      }
     });
 
     console.info("[meetings:v2:upload] rows created", { meetingId });

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { IbmDoclingSpendPanel, type IbmDoclingSpendSummary } from "@/components/IbmDoclingSpendPanel";
+import { PipelineStageInfoTooltip } from "@/components/PipelineStageInfoTooltip";
 import {
   estimateCostBreakdown,
   flattenAiUsageToStages,
@@ -71,6 +72,7 @@ function UsageStageRow({
         <td className="px-4 py-3 align-top">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-slate-700">{stage.label}</span>
+            <PipelineStageInfoTooltip stageId={stage.id} label={stage.label} />
             {stage.stageKind === "user" ? (
               <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                 Manual
@@ -95,7 +97,10 @@ function UsageStageRow({
   return (
     <tr>
       <td className="px-4 py-3 align-top">
-        <div className="font-medium text-slate-900">{stage.label}</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-slate-900">{stage.label}</span>
+          <PipelineStageInfoTooltip stageId={stage.id} label={stage.label} />
+        </div>
         <div className="mt-0.5 font-mono text-[11px] text-slate-400">
           {stage.modelName}
         </div>

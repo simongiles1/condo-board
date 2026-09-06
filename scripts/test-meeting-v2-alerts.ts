@@ -35,6 +35,23 @@ function quality(
 }
 
 describe("buildMeetingV2Alerts", () => {
+  it("returns no alerts before the pipeline has started", () => {
+    const alerts = buildMeetingV2Alerts({
+      extractionQuality: quality({
+        likelyIncomplete: true,
+        issueCode: "no_items",
+        note: "No agenda items were extracted yet.",
+      }),
+      integrityNote: "Base source ingest is incomplete.",
+      isConsistent: false,
+      lastError: null,
+      pipelineState: "created",
+      updatedAt: "2026-09-06T21:00:00.000Z",
+    });
+
+    assert.equal(alerts.length, 0);
+  });
+
   it("treats section-shaped output as a pipeline stop, not a warning", () => {
     const alerts = buildMeetingV2Alerts({
       extractionQuality: quality(),

@@ -167,6 +167,8 @@ export function analyzeExtractionQuality(options: {
   agendaChunkSnapshots: number;
   deepSeekKeyConfigured: boolean;
   lastError: string | null;
+  /** Stored pipeline has never been started (`created`). */
+  pipelineNotStarted?: boolean;
 }): MeetingV2ExtractionQuality {
   const {
     agendaItems,
@@ -176,7 +178,23 @@ export function analyzeExtractionQuality(options: {
     agendaChunkSnapshots,
     deepSeekKeyConfigured,
     lastError,
+    pipelineNotStarted = false,
   } = options;
+
+  if (pipelineNotStarted && !extractionRun) {
+    return {
+      mode: "semantic",
+      likelyIncomplete: false,
+      pageLikeTitleCount: 0,
+      suspiciousTitleCount: 0,
+      note: "Agenda extraction runs after you start the pipeline.",
+      issueCode: "none",
+      extractorUsed: "none",
+      deepSeekKeyConfigured,
+      agendaChunkSnapshots,
+      extractionRun: null,
+    };
+  }
 
   const pageLikeTitleCount = agendaItems.filter((item) =>
     /^page\s+\d+$/i.test(item.title),
@@ -333,6 +351,10 @@ export function buildMeetingV2Alerts(options: {
   pipelineState: string;
   updatedAt?: string;
 }): MeetingV2Alert[] {
+  if (options.pipelineState === "created") {
+    return [];
+  }
+
   const alerts: MeetingV2Alert[] = [];
   const { extractionQuality, integrityNote, isConsistent, lastError, pipelineState } =
     options;

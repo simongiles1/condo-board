@@ -205,7 +205,7 @@ export function GenerateMeetingDialog({ open, onClose }: Props) {
           </p>
         </div>
 
-        <div className="min-h-0 overflow-y-auto px-6 py-5">
+        <div className="min-h-0 overflow-y-auto overflow-anchor-none px-6 py-5">
           <form
             key={formKey}
             className="space-y-6"

@@ -10,12 +10,17 @@ type Props = {
   meetingTitle: string;
   /** Navigate here after a successful delete (e.g. `/` from the workspace page). */
   redirectTo?: string;
+  /** Which meeting API to call. Defaults to legacy v1 meetings. */
+  apiVersion?: "v1" | "v2";
+  tone?: "default" | "inverse";
 };
 
 export function DeleteMeetingButton({
   meetingId,
   meetingTitle,
   redirectTo,
+  apiVersion = "v1",
+  tone = "default",
 }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -28,7 +33,12 @@ export function DeleteMeetingButton({
     try {
       setBusy(true);
 
-      const res = await fetch(`/api/meetings/${meetingId}`, {
+      const deletePath =
+        apiVersion === "v2"
+          ? `/api/v2/meetings/${meetingId}`
+          : `/api/meetings/${meetingId}`;
+
+      const res = await fetch(deletePath, {
         method: "DELETE",
       });
 
@@ -55,6 +65,11 @@ export function DeleteMeetingButton({
     }
   }
 
+  const toneClass =
+    tone === "inverse"
+      ? "border-white/15 bg-white/10 text-white hover:border-red-300/40 hover:bg-red-500/20 hover:text-red-100"
+      : "border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50 hover:text-red-700";
+
   return (
     <>
       <button
@@ -65,7 +80,7 @@ export function DeleteMeetingButton({
         }}
         aria-label={`Delete workspace: ${meetingTitle}`}
         title="Delete workspace"
-        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+        className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition ${toneClass}`}
       >
         <TrashIcon />
       </button>
@@ -75,9 +90,12 @@ export function DeleteMeetingButton({
         title="Delete meeting workspace?"
         description={
           <>
-            <p>
-              This permanently removes <strong>{meetingTitle}</strong>, its
-              action items, and uploaded transcript/PDF files.
+            <p className="font-medium text-slate-900">
+              This can&apos;t be undone.
+            </p>
+            <p className="mt-2">
+              This permanently removes <strong>{meetingTitle}</strong> and all
+              associated meeting data, including uploaded transcript/PDF files.
             </p>
             {error ? (
               <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-900">

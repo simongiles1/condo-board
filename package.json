@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "node scripts/run-dev.cjs",
     "dev:restart": "node scripts/dev-restart.cjs",
+    "predev": "node scripts/copy-pdfjs-worker.cjs",
+    "prebuild": "node scripts/copy-pdfjs-worker.cjs",
     "build": "next build",
     "start": "npm run db:migrate && next start",
     "lint": "eslint",
@@ -39,6 +41,7 @@
     "test:project-year-range": "npx tsx --test scripts/test-project-year-range.ts",
     "test:project-identity-review": "npx tsx --test scripts/test-project-identity-review.ts",
     "test:meeting-v2-alerts": "npx tsx --test scripts/test-meeting-v2-alerts.ts",
+    "test:meeting-v2-status-poll": "npx tsx --test scripts/test-meeting-v2-status-poll.ts",
     "test:project-board-reports": "npx tsx --test scripts/test-project-board-reports.ts",
     "test:registry-page": "npx tsx --test scripts/test-registry-page.ts",
     "test:extract-artifacts-storage": "npx tsx --test scripts/test-extract-artifacts-storage.ts",

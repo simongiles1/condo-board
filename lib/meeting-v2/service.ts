@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
 import { getDb } from "@/lib/db";
@@ -536,41 +536,33 @@ export async function getMeetingV2Counts(meetingId: string): Promise<{
   drafts: number;
 }> {
   const db = getDb();
-  const [
-    sourceArtifacts,
-    transcriptSegments,
-    documentPages,
-    documentSections,
-    documentChunks,
-    agendaItems,
-    evidenceContexts,
-    investigations,
-    validations,
-    drafts,
-  ] = await Promise.all([
-    db.select({ value: count() }).from(meetingsV2SourceArtifacts).where(eq(meetingsV2SourceArtifacts.meetingV2Id, meetingId)),
-    db.select({ value: count() }).from(meetingsV2TranscriptSegments).where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId)),
-    db.select({ value: count() }).from(meetingsV2DocumentPages).where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
-    db.select({ value: count() }).from(meetingsV2DocumentSections).where(eq(meetingsV2DocumentSections.meetingV2Id, meetingId)),
-    db.select({ value: count() }).from(meetingsV2DocumentChunks).where(eq(meetingsV2DocumentChunks.meetingV2Id, meetingId)),
-    db.select({ value: count() }).from(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId)),
-    db.select({ value: count() }).from(meetingsV2AgendaItemContexts).where(eq(meetingsV2AgendaItemContexts.meetingV2Id, meetingId)),
-    db.select({ value: count() }).from(meetingsV2AgendaItemInvestigations).where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
-    db.select({ value: count() }).from(meetingsV2ValidationResults).where(eq(meetingsV2ValidationResults.meetingV2Id, meetingId)),
-    db.select({ value: count() }).from(meetingsV2MinutesDrafts).where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId)),
-  ]);
+  const result = await db.execute(sql`
+    SELECT
+      (SELECT count(*)::int FROM "meetings_v2_source_artifacts" WHERE "meeting_v2_id" = ${meetingId}) AS "sourceArtifacts",
+      (SELECT count(*)::int FROM "meetings_v2_transcript_segments" WHERE "meeting_v2_id" = ${meetingId}) AS "transcriptSegments",
+      (SELECT count(*)::int FROM "meetings_v2_document_pages" WHERE "meeting_v2_id" = ${meetingId}) AS "documentPages",
+      (SELECT count(*)::int FROM "meetings_v2_document_sections" WHERE "meeting_v2_id" = ${meetingId}) AS "documentSections",
+      (SELECT count(*)::int FROM "meetings_v2_document_chunks" WHERE "meeting_v2_id" = ${meetingId}) AS "documentChunks",
+      (SELECT count(*)::int FROM "meetings_v2_agenda_items" WHERE "meeting_v2_id" = ${meetingId}) AS "agendaItems",
+      (SELECT count(*)::int FROM "meetings_v2_agenda_item_contexts" WHERE "meeting_v2_id" = ${meetingId}) AS "evidenceContexts",
+      (SELECT count(*)::int FROM "meetings_v2_agenda_item_investigations" WHERE "meeting_v2_id" = ${meetingId}) AS "investigations",
+      (SELECT count(*)::int FROM "meetings_v2_validation_results" WHERE "meeting_v2_id" = ${meetingId}) AS "validations",
+      (SELECT count(*)::int FROM "meetings_v2_minutes_drafts" WHERE "meeting_v2_id" = ${meetingId}) AS "drafts"
+  `);
+
+  const row = (result.rows?.[0] ?? (result as unknown as Record<string, unknown>[])[0] ?? {}) as Record<string, unknown>;
 
   return {
-    sourceArtifacts: sourceArtifacts[0]?.value ?? 0,
-    transcriptSegments: transcriptSegments[0]?.value ?? 0,
-    documentPages: documentPages[0]?.value ?? 0,
-    documentSections: documentSections[0]?.value ?? 0,
-    documentChunks: documentChunks[0]?.value ?? 0,
-    agendaItems: agendaItems[0]?.value ?? 0,
-    evidenceContexts: evidenceContexts[0]?.value ?? 0,
-    investigations: investigations[0]?.value ?? 0,
-    validations: validations[0]?.value ?? 0,
-    drafts: drafts[0]?.value ?? 0,
+    sourceArtifacts: Number(row.sourceArtifacts ?? 0),
+    transcriptSegments: Number(row.transcriptSegments ?? 0),
+    documentPages: Number(row.documentPages ?? 0),
+    documentSections: Number(row.documentSections ?? 0),
+    documentChunks: Number(row.documentChunks ?? 0),
+    agendaItems: Number(row.agendaItems ?? 0),
+    evidenceContexts: Number(row.evidenceContexts ?? 0),
+    investigations: Number(row.investigations ?? 0),
+    validations: Number(row.validations ?? 0),
+    drafts: Number(row.drafts ?? 0),
   };
 }
 
@@ -725,37 +717,51 @@ function buildMeetingV2Stages(options: {
 
 export async function assessMeetingV2Extraction(
   meetingId: string,
+  preloaded?: {
+    meeting?: typeof meetingsV2.$inferSelect;
+    agendaItems?: Array<{ title: string; sourceSectionId: string | null; itemType: string }>;
+    documentSections?: Array<{ title: string }>;
+  },
 ): Promise<MeetingV2ExtractionQuality> {
   const db = getDb();
-  const [meeting, agendaItems, sectionCount, agendaChunkSnapshots] = await Promise.all([
-    db.select().from(meetingsV2).where(eq(meetingsV2.id, meetingId)),
-    db
-      .select({
-        title: meetingsV2AgendaItems.title,
-        sourceSectionId: meetingsV2AgendaItems.sourceSectionId,
-        itemType: meetingsV2AgendaItems.itemType,
-      })
-      .from(meetingsV2AgendaItems)
-      .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId)),
-    db
-      .select()
-      .from(meetingsV2DocumentSections)
-      .where(eq(meetingsV2DocumentSections.meetingV2Id, meetingId)),
+  const [meetingRows, agendaItems, documentSections, agendaChunkSnapshots] = await Promise.all([
+    preloaded?.meeting
+      ? [preloaded.meeting]
+      : db.select().from(meetingsV2).where(eq(meetingsV2.id, meetingId)),
+    preloaded?.agendaItems
+      ? preloaded.agendaItems
+      : db
+          .select({
+            title: meetingsV2AgendaItems.title,
+            sourceSectionId: meetingsV2AgendaItems.sourceSectionId,
+            itemType: meetingsV2AgendaItems.itemType,
+          })
+          .from(meetingsV2AgendaItems)
+          .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId)),
+    preloaded?.documentSections
+      ? preloaded.documentSections
+      : db
+          .select({
+            title: meetingsV2DocumentSections.title,
+          })
+          .from(meetingsV2DocumentSections)
+          .where(eq(meetingsV2DocumentSections.meetingV2Id, meetingId)),
     getMeetingV2AgendaChunkSnapshotCount(meetingId),
   ]);
 
+  const selectedMeeting = preloaded?.meeting ?? meetingRows[0];
   const settings = readMeetingV2Settings(
-    meeting[0]?.settings as MeetingV2Settings | null | undefined,
+    selectedMeeting?.settings as MeetingV2Settings | null | undefined,
   );
 
   return analyzeExtractionQuality({
     agendaItems,
-    documentSectionCount: sectionCount.length,
-    documentSections: sectionCount.map((s) => ({ title: s.title })),
+    documentSectionCount: documentSections.length,
+    documentSections: documentSections.map((s) => ({ title: s.title })),
     extractionRun: settings.extractionRun ?? null,
     agendaChunkSnapshots,
     deepSeekKeyConfigured: isDeepSeekKeyConfigured(),
-    lastError: meeting[0]?.lastError ?? null,
+    lastError: selectedMeeting?.lastError ?? null,
   });
 }
 
@@ -2646,7 +2652,11 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       }
     : null;
   const computed = deriveMeetingV2ComputedStatus(counts);
-  const extractionQuality = await assessMeetingV2Extraction(meetingId);
+  const extractionQuality = await assessMeetingV2Extraction(meetingId, {
+    meeting: selectedMeeting,
+    agendaItems,
+    documentSections,
+  });
   const stages = buildMeetingV2Stages({
     counts: {
       ...counts,

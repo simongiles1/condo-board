@@ -287,6 +287,18 @@ export async function getBulkExtractRun(
   return rowToRecord(row);
 }
 
+export async function getBulkExtractRunStatus(
+  id: string,
+): Promise<BulkExtractRunStatus | null> {
+  const db = getDb();
+  const [row] = await db
+    .select({ status: bulkExtractRuns.status })
+    .from(bulkExtractRuns)
+    .where(eq(bulkExtractRuns.id, id))
+    .limit(1);
+  return (row?.status as BulkExtractRunStatus) ?? null;
+}
+
 /** Only one inbox-wide run may be active; cancel others before start/resume. */
 async function cancelOtherRunningRuns(
   exceptId: string | null,

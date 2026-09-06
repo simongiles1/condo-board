@@ -20,6 +20,29 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Supabase database egress spike and connection pool exhaustion** — Consolidated
+  Meetings V2 counts calculation from 10 parallel full-table queries into a single
+  SQL query with scalar subselects, preventing PgBouncer pool saturation
+  (`EMAXCONNSESSION`) and eliminating unneeded database connections. Preloaded
+  meeting, agenda items, and section titles into extraction quality assessments
+  to avoid redundant duplicate table queries per status poll. Applied missing
+  database migration `0068_meetings_v2_status_indexes` providing B-tree indexes
+  across all Meetings V2 tables to eliminate sequential table scans. Throttled
+  and memoized bulk extract worker run status checks and reduced progress
+  polling frequency to curb repetitive database egress.
+
+- **Board package Raw PDF canvas race** — Opening the Board Package tab no longer
+  triggers concurrent pdf.js paints on the same canvas. `ZoomablePdfViewer`
+  routes resize events through state instead of a second render path, and
+  `renderPdfPageToCanvas` invalidates stale async work with a per-canvas
+  generation token before calling `page.render()`.
+
+- **Board package Raw PDF viewer in production** — pdf.js now loads its worker
+  from `/pdf.worker.min.mjs` (copied from `pdfjs-dist` at dev/build time)
+  instead of unpkg. The worker route bypasses auth middleware so the module
+  worker fetch is not blocked by session cookies. ZoomablePdfViewer also cancels
+  in-flight canvas renders before starting a new page or resize paint.
+
 - **Meetings V2 extraction quality false-positive stop** — Fixed heuristic detector in `analyzeExtractionQuality` where valid DeepSeek agenda items were falsely flagged as `section_shaped_output` solely because `sourceSectionId` was attached. The detector now compares extracted titles against PDF section titles and verifies `itemType === "agenda_section"`.
 
 - **Meetings V2 agenda item ordering** — Removed alphabetical title tie-breaker in `sortTopics()`. Extracted agenda topics discovered on the same page now strictly preserve their original document encounter sequence rather than being alphabetized.

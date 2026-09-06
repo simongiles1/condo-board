@@ -285,7 +285,7 @@ export function BulkExtractButton() {
     void pollActiveRun();
     const timer = window.setInterval(() => {
       void pollActiveRun();
-    }, 1500);
+    }, 3000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);

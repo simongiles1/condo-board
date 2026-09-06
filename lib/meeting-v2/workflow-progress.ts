@@ -1,3 +1,40 @@
+/** Pipeline states where automated work may still be in flight. */
+export const MEETING_V2_ACTIVE_PIPELINE_STATES = new Set([
+  "ingesting",
+  "ingested",
+  "extracting",
+  "extracted",
+  "gathering_evidence",
+  "evidence_gathered",
+  "investigating",
+  "investigated",
+  "validating",
+]);
+
+/** Pipeline states where the UI is waiting on user action, not background work. */
+export const MEETING_V2_IDLE_PIPELINE_STATES = new Set([
+  "created",
+  "validated",
+  "failed",
+]);
+
+export function shouldPollMeetingV2Status(options: {
+  pipelineState: string;
+  pipelineHalted?: boolean;
+  awaitingBackgroundWork?: boolean;
+}): boolean {
+  const {
+    pipelineState,
+    pipelineHalted = false,
+    awaitingBackgroundWork = false,
+  } = options;
+
+  if (awaitingBackgroundWork) return true;
+  if (pipelineHalted) return false;
+  if (MEETING_V2_IDLE_PIPELINE_STATES.has(pipelineState)) return false;
+  return MEETING_V2_ACTIVE_PIPELINE_STATES.has(pipelineState);
+}
+
 export type WorkflowStepStatus = "complete" | "in_progress" | "incomplete";
 
 export type MeetingV2WorkflowStep = {

@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getPdfPageCount } from "@/lib/pdf/pdf-page-count";
-import { renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
+import {
+  cancelPdfCanvasRender,
+  renderPdfPageToCanvas,
+} from "@/lib/pdf/pdfjs-browser";
 
 type Props = {
   url: string;
@@ -30,6 +33,7 @@ export function ZoomablePdfViewer({ url, className }: Props) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [pageWidthPt, setPageWidthPt] = useState<number | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,21 +73,23 @@ export function ZoomablePdfViewer({ url, className }: Props) {
   }, [url]);
 
   const resolveScale = useCallback(() => {
-    if (!fitWidth || !pageWidthPt || !scrollRef.current) return scale;
+    if (!fitWidth || !pageWidthPt || viewportWidth <= 0) return scale;
     const padding = 32;
-    const available = Math.max(200, scrollRef.current.clientWidth - padding);
+    const available = Math.max(200, viewportWidth - padding);
     return Math.min(MAX_SCALE, Math.max(MIN_SCALE, available / pageWidthPt));
-  }, [fitWidth, pageWidthPt, scale]);
+  }, [fitWidth, pageWidthPt, scale, viewportWidth]);
 
   useEffect(() => {
-    if (!pdfData || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    if (!pdfData || !canvas) return;
 
     let cancelled = false;
     setRenderingPage(true);
     setErrorMessage(null);
     const effectiveScale = resolveScale();
+    cancelPdfCanvasRender(canvas);
 
-    renderPdfPageToCanvas(pdfData, page, canvasRef.current, effectiveScale)
+    renderPdfPageToCanvas(pdfData, page, canvas, effectiveScale)
       .then((info) => {
         if (cancelled) return;
         if (info?.pageWidthPt) {
@@ -91,30 +97,30 @@ export function ZoomablePdfViewer({ url, className }: Props) {
         }
         setRenderingPage(false);
       })
-      .catch(() => {
-        if (!cancelled) {
-          setRenderingPage(false);
-          setErrorMessage("Could not render PDF page.");
-        }
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        console.error("[ZoomablePdfViewer] PDF render failed:", error);
+        setRenderingPage(false);
+        setErrorMessage("Could not render PDF page.");
       });
 
     return () => {
       cancelled = true;
+      cancelPdfCanvasRender(canvas);
     };
-  }, [pdfData, page, scale, fitWidth, resolveScale]);
+  }, [pdfData, page, scale, fitWidth, pageWidthPt, viewportWidth]);
 
   useEffect(() => {
-    if (!fitWidth || !scrollRef.current) return;
-
     const element = scrollRef.current;
+    if (!element) return;
+
     const observer = new ResizeObserver(() => {
-      if (!pdfData || !canvasRef.current) return;
-      const effectiveScale = resolveScale();
-      void renderPdfPageToCanvas(pdfData, page, canvasRef.current, effectiveScale);
+      setViewportWidth(element.clientWidth);
     });
     observer.observe(element);
+    setViewportWidth(element.clientWidth);
     return () => observer.disconnect();
-  }, [fitWidth, pdfData, page, resolveScale]);
+  }, [pdfData]);
 
   useEffect(() => {
     function onFullscreenChange() {

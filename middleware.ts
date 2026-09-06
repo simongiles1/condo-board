@@ -46,6 +46,11 @@ function isAuthorizedInternalFilePull(request: NextRequest): boolean {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // pdf.js worker must load without a session cookie (module worker fetch).
+  if (pathname === "/pdf.worker.min.mjs") {
+    return NextResponse.next();
+  }
+
   if (pathname.startsWith("/api/internal/")) {
     if (isAuthorizedInternalFilePull(request)) {
       return NextResponse.next();

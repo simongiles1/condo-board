@@ -12,10 +12,25 @@ type ClipRenderHandle = {
 
 const activeClipRenders = new WeakMap<HTMLCanvasElement, ClipRenderHandle>();
 const activeFullPageRenders = new WeakMap<HTMLCanvasElement, ClipRenderHandle>();
+const fullPageRenderGenerations = new WeakMap<HTMLCanvasElement, number>();
+
+function bumpFullPageRenderGeneration(canvas: HTMLCanvasElement): number {
+  const next = (fullPageRenderGenerations.get(canvas) ?? 0) + 1;
+  fullPageRenderGenerations.set(canvas, next);
+  return next;
+}
+
+function isCurrentFullPageRender(
+  canvas: HTMLCanvasElement,
+  generation: number,
+): boolean {
+  return fullPageRenderGenerations.get(canvas) === generation;
+}
 
 /** Cancel an in-flight clip or full-page render without clearing the painted bitmap. */
 export function cancelPdfCanvasRender(canvas: HTMLCanvasElement | null): void {
   if (!canvas) return;
+  bumpFullPageRenderGeneration(canvas);
   activeClipRenders.get(canvas)?.cancel();
   activeClipRenders.delete(canvas);
   activeFullPageRenders.get(canvas)?.cancel();
@@ -49,10 +64,10 @@ export async function getPdfjs(): Promise<PdfJsModule> {
 
   if (!pdfjsPromise) {
     pdfjsPromise = import("pdfjs-dist").then((pdfjs) => {
-      // Avoid `new URL("pdfjs-dist/...", import.meta.url)` — Next/Webpack treats
-      // that as an ESM package resolution and fails (import-esm-externals).
-      // Pin the worker to the same package version via CDN instead.
-      pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+      // Serve the worker from /public (copied by scripts/copy-pdfjs-worker.cjs).
+      // CDN workers fail in production when outbound fetch or CSP is restricted,
+      // and a same-origin worker must bypass auth middleware (see middleware.ts).
+      pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
       return pdfjs;
     });
   }
@@ -125,16 +140,27 @@ export async function renderPdfPageToCanvas(
   canvas: HTMLCanvasElement,
   scale = 1.25,
 ): Promise<PdfPageRenderInfo | void> {
+  cancelPdfCanvasRender(canvas);
+  const generation = bumpFullPageRenderGeneration(canvas);
+
   const pdfjs = await getPdfjs();
+  if (!isCurrentFullPageRender(canvas, generation)) return;
+
   const doc = await pdfjs.getDocument({ data: data.slice(0) }).promise;
   try {
+    if (!isCurrentFullPageRender(canvas, generation)) return;
+
     const page = await doc.getPage(pageNumber);
+    if (!isCurrentFullPageRender(canvas, generation)) return;
+
     const unscaled = page.getViewport({ scale: 1 });
     const viewport = page.getViewport({ scale });
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    if (!isCurrentFullPageRender(canvas, generation)) return;
+
     const task = page.render({
       canvas,
       canvasContext: ctx,
@@ -144,6 +170,7 @@ export async function renderPdfPageToCanvas(
     activeFullPageRenders.set(canvas, { cancel: () => task.cancel() });
     try {
       await task.promise;
+      if (!isCurrentFullPageRender(canvas, generation)) return;
       return {
         canvasWidth: viewport.width,
         canvasHeight: viewport.height,

@@ -15,7 +15,11 @@ import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
 import { serializeMinutesDoc } from "@/lib/minutes/doc-v2-edits";
 import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
-import { buildMeetingV2WorkflowProgress, type MeetingV2WorkflowProgress } from "@/lib/meeting-v2/workflow-progress";
+import {
+  buildMeetingV2WorkflowProgress,
+  shouldPollMeetingV2Status,
+  type MeetingV2WorkflowProgress,
+} from "@/lib/meeting-v2/workflow-progress";
 import type {
   MeetingV2Alert,
   MeetingV2ExtractionQuality,
@@ -257,8 +261,13 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [usageDialogOpen, setUsageDialogOpen] = useState(false);
   const [usageStages, setUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
+  const [pollWindowUntil, setPollWindowUntil] = useState<number | null>(null);
   const statusRequestInFlight = useRef(false);
   const statusAbortRef = useRef<AbortController | null>(null);
+
+  const kickPollWindow = useCallback((durationMs = 120_000) => {
+    setPollWindowUntil(Date.now() + durationMs);
+  }, []);
 
   useEffect(() => {
     if (!usageDialogOpen) return;
@@ -328,6 +337,34 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     }
   }, [meetingId]);
 
+  const pipelineState =
+    status?.meeting.pipelineState ?? status?.meeting.computedPipelineState ?? "created";
+  const pipelineHalted = Boolean(
+    status?.meeting.alerts.some(
+      (alert) => alert.blocksPipeline || alert.severity === "error",
+    ),
+  );
+  const awaitingBackgroundWork =
+    runBusy ||
+    draftBusy ||
+    (pollWindowUntil !== null && Date.now() < pollWindowUntil);
+  const shouldPollStatus = shouldPollMeetingV2Status({
+    pipelineState,
+    pipelineHalted,
+    awaitingBackgroundWork,
+  });
+
+  useEffect(() => {
+    if (!pollWindowUntil) return;
+    const remaining = pollWindowUntil - Date.now();
+    if (remaining <= 0) {
+      setPollWindowUntil(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setPollWindowUntil(null), remaining);
+    return () => window.clearTimeout(timer);
+  }, [pollWindowUntil]);
+
   useEffect(() => {
     let active = true;
 
@@ -342,6 +379,16 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     }
 
     void loadStatus();
+
+    if (!shouldPollStatus) {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+      return () => {
+        active = false;
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+        statusAbortRef.current?.abort();
+      };
+    }
+
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") {
         void loadStatus();
@@ -356,7 +403,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       statusAbortRef.current?.abort();
     };
-  }, [meetingId, refreshStatus]);
+  }, [meetingId, refreshStatus, shouldPollStatus]);
 
   useEffect(() => {
     const draftId = status?.latestDraft?.id;
@@ -385,6 +432,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
 
   async function handleRunPipeline() {
     setRunBusy(true);
+    kickPollWindow();
     try {
       await fetch("/api/v2/meetings/start", {
         method: "POST",
@@ -400,6 +448,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     const confirmed = window.confirm("Are you sure you want to restart from scratch? This will wipe all extracted data, investigations, and drafts for this meeting.");
     if (!confirmed) return;
     setRunBusy(true);
+    kickPollWindow();
     try {
       await fetch("/api/v2/meetings/restart", {
         method: "POST",
@@ -432,7 +481,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   }
 
   const progress = status?.meeting.progressPercent ?? 0;
-  const displayState = status?.meeting.computedPipelineState ?? status?.meeting.pipelineState ?? "created";
+  const displayState =
+    status?.meeting.computedPipelineState ?? status?.meeting.pipelineState ?? "created";
   const reviewableItems = status?.items ?? [];
   const needsClarificationCount = reviewableItems.filter((item) => item.openQuestions.length > 0).length;
   const flaggedCount = reviewableItems.filter((item) =>
@@ -476,9 +526,6 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               : status?.meeting.computedPipelineState === "ingesting"
                 ? 10
                 : progress;
-  const pipelineHalted = Boolean(
-    status?.meeting.alerts.some((alert) => alert.blocksPipeline || alert.severity === "error"),
-  );
   const displayLabel = workflowProgress
     ? pipelineHalted && displayState !== "failed"
       ? `Stopped · ${workflowProgress.currentLabel}`
@@ -683,7 +730,11 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   />
                 ) : null}
                 {activeTab === "review" ? (
-                  <AgendaReviewPanel meetingId={meetingId} status={status} />
+                  <AgendaReviewPanel
+                    meetingId={meetingId}
+                    status={status}
+                    onReEvaluateSubmitted={kickPollWindow}
+                  />
                 ) : null}
                 {activeTab === "draft" ? (
                   <DraftWorkspacePanel
@@ -1155,9 +1206,11 @@ function HealthCallout({
 function AgendaReviewPanel({
   meetingId,
   status,
+  onReEvaluateSubmitted,
 }: {
   meetingId: string;
   status: MeetingV2Status;
+  onReEvaluateSubmitted?: () => void;
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [dirtyItems, setDirtyItems] = useState<Record<string, boolean>>({});
@@ -1187,6 +1240,7 @@ function AgendaReviewPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userAnswers: { text: answers[itemId] ?? "" } }),
       });
+      onReEvaluateSubmitted?.();
       setDirtyItems((current) => ({
         ...current,
         [itemId]: false,

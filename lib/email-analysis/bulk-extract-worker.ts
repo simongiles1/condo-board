@@ -46,6 +46,7 @@ import { runBulkHighlightPass } from "@/lib/email-analysis/bulk-extract-highligh
 import { listBulkExtractTargets, listMissingExtractTargets } from "@/lib/email-analysis/bulk-extract-targets";
 import {
   getBulkExtractRun,
+  getBulkExtractRunStatus,
   listRunningBulkExtractRuns,
   updateBulkExtractRun,
   type BulkExtractKind,
@@ -122,9 +123,18 @@ async function prepareTargetItems(
   return prepareContactExtractItemsForEmails(target.emailIds);
 }
 
+const runActiveCache = new Map<string, { active: boolean; expiresAt: number }>();
+
 async function isRunStillActive(runId: string): Promise<boolean> {
-  const run = await getBulkExtractRun(runId);
-  return run?.status === "running";
+  const now = Date.now();
+  const cached = runActiveCache.get(runId);
+  if (cached && cached.expiresAt > now) {
+    return cached.active;
+  }
+  const status = await getBulkExtractRunStatus(runId);
+  const active = status === "running";
+  runActiveCache.set(runId, { active, expiresAt: now + 2500 });
+  return active;
 }
 
 type ThreadSuccess = {

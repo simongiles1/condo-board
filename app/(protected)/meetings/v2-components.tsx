@@ -1006,7 +1006,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
       />
       <GoldStandardValidationSidePanel
         meeting={
-          status?.meeting
+          sidePanelOpen && status?.meeting
             ? {
                 title: status.meeting.title,
                 meetingDate: status.meeting.meetingDate,
@@ -1014,7 +1014,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               }
             : null
         }
-        validation={currentValidation}
+        validation={sidePanelOpen ? currentValidation : null}
         onClose={() => setSidePanelOpen(false)}
         onReCompare={() => {
           setSidePanelOpen(false);

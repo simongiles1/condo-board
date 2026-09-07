@@ -63,9 +63,13 @@ function UsageStageRow({
     const subtitle =
       stage.stageKind === "user"
         ? "Manual"
-        : stage.modelName !== "N/A"
-          ? stage.modelName
-          : "No LLM usage";
+        : stage.usageDetail
+          ? stage.modelName !== "N/A" && stage.modelName
+            ? stage.modelName
+            : stage.usageDetail
+          : stage.modelName !== "N/A"
+            ? stage.modelName
+            : "No usage recorded";
 
     return (
       <tr className="text-slate-500">

@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { count, desc, eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { meetings } from "@/lib/db/schema";
@@ -8,6 +8,7 @@ import {
   meetingsV2AgendaItemInvestigations,
   meetingsV2DocumentPages,
   meetingsV2MinutesDrafts,
+  meetingsV2ValidationResults,
 } from "@/lib/db/schema-v2";
 import {
   flattenAiUsageToStages,
@@ -115,7 +116,7 @@ export async function loadMeetingV2AiUsageStages(
   meetingId: string,
 ): Promise<AiUsageStageRow[]> {
   const db = getDb();
-  const [legacyMeeting, v2Meeting, chunkSnapshots, investigations, documentPages, drafts] =
+  const [legacyMeeting, v2Meeting, chunkSnapshots, investigations, documentPages, drafts, validationCountRow] =
     await Promise.all([
       db
         .select({ aiUsageJson: meetings.aiUsageJson })
@@ -153,6 +154,10 @@ export async function loadMeetingV2AiUsageStages(
         .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId))
         .orderBy(desc(meetingsV2MinutesDrafts.createdAt))
         .limit(1),
+      db
+        .select({ value: count() })
+        .from(meetingsV2ValidationResults)
+        .where(eq(meetingsV2ValidationResults.meetingV2Id, meetingId)),
     ]);
 
   const usageByStageId = new Map<string, AiUsageStageRow>();
@@ -264,6 +269,8 @@ export async function loadMeetingV2AiUsageStages(
     }
   }
 
+  const validationResultCount = Number(validationCountRow[0]?.value ?? 0);
+
   return MEETING_V2_USAGE_STAGE_DEFINITIONS.map((stage) => {
     const recorded = usageByStageId.get(stage.id);
     if (recorded && !recorded.notApplicable) {
@@ -286,8 +293,18 @@ export async function loadMeetingV2AiUsageStages(
       id: stage.id,
       label: stage.label,
       stageKind: stage.kind,
+      modelName:
+        stage.id === "validate" && validationResultCount > 0
+          ? "deepseek-v4-flash"
+          : undefined,
       usageDetail:
-        stage.kind === "user" ? "Manual step — no API usage" : undefined,
+        stage.id === "evidence"
+          ? "No LLM usage"
+          : stage.id === "validate" && validationResultCount > 0
+            ? "DeepSeek ran for this stage — token counts were not stored for this meeting"
+            : stage.kind === "user"
+              ? "Manual step — no API usage"
+              : undefined,
     });
   });
 }

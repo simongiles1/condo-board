@@ -624,7 +624,7 @@ export async function getMeetingV2CountsBulk(
     WHERE "meeting_v2_id" IN (${meetingIdFilter})
     GROUP BY "meeting_v2_id"
     UNION ALL
-    SELECT "meeting_v2_id", 'validations', count(*)::int
+    SELECT "meeting_v2_id", 'validations', count(DISTINCT "agenda_item_id")::int
     FROM "meetings_v2_validation_results"
     WHERE "meeting_v2_id" IN (${meetingIdFilter})
     GROUP BY "meeting_v2_id"
@@ -804,6 +804,7 @@ export async function loadMeetingsV2DashboardCards(
     const pipelineActivelyRunning = isMeetingV2PipelineActivelyRunning({
       pipelineState: meeting.pipelineState,
       lastError: meeting.lastError,
+      updatedAt: meeting.updatedAt,
     });
     const stages = buildMeetingV2Stages({
       counts,
@@ -973,7 +974,7 @@ function buildMeetingV2Stages(options: {
         : counts.validations > 0
           ? "in_progress"
           : "incomplete",
-      note: `${counts.validations}/${counts.investigations} investigations have validation results.`,
+      note: `${counts.validations}/${counts.investigations} agenda items have validation results.`,
       progressPercent: counts.investigations > 0 ? Math.min(100, Math.round((counts.validations / counts.investigations) * 100)) : 0,
     },
   ];
@@ -2605,6 +2606,26 @@ export async function investigateAgendaItems(
   return { meetingId, investigatedCount: investigatedThisRun };
 }
 
+/** Agenda items with investigations but no persisted validation rows yet. */
+export async function listPendingValidationAgendaItemIds(meetingId: string): Promise<string[]> {
+  const db = getDb();
+  const [investigations, existingValidations] = await Promise.all([
+    db
+      .select({ agendaItemId: meetingsV2AgendaItemInvestigations.agendaItemId })
+      .from(meetingsV2AgendaItemInvestigations)
+      .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
+    db
+      .select({ agendaItemId: meetingsV2ValidationResults.agendaItemId })
+      .from(meetingsV2ValidationResults)
+      .where(eq(meetingsV2ValidationResults.meetingV2Id, meetingId)),
+  ]);
+
+  const validatedAgendaItemIds = new Set(existingValidations.map((row) => row.agendaItemId));
+  return investigations
+    .filter((investigation) => !validatedAgendaItemIds.has(investigation.agendaItemId))
+    .map((investigation) => investigation.agendaItemId);
+}
+
 export async function validateAgendaItemInvestigations(
   meetingId: string,
   agendaItemId?: string,
@@ -2661,19 +2682,20 @@ export async function validateAgendaItemInvestigations(
         (investigation) =>
           !existingValidations.some((row) => row.agendaItemId === investigation.agendaItemId),
       );
-  const rows: Array<typeof meetingsV2ValidationResults.$inferInsert> = [];
   let completedCount = investigations.length - pendingInvestigations.length;
   const contextByAgendaItemId = new Map(contexts.map((row) => [row.agendaItemId, row] as const));
   const agendaById = new Map(agendaItems.map((row) => [row.id, row] as const));
+  let validationCount = 0;
   for (const investigation of pendingInvestigations) {
     const context = contextByAgendaItemId.get(investigation.agendaItemId) ?? null;
     const agendaItem = agendaById.get(investigation.agendaItemId);
     if (!agendaItem) continue;
 
+    const itemRows: Array<typeof meetingsV2ValidationResults.$inferInsert> = [];
     const contextDocument =
       safeJsonParse<AgendaItemContextDocument | null>(context?.contextJson, null) ?? null;
     const deterministic = addDeterministicValidationRows({
-      rows,
+      rows: itemRows,
       meetingId,
       agendaItem,
       investigation,
@@ -2705,7 +2727,7 @@ export async function validateAgendaItemInvestigations(
         },
       });
       addAiValidationRows({
-        rows,
+        rows: itemRows,
         meetingId,
         agendaItemId: agendaItem.id,
         review: aiValidation.parsed,
@@ -2716,7 +2738,7 @@ export async function validateAgendaItemInvestigations(
         aiValidation.modelName,
       );
     } catch (error) {
-      pushValidationRow(rows, {
+      pushValidationRow(itemRows, {
         meetingId,
         agendaItemId: agendaItem.id,
         validationType: "ai_review",
@@ -2729,6 +2751,12 @@ export async function validateAgendaItemInvestigations(
         },
       });
     }
+
+    if (itemRows.length > 0) {
+      await db.insert(meetingsV2ValidationResults).values(itemRows);
+      validationCount += itemRows.length;
+    }
+
     completedCount += 1;
     await updatePhaseProgress({
       meetingId,
@@ -2741,11 +2769,7 @@ export async function validateAgendaItemInvestigations(
     });
   }
 
-  if (rows.length > 0) {
-    await db.insert(meetingsV2ValidationResults).values(rows);
-  }
-
-  return { meetingId, validationCount: rows.length };
+  return { meetingId, validationCount };
 }
 
 export async function generateMeetingV2Draft(meetingId: string): Promise<{
@@ -2965,6 +2989,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
     pipelineActivelyRunning: isMeetingV2PipelineActivelyRunning({
       pipelineState: selectedMeeting.pipelineState,
       lastError: selectedMeeting.lastError,
+      updatedAt: selectedMeeting.updatedAt,
     }),
     updatedAt: selectedMeeting.updatedAt,
   });
@@ -3003,6 +3028,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       pipelineActivelyRunning: isMeetingV2PipelineActivelyRunning({
         pipelineState: selectedMeeting.pipelineState,
         lastError: selectedMeeting.lastError,
+        updatedAt: selectedMeeting.updatedAt,
       }),
     },
     items: agendaItems.map((item) => {

@@ -18,11 +18,15 @@ export const MEETING_V2_IDLE_PIPELINE_STATES = new Set([
   "failed",
 ]);
 
+/** No progress heartbeat for this long → treat the run as stalled (Resume required). */
+export const MEETING_V2_PIPELINE_STALE_MS = 5 * 60 * 1000;
+
 export function isMeetingV2PipelineActivelyRunning(options: {
   pipelineState: string;
   lastError?: string | null;
+  updatedAt?: string | null;
 }): boolean {
-  const { pipelineState, lastError } = options;
+  const { pipelineState, lastError, updatedAt } = options;
   if (
     pipelineState === "failed" ||
     pipelineState === "created" ||
@@ -31,6 +35,12 @@ export function isMeetingV2PipelineActivelyRunning(options: {
     return false;
   }
   if (lastError?.trim()) return false;
+  if (updatedAt?.trim()) {
+    const updatedMs = Date.parse(updatedAt);
+    if (Number.isFinite(updatedMs) && Date.now() - updatedMs > MEETING_V2_PIPELINE_STALE_MS) {
+      return false;
+    }
+  }
   return MEETING_V2_ACTIVE_PIPELINE_STATES.has(pipelineState);
 }
 

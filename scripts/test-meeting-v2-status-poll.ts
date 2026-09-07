@@ -75,6 +75,14 @@ describe("shouldPollMeetingV2Status", () => {
       }),
       false,
     );
+    assert.equal(
+      isMeetingV2PipelineActivelyRunning({
+        pipelineState: "validating",
+        lastError: null,
+        updatedAt: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
+      }),
+      false,
+    );
   });
 
   it("uses stored phase progress while the pipeline is actively running", () => {

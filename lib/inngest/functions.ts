@@ -1,5 +1,8 @@
 import { inngest } from "./client";
-import { classifyDeepSeekError } from "@/lib/meeting-v2/extraction-diagnostics";
+import {
+  classifyDeepSeekError,
+  clearMeetingV2ValidationUsage,
+} from "@/lib/meeting-v2/extraction-diagnostics";
 import {
   assessMeetingV2Extraction,
   deriveMeetingV2ComputedStatus,
@@ -9,6 +12,7 @@ import {
   getMeetingV2Counts,
   ingestMeetingV2Sources,
   investigateAgendaItems,
+  listPendingValidationAgendaItemIds,
   resetMeetingV2PostExtractData,
   retrieveAgendaItemEvidence,
   rerunAgendaItem,
@@ -126,10 +130,21 @@ export const runMeetingV2Pipeline = inngest.createFunction(
       }
 
       if (!validationsComplete || (evidenceComplete && investigationsComplete && validationsComplete)) {
-        await step.run("validate-meeting-v2-items", async () => {
+        await step.run("prepare-meeting-v2-validation", async () => {
           await updateMeetingV2Status(meetingId, "validating", "Checking draft readiness", 80, null);
-          await validateAgendaItemInvestigations(meetingId);
+          await clearMeetingV2ValidationUsage(meetingId);
         });
+
+        const pendingValidationItemIds = await step.run("list-pending-validation-items", async () => {
+          return listPendingValidationAgendaItemIds(meetingId);
+        });
+
+        for (let index = 0; index < pendingValidationItemIds.length; index += 1) {
+          const agendaItemId = pendingValidationItemIds[index];
+          await step.run(`validate-meeting-v2-item-${index}`, async () => {
+            await validateAgendaItemInvestigations(meetingId, agendaItemId);
+          });
+        }
       } else {
         await step.run("skip-validate-meeting-v2-items", async () => {
           await updateMeetingV2Status(meetingId, "validating", "Validation already complete", 95, null);

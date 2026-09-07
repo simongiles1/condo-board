@@ -1,6 +1,8 @@
 import type { TokenUsage } from "@/lib/gemini/usage";
 
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+/** Per-request ceiling so a hung DeepSeek call cannot block the whole validation loop. */
+const DEFAULT_DEEPSEEK_REQUEST_TIMEOUT_MS = 120_000;
 
 function requireDeepSeekApiKey(): string {
   const key = process.env.DEEPSEEK_API_KEY;
@@ -61,18 +63,22 @@ export async function generateDeepSeekJson(options: {
   temperature?: number;
   /** V4 thinking mode. Default true (API default). Prefer false for JSON extract. */
   thinking?: boolean;
+  /** Abort the HTTP request after this many ms (default 120s). */
+  requestTimeoutMs?: number;
 }): Promise<DeepSeekGenerationResult> {
   const apiKey = requireDeepSeekApiKey();
   const modelName = options.modelName.trim() || "deepseek-v4-flash";
   const maxTokens = options.maxOutputTokens ?? 4096;
   const thinkingEnabled = options.thinking !== false;
 
+  const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_DEEPSEEK_REQUEST_TIMEOUT_MS;
   const response = await fetch(`${deepSeekBaseUrl()}/v1/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
+    signal: AbortSignal.timeout(requestTimeoutMs),
     body: JSON.stringify({
       model: modelName,
       temperature: options.temperature ?? 0.15,

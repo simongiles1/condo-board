@@ -112,6 +112,7 @@ export type MeetingV2Detail = {
     itemNumber: string | null;
     itemType: string;
     sourceSectionId: string | null;
+    sourcePages: number[];
     discussionSummary: string | null;
     confidence: string | null;
     outcome: string | null;
@@ -121,6 +122,17 @@ export type MeetingV2Detail = {
       severity: string;
       code: string;
       message: string;
+    }>;
+    evidence: Array<{
+      id: string;
+      sourceType: "transcript_segment" | "document_page" | "document_section";
+      sourceId: string;
+      rationale: string | null;
+      relevanceScore: number;
+      snippet: string | null;
+      speakerLabel?: string | null;
+      timestamp?: string | null;
+      pageNumber?: number | null;
     }>;
   }>;
   latestDraft: {
@@ -3024,7 +3036,7 @@ export async function generateMeetingV2Draft(meetingId: string): Promise<{
 
 export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2Detail> {
   const db = getDb();
-  const [meeting, legacyMeeting, agendaItems, investigations, validationRows, drafts, counts, documentSections, sourceArtifacts, boardPackageMeta] = await Promise.all([
+  const [meeting, legacyMeeting, agendaItems, investigations, validationRows, drafts, counts, documentSections, sourceArtifacts, boardPackageMeta, evidenceRows, documentPages, transcriptSegments] = await Promise.all([
     db.select().from(meetingsV2).where(eq(meetingsV2.id, meetingId)),
     db
       .select({
@@ -3044,6 +3056,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         itemNumber: meetingsV2AgendaItems.itemNumber,
         itemType: meetingsV2AgendaItems.itemType,
         sourceSectionId: meetingsV2AgendaItems.sourceSectionId,
+        sourcePagesJson: meetingsV2AgendaItems.sourcePagesJson,
       })
       .from(meetingsV2AgendaItems)
       .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId))
@@ -3098,6 +3111,33 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       .from(meetingsV2SourceArtifacts)
       .where(eq(meetingsV2SourceArtifacts.meetingV2Id, meetingId)),
     loadMeetingBoardPackageMeta(meetingId),
+    db
+      .select({
+        id: meetingsV2AgendaItemEvidence.id,
+        agendaItemId: meetingsV2AgendaItemEvidence.agendaItemId,
+        sourceType: meetingsV2AgendaItemEvidence.sourceType,
+        sourceId: meetingsV2AgendaItemEvidence.sourceId,
+        rationale: meetingsV2AgendaItemEvidence.rationale,
+        relevanceScore: meetingsV2AgendaItemEvidence.relevanceScore,
+        snippet: meetingsV2AgendaItemEvidence.snippet,
+      })
+      .from(meetingsV2AgendaItemEvidence)
+      .where(eq(meetingsV2AgendaItemEvidence.meetingV2Id, meetingId)),
+    db
+      .select({
+        id: meetingsV2DocumentPages.id,
+        pageNumber: meetingsV2DocumentPages.pageNumber,
+      })
+      .from(meetingsV2DocumentPages)
+      .where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
+    db
+      .select({
+        id: meetingsV2TranscriptSegments.id,
+        speakerLabel: meetingsV2TranscriptSegments.speakerLabel,
+        startTimestamp: meetingsV2TranscriptSegments.startTimestamp,
+      })
+      .from(meetingsV2TranscriptSegments)
+      .where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId)),
   ]);
 
   const selectedMeeting = meeting[0];
@@ -3180,6 +3220,11 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
     ? path.resolve(process.cwd(), legacy.vttFilePath)
     : null;
 
+  const pageNumberById = new Map(documentPages.map((p) => [p.id, p.pageNumber] as const));
+  const segmentMetaById = new Map(
+    transcriptSegments.map((s) => [s.id, { speakerLabel: s.speakerLabel, timestamp: s.startTimestamp }] as const),
+  );
+
   return {
     meeting: {
       id: selectedMeeting.id,
@@ -3219,12 +3264,31 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
           code: entry.code,
           message: entry.message,
         }));
+      const itemEvidence = evidenceRows
+        .filter((entry) => entry.agendaItemId === item.id)
+        .map((entry) => {
+          const pageNum = entry.sourceType === "document_page" ? pageNumberById.get(entry.sourceId) ?? null : null;
+          const segMeta = entry.sourceType === "transcript_segment" ? segmentMetaById.get(entry.sourceId) : null;
+          return {
+            id: entry.id,
+            sourceType: entry.sourceType,
+            sourceId: entry.sourceId,
+            rationale: entry.rationale,
+            relevanceScore: entry.relevanceScore,
+            snippet: entry.snippet,
+            pageNumber: pageNum,
+            speakerLabel: segMeta?.speakerLabel ?? null,
+            timestamp: segMeta?.timestamp ?? null,
+          };
+        });
+      const sourcePages = safeJsonParse<number[]>(item.sourcePagesJson, []);
       return {
         id: item.id,
         title: item.title,
         itemNumber: item.itemNumber,
         itemType: item.itemType,
         sourceSectionId: item.sourceSectionId,
+        sourcePages,
         discussionSummary: investigation?.discussionSummary ?? null,
         confidence: investigation?.confidence ?? null,
         outcome: investigation?.outcome ?? null,
@@ -3234,6 +3298,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
           null,
         ),
         validation: validations,
+        evidence: itemEvidence,
       };
     }),
     latestDraft,

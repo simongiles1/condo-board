@@ -96,6 +96,7 @@ type MeetingV2Status = {
     itemNumber: string | null;
     itemType: string;
     sourceSectionId: string | null;
+    sourcePages?: number[];
     discussionSummary: string | null;
     confidence: string | null;
     outcome: string | null;
@@ -105,6 +106,17 @@ type MeetingV2Status = {
       severity: string;
       code: string;
       message: string;
+    }>;
+    evidence?: Array<{
+      id: string;
+      sourceType: "transcript_segment" | "document_page" | "document_section";
+      sourceId: string;
+      rationale: string | null;
+      relevanceScore: number;
+      snippet: string | null;
+      speakerLabel?: string | null;
+      timestamp?: string | null;
+      pageNumber?: number | null;
     }>;
   }>;
   latestDraft: {
@@ -1766,8 +1778,144 @@ function AgendaReviewPanel({
                           <dt className="text-slate-500">Open questions</dt>
                           <dd className="font-medium text-slate-900">{item.openQuestions.length}</dd>
                         </div>
+                        {item.sourcePages && item.sourcePages.length > 0 ? (
+                          <div className="flex items-center justify-between gap-4">
+                            <dt className="text-slate-500">Source pages</dt>
+                            <dd className="font-medium text-slate-900">
+                              Pages {item.sourcePages.join(", ")}
+                            </dd>
+                          </div>
+                        ) : null}
                       </dl>
                     </div>
+                  </div>
+
+                  {/* Fact Provenance & Evidence Drawer */}
+                  <div className="mt-6 border-t border-slate-200 pt-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                      <div>
+                        <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-700 flex items-center gap-2">
+                          <span>Evidence & Fact Provenance</span>
+                          <span className="rounded-full bg-slate-200 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700">
+                            {item.evidence?.length ?? 0} {item.evidence?.length === 1 ? "source" : "sources"}
+                          </span>
+                        </h4>
+                        <p className="text-xs text-slate-500 mt-1">
+                          Auditable pipeline trace showing verbatim excerpts and locations from the meeting transcript and board package.
+                        </p>
+                      </div>
+
+                      {/* Origin Summary Badge */}
+                      {item.evidence && item.evidence.length > 0 ? (
+                        <div className="flex items-center gap-2">
+                          {(() => {
+                            const hasTranscript = item.evidence.some(e => e.sourceType === "transcript_segment");
+                            const hasDoc = item.evidence.some(e => e.sourceType === "document_page" || e.sourceType === "document_section");
+                            if (hasTranscript && hasDoc) {
+                              return (
+                                <span className="rounded-full border border-sky-300 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-800">
+                                  Hybrid (Transcript + Board Package)
+                                </span>
+                              );
+                            }
+                            if (hasTranscript) {
+                              return (
+                                <span className="rounded-full border border-purple-300 bg-purple-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-purple-800">
+                                  Transcript Derived
+                                </span>
+                              );
+                            }
+                            return (
+                              <span className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-800">
+                                Board Package Only
+                              </span>
+                            );
+                          })()}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {item.evidence && item.evidence.length > 0 ? (
+                      <div className="space-y-3">
+                        {item.evidence.map((ev) => {
+                          const isTranscript = ev.sourceType === "transcript_segment";
+                          const isDocPage = ev.sourceType === "document_page";
+                          return (
+                            <div
+                              key={ev.id}
+                              className={`rounded-2xl border p-4 text-sm transition ${
+                                isTranscript
+                                  ? "border-purple-200 bg-purple-50/50"
+                                  : isDocPage
+                                    ? "border-blue-200 bg-blue-50/50"
+                                    : "border-slate-200 bg-slate-50"
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] ${
+                                      isTranscript
+                                        ? "bg-purple-200 text-purple-900"
+                                        : isDocPage
+                                          ? "bg-blue-200 text-blue-900"
+                                          : "bg-slate-200 text-slate-800"
+                                    }`}
+                                  >
+                                    {isTranscript
+                                      ? "Transcript"
+                                      : isDocPage
+                                        ? "Board Package"
+                                        : "Agenda Section"}
+                                  </span>
+
+                                  {isTranscript ? (
+                                    <span className="font-medium text-slate-800">
+                                      {ev.speakerLabel ? `${ev.speakerLabel}` : "Speaker"}
+                                      {ev.timestamp ? (
+                                        <span className="ml-1.5 font-mono text-xs text-slate-500">
+                                          ({ev.timestamp.slice(0, 8)})
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                  ) : isDocPage && ev.pageNumber ? (
+                                    <span className="font-semibold text-slate-800">
+                                      Page {ev.pageNumber}
+                                    </span>
+                                  ) : null}
+                                </div>
+
+                                <div className="flex items-center gap-2 text-xs text-slate-500">
+                                  <span>Score: {ev.relevanceScore}</span>
+                                </div>
+                              </div>
+
+                              {ev.rationale ? (
+                                <p className="text-xs text-slate-500 italic mb-2">
+                                  Provenance: {ev.rationale}
+                                </p>
+                              ) : null}
+
+                              {ev.snippet ? (
+                                <blockquote
+                                  className={`rounded-xl border-l-4 pl-3 py-1.5 text-xs font-mono leading-relaxed whitespace-pre-wrap ${
+                                    isTranscript
+                                      ? "border-purple-400 bg-purple-100/50 text-purple-950"
+                                      : "border-blue-400 bg-blue-100/50 text-blue-950"
+                                  }`}
+                                >
+                                  {ev.snippet}
+                                </blockquote>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-500 italic">
+                        No individual evidence citations linked to this agenda item yet.
+                      </p>
+                    )}
                   </div>
                 </div>
               ) : null}

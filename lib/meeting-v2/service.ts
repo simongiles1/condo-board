@@ -39,7 +39,11 @@ import {
   type MeetingV2ExtractionQuality,
   type MeetingV2Settings,
 } from "@/lib/meeting-v2/extraction-diagnostics";
-import { isMeetingV2PipelineActivelyRunning } from "@/lib/meeting-v2/workflow-progress";
+import {
+  buildMeetingV2DisplayProgress,
+  buildMeetingV2WorkflowProgress,
+  isMeetingV2PipelineActivelyRunning,
+} from "@/lib/meeting-v2/workflow-progress";
 import { buildMeetingV2DraftArtifact, buildMeetingFrame } from "@/lib/meeting-v2/draft-builder";
 import { chunkDocumentPages, chunkTranscriptSegments } from "@/lib/meeting-v2/chunking";
 import {
@@ -647,6 +651,112 @@ export function deriveMeetingV2ComputedStatus(counts: {
 
 export function isMeetingV2PipelineNotStarted(pipelineState: string): boolean {
   return pipelineState === "created";
+}
+
+export type MeetingV2DashboardCard = Pick<
+  MeetingV2Row,
+  "id" | "title" | "meetingDate" | "pipelineState"
+> & {
+  progressLabel: string;
+  progressStepNumber: number;
+  progressTotalSteps: number;
+  progressNote: string;
+  progressStatus: "complete" | "in_progress" | "incomplete";
+};
+
+export async function loadMeetingsV2DashboardCards(
+  meetingRows: MeetingV2Row[],
+): Promise<MeetingV2DashboardCard[]> {
+  const db = getDb();
+
+  return Promise.all(
+    meetingRows.map(async (meeting) => {
+      const [counts, investigations, validations, latestDraft] = await Promise.all([
+        getMeetingV2Counts(meeting.id),
+        db
+          .select({
+            openQuestionsJson: meetingsV2AgendaItemInvestigations.openQuestionsJson,
+          })
+          .from(meetingsV2AgendaItemInvestigations)
+          .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meeting.id)),
+        db
+          .select({
+            agendaItemId: meetingsV2ValidationResults.agendaItemId,
+            severity: meetingsV2ValidationResults.severity,
+          })
+          .from(meetingsV2ValidationResults)
+          .where(eq(meetingsV2ValidationResults.meetingV2Id, meeting.id)),
+        db
+          .select({ id: meetingsV2MinutesDrafts.id })
+          .from(meetingsV2MinutesDrafts)
+          .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meeting.id))
+          .limit(1),
+      ]);
+
+      const pipelineNotStarted = isMeetingV2PipelineNotStarted(meeting.pipelineState);
+      const pipelineActivelyRunning = isMeetingV2PipelineActivelyRunning({
+        pipelineState: meeting.pipelineState,
+        lastError: meeting.lastError,
+      });
+      const stages = buildMeetingV2Stages({
+        counts,
+        extractionQuality: {
+          likelyIncomplete: false,
+          note: "",
+        } as MeetingV2ExtractionQuality,
+        pipelineNotStarted,
+      });
+      const needsClarificationCount = investigations.filter((investigation) => {
+        const openQuestions = safeJsonParse<string[]>(investigation.openQuestionsJson, []);
+        return openQuestions.length > 0;
+      }).length;
+      const flaggedAgendaItemIds = new Set(
+        validations
+          .filter(
+            (validation) => validation.severity === "error" || validation.severity === "warning",
+          )
+          .map((validation) => validation.agendaItemId),
+      );
+      const workflowProgress = buildMeetingV2WorkflowProgress({
+        pipelineStages: stages.map((stage) => ({
+          key: stage.key,
+          label: stage.label,
+          status: stage.status,
+          note: stage.note,
+        })),
+        agendaItemCount: counts.agendaItems,
+        needsClarificationCount,
+        flaggedCount: flaggedAgendaItemIds.size,
+        draftCount: counts.drafts,
+        hasLatestDraft: latestDraft.length > 0,
+      });
+      const displayProgress = buildMeetingV2DisplayProgress({
+        pipelineNotStarted,
+        pipelineActivelyRunning,
+        pipelineState: meeting.pipelineState,
+        storedProgressPercent: meeting.progressPercent,
+        storedCurrentStep: meeting.currentStep,
+        workflowProgress,
+      });
+      const activeStep =
+        workflowProgress.steps.find((step) => step.status === "in_progress") ??
+        workflowProgress.steps.find((step) => step.status !== "complete") ??
+        workflowProgress.steps[workflowProgress.steps.length - 1];
+      const activeStepIndex = workflowProgress.steps.findIndex((step) => step.key === activeStep.key);
+
+      return {
+        id: meeting.id,
+        title: meeting.title,
+        meetingDate: meeting.meetingDate,
+        pipelineState: meeting.pipelineState,
+        progressLabel: displayProgress.currentLabel,
+        progressStepNumber: activeStepIndex >= 0 ? activeStepIndex + 1 : workflowProgress.totalCount,
+        progressTotalSteps: workflowProgress.totalCount,
+        progressNote: displayProgress.currentStep,
+        progressStatus: activeStep?.status ?? "incomplete",
+      };
+    }),
+  );
 }
 
 function buildMeetingV2Stages(options: {

@@ -19,21 +19,17 @@ import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
 import {
   buildMeetingV2DisplayProgress,
   buildMeetingV2WorkflowProgress,
+  getMeetingV2PipelineStateDescription,
   shouldPollMeetingV2Status,
   type MeetingV2WorkflowProgress,
 } from "@/lib/meeting-v2/workflow-progress";
+import type { MeetingV2DashboardCard } from "@/lib/meeting-v2/service";
 import type {
   MeetingV2Alert,
   MeetingV2ExtractionQuality,
 } from "@/lib/meeting-v2/extraction-diagnostics";
 
-type MeetingCard = {
-  id: string;
-  title: string;
-  meetingDate: string;
-  pipelineState: string;
-  currentStep: string | null;
-};
+type MeetingCard = MeetingV2DashboardCard;
 
 type MeetingV2Status = {
   meeting: {
@@ -236,13 +232,26 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
           <div className="space-y-4 px-6 py-5">
             <div className="flex items-center justify-between text-sm text-slate-600">
               <span>{formatDate(meeting.meetingDate)}</span>
-              <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${statusTone(meeting.pipelineState)}`}>
+              <span
+                className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${statusTone(meeting.pipelineState)}`}
+                title={getMeetingV2PipelineStateDescription(meeting.pipelineState)}
+              >
                 {startCase(meeting.pipelineState)}
               </span>
             </div>
-            <p className="min-h-[3rem] text-sm leading-6 text-slate-600">
-              {meeting.currentStep ?? "Ready to start"}
-            </p>
+            <div className="space-y-2">
+              <span
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${stageTone(meeting.progressStatus)}`}
+              >
+                <span>{meeting.progressLabel}</span>
+                <span className="rounded-full border border-current/20 px-2 py-0.5 text-[10px] font-bold tabular-nums tracking-normal">
+                  {meeting.progressStepNumber}/{meeting.progressTotalSteps}
+                </span>
+              </span>
+              <p className="min-h-[2.5rem] text-sm leading-6 text-slate-600">
+                {meeting.progressNote}
+              </p>
+            </div>
             <div className="text-sm font-medium text-slate-900 transition-colors group-hover:text-teal-700">
               Open workspace &rarr;
             </div>

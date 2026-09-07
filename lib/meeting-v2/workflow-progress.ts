@@ -50,6 +50,42 @@ export function getMeetingV2PhaseLabel(pipelineState: string): string {
   return MEETING_V2_PHASE_LABELS[pipelineState] ?? "In progress";
 }
 
+export function getMeetingV2PipelineStateDescription(pipelineState: string): string {
+  if (pipelineState === "validated") {
+    return "Automated pipeline finished — ingest through validation are complete.";
+  }
+  if (pipelineState === "failed") {
+    return "The automated pipeline stopped with an error.";
+  }
+  if (pipelineState === "created") {
+    return "Transcript and board package uploaded; pipeline not started yet.";
+  }
+  return "Automated pipeline is running or paused mid-stage.";
+}
+
+export function getMeetingV2CurrentStepPosition(
+  workflowProgress: MeetingV2WorkflowProgress,
+): {
+  stepNumber: number;
+  totalCount: number;
+  activeStatus: WorkflowStepStatus;
+} {
+  const inProgressIndex = workflowProgress.steps.findIndex((step) => step.status === "in_progress");
+  const firstIncompleteIndex = workflowProgress.steps.findIndex((step) => step.status !== "complete");
+  const activeIndex =
+    inProgressIndex >= 0
+      ? inProgressIndex
+      : firstIncompleteIndex >= 0
+        ? firstIncompleteIndex
+        : workflowProgress.totalCount - 1;
+
+  return {
+    stepNumber: activeIndex + 1,
+    totalCount: workflowProgress.totalCount,
+    activeStatus: workflowProgress.steps[activeIndex]?.status ?? "incomplete",
+  };
+}
+
 export function buildMeetingV2DisplayProgress(options: {
   pipelineNotStarted: boolean;
   pipelineActivelyRunning: boolean;

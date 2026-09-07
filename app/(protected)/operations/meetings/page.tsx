@@ -9,6 +9,7 @@ import { MeetingsPageHeader } from "@/components/MeetingsPageHeader";
 import { getDb } from "@/lib/db";
 import { meetings, meetingsV2 } from "@/lib/db/schema";
 import { MeetingsV2Dashboard } from "@/app/(protected)/meetings/v2-components";
+import { loadMeetingsV2DashboardCards } from "@/lib/meeting-v2/service";
 
 export default async function MeetingsPage({ searchParams }: { searchParams: Promise<{ v?: string }> }) {
   const db = getDb();
@@ -30,6 +31,8 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
     .select()
     .from(meetingsV2)
     .orderBy(desc(meetingsV2.meetingDate));
+
+  const meetingV2Cards = await loadMeetingsV2DashboardCards(meetingV2Rows);
 
   return (
     <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-6">
@@ -69,7 +72,7 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
         )
       ) : (
         <div className="px-4">
-          <MeetingsV2Dashboard meetings={meetingV2Rows} />
+          <MeetingsV2Dashboard meetings={meetingV2Cards} />
         </div>
       )}
     </div>

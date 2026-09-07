@@ -8,6 +8,8 @@ import { describe, it } from "node:test";
 
 import {
   buildMeetingV2DisplayProgress,
+  buildMeetingV2WorkflowProgress,
+  getMeetingV2CurrentStepPosition,
   isMeetingV2PipelineActivelyRunning,
   shouldPollMeetingV2Status,
 } from "../lib/meeting-v2/workflow-progress";
@@ -96,5 +98,29 @@ describe("shouldPollMeetingV2Status", () => {
     assert.equal(display.progressPercent, 72);
     assert.equal(display.currentStep, "Investigating items (18/30)");
     assert.equal(display.currentLabel, "Investigate");
+  });
+
+  it("reports agenda review as step 6 of 7 after pipeline validation", () => {
+    const workflowProgress = buildMeetingV2WorkflowProgress({
+      pipelineStages: [
+        { key: "ingest", label: "Ingest", status: "complete", note: "" },
+        { key: "extract", label: "Extract", status: "complete", note: "" },
+        { key: "evidence", label: "Evidence", status: "complete", note: "" },
+        { key: "investigate", label: "Investigate", status: "complete", note: "" },
+        { key: "validate", label: "Validate", status: "complete", note: "" },
+      ],
+      agendaItemCount: 12,
+      needsClarificationCount: 2,
+      flaggedCount: 0,
+      draftCount: 0,
+      hasLatestDraft: false,
+    });
+
+    assert.equal(workflowProgress.currentLabel, "Agenda review");
+    assert.deepEqual(getMeetingV2CurrentStepPosition(workflowProgress), {
+      stepNumber: 6,
+      totalCount: 7,
+      activeStatus: "in_progress",
+    });
   });
 });

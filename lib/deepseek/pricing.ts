@@ -171,9 +171,9 @@ export function formatDurationMs(ms: number): string {
   return `${hours}h ${minutes}m`;
 }
 
-function formatUtcHourOnDate(hourUtc: number, dateMs: number): string {
+function utcInstantOnDate(hourUtc: number, dateMs: number): number {
   const date = new Date(dateMs);
-  const instant = Date.UTC(
+  return Date.UTC(
     date.getUTCFullYear(),
     date.getUTCMonth(),
     date.getUTCDate(),
@@ -182,30 +182,59 @@ function formatUtcHourOnDate(hourUtc: number, dateMs: number): string {
     0,
     0,
   );
+}
+
+function formatUtcHourOnDate(hourUtc: number, dateMs: number): string {
   return new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
     timeZone: "UTC",
     timeZoneName: "short",
-  }).format(instant);
+  }).format(utcInstantOnDate(hourUtc, dateMs));
 }
 
 function formatLocalHourOnDate(hourUtc: number, dateMs: number): string {
-  const date = new Date(dateMs);
-  const instant = Date.UTC(
-    date.getUTCFullYear(),
-    date.getUTCMonth(),
-    date.getUTCDate(),
-    hourUtc,
-    0,
-    0,
-    0,
-  );
   return new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
     timeZoneName: "short",
-  }).format(instant);
+  }).format(utcInstantOnDate(hourUtc, dateMs));
+}
+
+function formatUtcHourCompact(hourUtc: number, dateMs: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC",
+  }).format(utcInstantOnDate(hourUtc, dateMs));
+}
+
+function formatLocalHourCompact(hourUtc: number, dateMs: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(utcInstantOnDate(hourUtc, dateMs));
+}
+
+export type DeepSeekPeakWindowRow = {
+  utcRange: string;
+  localRange: string;
+};
+
+export function getDeepSeekPeakWindowRows(atMs = Date.now()): DeepSeekPeakWindowRow[] {
+  return DEEPSEEK_PEAK_WINDOWS_UTC.map(({ startHour, endHour }) => ({
+    utcRange: `${formatUtcHourCompact(startHour, atMs)}–${formatUtcHourCompact(endHour, atMs)}`,
+    localRange: `${formatLocalHourCompact(startHour, atMs)}–${formatLocalHourCompact(endHour, atMs)}`,
+  }));
+}
+
+export function getLocalTimeZoneShort(atMs = Date.now()): string {
+  const part = new Intl.DateTimeFormat(undefined, {
+    timeZoneName: "short",
+  })
+    .formatToParts(atMs)
+    .find((segment) => segment.type === "timeZoneName");
+  return part?.value ?? "local";
 }
 
 export function formatDeepSeekPeakHoursUtc(atMs = Date.now()): string {

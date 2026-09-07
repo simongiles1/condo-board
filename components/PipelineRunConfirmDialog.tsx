@@ -3,13 +3,12 @@
 import { useEffect, useState } from "react";
 
 import {
-  formatDeepSeekPeakHoursLocal,
-  formatDeepSeekPeakHoursUtc,
   formatDeepSeekPricingTierLabel,
   formatDurationMs,
   formatInstantLocal,
-  formatInstantUtc,
+  getDeepSeekPeakWindowRows,
   getDeepSeekPricingStatus,
+  getLocalTimeZoneShort,
 } from "@/lib/deepseek/pricing";
 
 export type PipelineConfirmAction = "start" | "resume" | "rerun" | "restart";
@@ -77,6 +76,8 @@ export function PipelineRunConfirmDialog({
 
   const copy = ACTION_COPY[action];
   const inPeak = pricingStatus.tier === "peak";
+  const peakWindows = getDeepSeekPeakWindowRows();
+  const localTimeZone = getLocalTimeZoneShort();
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
@@ -105,23 +106,41 @@ export function PipelineRunConfirmDialog({
               : "border-teal-200 bg-teal-50 text-teal-950"
           }`}
         >
-          <p className="font-semibold">
-            DeepSeek pricing: {formatDeepSeekPricingTierLabel(pricingStatus.tier)} hours
-          </p>
-          <p className="mt-1 text-[13px] leading-relaxed opacity-90">
-            Peak hours (2× cost): {formatDeepSeekPeakHoursUtc()} UTC
-          </p>
-          <p className="mt-0.5 text-[13px] leading-relaxed opacity-90">
-            Your local time: {formatDeepSeekPeakHoursLocal()}
-          </p>
-          {inPeak && pricingStatus.msUntilOffPeak != null && pricingStatus.nextOffPeakAtMs != null ? (
-            <p className="mt-2 text-[13px] font-medium">
-              Off-peak starts in {formatDurationMs(pricingStatus.msUntilOffPeak)} (
-              {formatInstantLocal(pricingStatus.nextOffPeakAtMs)} ·{" "}
-              {formatInstantUtc(pricingStatus.nextOffPeakAtMs)})
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <p className="font-semibold">
+              DeepSeek pricing: {formatDeepSeekPricingTierLabel(pricingStatus.tier)} hours
             </p>
+            {inPeak ? (
+              <span className="text-xs font-medium uppercase tracking-wide opacity-80">
+                2× cost now
+              </span>
+            ) : null}
+          </div>
+
+          <p className="mt-2 text-xs font-medium uppercase tracking-wide opacity-70">
+            Peak hours · Mon–Fri · {localTimeZone}
+          </p>
+          <ul className="mt-1.5 list-inside list-disc space-y-1 text-[13px] leading-snug">
+            {peakWindows.map((window, index) => (
+              <li key={index}>{window.localRange}</li>
+            ))}
+          </ul>
+
+          {inPeak && pricingStatus.msUntilOffPeak != null && pricingStatus.nextOffPeakAtMs != null ? (
+            <div
+              className={`mt-3 border-t pt-3 ${
+                inPeak ? "border-amber-200/80" : "border-teal-200/80"
+              }`}
+            >
+              <p className="text-[13px] font-medium">
+                Off-peak starts in {formatDurationMs(pricingStatus.msUntilOffPeak)}
+              </p>
+              <p className="mt-0.5 text-[13px] opacity-90">
+                {formatInstantLocal(pricingStatus.nextOffPeakAtMs)}
+              </p>
+            </div>
           ) : (
-            <p className="mt-2 text-[13px] font-medium">
+            <p className="mt-3 border-t border-teal-200/80 pt-3 text-[13px] font-medium">
               You are currently in off-peak hours — lowest DeepSeek rates apply.
             </p>
           )}

@@ -91,7 +91,7 @@ describe("buildMeetingV2Alerts", () => {
     );
   });
 
-  it("shows in-progress integrity mismatches as warnings without blocking", () => {
+  it("suppresses expected extraction lag notices while the pipeline is actively running", () => {
     const alerts = buildMeetingV2Alerts({
       extractionQuality: quality({
         likelyIncomplete: true,
@@ -107,6 +107,25 @@ describe("buildMeetingV2Alerts", () => {
     });
 
     assert.equal(alerts.some((alert) => alert.id === "no-items"), false);
+    assert.equal(alerts.some((alert) => alert.id === "pipeline-progress"), false);
+    assert.equal(alerts.length, 0);
+  });
+
+  it("shows unexpected in-progress integrity mismatches as warnings without blocking", () => {
+    const alerts = buildMeetingV2Alerts({
+      extractionQuality: quality({
+        likelyIncomplete: true,
+        issueCode: "no_items",
+        note: "No agenda items were extracted yet.",
+      }),
+      integrityNote: "Agenda items have not been extracted yet.",
+      isConsistent: false,
+      lastError: null,
+      pipelineState: "gathering_evidence",
+      pipelineActivelyRunning: true,
+      updatedAt: "2026-09-06T23:00:00.000Z",
+    });
+
     const progress = alerts.find((alert) => alert.id === "pipeline-progress");
     assert.ok(progress);
     assert.equal(progress.severity, "warning");

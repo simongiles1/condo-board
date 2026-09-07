@@ -2831,6 +2831,7 @@ export async function generateMeetingV2Draft(meetingId: string): Promise<{
   meetingId: string;
   title: string;
   contentMarkdown: string;
+  json: string | null;
   format: string;
   createdAt: string;
   updatedAt: string;
@@ -2906,6 +2907,7 @@ export async function generateMeetingV2Draft(meetingId: string): Promise<{
     meetingId,
     title: draftRow.title,
     contentMarkdown: draftRow.contentMarkdown,
+    json: draftRow.summaryJson,
     format: draftRow.format,
     createdAt,
     updatedAt: createdAt,

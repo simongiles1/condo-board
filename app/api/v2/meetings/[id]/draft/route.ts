@@ -25,7 +25,9 @@ export async function POST(
     const { id } = await params;
     const draft = await generateMeetingV2Draft(id);
     return NextResponse.json({ success: true, draft });
-  } catch {
-    return NextResponse.json({ error: "Failed to generate draft" }, { status: 500 });
+  } catch (error) {
+    console.error("[meetings/v2/draft] POST failed:", error);
+    const message = error instanceof Error ? error.message : "Failed to generate draft";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

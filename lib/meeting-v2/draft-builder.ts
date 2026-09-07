@@ -1275,6 +1275,7 @@ function buildDeterministicMinutesDocument(input: {
   meetingFrame: ReturnType<typeof buildMeetingFrame>;
   agendaItems: DraftInputItem[];
 }) {
+  const presentDirectors = input.meetingFrame.attendanceCandidates.present;
   const sections = {
     specialPresentations: [] as AgendaItemV2[],
     financialMatters: [] as AgendaItemV2[],
@@ -1288,7 +1289,6 @@ function buildDeterministicMinutesDocument(input: {
 
   const assemblyPlan = input.agendaItems.map((item) => {
     const sectionPath = mapSuggestedSectionPath(item);
-    const presentDirectors = input.meetingFrame.directors.filter(d => d.isPresent);
     const agendaItem = buildAgendaItemV2(item, presentDirectors);
 
     switch (sectionPath) {
@@ -1341,8 +1341,8 @@ function buildDeterministicMinutesDocument(input: {
     metadata: buildMetadata(input.meeting, input.meetingFrame),
     attendance: buildAttendance(input.meetingFrame, input.agendaItems),
     callToOrder: buildCallToOrderSection(input.meetingFrame),
-    specialPresentations: buildSpecialPresentations(input.agendaItems),
-    approvalOfPreviousMinutes: buildApprovalOfPreviousMinutes(input.agendaItems),
+    specialPresentations: buildSpecialPresentations(input.agendaItems, presentDirectors),
+    approvalOfPreviousMinutes: buildApprovalOfPreviousMinutes(input.agendaItems, presentDirectors),
     financialMatters: sections.financialMatters,
     managementReport: {
       itemsForRatification: sections.managementRatification,

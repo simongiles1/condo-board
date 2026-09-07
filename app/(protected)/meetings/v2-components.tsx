@@ -270,6 +270,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [status, setStatus] = useState<MeetingV2Status | null>(null);
   const [loading, setLoading] = useState(true);
   const [draftBusy, setDraftBusy] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
   const [runBusy, setRunBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<V2Tab>("overview");
   const [autonomyTemperature, setAutonomyTemperature] = useState(0.8);
@@ -510,15 +511,20 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
 
   async function handleGenerateDraft() {
     setDraftBusy(true);
+    setDraftError(null);
     try {
       const response = await fetch(`/api/v2/meetings/${meetingId}/draft`, {
         method: "POST",
       });
-      if (!response.ok) return;
       const payload = (await response.json()) as {
-        success: boolean;
-        draft: MeetingV2Status["latestDraft"];
+        success?: boolean;
+        error?: string;
+        draft?: MeetingV2Status["latestDraft"];
       };
+      if (!response.ok) {
+        setDraftError(payload.error ?? "Failed to generate draft.");
+        return;
+      }
       if (payload.draft) {
         setStatus((current) => (current ? { ...current, latestDraft: payload.draft } : current));
         setActiveTab("draft");
@@ -789,6 +795,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                     meetingId={meetingId}
                     draft={status.latestDraft}
                     draftBusy={draftBusy}
+                    draftError={draftError}
                     onGenerateDraft={handleGenerateDraft}
                   />
                 ) : null}
@@ -1814,11 +1821,13 @@ function DraftWorkspacePanel({
   meetingId,
   draft,
   draftBusy,
+  draftError,
   onGenerateDraft,
 }: {
   meetingId: string;
   draft: MeetingV2Status["latestDraft"] | null;
   draftBusy: boolean;
+  draftError: string | null;
   onGenerateDraft: () => void;
 }) {
   const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
@@ -1834,6 +1843,9 @@ function DraftWorkspacePanel({
           <p className="text-sm text-slate-600">
             No draft has been generated yet. The pipeline builds the content during validation — this step formats it into editable minutes.
           </p>
+          {draftError ? (
+            <p className="mt-3 text-sm font-medium text-red-700">{draftError}</p>
+          ) : null}
           <button
             type="button"
             onClick={onGenerateDraft}

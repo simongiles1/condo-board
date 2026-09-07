@@ -410,6 +410,40 @@ export function analyzeExtractionQuality(options: {
   };
 }
 
+const EXPECTED_INTEGRITY_NOTES_BY_PIPELINE_PHASE: Record<string, readonly string[]> = {
+  ingest: ["Base source ingest is incomplete."],
+  extract: ["Agenda items have not been extracted yet."],
+  evidence: ["Evidence contexts are missing for one or more agenda items."],
+  investigate: ["Investigations are missing for one or more agenda items."],
+  validate: [
+    "Validation results are missing for one or more investigated agenda items.",
+  ],
+};
+
+function meetingV2PipelinePhase(pipelineState: string): string | null {
+  if (pipelineState === "ingesting" || pipelineState === "ingested") return "ingest";
+  if (pipelineState === "extracting" || pipelineState === "extracted") return "extract";
+  if (pipelineState === "gathering_evidence" || pipelineState === "evidence_gathered") {
+    return "evidence";
+  }
+  if (pipelineState === "investigating" || pipelineState === "investigated") {
+    return "investigate";
+  }
+  if (pipelineState === "validating") return "validate";
+  return null;
+}
+
+/** Count/data lag that matches the current running stage — not a user-facing alert. */
+export function isExpectedMeetingV2IntegrityMismatchDuringActiveRun(
+  pipelineState: string,
+  integrityNote: string,
+): boolean {
+  const phase = meetingV2PipelinePhase(pipelineState);
+  if (!phase) return false;
+  const note = integrityNote.trim();
+  return EXPECTED_INTEGRITY_NOTES_BY_PIPELINE_PHASE[phase]?.includes(note) ?? false;
+}
+
 function lastErrorAlreadyCovered(
   lastError: string,
   extractionNote: string,
@@ -464,17 +498,23 @@ export function buildMeetingV2Alerts(options: {
     options.updatedAt ?? extractionQuality.extractionRun?.completedAt;
 
   if (!isConsistent && integrityNote.trim()) {
+    const expectedActiveRunLag = isExpectedMeetingV2IntegrityMismatchDuringActiveRun(
+      pipelineState,
+      integrityNote,
+    );
     if (pipelineActivelyRunning) {
-      alerts.push({
-        id: "pipeline-progress",
-        severity: "warning",
-        title: "Stage in progress",
-        summary: integrityNote,
-        recommendedAction:
-          "The pipeline is still working through this stage. Refresh if the step text and percentage stay frozen for several minutes.",
-        occurredAt: haltOccurredAt,
-        blocksPipeline: false,
-      });
+      if (!expectedActiveRunLag) {
+        alerts.push({
+          id: "pipeline-progress",
+          severity: "warning",
+          title: "Stage in progress",
+          summary: integrityNote,
+          recommendedAction:
+            "The pipeline is still working through this stage. Refresh if the step text and percentage stay frozen for several minutes.",
+          occurredAt: haltOccurredAt,
+          blocksPipeline: false,
+        });
+      }
     } else {
       alerts.push({
         id: "pipeline-progress",

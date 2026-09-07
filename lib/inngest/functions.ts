@@ -51,7 +51,7 @@ export const runMeetingV2Pipeline = inngest.createFunction(
         pipelineSnapshot.counts.investigations >= pipelineSnapshot.counts.agendaItems;
       const validationsComplete =
         investigationsComplete &&
-        pipelineSnapshot.counts.validations >= pipelineSnapshot.counts.investigations;
+        pipelineSnapshot.counts.validations >= pipelineSnapshot.counts.agendaItems;
 
       await step.run("seed-meeting-v2", async () => {
         await ensureMeetingV2Seed(meetingId);
@@ -142,6 +142,12 @@ export const runMeetingV2Pipeline = inngest.createFunction(
         for (let index = 0; index < pendingValidationItemIds.length; index += 1) {
           const agendaItemId = pendingValidationItemIds[index];
           await step.run(`validate-meeting-v2-item-${index}`, async () => {
+            console.info("[meetings:v2:validate] inngest item start", {
+              meetingId,
+              agendaItemId,
+              index,
+              total: pendingValidationItemIds.length,
+            });
             await validateAgendaItemInvestigations(meetingId, agendaItemId);
           });
         }

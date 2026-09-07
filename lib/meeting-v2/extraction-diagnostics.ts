@@ -183,7 +183,6 @@ export async function recordMeetingV2ValidationUsage(
     .update(meetingsV2)
     .set({
       settings: nextSettings,
-      updatedAt: new Date().toISOString(),
     })
     .where(eq(meetingsV2.id, meetingId));
 }
@@ -203,7 +202,6 @@ export async function clearMeetingV2ValidationUsage(meetingId: string): Promise<
     .update(meetingsV2)
     .set({
       settings: rest,
-      updatedAt: new Date().toISOString(),
     })
     .where(eq(meetingsV2.id, meetingId));
 }

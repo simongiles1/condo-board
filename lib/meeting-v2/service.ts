@@ -712,7 +712,7 @@ export function deriveMeetingV2ComputedStatus(counts: {
     };
   }
 
-  if (counts.validations < counts.investigations) {
+  if (counts.validations < counts.agendaItems) {
     return {
       pipelineState: "validating",
       currentStep: "Validation incomplete",
@@ -921,7 +921,7 @@ function buildMeetingV2Stages(options: {
   const extractComplete = counts.agendaItems > 0 && !extractionQuality.likelyIncomplete;
   const evidenceComplete = counts.agendaItems > 0 && counts.evidenceContexts >= counts.agendaItems;
   const investigateComplete = counts.agendaItems > 0 && counts.investigations >= counts.agendaItems;
-  const validateComplete = counts.investigations > 0 && counts.validations >= counts.investigations;
+  const validateComplete = counts.agendaItems > 0 && counts.validations >= counts.agendaItems;
 
   return [
     {
@@ -974,8 +974,8 @@ function buildMeetingV2Stages(options: {
         : counts.validations > 0
           ? "in_progress"
           : "incomplete",
-      note: `${counts.validations}/${counts.investigations} agenda items have validation results.`,
-      progressPercent: counts.investigations > 0 ? Math.min(100, Math.round((counts.validations / counts.investigations) * 100)) : 0,
+      note: `${counts.validations}/${counts.agendaItems} agenda items have validation results.`,
+      progressPercent: counts.agendaItems > 0 ? Math.min(100, Math.round((counts.validations / counts.agendaItems) * 100)) : 0,
     },
   ];
 }
@@ -1803,6 +1803,50 @@ function pushValidationRow(
   });
 }
 
+const VALIDATION_ASSEMBLED_CONTEXT_CHAR_LIMIT = 12_000;
+const VALIDATION_CHUNK_TEXT_CHAR_LIMIT = 1_500;
+
+function truncateForValidation(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+async function updateValidationPhaseProgress(
+  meetingId: string,
+  options?: { activeItemTitle?: string },
+): Promise<void> {
+  const counts = await getMeetingV2Counts(meetingId);
+  const total = Math.max(counts.investigations, 1);
+  const current = Math.min(counts.validations, total);
+  const suffix = options?.activeItemTitle ? ` — ${options.activeItemTitle}` : "";
+  await updatePhaseProgress({
+    meetingId,
+    pipelineState: "validating",
+    basePercent: 80,
+    spanPercent: 15,
+    current,
+    total,
+    label: `Validating items (${current}/${total})${suffix}`,
+  });
+}
+
+function summarizeInvestigationTrace(investigationTrace: {
+  toolCalls: Array<Record<string, unknown>>;
+  requestTrace: Record<string, unknown> | null;
+}) {
+  const toolNames = investigationTrace.toolCalls
+    .map((entry) => {
+      const name = entry.name ?? entry.tool ?? entry.toolName;
+      return typeof name === "string" ? name.trim() : "";
+    })
+    .filter(Boolean);
+  return {
+    toolCallCount: investigationTrace.toolCalls.length,
+    toolsUsed: [...new Set(toolNames)],
+    hadRequestTrace: Boolean(investigationTrace.requestTrace),
+  };
+}
+
 function buildValidationInput(options: {
   agendaItem: typeof meetingsV2AgendaItems.$inferSelect;
   investigation: typeof meetingsV2AgendaItemInvestigations.$inferSelect;
@@ -1831,7 +1875,7 @@ function buildValidationInput(options: {
           sequenceRange: chunk.sequenceRange ?? null,
           startTimestamp: chunk.startTimestamp ?? null,
           endTimestamp: chunk.endTimestamp ?? null,
-          text: chunk.text ?? "",
+          text: truncateForValidation(chunk.text ?? "", VALIDATION_CHUNK_TEXT_CHAR_LIMIT),
         }))
     : [];
 
@@ -1864,11 +1908,14 @@ function buildValidationInput(options: {
       anchorChunkIds: options.contextDocument?.anchorChunkIds ?? [],
       transcriptEvidenceCount: options.transcriptEvidenceCount,
       documentEvidenceCount: options.documentEvidenceCount,
-      assembledContextText: options.assembledContextText ?? "",
+      assembledContextText: truncateForValidation(
+        options.assembledContextText ?? "",
+        VALIDATION_ASSEMBLED_CONTEXT_CHAR_LIMIT,
+      ),
       anchorChunks,
       buildNotes: options.contextDocument?.buildNotes ?? [],
     },
-    investigationTrace: options.investigationTrace,
+    investigationTrace: summarizeInvestigationTrace(options.investigationTrace),
   };
 }
 
@@ -1885,6 +1932,13 @@ async function runAiValidationReview(options: {
   };
 }) {
   const validationInput = buildValidationInput(options);
+  const startedAt = Date.now();
+  console.info("[meetings:v2:validate] deepseek start", {
+    meetingId: options.investigation.meetingV2Id,
+    agendaItemId: options.agendaItem.id,
+    title: options.agendaItem.title,
+    payloadChars: JSON.stringify(validationInput).length,
+  });
   const completion = await generateDeepSeekJson({
     systemInstruction: AGENDA_ITEM_VALIDATION_PROMPT,
     userText: JSON.stringify(validationInput, null, 2),
@@ -1892,6 +1946,14 @@ async function runAiValidationReview(options: {
     maxOutputTokens: 8192,
     temperature: 0,
     thinking: false,
+    requestTimeoutMs: 90_000,
+  });
+  console.info("[meetings:v2:validate] deepseek done", {
+    meetingId: options.investigation.meetingV2Id,
+    agendaItemId: options.agendaItem.id,
+    ms: Date.now() - startedAt,
+    inputTokens: completion.usage.inputTokens,
+    outputTokens: completion.usage.outputTokens,
   });
 
   const parsed = normalizeValidationDocument(safeJsonObjectParse(completion.text));
@@ -2682,7 +2744,6 @@ export async function validateAgendaItemInvestigations(
         (investigation) =>
           !existingValidations.some((row) => row.agendaItemId === investigation.agendaItemId),
       );
-  let completedCount = investigations.length - pendingInvestigations.length;
   const contextByAgendaItemId = new Map(contexts.map((row) => [row.agendaItemId, row] as const));
   const agendaById = new Map(agendaItems.map((row) => [row.id, row] as const));
   let validationCount = 0;
@@ -2690,6 +2751,8 @@ export async function validateAgendaItemInvestigations(
     const context = contextByAgendaItemId.get(investigation.agendaItemId) ?? null;
     const agendaItem = agendaById.get(investigation.agendaItemId);
     if (!agendaItem) continue;
+
+    await updateValidationPhaseProgress(meetingId, { activeItemTitle: agendaItem.title });
 
     const itemRows: Array<typeof meetingsV2ValidationResults.$inferInsert> = [];
     const contextDocument =
@@ -2757,16 +2820,7 @@ export async function validateAgendaItemInvestigations(
       validationCount += itemRows.length;
     }
 
-    completedCount += 1;
-    await updatePhaseProgress({
-      meetingId,
-      pipelineState: "validating",
-      basePercent: 80,
-      spanPercent: 15,
-      current: completedCount,
-      total: investigations.length,
-      label: `Validating items (${completedCount}/${investigations.length})`,
-    });
+    await updateValidationPhaseProgress(meetingId);
   }
 
   return { meetingId, validationCount };

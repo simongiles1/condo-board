@@ -33,10 +33,13 @@ import {
   isDeepSeekKeyConfigured,
   readMeetingV2Settings,
   recordMeetingV2ExtractionRun,
+  clearMeetingV2ValidationUsage,
+  recordMeetingV2ValidationUsage,
   type MeetingV2Alert,
   type MeetingV2ExtractionQuality,
   type MeetingV2Settings,
 } from "@/lib/meeting-v2/extraction-diagnostics";
+import { isMeetingV2PipelineActivelyRunning } from "@/lib/meeting-v2/workflow-progress";
 import { buildMeetingV2DraftArtifact, buildMeetingFrame } from "@/lib/meeting-v2/draft-builder";
 import { chunkDocumentPages, chunkTranscriptSegments } from "@/lib/meeting-v2/chunking";
 import {
@@ -2257,8 +2260,8 @@ export async function investigateAgendaItems(
     : agendaItems.filter(
         (item) => !existingInvestigations.some((entry) => entry.agendaItemId === item.id),
       );
-  const investigationRows: Array<typeof meetingsV2AgendaItemInvestigations.$inferInsert> = [];
   let completedCount = agendaItems.length - pendingItems.length;
+  let investigatedThisRun = 0;
   const runtime = await loadInvestigationToolRuntime({ meetingId });
 
   let directorsPromptLines: string[] = [];
@@ -2350,7 +2353,7 @@ export async function investigateAgendaItems(
       normalized.open_questions = remainingQuestions;
     }
 
-    investigationRows.push({
+    const investigationRow: typeof meetingsV2AgendaItemInvestigations.$inferInsert = {
       id: randomUUID(),
       meetingV2Id: meetingId,
       agendaItemId: item.id,
@@ -2367,9 +2370,11 @@ export async function investigateAgendaItems(
       usageJson,
       createdAt: nowIso(),
       updatedAt: nowIso(),
-    });
+    };
+    await db.insert(meetingsV2AgendaItemInvestigations).values(investigationRow);
 
     completedCount += 1;
+    investigatedThisRun += 1;
     await updatePhaseProgress({
       meetingId,
       pipelineState: "investigating",
@@ -2381,11 +2386,7 @@ export async function investigateAgendaItems(
     });
   }
 
-  if (investigationRows.length > 0) {
-    await db.insert(meetingsV2AgendaItemInvestigations).values(investigationRows);
-  }
-
-  return { meetingId, investigatedCount: investigationRows.length };
+  return { meetingId, investigatedCount: investigatedThisRun };
 }
 
 export async function validateAgendaItemInvestigations(
@@ -2434,6 +2435,8 @@ export async function validateAgendaItemInvestigations(
           eq(meetingsV2ValidationResults.agendaItemId, agendaItemId),
         ),
       );
+  } else {
+    await clearMeetingV2ValidationUsage(meetingId);
   }
 
   const pendingInvestigations = agendaItemId
@@ -2491,6 +2494,11 @@ export async function validateAgendaItemInvestigations(
         agendaItemId: agendaItem.id,
         review: aiValidation.parsed,
       });
+      await recordMeetingV2ValidationUsage(
+        meetingId,
+        aiValidation.usage,
+        aiValidation.modelName,
+      );
     } catch (error) {
       pushValidationRow(rows, {
         meetingId,
@@ -2738,6 +2746,10 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
     isConsistent,
     lastError: selectedMeeting.lastError,
     pipelineState: selectedMeeting.pipelineState,
+    pipelineActivelyRunning: isMeetingV2PipelineActivelyRunning({
+      pipelineState: selectedMeeting.pipelineState,
+      lastError: selectedMeeting.lastError,
+    }),
     updatedAt: selectedMeeting.updatedAt,
   });
 
@@ -2772,6 +2784,10 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         isConsistent,
         note: integrityNote,
       },
+      pipelineActivelyRunning: isMeetingV2PipelineActivelyRunning({
+        pipelineState: selectedMeeting.pipelineState,
+        lastError: selectedMeeting.lastError,
+      }),
     },
     items: agendaItems.map((item) => {
       const investigation = investigations.find((entry) => entry.agendaItemId === item.id);

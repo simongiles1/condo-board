@@ -18,6 +18,97 @@ export const MEETING_V2_IDLE_PIPELINE_STATES = new Set([
   "failed",
 ]);
 
+export function isMeetingV2PipelineActivelyRunning(options: {
+  pipelineState: string;
+  lastError?: string | null;
+}): boolean {
+  const { pipelineState, lastError } = options;
+  if (
+    pipelineState === "failed" ||
+    pipelineState === "created" ||
+    pipelineState === "validated"
+  ) {
+    return false;
+  }
+  if (lastError?.trim()) return false;
+  return MEETING_V2_ACTIVE_PIPELINE_STATES.has(pipelineState);
+}
+
+const MEETING_V2_PHASE_LABELS: Record<string, string> = {
+  ingesting: "Ingest",
+  ingested: "Ingest",
+  extracting: "Extract",
+  extracted: "Extract",
+  gathering_evidence: "Evidence",
+  evidence_gathered: "Evidence",
+  investigating: "Investigate",
+  investigated: "Investigate",
+  validating: "Validate",
+};
+
+export function getMeetingV2PhaseLabel(pipelineState: string): string {
+  return MEETING_V2_PHASE_LABELS[pipelineState] ?? "In progress";
+}
+
+export function buildMeetingV2DisplayProgress(options: {
+  pipelineNotStarted: boolean;
+  pipelineActivelyRunning: boolean;
+  pipelineState: string;
+  storedProgressPercent: number | null | undefined;
+  storedCurrentStep: string | null | undefined;
+  workflowProgress: MeetingV2WorkflowProgress | null;
+}): {
+  progressPercent: number;
+  currentStep: string;
+  currentLabel: string;
+} {
+  const {
+    pipelineNotStarted,
+    pipelineActivelyRunning,
+    pipelineState,
+    storedProgressPercent,
+    storedCurrentStep,
+    workflowProgress,
+  } = options;
+
+  if (pipelineNotStarted) {
+    return {
+      progressPercent: 0,
+      currentStep: "Transcript and board package uploaded. Start the pipeline when you are ready.",
+      currentLabel: "Ready to start",
+    };
+  }
+
+  if (pipelineActivelyRunning) {
+    const progressPercent =
+      typeof storedProgressPercent === "number" && storedProgressPercent > 0
+        ? storedProgressPercent
+        : workflowProgress?.progressPercent ?? 0;
+    return {
+      progressPercent,
+      currentStep:
+        storedCurrentStep?.trim() ||
+        workflowProgress?.currentStep ||
+        "Automated pipeline is running.",
+      currentLabel: getMeetingV2PhaseLabel(pipelineState),
+    };
+  }
+
+  if (workflowProgress) {
+    return {
+      progressPercent: workflowProgress.progressPercent,
+      currentStep: workflowProgress.currentStep,
+      currentLabel: workflowProgress.currentLabel,
+    };
+  }
+
+  return {
+    progressPercent: typeof storedProgressPercent === "number" ? storedProgressPercent : 0,
+    currentStep: storedCurrentStep ?? "Waiting for first run",
+    currentLabel: getMeetingV2PhaseLabel(pipelineState),
+  };
+}
+
 export function shouldPollMeetingV2Status(options: {
   pipelineState: string;
   pipelineHalted?: boolean;

@@ -60,6 +60,7 @@ describe("buildMeetingV2Alerts", () => {
       lastError:
         "DeepSeek ran, but the output still looks like one PDF section per agenda item instead of real meeting topics.",
       pipelineState: "gathering_evidence",
+      pipelineActivelyRunning: false,
       updatedAt: "2026-09-04T21:00:00.000Z",
     });
 
@@ -86,6 +87,33 @@ describe("buildMeetingV2Alerts", () => {
 
     assert.equal(
       alerts.some((alert) => alert.id === "last-error"),
+      false,
+    );
+  });
+
+  it("shows in-progress integrity mismatches as warnings without blocking", () => {
+    const alerts = buildMeetingV2Alerts({
+      extractionQuality: quality({
+        likelyIncomplete: true,
+        issueCode: "no_items",
+        note: "No agenda items were extracted yet.",
+      }),
+      integrityNote: "Agenda items have not been extracted yet.",
+      isConsistent: false,
+      lastError: null,
+      pipelineState: "extracting",
+      pipelineActivelyRunning: true,
+      updatedAt: "2026-09-06T23:00:00.000Z",
+    });
+
+    assert.equal(alerts.some((alert) => alert.id === "no-items"), false);
+    const progress = alerts.find((alert) => alert.id === "pipeline-progress");
+    assert.ok(progress);
+    assert.equal(progress.severity, "warning");
+    assert.equal(progress.title, "Stage in progress");
+    assert.equal(progress.blocksPipeline, false);
+    assert.equal(
+      alerts.some((alert) => alert.blocksPipeline),
       false,
     );
   });

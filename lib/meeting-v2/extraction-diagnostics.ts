@@ -3,9 +3,18 @@ import { count, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2AgendaChunkSnapshots } from "@/lib/db/schema";
 
+export type MeetingV2StageTokenUsage = {
+  modelName: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+};
+
 export type MeetingV2Settings = {
   autonomyTemperature?: number;
   extractionRun?: MeetingV2ExtractionRun;
+  /** Accumulated DeepSeek usage for the validate stage (per-item AI reviews). */
+  validationUsage?: MeetingV2StageTokenUsage;
 };
 
 export type MeetingV2ExtractionRun = {
@@ -118,6 +127,58 @@ export function readMeetingV2Settings(
     return {};
   }
   return settings;
+}
+
+export async function recordMeetingV2ValidationUsage(
+  meetingId: string,
+  usage: { inputTokens: number; outputTokens: number; totalTokens: number },
+  modelName: string,
+): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select({ settings: meetingsV2.settings })
+    .from(meetingsV2)
+    .where(eq(meetingsV2.id, meetingId));
+
+  const settings = readMeetingV2Settings(row?.settings as MeetingV2Settings | null);
+  const previous = settings.validationUsage;
+  const nextSettings: MeetingV2Settings = {
+    ...settings,
+    validationUsage: {
+      modelName,
+      inputTokens: (previous?.inputTokens ?? 0) + usage.inputTokens,
+      outputTokens: (previous?.outputTokens ?? 0) + usage.outputTokens,
+      totalTokens: (previous?.totalTokens ?? 0) + usage.totalTokens,
+    },
+  };
+
+  await db
+    .update(meetingsV2)
+    .set({
+      settings: nextSettings,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(meetingsV2.id, meetingId));
+}
+
+export async function clearMeetingV2ValidationUsage(meetingId: string): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select({ settings: meetingsV2.settings })
+    .from(meetingsV2)
+    .where(eq(meetingsV2.id, meetingId));
+
+  const settings = readMeetingV2Settings(row?.settings as MeetingV2Settings | null);
+  if (!settings.validationUsage) return;
+
+  const { validationUsage: _removed, ...rest } = settings;
+  await db
+    .update(meetingsV2)
+    .set({
+      settings: rest,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(meetingsV2.id, meetingId));
 }
 
 export async function recordMeetingV2ExtractionRun(
@@ -349,6 +410,7 @@ export function buildMeetingV2Alerts(options: {
   isConsistent: boolean;
   lastError: string | null;
   pipelineState: string;
+  pipelineActivelyRunning?: boolean;
   updatedAt?: string;
 }): MeetingV2Alert[] {
   if (options.pipelineState === "created") {
@@ -356,33 +418,52 @@ export function buildMeetingV2Alerts(options: {
   }
 
   const alerts: MeetingV2Alert[] = [];
-  const { extractionQuality, integrityNote, isConsistent, lastError, pipelineState } =
-    options;
+  const {
+    extractionQuality,
+    integrityNote,
+    isConsistent,
+    lastError,
+    pipelineState,
+    pipelineActivelyRunning = false,
+  } = options;
   const apiError =
     extractionQuality.extractionRun?.apiError?.trim() ||
     (lastError && /deepseek/i.test(lastError) ? lastError : null);
-  const halted =
+  const trulyHalted =
     pipelineState === "failed" ||
-    extractionQuality.likelyIncomplete ||
     Boolean(lastError?.trim()) ||
-    !isConsistent;
-  const blockingSeverity: MeetingV2Alert["severity"] = halted ? "error" : "warning";
+    (extractionQuality.likelyIncomplete && !pipelineActivelyRunning) ||
+    (!isConsistent && !pipelineActivelyRunning);
+  const blockingSeverity: MeetingV2Alert["severity"] = trulyHalted ? "error" : "warning";
   const haltOccurredAt =
     options.updatedAt ?? extractionQuality.extractionRun?.completedAt;
 
   if (!isConsistent && integrityNote.trim()) {
-    alerts.push({
-      id: "pipeline-progress",
-      severity: blockingSeverity,
-      title: "Pipeline stopped before this stage finished",
-      summary: integrityNote,
-      likelyCause:
-        "The stored pipeline step does not match the data that has actually been written for this meeting.",
-      recommendedAction:
-        "Use Resume Pipeline to continue, or Restart from Beginning if the run looks stuck or partially written.",
-      occurredAt: haltOccurredAt,
-      blocksPipeline: halted,
-    });
+    if (pipelineActivelyRunning) {
+      alerts.push({
+        id: "pipeline-progress",
+        severity: "warning",
+        title: "Stage in progress",
+        summary: integrityNote,
+        recommendedAction:
+          "The pipeline is still working through this stage. Refresh if the step text and percentage stay frozen for several minutes.",
+        occurredAt: haltOccurredAt,
+        blocksPipeline: false,
+      });
+    } else {
+      alerts.push({
+        id: "pipeline-progress",
+        severity: blockingSeverity,
+        title: "Pipeline stopped before this stage finished",
+        summary: integrityNote,
+        likelyCause:
+          "The stored pipeline step does not match the data that has actually been written for this meeting.",
+        recommendedAction:
+          "Use Resume Pipeline to continue, or Restart from Beginning if the run looks stuck or partially written.",
+        occurredAt: haltOccurredAt,
+        blocksPipeline: trulyHalted,
+      });
+    }
   }
 
   if (extractionQuality.issueCode === "deepseek_billing") {
@@ -439,7 +520,7 @@ export function buildMeetingV2Alerts(options: {
       recommendedAction:
         "Compare the lists below, confirm DeepSeek is configured and funded, then Restart from Beginning so semantic extraction can run.",
       occurredAt: haltOccurredAt,
-      blocksPipeline: halted,
+      blocksPipeline: trulyHalted,
     });
   } else if (extractionQuality.issueCode === "section_shaped_output") {
     alerts.push({
@@ -455,7 +536,7 @@ export function buildMeetingV2Alerts(options: {
       recommendedAction:
         "Use the got-vs-expected comparison below. If the left column matches PDF page titles, Restart from Beginning after confirming DeepSeek is funded and the board package has a real agenda outline.",
       occurredAt: haltOccurredAt,
-      blocksPipeline: halted,
+      blocksPipeline: trulyHalted,
     });
   } else if (extractionQuality.issueCode === "noisy_titles") {
     alerts.push({
@@ -468,9 +549,12 @@ export function buildMeetingV2Alerts(options: {
       recommendedAction:
         "Compare the lists below, trim the board package if needed, then Restart from Beginning.",
       occurredAt: haltOccurredAt,
-      blocksPipeline: halted,
+      blocksPipeline: trulyHalted,
     });
-  } else if (extractionQuality.issueCode === "no_items") {
+  } else if (
+    extractionQuality.issueCode === "no_items" &&
+    !(pipelineActivelyRunning && (pipelineState === "extracting" || pipelineState === "ingested"))
+  ) {
     alerts.push({
       id: "no-items",
       severity: blockingSeverity,
@@ -479,7 +563,7 @@ export function buildMeetingV2Alerts(options: {
       recommendedAction:
         "Confirm source ingestion completed, then Resume Pipeline or Restart from Beginning.",
       occurredAt: haltOccurredAt,
-      blocksPipeline: halted,
+      blocksPipeline: trulyHalted,
     });
   }
 

@@ -6,7 +6,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { shouldPollMeetingV2Status } from "../lib/meeting-v2/workflow-progress";
+import {
+  buildMeetingV2DisplayProgress,
+  isMeetingV2PipelineActivelyRunning,
+  shouldPollMeetingV2Status,
+} from "../lib/meeting-v2/workflow-progress";
 
 describe("shouldPollMeetingV2Status", () => {
   it("polls during active pipeline stages", () => {
@@ -52,5 +56,45 @@ describe("shouldPollMeetingV2Status", () => {
       }),
       true,
     );
+  });
+
+  it("detects actively running pipeline states", () => {
+    assert.equal(
+      isMeetingV2PipelineActivelyRunning({
+        pipelineState: "validating",
+        lastError: null,
+      }),
+      true,
+    );
+    assert.equal(
+      isMeetingV2PipelineActivelyRunning({
+        pipelineState: "validating",
+        lastError: "halted",
+      }),
+      false,
+    );
+  });
+
+  it("uses stored phase progress while the pipeline is actively running", () => {
+    const display = buildMeetingV2DisplayProgress({
+      pipelineNotStarted: false,
+      pipelineActivelyRunning: true,
+      pipelineState: "investigating",
+      storedProgressPercent: 72,
+      storedCurrentStep: "Investigating items (18/30)",
+      workflowProgress: {
+        steps: [],
+        completedCount: 3,
+        totalCount: 7,
+        progressPercent: 43,
+        currentLabel: "Investigate",
+        currentStep: "0/30 agenda items have investigation output.",
+        isFullyComplete: false,
+      },
+    });
+
+    assert.equal(display.progressPercent, 72);
+    assert.equal(display.currentStep, "Investigating items (18/30)");
+    assert.equal(display.currentLabel, "Investigate");
   });
 });

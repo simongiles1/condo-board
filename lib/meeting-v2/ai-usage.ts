@@ -1,11 +1,13 @@
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { meetings } from "@/lib/db/schema";
 import {
+  meetingsV2,
   meetingsV2AgendaChunkSnapshots,
   meetingsV2AgendaItemInvestigations,
   meetingsV2DocumentPages,
+  meetingsV2MinutesDrafts,
 } from "@/lib/db/schema-v2";
 import {
   flattenAiUsageToStages,
@@ -13,6 +15,7 @@ import {
   type AiUsageStageRow,
   type TokenUsage,
 } from "@/lib/gemini/usage";
+import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { isLikelyDoclingMarkdown } from "@/lib/meeting-v2/pdf";
 import { MEETING_V2_USAGE_STAGE_DEFINITIONS } from "@/lib/meeting-v2/workflow-progress";
 
@@ -112,12 +115,16 @@ export async function loadMeetingV2AiUsageStages(
   meetingId: string,
 ): Promise<AiUsageStageRow[]> {
   const db = getDb();
-  const [legacyMeeting, chunkSnapshots, investigations, documentPages] =
+  const [legacyMeeting, v2Meeting, chunkSnapshots, investigations, documentPages, drafts] =
     await Promise.all([
       db
         .select({ aiUsageJson: meetings.aiUsageJson })
         .from(meetings)
         .where(eq(meetings.id, meetingId)),
+      db
+        .select({ settings: meetingsV2.settings })
+        .from(meetingsV2)
+        .where(eq(meetingsV2.id, meetingId)),
       db
         .select({
           usageJson: meetingsV2AgendaChunkSnapshots.usageJson,
@@ -137,6 +144,15 @@ export async function loadMeetingV2AiUsageStages(
         })
         .from(meetingsV2DocumentPages)
         .where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
+      db
+        .select({
+          modelName: meetingsV2MinutesDrafts.modelName,
+          usageJson: meetingsV2MinutesDrafts.usageJson,
+        })
+        .from(meetingsV2MinutesDrafts)
+        .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId))
+        .orderBy(desc(meetingsV2MinutesDrafts.createdAt))
+        .limit(1),
     ]);
 
   const usageByStageId = new Map<string, AiUsageStageRow>();
@@ -211,6 +227,41 @@ export async function loadMeetingV2AiUsageStages(
         stageKind: "pipeline",
       }),
     );
+  }
+
+  const settings = readMeetingV2Settings(v2Meeting[0]?.settings ?? null);
+  if (settings.validationUsage && settings.validationUsage.totalTokens > 0) {
+    usageByStageId.set(
+      "validate",
+      buildStageRow({
+        id: "validate",
+        label: "Validate",
+        modelName: settings.validationUsage.modelName,
+        usage: {
+          inputTokens: settings.validationUsage.inputTokens,
+          outputTokens: settings.validationUsage.outputTokens,
+          totalTokens: settings.validationUsage.totalTokens,
+        },
+        stageKind: "pipeline",
+      }),
+    );
+  }
+
+  const latestDraft = drafts[0];
+  if (latestDraft?.usageJson) {
+    const draftUsage = readTokenUsage(safeJsonParse(latestDraft.usageJson, null));
+    if (draftUsage && draftUsage.totalTokens > 0) {
+      usageByStageId.set(
+        "draft_generated",
+        buildStageRow({
+          id: "draft_generated",
+          label: "Draft generated",
+          modelName: latestDraft.modelName?.trim() || "deepseek-v4-flash",
+          usage: draftUsage,
+          stageKind: "user",
+        }),
+      );
+    }
   }
 
   return MEETING_V2_USAGE_STAGE_DEFINITIONS.map((stage) => {

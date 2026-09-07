@@ -9,7 +9,14 @@ export async function GET(
   try {
     const { id } = await params;
     const stages = await loadMeetingV2AiUsageStages(id);
-    return NextResponse.json({ stages });
+    return NextResponse.json(
+      { stages },
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
+    );
   } catch (error) {
     console.error("[v2/ai-usage]", error);
     return NextResponse.json(

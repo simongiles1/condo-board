@@ -378,10 +378,14 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
 
           {resolvedStages.length > 0 ? (
             <p className="mt-4 text-xs text-slate-500">
-              Costs are recalculated from token counts using published model
-              pricing. Ingest Docling page counts appear when markdown extraction
-              was stored; dollar cost for Docling is on the WatsonX tab. Manual
-              review steps have no API usage.
+              Costs are recalculated from token counts stored for this meeting using
+              published model pricing. Validate-stage usage is included from runs
+              after this update; older meetings may under-report that stage. Your
+              provider dashboard may show a higher total when it includes retries,
+              tool-round billing, or runs not yet written to the database. Ingest
+              Docling page counts appear when markdown extraction was stored;
+              dollar cost for Docling is on the WatsonX tab. Manual review steps
+              have no API usage unless a draft was generated.
             </p>
           ) : null}
             </>

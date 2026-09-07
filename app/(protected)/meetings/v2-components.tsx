@@ -17,6 +17,7 @@ import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
 import { serializeMinutesDoc } from "@/lib/minutes/doc-v2-edits";
 import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
 import {
+  buildMeetingV2DisplayProgress,
   buildMeetingV2WorkflowProgress,
   shouldPollMeetingV2Status,
   type MeetingV2WorkflowProgress,
@@ -70,6 +71,7 @@ type MeetingV2Status = {
       isConsistent: boolean;
       note: string;
     };
+    pipelineActivelyRunning: boolean;
   };
   items: Array<{
     id: string;
@@ -360,13 +362,10 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const pipelineNotStarted =
     status?.meeting.pipelineState === "created" ||
     status?.meeting.currentStep === "Ready to start";
+  const pipelineActivelyRunning = status?.meeting.pipelineActivelyRunning ?? false;
   const pipelineHalted =
     !pipelineNotStarted &&
-    Boolean(
-      status?.meeting.alerts.some(
-        (alert) => alert.blocksPipeline || alert.severity === "error",
-      ),
-    );
+    Boolean(status?.meeting.alerts.some((alert) => alert.blocksPipeline));
   const awaitingBackgroundWork =
     runBusy ||
     draftBusy ||
@@ -376,6 +375,21 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     pipelineHalted,
     awaitingBackgroundWork,
   });
+
+  useEffect(() => {
+    if (!usageDialogOpen || !pipelineActivelyRunning) return;
+
+    const timer = window.setInterval(() => {
+      void fetch(`/api/v2/meetings/${meetingId}/ai-usage`, { cache: "no-store" })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((payload: { stages?: AiUsageStageRow[] } | null) => {
+          if (payload?.stages) setUsageStages(payload.stages);
+        })
+        .catch(() => undefined);
+    }, 10_000);
+
+    return () => window.clearInterval(timer);
+  }, [meetingId, pipelineActivelyRunning, usageDialogOpen]);
 
   useEffect(() => {
     if (!pollWindowUntil) return;
@@ -530,39 +544,21 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         hasLatestDraft: Boolean(status.latestDraft),
       })
     : null;
-  const displayStep = pipelineNotStarted
-    ? "Transcript and board package uploaded. Start the pipeline when you are ready."
-    : workflowProgress
-    ? workflowProgress.currentStep
-    : status && status.meeting.integrity.isConsistent
-      ? status.meeting.currentStep ?? status.meeting.computedCurrentStep
-      : status?.meeting.computedCurrentStep ?? status?.meeting.currentStep ?? "Waiting for first run";
-  const displayProgress = pipelineNotStarted
-    ? 0
-    : workflowProgress
-    ? workflowProgress.progressPercent
-    : status && status.meeting.integrity.isConsistent
-      ? progress
-      : status?.meeting.computedPipelineState === "gathering_evidence"
-        ? 55
-        : status?.meeting.computedPipelineState === "investigating"
-          ? 75
-          : status?.meeting.computedPipelineState === "validating"
-            ? 90
-            : status?.meeting.computedPipelineState === "extracting"
-              ? 30
-              : status?.meeting.computedPipelineState === "ingesting"
-                ? 10
-                : progress;
+  const displayProgressState = buildMeetingV2DisplayProgress({
+    pipelineNotStarted,
+    pipelineActivelyRunning,
+    pipelineState: status?.meeting.pipelineState ?? "created",
+    storedProgressPercent: status?.meeting.progressPercent,
+    storedCurrentStep: status?.meeting.currentStep,
+    workflowProgress,
+  });
+  const displayStep = displayProgressState.currentStep;
+  const displayProgress = displayProgressState.progressPercent;
   const displayLabel = pipelineNotStarted
     ? "Ready to start"
-    : workflowProgress
-    ? pipelineHalted && displayState !== "failed"
-      ? `Stopped · ${workflowProgress.currentLabel}`
-      : workflowProgress.currentLabel
     : pipelineHalted && displayState !== "failed"
-      ? `Stopped · ${startCase(displayState)}`
-      : startCase(displayState);
+      ? `Stopped · ${displayProgressState.currentLabel}`
+      : displayProgressState.currentLabel;
   const hasSuccessfulRun = displayState === "validated";
   const pipelineValidated = hasSuccessfulRun;
   const hasMeetingDocuments = Boolean(
@@ -644,12 +640,16 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
                     pipelineHalted
                       ? "border-rose-300 bg-rose-600 text-white"
-                      : pipelineNotStarted
+                      : pipelineActivelyRunning
                         ? "border-teal-200 bg-teal-500/90 text-white"
-                        : "border-white/20 bg-white/10 text-white/90"
+                        : pipelineNotStarted
+                          ? "border-teal-200 bg-teal-500/90 text-white"
+                          : "border-white/20 bg-white/10 text-white/90"
                   }`}
                 >
-                  {displayLabel}
+                  {pipelineActivelyRunning && !pipelineHalted
+                    ? `Running · ${displayLabel}`
+                    : displayLabel}
                 </span>
               </div>
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
@@ -790,6 +790,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 status={status}
                 pipelineNotStarted={pipelineNotStarted}
                 pipelineHalted={pipelineHalted}
+                pipelineActivelyRunning={pipelineActivelyRunning}
                 onOpenDocuments={() => setDocumentsDialogOpen(true)}
               />
             )}
@@ -924,9 +925,7 @@ function ChevronDownIcon() {
 }
 
 function MeetingV2AlertsPanel({ alerts }: { alerts: MeetingV2Alert[] }) {
-  const blockedCount = alerts.filter(
-    (alert) => alert.blocksPipeline || alert.severity === "error",
-  ).length;
+  const blockedCount = alerts.filter((alert) => alert.blocksPipeline).length;
 
   return (
     <div className="space-y-2">
@@ -945,7 +944,7 @@ function MeetingV2AlertsPanel({ alerts }: { alerts: MeetingV2Alert[] }) {
         </div>
       </div>
       {alerts.map((alert, index) => {
-        const stopped = alert.severity === "error" || Boolean(alert.blocksPipeline);
+        const stopped = Boolean(alert.blocksPipeline);
         return (
           <div
             key={alert.id}
@@ -1051,11 +1050,13 @@ function PreRunPanel({
   status,
   pipelineNotStarted,
   pipelineHalted,
+  pipelineActivelyRunning,
   onOpenDocuments,
 }: {
   status: MeetingV2Status;
   pipelineNotStarted: boolean;
   pipelineHalted: boolean;
+  pipelineActivelyRunning: boolean;
   onOpenDocuments: () => void;
 }) {
   const hasDocuments = Boolean(
@@ -1070,14 +1071,18 @@ function PreRunPanel({
           ? "Ready to start"
           : pipelineHalted
             ? "Pipeline stopped"
-            : "Pipeline not complete"
+            : pipelineActivelyRunning
+              ? "Pipeline running"
+              : "Pipeline not complete"
       }
       description={
         pipelineNotStarted
           ? "Your transcript and board package are uploaded. Click Start Pipeline when you are ready."
           : pipelineHalted
             ? "The pipeline did not finish successfully. Review the alerts above, then resume or restart the run."
-            : "The meeting workspace is set up but the pipeline has not reached validation yet. Start or resume the run to continue."
+            : pipelineActivelyRunning
+              ? "Automated work is in progress. The step text and percentage above update as each sub-stage completes."
+              : "The meeting workspace is set up but the pipeline has not reached validation yet. Start or resume the run to continue."
       }
       compact
     >
@@ -1099,16 +1104,20 @@ function PreRunPanel({
           value={
             pipelineNotStarted
               ? "Not started"
-              : status.meeting.extractionQuality.likelyIncomplete || pipelineHalted
-                ? "Needs attention"
-                : "In progress"
+              : pipelineActivelyRunning
+                ? "Running"
+                : status.meeting.extractionQuality.likelyIncomplete || pipelineHalted
+                  ? "Needs attention"
+                  : "In progress"
           }
           tone={
             pipelineNotStarted
               ? "border-slate-200 bg-slate-50 text-slate-700"
-              : status.meeting.extractionQuality.likelyIncomplete || pipelineHalted
-                ? "border-amber-200 bg-amber-50 text-amber-900"
-                : "border-slate-200 bg-slate-50 text-slate-700"
+              : pipelineActivelyRunning
+                ? "border-teal-200 bg-teal-50 text-teal-900"
+                : status.meeting.extractionQuality.likelyIncomplete || pipelineHalted
+                  ? "border-amber-200 bg-amber-50 text-amber-900"
+                  : "border-slate-200 bg-slate-50 text-slate-700"
           }
           note={
             pipelineNotStarted

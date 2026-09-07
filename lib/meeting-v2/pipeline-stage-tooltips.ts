@@ -117,8 +117,8 @@ export const PIPELINE_STAGE_TOOLTIPS: Record<string, PipelineStageTooltip> = {
         items: [
           "Review each agenda item in the Agenda Review tab.",
           "Answer open questions or add clarifications where the pipeline was uncertain.",
-          "Re-evaluate individual items without re-running the full pipeline.",
-          "No API usage — this is human judgment on top of automated output.",
+          "Submit & Re-evaluate re-runs investigate and validate for that item only.",
+          "Each re-evaluation is billed separately here — not folded into Investigate or Validate.",
         ],
       },
     ],

@@ -163,6 +163,11 @@ function readNestedUsageRecord(
   return readDeepSeekUsageRecord(record);
 }
 
+function isReEvaluateInvestigationUsage(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  return (value as Record<string, unknown>).reEvaluate === true;
+}
+
 function buildStageRow(options: {
   id: string;
   label: string;
@@ -176,6 +181,7 @@ function buildStageRow(options: {
   outputCostUsd?: number;
   totalCostUsd?: number;
   pricingTier?: DeepSeekPricingTier | "mixed";
+  usageDetail?: string;
 }): AiUsageStageRow {
   return {
     id: options.id,
@@ -192,6 +198,7 @@ function buildStageRow(options: {
     outputCostUsd: options.outputCostUsd,
     totalCostUsd: options.totalCostUsd,
     pricingTier: options.pricingTier,
+    usageDetail: options.usageDetail,
   };
 }
 
@@ -325,26 +332,31 @@ export async function loadMeetingV2AiUsageStages(
     );
   }
 
-  const investigationRecords: Array<DeepSeekUsageRecord & { billedAtMs?: number }> = [];
+  const pipelineInvestigationRecords: Array<DeepSeekUsageRecord & { billedAtMs?: number }> = [];
+  const reEvaluateInvestigationRecords: Array<DeepSeekUsageRecord & { billedAtMs?: number }> = [];
   let investigationModel = "deepseek-v4-flash";
 
   for (const investigation of investigations) {
-    const usage = readNestedUsageRecord(
-      safeJsonParse(investigation.usageJson, null),
-    );
+    const parsed = safeJsonParse<Record<string, unknown>>(investigation.usageJson, {});
+    const usage = readNestedUsageRecord(parsed);
     if (!usage) continue;
 
-    investigationRecords.push({
+    const record = {
       ...usage,
       billedAtMs: parseBilledAtMs(investigation.createdAt),
-    });
+    };
+    if (isReEvaluateInvestigationUsage(parsed)) {
+      reEvaluateInvestigationRecords.push(record);
+    } else {
+      pipelineInvestigationRecords.push(record);
+    }
     if (investigation.modelName?.trim()) {
       investigationModel = investigation.modelName.trim();
     }
   }
 
-  if (investigationRecords.length > 0) {
-    const billed = sumDeepSeekUsageRecords(investigationRecords);
+  if (pipelineInvestigationRecords.length > 0) {
+    const billed = sumDeepSeekUsageRecords(pipelineInvestigationRecords);
     usageByStageId.set(
       "investigate",
       buildStageRow({
@@ -366,9 +378,15 @@ export async function loadMeetingV2AiUsageStages(
   const settings = readMeetingV2Settings(v2Meeting[0]?.settings ?? null);
   if (settings.validationUsage && settings.validationUsage.totalTokens > 0) {
     const validationSegments = settings.validationUsage.segments ?? [];
+    const pipelineValidationSegments = validationSegments.filter(
+      (segment) => segment.source !== "re_evaluate",
+    );
+    const reEvaluateValidationSegments = validationSegments.filter(
+      (segment) => segment.source === "re_evaluate",
+    );
     const validationRecords =
-      validationSegments.length > 0
-        ? validationSegments
+      pipelineValidationSegments.length > 0
+        ? pipelineValidationSegments
             .map((segment) => ({
               inputTokens: segment.inputTokens,
               outputTokens: segment.outputTokens,
@@ -378,30 +396,92 @@ export async function loadMeetingV2AiUsageStages(
               billedAtMs: segment.billedAtMs,
             }))
             .filter((segment) => segment.totalTokens > 0)
-        : [
-            {
-              inputTokens: settings.validationUsage.inputTokens,
-              outputTokens: settings.validationUsage.outputTokens,
-              totalTokens: settings.validationUsage.totalTokens,
-              billedAtMs: parseBilledAtMs(v2Meeting[0]?.updatedAt ?? null),
-            },
-          ];
+        : validationSegments.length === 0
+          ? [
+              {
+                inputTokens: settings.validationUsage.inputTokens,
+                outputTokens: settings.validationUsage.outputTokens,
+                totalTokens: settings.validationUsage.totalTokens,
+                billedAtMs: parseBilledAtMs(v2Meeting[0]?.updatedAt ?? null),
+              },
+            ]
+          : [];
 
-    const billed = sumDeepSeekUsageRecords(validationRecords);
+    if (validationRecords.length > 0) {
+      const billed = sumDeepSeekUsageRecords(validationRecords);
+      usageByStageId.set(
+        "validate",
+        buildStageRow({
+          id: "validate",
+          label: "Validate",
+          modelName: settings.validationUsage.modelName,
+          usage: billed.usage,
+          stageKind: "pipeline",
+          cacheHitTokens: billed.cacheHitTokens,
+          cacheMissTokens: billed.cacheMissTokens,
+          inputCostUsd: billed.inputCostUsd,
+          outputCostUsd: billed.outputCostUsd,
+          totalCostUsd: billed.totalCostUsd,
+          pricingTier: billed.pricingTier,
+        }),
+      );
+    }
+
+    const reEvaluateValidationRecords = reEvaluateValidationSegments
+      .map((segment) => ({
+        inputTokens: segment.inputTokens,
+        outputTokens: segment.outputTokens,
+        totalTokens: segment.totalTokens,
+        cacheHitTokens: segment.cacheHitTokens,
+        cacheMissTokens: segment.cacheMissTokens,
+        billedAtMs: segment.billedAtMs,
+      }))
+      .filter((segment) => segment.totalTokens > 0);
+    const reEvaluateRecords = [
+      ...reEvaluateInvestigationRecords,
+      ...reEvaluateValidationRecords,
+    ];
+    if (reEvaluateRecords.length > 0) {
+      const billed = sumDeepSeekUsageRecords(reEvaluateRecords);
+      const runCount = Math.max(
+        reEvaluateInvestigationRecords.length,
+        reEvaluateValidationSegments.length,
+      );
+      usageByStageId.set(
+        "agenda_review",
+        buildStageRow({
+          id: "agenda_review",
+          label: "Agenda review",
+          modelName: settings.validationUsage.modelName || investigationModel,
+          usage: billed.usage,
+          stageKind: "user",
+          cacheHitTokens: billed.cacheHitTokens,
+          cacheMissTokens: billed.cacheMissTokens,
+          inputCostUsd: billed.inputCostUsd,
+          outputCostUsd: billed.outputCostUsd,
+          totalCostUsd: billed.totalCostUsd,
+          pricingTier: billed.pricingTier,
+          usageDetail: `${runCount} re-evaluation${runCount === 1 ? "" : "s"}`,
+        }),
+      );
+    }
+  } else if (reEvaluateInvestigationRecords.length > 0) {
+    const billed = sumDeepSeekUsageRecords(reEvaluateInvestigationRecords);
     usageByStageId.set(
-      "validate",
+      "agenda_review",
       buildStageRow({
-        id: "validate",
-        label: "Validate",
-        modelName: settings.validationUsage.modelName,
+        id: "agenda_review",
+        label: "Agenda review",
+        modelName: investigationModel,
         usage: billed.usage,
-        stageKind: "pipeline",
+        stageKind: "user",
         cacheHitTokens: billed.cacheHitTokens,
         cacheMissTokens: billed.cacheMissTokens,
         inputCostUsd: billed.inputCostUsd,
         outputCostUsd: billed.outputCostUsd,
         totalCostUsd: billed.totalCostUsd,
         pricingTier: billed.pricingTier,
+        usageDetail: `${reEvaluateInvestigationRecords.length} re-evaluation${reEvaluateInvestigationRecords.length === 1 ? "" : "s"}`,
       }),
     );
   }

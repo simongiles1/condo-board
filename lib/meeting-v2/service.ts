@@ -2483,6 +2483,7 @@ export async function retrieveAgendaItemEvidence(
 export async function investigateAgendaItems(
   meetingId: string,
   agendaItemId?: string,
+  options?: { usageSource?: "pipeline" | "re_evaluate" },
 ): Promise<{ meetingId: string; investigatedCount: number }> {
   const db = getDb();
   const filters = agendaItemId
@@ -2578,9 +2579,11 @@ export async function investigateAgendaItems(
 
     let normalized: AiInvestigationDocument;
     let modelName = "deepseek-v4-flash";
+    const reEvaluate = options?.usageSource === "re_evaluate";
     let usageJson = JSON.stringify({
       evidenceCount: evidenceForItem.length,
       transcriptEvidenceCount: evidenceForItem.filter((entry) => entry.sourceType === "transcript_segment").length,
+      ...(reEvaluate ? { reEvaluate: true } : {}),
     });
     try {
       const aiResult = await runToolEnabledInvestigation({
@@ -2597,6 +2600,7 @@ export async function investigateAgendaItems(
         toolCalls: aiResult.toolCalls,
         usage: aiResult.usage,
         requestTrace: aiResult.requestTrace,
+        ...(reEvaluate ? { reEvaluate: true } : {}),
       });
     } catch {
       const transcriptEvidenceCount = evidenceForItem.filter(
@@ -2691,6 +2695,7 @@ export async function listPendingValidationAgendaItemIds(meetingId: string): Pro
 export async function validateAgendaItemInvestigations(
   meetingId: string,
   agendaItemId?: string,
+  options?: { usageSource?: "pipeline" | "re_evaluate" },
 ): Promise<{ meetingId: string; validationCount: number }> {
   const db = getDb();
   const filters = agendaItemId
@@ -2799,6 +2804,7 @@ export async function validateAgendaItemInvestigations(
         meetingId,
         aiValidation.usage,
         aiValidation.modelName,
+        { source: options?.usageSource ?? "pipeline" },
       );
     } catch (error) {
       pushValidationRow(itemRows, {
@@ -3170,8 +3176,8 @@ export async function loadLatestMeetingV2Draft(meetingId: string): Promise<{
 
 export async function rerunAgendaItem(meetingId: string, agendaItemId: string): Promise<void> {
   await retrieveAgendaItemEvidence(meetingId, agendaItemId);
-  await investigateAgendaItems(meetingId, agendaItemId);
-  await validateAgendaItemInvestigations(meetingId, agendaItemId);
+  await investigateAgendaItems(meetingId, agendaItemId, { usageSource: "re_evaluate" });
+  await validateAgendaItemInvestigations(meetingId, agendaItemId, { usageSource: "re_evaluate" });
 }
 
 export async function finalizeMeetingV2PipelineStatus(meetingId: string): Promise<void> {

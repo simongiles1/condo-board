@@ -3,6 +3,8 @@ import { count, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2AgendaChunkSnapshots } from "@/lib/db/schema";
 
+export type MeetingV2ValidationUsageSource = "pipeline" | "re_evaluate";
+
 export type MeetingV2ValidationUsageSegment = {
   inputTokens: number;
   outputTokens: number;
@@ -10,6 +12,8 @@ export type MeetingV2ValidationUsageSegment = {
   cacheHitTokens?: number;
   cacheMissTokens?: number;
   billedAtMs: number;
+  /** Distinguishes initial pipeline validation from agenda-review re-runs. */
+  source?: MeetingV2ValidationUsageSource;
 };
 
 export type MeetingV2StageTokenUsage = {
@@ -150,6 +154,7 @@ export async function recordMeetingV2ValidationUsage(
     cacheMissTokens?: number;
   },
   modelName: string,
+  options?: { source?: MeetingV2ValidationUsageSource },
 ): Promise<void> {
   const db = getDb();
   const [row] = await db
@@ -167,6 +172,7 @@ export async function recordMeetingV2ValidationUsage(
     cacheHitTokens: usage.cacheHitTokens,
     cacheMissTokens: usage.cacheMissTokens,
     billedAtMs,
+    source: options?.source ?? "pipeline",
   };
   const nextSettings: MeetingV2Settings = {
     ...settings,

@@ -272,6 +272,9 @@ function UsageStageRow({
             </span>
           ) : null}
         </div>
+        {stage.usageDetail ? (
+          <div className="mt-1 text-[11px] font-medium text-slate-600">{stage.usageDetail}</div>
+        ) : null}
       </td>
       <td className="px-4 py-3 text-right align-top">
         <TokenCostCell

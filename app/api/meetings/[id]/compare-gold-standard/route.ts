@@ -4,11 +4,12 @@ import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { meetings } from "@/lib/db/schema";
+import { meetingsV2, meetingsV2MinutesDrafts } from "@/lib/db/schema-v2";
 import { generateOmissionsAnalysis } from "@/lib/gemini/client";
 import { parseGoldStandardValidationResponse } from "@/lib/gemini/parse-output";
 import { GOLD_STANDARD_VALIDATION_SYSTEM_PROMPT } from "@/lib/gemini/prompts";
@@ -23,6 +24,8 @@ import {
 } from "@/lib/gemini/usage";
 import { serializeGoldStandardValidation } from "@/lib/minutes/gold-standard-schema";
 import { extractPdfText } from "@/lib/parsers/pdf";
+import { saveMeetingV2GoldStandardArtifact } from "@/lib/meeting-v2/service";
+import type { MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 
 function buildGoldStandardValidationPrompt(
   title: string,
@@ -126,13 +129,44 @@ export async function POST(
       .from(meetings)
       .where(eq(meetings.id, id));
 
-    if (!meeting) {
+    const [v2Meeting] = await db
+      .select()
+      .from(meetingsV2)
+      .where(eq(meetingsV2.id, id));
+
+    if (!meeting && !v2Meeting) {
       return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
     }
 
-    if (!meeting.minutesJson?.trim()) {
+    let minutesJsonToCompare = meeting?.minutesJson?.trim() ?? "";
+    if (!minutesJsonToCompare && v2Meeting) {
+      const [v2Draft] = await db
+        .select()
+        .from(meetingsV2MinutesDrafts)
+        .where(eq(meetingsV2MinutesDrafts.meetingV2Id, id))
+        .orderBy(desc(meetingsV2MinutesDrafts.createdAt))
+        .limit(1);
+
+      if (v2Draft?.summaryJson) {
+        try {
+          const parsed = JSON.parse(v2Draft.summaryJson);
+          const actualDoc =
+            parsed.minutesV2?.data || parsed.minutesV2 || parsed.data || parsed;
+          minutesJsonToCompare = JSON.stringify(actualDoc, null, 2);
+        } catch {
+          minutesJsonToCompare = v2Draft.summaryJson;
+        }
+      } else if (v2Draft?.contentMarkdown) {
+        minutesJsonToCompare = v2Draft.contentMarkdown;
+      }
+    }
+
+    if (!minutesJsonToCompare) {
       return NextResponse.json(
-        { error: "Meeting has no structured minutes JSON to compare." },
+        {
+          error:
+            "No structured minutes or draft found to compare. Please generate a minutes draft first.",
+        },
         { status: 400 },
       );
     }
@@ -160,7 +194,7 @@ export async function POST(
     }
 
     const minutesJsonInput = sliceForPrompt(
-      meeting.minutesJson,
+      minutesJsonToCompare,
       PROMPT_INPUT_LIMITS.minutesJson,
     );
     const goldStandardInput = sliceForPrompt(
@@ -190,9 +224,12 @@ export async function POST(
       );
     }
 
+    const meetingTitle = meeting?.title || v2Meeting?.title || "Board Meeting";
+    const meetingDate = meeting?.meetingDate || v2Meeting?.meetingDate || "";
+
     const userText = buildGoldStandardValidationPrompt(
-      meeting.title,
-      meeting.meetingDate,
+      meetingTitle,
+      meetingDate,
       minutesJsonInput.text,
       goldStandardInput.text,
     );
@@ -220,26 +257,73 @@ export async function POST(
     };
 
     const serialized = serializeGoldStandardValidation(validationWithTimestamp);
+    const baseUsageJson = meeting?.aiUsageJson ?? null;
     const validationUsageRun = buildGoldStandardValidationRun({
       id: randomUUID(),
       ranAt: validationWithTimestamp.analyzedAt,
       modelName: generation.modelName,
       usage: generation.usage,
-      existingJson: meeting.aiUsageJson,
+      existingJson: baseUsageJson,
     });
     const aiUsageJson = appendAiUsageRun(
-      meeting.aiUsageJson,
+      baseUsageJson,
       validationUsageRun,
     );
 
-    await db
-      .update(meetings)
-      .set({
+    if (meeting) {
+      await db
+        .update(meetings)
+        .set({
+          goldStandardFilePath,
+          goldStandardValidationJson: serialized,
+          aiUsageJson,
+        })
+        .where(eq(meetings.id, id));
+    }
+
+    if (v2Meeting) {
+      const existingSettings =
+        (v2Meeting.settings as MeetingV2Settings) || {};
+      const nextSettings: MeetingV2Settings = {
+        ...existingSettings,
         goldStandardFilePath,
         goldStandardValidationJson: serialized,
-        aiUsageJson,
-      })
-      .where(eq(meetings.id, id));
+        goldStandardValidationRuns: [
+          ...(existingSettings.goldStandardValidationRuns ?? []),
+          {
+            id: validationUsageRun.id,
+            label: validationUsageRun.label,
+            ranAt: validationUsageRun.ranAt,
+            modelName: validationUsageRun.modelName,
+            inputTokens: validationUsageRun.inputTokens,
+            outputTokens: validationUsageRun.outputTokens,
+            totalTokens: validationUsageRun.totalTokens,
+          },
+        ],
+      };
+      await db
+        .update(meetingsV2)
+        .set({
+          settings: nextSettings,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(meetingsV2.id, id));
+
+      try {
+        await saveMeetingV2GoldStandardArtifact(
+          id,
+          goldStandardFilePath,
+          goldStandardFile.name || "gold-standard.pdf",
+          goldStandardFile.type || "application/pdf",
+          null,
+        );
+      } catch (artifactErr) {
+        console.error(
+          "[meetings:compare-gold-standard] Failed to save V2 source artifact:",
+          artifactErr,
+        );
+      }
+    }
 
     const warnings = [...parsed.warnings, ...promptInputWarnings];
     if (generation.truncated) {

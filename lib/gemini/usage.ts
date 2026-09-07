@@ -620,6 +620,65 @@ export function getLatestGoldStandardValidationRun(
   return runs[runs.length - 1] ?? null;
 }
 
+export function goldStandardValidationRunsToStages(
+  runs: AiUsageRun[],
+): AiUsageStageRow[] {
+  return runs.map((run) => ({
+    id: `gold_standard_validation:${run.id}`,
+    label: run.label,
+    modelName: run.modelName,
+    inputTokens: run.inputTokens,
+    outputTokens: run.outputTokens,
+    totalTokens: run.totalTokens,
+    stageKind: "user",
+    billedAtMs: Number.isFinite(Date.parse(run.ranAt))
+      ? Date.parse(run.ranAt)
+      : undefined,
+  }));
+}
+
+export function collectGoldStandardValidationRuns(options: {
+  aiUsageJson?: string | null;
+  settingsRuns?: GoldStandardValidationUsageRun[] | null;
+}): AiUsageRun[] {
+  const byId = new Map<string, AiUsageRun>();
+
+  for (const run of parseStoredAiUsage(options.aiUsageJson)?.runs ?? []) {
+    if (run.kind !== "gold_standard_validation") continue;
+    byId.set(run.id, run);
+  }
+
+  for (const run of options.settingsRuns ?? []) {
+    if (!run.id || byId.has(run.id)) continue;
+    byId.set(run.id, {
+      id: run.id,
+      kind: "gold_standard_validation",
+      label: run.label,
+      ranAt: run.ranAt,
+      modelName: run.modelName,
+      inputTokens: run.inputTokens,
+      outputTokens: run.outputTokens,
+      totalTokens: run.totalTokens,
+      costUsd: estimateCostUsd(run.modelName, run),
+    });
+  }
+
+  return [...byId.values()].sort((left, right) =>
+    left.ranAt.localeCompare(right.ranAt),
+  );
+}
+
+/** Stored on meetings_v2.settings for gold-standard compare usage. */
+export type GoldStandardValidationUsageRun = {
+  id: string;
+  label: string;
+  ranAt: string;
+  modelName: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+};
+
 export function sumAiUsageRuns(runs: AiUsageRun[]): {
   inputTokens: number;
   outputTokens: number;

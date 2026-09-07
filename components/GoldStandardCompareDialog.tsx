@@ -9,6 +9,7 @@ type Props = {
   open: boolean;
   meetingId: string | null;
   meetingTitle: string | null;
+  endpoint?: string;
   onClose: () => void;
   onSuccess: (validation: GoldStandardValidationResult, aiUsageJson: string) => void;
 };
@@ -17,6 +18,7 @@ export function GoldStandardCompareDialog({
   open,
   meetingId,
   meetingTitle,
+  endpoint,
   onClose,
   onSuccess,
 }: Props) {
@@ -54,8 +56,10 @@ export function GoldStandardCompareDialog({
     try {
       setLoading(true);
 
+      const targetEndpoint =
+        endpoint || `/api/meetings/${meetingId}/compare-gold-standard`;
       const response = await fetch(
-        `/api/meetings/${meetingId}/compare-gold-standard`,
+        targetEndpoint,
         {
           method: "POST",
           body: formData,

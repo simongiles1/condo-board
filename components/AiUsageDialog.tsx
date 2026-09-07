@@ -26,6 +26,8 @@ import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 type DialogTab = "usage" | "watsonx";
 
 const TOOLTIP_VIEWPORT_MARGIN = 8;
+const USAGE_TABLE_GRID =
+  "grid grid-cols-[minmax(11rem,1.35fr)_repeat(4,minmax(5.5rem,1fr))]";
 
 function InfoCircleIcon() {
   return (
@@ -226,8 +228,10 @@ function UsageStageRow({
             : "No usage recorded";
 
     return (
-      <tr className="text-slate-500">
-        <td className="px-4 py-3 align-top">
+      <div
+        className={`${USAGE_TABLE_GRID} border-b border-slate-100 text-sm text-slate-500`}
+      >
+        <div className="px-4 py-3 align-top">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-slate-700">{stage.label}</span>
             <PipelineStageInfoTooltip stageId={stage.id} label={stage.label} />
@@ -241,20 +245,20 @@ function UsageStageRow({
           {stage.usageDetail ? (
             <div className="mt-1 text-[11px] font-medium text-slate-600">{stage.usageDetail}</div>
           ) : null}
-        </td>
-        <td className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</td>
-        <td className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</td>
-        <td className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</td>
-        <td className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</td>
-      </tr>
+        </div>
+        <div className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</div>
+        <div className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</div>
+        <div className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</div>
+        <div className="px-4 py-3 text-right align-top font-mono text-slate-400">N/A</div>
+      </div>
     );
   }
 
   const breakdown = estimateCostBreakdown(stage.modelName, stage);
 
   return (
-    <tr>
-      <td className="px-4 py-3 align-top">
+    <div className={`${USAGE_TABLE_GRID} border-b border-slate-100 text-sm`}>
+      <div className="px-4 py-3 align-top">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium text-slate-900">{stage.label}</span>
           <PipelineStageInfoTooltip stageId={stage.id} label={stage.label} />
@@ -275,30 +279,30 @@ function UsageStageRow({
         {stage.usageDetail ? (
           <div className="mt-1 text-[11px] font-medium text-slate-600">{stage.usageDetail}</div>
         ) : null}
-      </td>
-      <td className="px-4 py-3 text-right align-top">
+      </div>
+      <div className="px-4 py-3 text-right align-top">
         <TokenCostCell
           tokenCount={stage.inputTokens}
           costUsd={breakdown.inputCostUsd}
           ratePerMillion={breakdown.pricing.inputPerMillion}
           showRate={showRatesInCells}
         />
-      </td>
-      <td className="px-4 py-3 text-right align-top">
+      </div>
+      <div className="px-4 py-3 text-right align-top">
         <TokenCostCell
           tokenCount={stage.outputTokens}
           costUsd={breakdown.outputCostUsd}
           ratePerMillion={breakdown.pricing.outputPerMillion}
           showRate={showRatesInCells}
         />
-      </td>
-      <td className="px-4 py-3 text-right align-top font-mono text-slate-800">
+      </div>
+      <div className="px-4 py-3 text-right align-top font-mono text-slate-800">
         {formatTokenCount(stage.totalTokens)}
-      </td>
-      <td className="px-4 py-3 text-right align-top font-mono font-medium text-slate-900">
+      </div>
+      <div className="px-4 py-3 text-right align-top font-mono font-medium text-slate-900">
         {formatCostUsd(breakdown.totalCostUsd)}
-      </td>
-    </tr>
+      </div>
+    </div>
   );
 }
 
@@ -382,6 +386,7 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
   const headerDeepSeekOffPeak = uniqueModels.length === 1 &&
     isDeepSeekModelName(uniqueModels[0]);
   const showRatesInCells = uniqueModels.length !== 1;
+  const usageTableReady = activeTab === "usage" && !loading && resolvedStages.length > 0;
 
   if (!open) return null;
 
@@ -408,7 +413,7 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
           </h2>
           <p className="mt-1 text-sm text-slate-600">
             {activeTab === "usage"
-              ? "All seven workflow steps — token costs for automated stages, manual steps marked N/A."
+              ? "Workflow stages plus gold-standard compare runs — token costs for automated stages, manual steps marked N/A."
               : "IBM watsonx Docling trial keys loaded from .env.local and their spend."}
           </p>
           <div
@@ -445,7 +450,13 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div
+          className={`min-h-0 flex-1 px-6 py-5 ${
+            usageTableReady
+              ? "flex flex-col overflow-hidden"
+              : "overflow-y-auto"
+          }`}
+        >
           {activeTab === "usage" ? (
             <>
           {loading ? (
@@ -458,151 +469,133 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
               track usage automatically; older meetings do not.
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-left font-semibold text-slate-700"
-                    >
-                      Stage
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-right font-semibold text-slate-700"
-                    >
-                      <div>Input tokens</div>
-                      <div className="mt-1 text-xs font-normal text-slate-500">
-                        {headerDeepSeekOffPeak
-                          ? `${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheMissPerMillion)}/M miss · ${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheHitPerMillion)}/M hit`
-                          : headerPricing
-                            ? `${formatPricePerMillion(headerPricing.inputPerMillion)}/M`
-                            : "Rate varies by model"}
-                      </div>
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-right font-semibold text-slate-700"
-                    >
-                      <div>Output tokens</div>
-                      <div className="mt-1 text-xs font-normal text-slate-500">
-                        {headerDeepSeekOffPeak
-                          ? `${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.outputPerMillion)}/M off-peak`
-                          : headerPricing
-                            ? `${formatPricePerMillion(headerPricing.outputPerMillion)}/M`
-                            : "Rate varies by model"}
-                      </div>
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-right font-semibold text-slate-700"
-                    >
-                      Total tokens
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-right font-semibold text-slate-700"
-                    >
-                      Est. cost
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {resolvedStages.map((stage) => (
-                    <UsageStageRow
-                      key={stage.id}
-                      stage={stage}
-                      showRatesInCells={showRatesInCells}
-                    />
-                  ))}
-                </tbody>
-                <tfoot className="bg-slate-50">
-                  <tr>
-                    <th
-                      scope="row"
-                      className="px-4 py-3 text-left font-semibold text-slate-900"
-                    >
-                      Total
-                    </th>
-                    <td className="px-4 py-3 text-right align-top">
-                      <div className="space-y-1">
-                        <div className="font-mono font-semibold text-slate-900">
-                          {formatTokenCount(totals.inputTokens)}
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200">
+              <div
+                className={`${USAGE_TABLE_GRID} shrink-0 border-b border-slate-200 bg-slate-50 text-sm`}
+              >
+                <div className="px-4 py-3 text-left font-semibold text-slate-700">
+                  Stage
+                </div>
+                <div className="px-4 py-3 text-right font-semibold text-slate-700">
+                  <div>Input tokens</div>
+                  <div className="mt-1 text-xs font-normal text-slate-500">
+                    {headerDeepSeekOffPeak
+                      ? `${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheMissPerMillion)}/M miss · ${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheHitPerMillion)}/M hit`
+                      : headerPricing
+                        ? `${formatPricePerMillion(headerPricing.inputPerMillion)}/M`
+                        : "Rate varies by model"}
+                  </div>
+                </div>
+                <div className="px-4 py-3 text-right font-semibold text-slate-700">
+                  <div>Output tokens</div>
+                  <div className="mt-1 text-xs font-normal text-slate-500">
+                    {headerDeepSeekOffPeak
+                      ? `${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.outputPerMillion)}/M off-peak`
+                      : headerPricing
+                        ? `${formatPricePerMillion(headerPricing.outputPerMillion)}/M`
+                        : "Rate varies by model"}
+                  </div>
+                </div>
+                <div className="px-4 py-3 text-right font-semibold text-slate-700">
+                  Total tokens
+                </div>
+                <div className="px-4 py-3 text-right font-semibold text-slate-700">
+                  Est. cost
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto bg-white">
+                {resolvedStages.map((stage) => (
+                  <UsageStageRow
+                    key={stage.id}
+                    stage={stage}
+                    showRatesInCells={showRatesInCells}
+                  />
+                ))}
+              </div>
+
+              <div
+                className={`${USAGE_TABLE_GRID} shrink-0 border-t border-slate-200 bg-slate-50 text-sm`}
+              >
+                <div className="px-4 py-3 text-left font-semibold text-slate-900">
+                  Total
+                </div>
+                <div className="px-4 py-3 text-right align-top">
+                  <div className="space-y-1">
+                    <div className="font-mono font-semibold text-slate-900">
+                      {formatTokenCount(totals.inputTokens)}
+                    </div>
+                    <div className="font-mono text-xs font-semibold text-slate-600">
+                      {formatCostUsd(totals.inputCostUsd)}
+                    </div>
+                    {offPeakOptimization ? (
+                      <div className="mt-2 space-y-1 border-t border-slate-200 pt-2 text-[11px] leading-snug text-slate-500">
+                        <div>
+                          Cached in{" "}
+                          <span className="font-mono text-slate-700">
+                            {formatTokenCount(offPeakOptimization.cacheHitTokens)}
+                          </span>
+                          <span className="font-mono text-slate-600">
+                            {" "}
+                            → {formatCostUsd(offPeakOptimization.offPeakInputCacheHitCostUsd)}
+                          </span>
                         </div>
-                        <div className="font-mono text-xs font-semibold text-slate-600">
-                          {formatCostUsd(totals.inputCostUsd)}
+                        <div>
+                          Uncached in{" "}
+                          <span className="font-mono text-slate-700">
+                            {formatTokenCount(offPeakOptimization.cacheMissTokens)}
+                          </span>
+                          <span className="font-mono text-slate-600">
+                            {" "}
+                            → {formatCostUsd(offPeakOptimization.offPeakInputCacheMissCostUsd)}
+                          </span>
                         </div>
-                        {offPeakOptimization ? (
-                          <div className="mt-2 space-y-1 border-t border-slate-200 pt-2 text-[11px] leading-snug text-slate-500">
-                            <div>
-                              Cached in{" "}
-                              <span className="font-mono text-slate-700">
-                                {formatTokenCount(offPeakOptimization.cacheHitTokens)}
-                              </span>
-                              <span className="font-mono text-slate-600">
-                                {" "}
-                                → {formatCostUsd(offPeakOptimization.offPeakInputCacheHitCostUsd)}
-                              </span>
-                            </div>
-                            <div>
-                              Uncached in{" "}
-                              <span className="font-mono text-slate-700">
-                                {formatTokenCount(offPeakOptimization.cacheMissTokens)}
-                              </span>
-                              <span className="font-mono text-slate-600">
-                                {" "}
-                                → {formatCostUsd(offPeakOptimization.offPeakInputCacheMissCostUsd)}
-                              </span>
-                            </div>
-                          </div>
-                        ) : null}
                       </div>
-                    </td>
-                    <td className="px-4 py-3 text-right align-top">
-                      <div className="space-y-1">
-                        <div className="font-mono font-semibold text-slate-900">
-                          {formatTokenCount(totals.outputTokens)}
-                        </div>
-                        <div className="font-mono text-xs font-semibold text-slate-600">
-                          {formatCostUsd(totals.outputCostUsd)}
-                        </div>
-                        {offPeakOptimization ? (
-                          <div className="mt-2 border-t border-slate-200 pt-2 text-[11px] text-slate-500">
-                            <span className="font-mono text-slate-600">
-                              Off-peak out → {formatCostUsd(offPeakOptimization.offPeakOutputCostUsd)}
-                            </span>
-                          </div>
-                        ) : null}
+                    ) : null}
+                  </div>
+                </div>
+                <div className="px-4 py-3 text-right align-top">
+                  <div className="space-y-1">
+                    <div className="font-mono font-semibold text-slate-900">
+                      {formatTokenCount(totals.outputTokens)}
+                    </div>
+                    <div className="font-mono text-xs font-semibold text-slate-600">
+                      {formatCostUsd(totals.outputCostUsd)}
+                    </div>
+                    {offPeakOptimization ? (
+                      <div className="mt-2 border-t border-slate-200 pt-2 text-[11px] text-slate-500">
+                        <span className="font-mono text-slate-600">
+                          Off-peak out → {formatCostUsd(offPeakOptimization.offPeakOutputCostUsd)}
+                        </span>
                       </div>
-                    </td>
-                    <td className="px-4 py-3 text-right align-top font-mono font-semibold text-slate-900">
-                      {formatTokenCount(totals.totalTokens)}
-                    </td>
-                    <td className="px-4 py-3 text-right align-top">
-                      <div className="font-mono font-semibold text-teal-800">
-                        {formatCostUsd(totals.costUsd)}
+                    ) : null}
+                  </div>
+                </div>
+                <div className="px-4 py-3 text-right align-top font-mono font-semibold text-slate-900">
+                  {formatTokenCount(totals.totalTokens)}
+                </div>
+                <div className="px-4 py-3 text-right align-top">
+                  <div className="font-mono font-semibold text-teal-800">
+                    {formatCostUsd(totals.costUsd)}
+                  </div>
+                  {offPeakOptimization ? (
+                    <div className="mt-2 space-y-1 border-t border-slate-200 pt-2">
+                      <div className="flex items-center justify-end gap-1.5 text-[11px] font-medium text-slate-600">
+                        <span>Off-peak optimized</span>
+                        <DeepSeekPromptCacheInfoTooltip />
                       </div>
-                      {offPeakOptimization ? (
-                        <div className="mt-2 space-y-1 border-t border-slate-200 pt-2">
-                          <div className="flex items-center justify-end gap-1.5 text-[11px] font-medium text-slate-600">
-                            <span>Off-peak optimized</span>
-                            <DeepSeekPromptCacheInfoTooltip />
-                          </div>
-                          <div className="font-mono text-xs font-semibold text-emerald-700">
-                            {formatCostUsd(offPeakOptimization.offPeakTotalCostUsd)}
-                          </div>
-                        </div>
-                      ) : null}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
+                      <div className="font-mono text-xs font-semibold text-emerald-700">
+                        {formatCostUsd(offPeakOptimization.offPeakTotalCostUsd)}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </div>
           )}
 
           {resolvedStages.length > 0 ? (
-            <p className="mt-4 text-xs text-slate-500">
+            <p className="mt-4 shrink-0 text-xs text-slate-500">
               Costs are recalculated from token counts stored for this meeting using
               published DeepSeek V4 Flash rates (non-thinking mode): off-peak input
               $0.22/M cache miss and $0.007/M cache hit, output $0.66/M; peak rates
@@ -611,7 +604,8 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
               and 06:00–10:00 UTC Monday–Friday. Each API call is priced at the tier active
               when it ran; stages that cross an hour boundary may show &quot;Peak + off-peak&quot;.
               Validate-stage usage is included from runs after this update; older
-              meetings may under-report that stage. Your provider dashboard may still
+              meetings may under-report that stage. Gold-standard compare runs appear
+              after the seven workflow stages. Your provider dashboard may still
               differ slightly when billing includes retries or calls not yet written
               to the database. Ingest Docling page counts appear when markdown
               extraction was stored; dollar cost for Docling is on the WatsonX tab.

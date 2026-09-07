@@ -2,6 +2,7 @@ import { count, eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2AgendaChunkSnapshots } from "@/lib/db/schema";
+import type { GoldStandardValidationUsageRun } from "@/lib/gemini/usage";
 
 export type MeetingV2ValidationUsageSource = "pipeline" | "re_evaluate";
 
@@ -30,6 +31,12 @@ export type MeetingV2Settings = {
   extractionRun?: MeetingV2ExtractionRun;
   /** Accumulated DeepSeek usage for the validate stage (per-item AI reviews). */
   validationUsage?: MeetingV2StageTokenUsage;
+  /** Relative path to uploaded gold-standard PDF. */
+  goldStandardFilePath?: string | null;
+  /** Cached gold-standard validation JSON. */
+  goldStandardValidationJson?: string | null;
+  /** Per-run LLM usage from gold-standard compare (appended each comparison). */
+  goldStandardValidationRuns?: GoldStandardValidationUsageRun[];
 };
 
 export type MeetingV2ExtractionRun = {

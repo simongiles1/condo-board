@@ -20,8 +20,14 @@ import {
 
 type ValidationTab = "generatedOnly" | "goldOnly";
 
+export type GoldStandardMeetingSummary = {
+  title: string;
+  meetingDate?: string;
+  aiUsageJson?: string | null;
+};
+
 type Props = {
-  meeting: Meeting | null;
+  meeting: GoldStandardMeetingSummary | null;
   validation: GoldStandardValidationResult | null;
   onClose: () => void;
   onReCompare: () => void;

@@ -11,7 +11,9 @@ import {
   meetingsV2ValidationResults,
 } from "@/lib/db/schema-v2";
 import {
+  collectGoldStandardValidationRuns,
   flattenAiUsageToStages,
+  goldStandardValidationRunsToStages,
   parseStoredAiUsage,
   type AiUsageStageRow,
   type TokenUsage,
@@ -21,7 +23,10 @@ import {
   type DeepSeekBillableUsage,
   type DeepSeekPricingTier,
 } from "@/lib/deepseek/pricing";
-import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
+import {
+  readMeetingV2Settings,
+  type MeetingV2Settings,
+} from "@/lib/meeting-v2/extraction-diagnostics";
 import { isLikelyDoclingMarkdown } from "@/lib/meeting-v2/pdf";
 import { MEETING_V2_USAGE_STAGE_DEFINITIONS } from "@/lib/meeting-v2/workflow-progress";
 
@@ -504,8 +509,9 @@ export async function loadMeetingV2AiUsageStages(
   }
 
   const validationResultCount = Number(validationCountRow[0]?.value ?? 0);
+  const v2Settings = (v2Meeting[0]?.settings as MeetingV2Settings | null) ?? null;
 
-  return MEETING_V2_USAGE_STAGE_DEFINITIONS.map((stage) => {
+  const workflowStages = MEETING_V2_USAGE_STAGE_DEFINITIONS.map((stage) => {
     const recorded = usageByStageId.get(stage.id);
     if (recorded && !recorded.notApplicable) {
       return {
@@ -541,4 +547,13 @@ export async function loadMeetingV2AiUsageStages(
               : undefined,
     });
   });
+
+  const goldStandardStages = goldStandardValidationRunsToStages(
+    collectGoldStandardValidationRuns({
+      aiUsageJson: legacyMeeting[0]?.aiUsageJson,
+      settingsRuns: v2Settings?.goldStandardValidationRuns,
+    }),
+  );
+
+  return [...workflowStages, ...goldStandardStages];
 }

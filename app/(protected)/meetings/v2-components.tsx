@@ -1,7 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, useRef, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+  type ReactNode,
+} from "react";
 import { MinutesStructuredEditor } from "@/components/MinutesStructuredEditor";
 import { AttendeesEditorDialog } from "@/components/AttendeesEditorDialog";
 import { MeetingDocumentsDialog } from "@/components/MeetingDocumentsDialog";
@@ -15,6 +22,13 @@ import {
   PipelineRunConfirmDialog,
   type PipelineConfirmAction,
 } from "@/components/PipelineRunConfirmDialog";
+import { GoldStandardValidationBadge } from "@/components/GoldStandardValidationBadge";
+import { GoldStandardCompareDialog } from "@/components/GoldStandardCompareDialog";
+import { GoldStandardValidationSidePanel } from "@/components/GoldStandardValidationSidePanel";
+import {
+  parseStoredGoldStandardValidation,
+  type GoldStandardValidationResult,
+} from "@/lib/minutes/gold-standard-schema";
 import type { EditableAttendance } from "@/lib/minutes/attendance-edit";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
@@ -72,6 +86,9 @@ type MeetingV2Status = {
       note: string;
     };
     pipelineActivelyRunning: boolean;
+    goldStandardFilePath?: string | null;
+    goldStandardValidationJson?: string | null;
+    aiUsageJson?: string | null;
   };
   items: Array<{
     id: string;
@@ -213,6 +230,74 @@ function tabTone(active: boolean): string {
 }
 
 export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
+  const [panelMeetingId, setPanelMeetingId] = useState<string | null>(null);
+  const [compareDialogMeetingId, setCompareDialogMeetingId] = useState<string | null>(null);
+  const [liveValidationByMeetingId, setLiveValidationByMeetingId] = useState<
+    Record<string, GoldStandardValidationResult>
+  >({});
+  const [liveAiUsageByMeetingId, setLiveAiUsageByMeetingId] = useState<
+    Record<string, string>
+  >({});
+
+  const panelMeeting = useMemo(() => {
+    const meeting = meetings.find((row) => row.id === panelMeetingId) ?? null;
+    if (!meeting) return null;
+    const aiUsageJson =
+      liveAiUsageByMeetingId[meeting.id] ?? meeting.aiUsageJson ?? null;
+    return { title: meeting.title, meetingDate: meeting.meetingDate, aiUsageJson };
+  }, [meetings, panelMeetingId, liveAiUsageByMeetingId]);
+
+  const compareDialogMeeting = useMemo(
+    () => meetings.find((m) => m.id === compareDialogMeetingId) ?? null,
+    [meetings, compareDialogMeetingId],
+  );
+
+  const panelValidation = useMemo(() => {
+    if (!panelMeetingId) return null;
+    if (liveValidationByMeetingId[panelMeetingId]) {
+      return liveValidationByMeetingId[panelMeetingId];
+    }
+    const meeting = meetings.find((row) => row.id === panelMeetingId);
+    return parseStoredGoldStandardValidation(meeting?.goldStandardValidationJson);
+  }, [panelMeetingId, liveValidationByMeetingId, meetings]);
+
+  const getValidationScore = useCallback(
+    (meeting: MeetingCard): number | null => {
+      const live = liveValidationByMeetingId[meeting.id];
+      if (live) return live.validationScore;
+      const stored = parseStoredGoldStandardValidation(meeting.goldStandardValidationJson);
+      return stored?.validationScore ?? null;
+    },
+    [liveValidationByMeetingId],
+  );
+
+  function handleValidationBadgeClick(meeting: MeetingCard) {
+    const score = getValidationScore(meeting);
+    if (score !== null) {
+      setPanelMeetingId(meeting.id);
+      return;
+    }
+    setCompareDialogMeetingId(meeting.id);
+  }
+
+  function handleCompareSuccess(
+    validation: GoldStandardValidationResult,
+    aiUsageJson: string,
+  ) {
+    if (!compareDialogMeetingId) return;
+    setLiveValidationByMeetingId((current) => ({
+      ...current,
+      [compareDialogMeetingId]: validation,
+    }));
+    setLiveAiUsageByMeetingId((current) => ({
+      ...current,
+      [compareDialogMeetingId]: aiUsageJson,
+    }));
+    const targetMeetingId = compareDialogMeetingId;
+    setCompareDialogMeetingId(null);
+    setPanelMeetingId(targetMeetingId);
+  }
+
   if (meetings.length === 0) {
     return (
       <div className="mt-4 rounded-3xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
@@ -222,47 +307,80 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
   }
 
   return (
-    <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {meetings.map((meeting) => (
-        <Link
-          key={meeting.id}
-          href={`/operations/meetings/v2/${meeting.id}`}
-          className="group overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
-        >
-          <div className="border-b border-slate-100 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-700 px-6 py-5 text-white">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/70">Meeting V2</p>
-            <h3 className="mt-2 line-clamp-2 text-lg font-semibold">{meeting.title}</h3>
-          </div>
-          <div className="space-y-4 px-6 py-5">
-            <div className="flex items-center justify-between text-sm text-slate-600">
-              <span>{formatDate(meeting.meetingDate)}</span>
-              <span
-                className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${statusTone(meeting.pipelineState)}`}
-                title={getMeetingV2PipelineStateDescription(meeting.pipelineState)}
-              >
-                {startCase(meeting.pipelineState)}
-              </span>
+    <>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {meetings.map((meeting) => (
+          <Link
+            key={meeting.id}
+            href={`/operations/meetings/v2/${meeting.id}`}
+            className="group overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+          >
+            <div className="border-b border-slate-100 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-700 px-6 py-5 text-white">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/70">Meeting V2</p>
+              <h3 className="mt-2 line-clamp-2 text-lg font-semibold">{meeting.title}</h3>
             </div>
-            <div className="space-y-2">
-              <span
-                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${stageTone(meeting.progressStatus)}`}
-              >
-                <span>{meeting.progressLabel}</span>
-                <span className="rounded-full border border-current/20 px-2 py-0.5 text-[10px] font-bold tabular-nums tracking-normal">
-                  {meeting.progressStepNumber}/{meeting.progressTotalSteps}
+            <div className="space-y-4 px-6 py-5">
+              <div className="flex items-center justify-between text-sm text-slate-600">
+                <span>{formatDate(meeting.meetingDate)}</span>
+                <div className="flex items-center gap-2">
+                  <div
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                  >
+                    <GoldStandardValidationBadge
+                      validationScore={getValidationScore(meeting)}
+                      onClick={() => handleValidationBadgeClick(meeting)}
+                    />
+                  </div>
+                  <span
+                    className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${statusTone(meeting.pipelineState)}`}
+                    title={getMeetingV2PipelineStateDescription(meeting.pipelineState)}
+                  >
+                    {startCase(meeting.pipelineState)}
+                  </span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <span
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${stageTone(meeting.progressStatus)}`}
+                >
+                  <span>{meeting.progressLabel}</span>
+                  <span className="rounded-full border border-current/20 px-2 py-0.5 text-[10px] font-bold tabular-nums tracking-normal">
+                    {meeting.progressStepNumber}/{meeting.progressTotalSteps}
+                  </span>
                 </span>
-              </span>
-              <p className="min-h-[2.5rem] text-sm leading-6 text-slate-600">
-                {meeting.progressNote}
-              </p>
+                <p className="min-h-[2.5rem] text-sm leading-6 text-slate-600">
+                  {meeting.progressNote}
+                </p>
+              </div>
+              <div className="text-sm font-medium text-slate-900 transition-colors group-hover:text-teal-700">
+                Open workspace &rarr;
+              </div>
             </div>
-            <div className="text-sm font-medium text-slate-900 transition-colors group-hover:text-teal-700">
-              Open workspace &rarr;
-            </div>
-          </div>
-        </Link>
-      ))}
-    </div>
+          </Link>
+        ))}
+      </div>
+
+      <GoldStandardCompareDialog
+        open={compareDialogMeetingId !== null}
+        meetingId={compareDialogMeetingId}
+        meetingTitle={compareDialogMeeting?.title ?? null}
+        onClose={() => setCompareDialogMeetingId(null)}
+        onSuccess={handleCompareSuccess}
+      />
+
+      <GoldStandardValidationSidePanel
+        meeting={panelMeeting}
+        validation={panelValidation}
+        onClose={() => setPanelMeetingId(null)}
+        onReCompare={() => {
+          if (!panelMeetingId) return;
+          setCompareDialogMeetingId(panelMeetingId);
+        }}
+      />
+    </>
   );
 }
 
@@ -279,8 +397,47 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [usageStages, setUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [pollWindowUntil, setPollWindowUntil] = useState<number | null>(null);
+  const [compareDialogOpen, setCompareDialogOpen] = useState(false);
+  const [sidePanelOpen, setSidePanelOpen] = useState(false);
+  const [liveValidation, setLiveValidation] =
+    useState<GoldStandardValidationResult | null>(null);
+  const [liveAiUsage, setLiveAiUsage] = useState<string | null>(null);
   const statusRequestSeq = useRef(0);
   const statusAbortRef = useRef<AbortController | null>(null);
+
+  const currentValidation = useMemo(() => {
+    if (liveValidation) return liveValidation;
+    return parseStoredGoldStandardValidation(
+      status?.meeting.goldStandardValidationJson,
+    );
+  }, [liveValidation, status?.meeting.goldStandardValidationJson]);
+
+  const validationScore = currentValidation?.validationScore ?? null;
+
+  function handleValidationBadgeClick() {
+    if (validationScore !== null) {
+      setSidePanelOpen(true);
+    } else {
+      setCompareDialogOpen(true);
+    }
+  }
+
+  function handleCompareSuccess(
+    validation: GoldStandardValidationResult,
+    aiUsageJson: string,
+  ) {
+    setLiveValidation(validation);
+    setLiveAiUsage(aiUsageJson);
+    setCompareDialogOpen(false);
+    setSidePanelOpen(true);
+    void refreshStatus({ allowHidden: true });
+    void fetch(`/api/v2/meetings/${meetingId}/ai-usage`, { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { stages?: AiUsageStageRow[] } | null) => {
+        if (payload?.stages) setUsageStages(payload.stages);
+      })
+      .catch(() => undefined);
+  }
 
   const kickPollWindow = useCallback((durationMs = 120_000) => {
     setPollWindowUntil(Date.now() + durationMs);
@@ -471,7 +628,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         draft: MeetingV2Status["latestDraft"];
       };
       if (payload.draft && active) {
-        setStatus((current) => (current ? { ...current, latestDraft: payload.draft } : current));
+        setStatus((current) =>
+          current ? { ...current, latestDraft: payload.draft ?? null } : current,
+        );
       }
     }
 
@@ -526,7 +685,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         return;
       }
       if (payload.draft) {
-        setStatus((current) => (current ? { ...current, latestDraft: payload.draft } : current));
+        setStatus((current) =>
+          current ? { ...current, latestDraft: payload.draft ?? null } : current,
+        );
         setActiveTab("draft");
       }
     } finally {
@@ -694,6 +855,10 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 </button>
               ) : null}
               <div className="flex items-center gap-2">
+                <GoldStandardValidationBadge
+                  validationScore={validationScore}
+                  onClick={handleValidationBadgeClick}
+                />
                 <AiUsageIconButton
                   tone="inverse"
                   onClick={() => setUsageDialogOpen(true)}
@@ -796,6 +961,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                     draft={status.latestDraft}
                     draftBusy={draftBusy}
                     draftError={draftError}
+                    validationScore={validationScore}
+                    onValidationBadgeClick={handleValidationBadgeClick}
                     onGenerateDraft={handleGenerateDraft}
                   />
                 ) : null}
@@ -829,6 +996,30 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         stages={usageStages}
         loading={usageLoading}
         onClose={() => setUsageDialogOpen(false)}
+      />
+      <GoldStandardCompareDialog
+        open={compareDialogOpen}
+        meetingId={meetingId}
+        meetingTitle={status?.meeting.title ?? null}
+        onClose={() => setCompareDialogOpen(false)}
+        onSuccess={handleCompareSuccess}
+      />
+      <GoldStandardValidationSidePanel
+        meeting={
+          status?.meeting
+            ? {
+                title: status.meeting.title,
+                meetingDate: status.meeting.meetingDate,
+                aiUsageJson: liveAiUsage ?? status.meeting.aiUsageJson ?? null,
+              }
+            : null
+        }
+        validation={currentValidation}
+        onClose={() => setSidePanelOpen(false)}
+        onReCompare={() => {
+          setSidePanelOpen(false);
+          setCompareDialogOpen(true);
+        }}
       />
     </div>
   );
@@ -1822,12 +2013,16 @@ function DraftWorkspacePanel({
   draft,
   draftBusy,
   draftError,
+  validationScore,
+  onValidationBadgeClick,
   onGenerateDraft,
 }: {
   meetingId: string;
   draft: MeetingV2Status["latestDraft"] | null;
   draftBusy: boolean;
   draftError: string | null;
+  validationScore?: number | null;
+  onValidationBadgeClick?: () => void;
   onGenerateDraft: () => void;
 }) {
   const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
@@ -1858,7 +2053,17 @@ function DraftWorkspacePanel({
       ) : (
         <>
           <div className="mb-3 flex items-center justify-between">
-            <span className="text-sm text-slate-600">Edit the draft or preview the PDF layout.</span>
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-slate-600">
+                Edit the draft or preview the PDF layout.
+              </span>
+              {onValidationBadgeClick ? (
+                <GoldStandardValidationBadge
+                  validationScore={validationScore ?? null}
+                  onClick={onValidationBadgeClick}
+                />
+              ) : null}
+            </div>
             <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
               <button
                 onClick={() => setEditorMode("edit")}

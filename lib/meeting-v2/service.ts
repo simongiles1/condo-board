@@ -102,6 +102,9 @@ export type MeetingV2Detail = {
       isConsistent: boolean;
       note: string;
     };
+    goldStandardFilePath?: string | null;
+    goldStandardValidationJson?: string | null;
+    aiUsageJson?: string | null;
   };
   items: Array<{
     id: string;
@@ -744,6 +747,8 @@ export type MeetingV2DashboardCard = Pick<
   progressTotalSteps: number;
   progressNote: string;
   progressStatus: "complete" | "in_progress" | "incomplete";
+  goldStandardValidationJson?: string | null;
+  aiUsageJson?: string | null;
 };
 
 export async function loadMeetingsV2DashboardCards(
@@ -754,29 +759,45 @@ export async function loadMeetingsV2DashboardCards(
   const db = getDb();
   const meetingIds = meetingRows.map((meeting) => meeting.id);
 
-  const countsByMeetingId = await getMeetingV2CountsBulk(meetingIds);
-  const investigationRows = await db
-    .select({
-      meetingV2Id: meetingsV2AgendaItemInvestigations.meetingV2Id,
-      openQuestionsJson: meetingsV2AgendaItemInvestigations.openQuestionsJson,
-    })
-    .from(meetingsV2AgendaItemInvestigations)
-    .where(inArray(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingIds));
-  const validationRows = await db
-    .select({
-      meetingV2Id: meetingsV2ValidationResults.meetingV2Id,
-      agendaItemId: meetingsV2ValidationResults.agendaItemId,
-      severity: meetingsV2ValidationResults.severity,
-    })
-    .from(meetingsV2ValidationResults)
-    .where(inArray(meetingsV2ValidationResults.meetingV2Id, meetingIds));
-  const draftRows = await db
-    .select({
-      meetingV2Id: meetingsV2MinutesDrafts.meetingV2Id,
-      id: meetingsV2MinutesDrafts.id,
-    })
-    .from(meetingsV2MinutesDrafts)
-    .where(inArray(meetingsV2MinutesDrafts.meetingV2Id, meetingIds));
+  const [countsByMeetingId, investigationRows, validationRows, draftRows, legacyRows] =
+    await Promise.all([
+      getMeetingV2CountsBulk(meetingIds),
+      db
+        .select({
+          meetingV2Id: meetingsV2AgendaItemInvestigations.meetingV2Id,
+          openQuestionsJson:
+            meetingsV2AgendaItemInvestigations.openQuestionsJson,
+        })
+        .from(meetingsV2AgendaItemInvestigations)
+        .where(
+          inArray(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingIds),
+        ),
+      db
+        .select({
+          meetingV2Id: meetingsV2ValidationResults.meetingV2Id,
+          agendaItemId: meetingsV2ValidationResults.agendaItemId,
+          severity: meetingsV2ValidationResults.severity,
+        })
+        .from(meetingsV2ValidationResults)
+        .where(inArray(meetingsV2ValidationResults.meetingV2Id, meetingIds)),
+      db
+        .select({
+          meetingV2Id: meetingsV2MinutesDrafts.meetingV2Id,
+          id: meetingsV2MinutesDrafts.id,
+        })
+        .from(meetingsV2MinutesDrafts)
+        .where(inArray(meetingsV2MinutesDrafts.meetingV2Id, meetingIds)),
+      db
+        .select({
+          id: meetings.id,
+          goldStandardValidationJson: meetings.goldStandardValidationJson,
+          aiUsageJson: meetings.aiUsageJson,
+        })
+        .from(meetings)
+        .where(inArray(meetings.id, meetingIds)),
+    ]);
+
+  const legacyByMeetingId = new Map(legacyRows.map((row) => [row.id, row]));
 
   const investigationsByMeetingId = new Map<string, typeof investigationRows>();
   for (const row of investigationRows) {
@@ -852,6 +873,14 @@ export async function loadMeetingsV2DashboardCards(
       workflowProgress.steps[workflowProgress.steps.length - 1];
     const activeStepIndex = workflowProgress.steps.findIndex((step) => step.key === activeStep.key);
 
+    const legacy = legacyByMeetingId.get(meeting.id);
+    const settings = (meeting.settings as MeetingV2Settings) || {};
+    const goldStandardValidationJson =
+      settings.goldStandardValidationJson ??
+      legacy?.goldStandardValidationJson ??
+      null;
+    const aiUsageJson = legacy?.aiUsageJson ?? null;
+
     return {
       id: meeting.id,
       title: meeting.title,
@@ -862,6 +891,8 @@ export async function loadMeetingsV2DashboardCards(
       progressTotalSteps: workflowProgress.totalCount,
       progressNote: displayProgress.currentStep,
       progressStatus: activeStep?.status ?? "incomplete",
+      goldStandardValidationJson,
+      aiUsageJson,
     };
   });
 }
@@ -1074,6 +1105,77 @@ async function ensureSourceArtifact(
     pageCount,
     createdAt,
   } satisfies typeof meetingsV2SourceArtifacts.$inferInsert;
+  await db.insert(meetingsV2SourceArtifacts).values(row);
+  return row;
+}
+
+export async function saveMeetingV2GoldStandardArtifact(
+  meetingId: string,
+  storedPath: string,
+  originalFilename: string,
+  mimeType: string,
+  pageCount: number | null,
+): Promise<typeof meetingsV2SourceArtifacts.$inferSelect> {
+  const db = getDb();
+  const absolutePath = resolveStoredPath(storedPath);
+  if (!absolutePath) {
+    throw new Error(`Missing storage path for gold_standard_minutes.`);
+  }
+  const buffer = await readFile(absolutePath);
+  const createdAt = nowIso();
+  const checksum = checksumFor(buffer);
+  const sizeBytes = buffer.byteLength;
+
+  const [existing] = await db
+    .select()
+    .from(meetingsV2SourceArtifacts)
+    .where(
+      and(
+        eq(meetingsV2SourceArtifacts.meetingV2Id, meetingId),
+        eq(meetingsV2SourceArtifacts.type, "gold_standard_minutes"),
+      ),
+    );
+
+  if (existing) {
+    await db
+      .update(meetingsV2SourceArtifacts)
+      .set({
+        storagePath: storedPath,
+        originalFilename,
+        mimeType,
+        checksum,
+        sizeBytes,
+        pageCount,
+        referenceClassification: "gold_standard",
+      })
+      .where(eq(meetingsV2SourceArtifacts.id, existing.id));
+
+    return {
+      ...existing,
+      storagePath: storedPath,
+      originalFilename,
+      mimeType,
+      checksum,
+      sizeBytes,
+      pageCount,
+      referenceClassification: "gold_standard",
+    };
+  }
+
+  const row = {
+    id: randomUUID(),
+    meetingV2Id: meetingId,
+    type: "gold_standard_minutes",
+    referenceClassification: "gold_standard",
+    originalFilename,
+    mimeType,
+    storagePath: storedPath,
+    checksum,
+    sizeBytes,
+    pageCount,
+    createdAt,
+  } satisfies typeof meetingsV2SourceArtifacts.$inferInsert;
+
   await db.insert(meetingsV2SourceArtifacts).values(row);
   return row;
 }
@@ -2929,6 +3031,9 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         vttFilePath: meetings.vttFilePath,
         boardPackageFilePath: meetings.boardPackageFilePath,
         pdfFilePath: meetings.pdfFilePath,
+        aiUsageJson: meetings.aiUsageJson,
+        goldStandardFilePath: meetings.goldStandardFilePath,
+        goldStandardValidationJson: meetings.goldStandardValidationJson,
       })
       .from(meetings)
       .where(eq(meetings.id, meetingId)),
@@ -3061,6 +3166,15 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
     (artifact) => artifact.type === "board_package",
   );
   const legacy = legacyMeeting[0];
+  const selectedSettings =
+    (selectedMeeting.settings as MeetingV2Settings) || {};
+  const goldStandardFilePath =
+    selectedSettings.goldStandardFilePath ?? legacy?.goldStandardFilePath ?? null;
+  const goldStandardValidationJson =
+    selectedSettings.goldStandardValidationJson ??
+    legacy?.goldStandardValidationJson ??
+    null;
+  const aiUsageJson = legacy?.aiUsageJson ?? null;
   const uploadRoot = path.resolve(process.cwd(), "uploads", meetingId);
   const transcriptPath = legacy?.vttFilePath
     ? path.resolve(process.cwd(), legacy.vttFilePath)
@@ -3092,6 +3206,9 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         lastError: selectedMeeting.lastError,
         updatedAt: selectedMeeting.updatedAt,
       }),
+      goldStandardFilePath,
+      goldStandardValidationJson,
+      aiUsageJson,
     },
     items: agendaItems.map((item) => {
       const investigation = investigations.find((entry) => entry.agendaItemId === item.id);

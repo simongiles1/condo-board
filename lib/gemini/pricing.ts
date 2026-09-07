@@ -20,7 +20,6 @@ export const MODEL_LIST_PRICING_USD_PER_MILLION: Record<
   "gemini-3.5-flash": { input: 1.5, output: 9 },
   "gemini-3.6-flash": { input: 1.5, output: 7.5 },
   "gemini-3.7-flash": { input: 1.5, output: 7.5 },
-  "deepseek-v4-flash": { input: 0.14, output: 0.28 },
 };
 
 /**
@@ -51,7 +50,6 @@ const MODEL_PRICING_ALIASES: Array<{
   { match: /gemini-2\.0-flash-lite/i, id: "gemini-2.0-flash-lite" },
   { match: /gemini-2\.0-flash/i, id: "gemini-2.0-flash" },
   { match: /gemini-2\.5-pro/i, id: "gemini-2.5-pro" },
-  { match: /deepseek-v4-flash/i, id: "deepseek-v4-flash" },
 ];
 
 export function geminiFlashIntroPricingActive(nowMs = Date.now()): boolean {

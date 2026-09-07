@@ -3,11 +3,22 @@ import { count, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2AgendaChunkSnapshots } from "@/lib/db/schema";
 
+export type MeetingV2ValidationUsageSegment = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheHitTokens?: number;
+  cacheMissTokens?: number;
+  billedAtMs: number;
+};
+
 export type MeetingV2StageTokenUsage = {
   modelName: string;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** Per-call usage for peak/off-peak and cache-aware billing. */
+  segments?: MeetingV2ValidationUsageSegment[];
 };
 
 export type MeetingV2Settings = {
@@ -131,7 +142,13 @@ export function readMeetingV2Settings(
 
 export async function recordMeetingV2ValidationUsage(
   meetingId: string,
-  usage: { inputTokens: number; outputTokens: number; totalTokens: number },
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cacheHitTokens?: number;
+    cacheMissTokens?: number;
+  },
   modelName: string,
 ): Promise<void> {
   const db = getDb();
@@ -142,6 +159,15 @@ export async function recordMeetingV2ValidationUsage(
 
   const settings = readMeetingV2Settings(row?.settings as MeetingV2Settings | null);
   const previous = settings.validationUsage;
+  const billedAtMs = Date.now();
+  const segment: MeetingV2ValidationUsageSegment = {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+    cacheHitTokens: usage.cacheHitTokens,
+    cacheMissTokens: usage.cacheMissTokens,
+    billedAtMs,
+  };
   const nextSettings: MeetingV2Settings = {
     ...settings,
     validationUsage: {
@@ -149,6 +175,7 @@ export async function recordMeetingV2ValidationUsage(
       inputTokens: (previous?.inputTokens ?? 0) + usage.inputTokens,
       outputTokens: (previous?.outputTokens ?? 0) + usage.outputTokens,
       totalTokens: (previous?.totalTokens ?? 0) + usage.totalTokens,
+      segments: [...(previous?.segments ?? []), segment],
     },
   };
 

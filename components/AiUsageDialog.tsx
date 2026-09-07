@@ -1,9 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 
 import { IbmDoclingSpendPanel, type IbmDoclingSpendSummary } from "@/components/IbmDoclingSpendPanel";
 import { PipelineStageInfoTooltip } from "@/components/PipelineStageInfoTooltip";
+import {
+  DEEPSEEK_V4_FLASH_OFF_PEAK_RATES,
+  isDeepSeekModelName,
+} from "@/lib/deepseek/pricing";
 import {
   estimateCostBreakdown,
   flattenAiUsageToStages,
@@ -11,12 +16,161 @@ import {
   formatPricePerMillion,
   formatTokenCount,
   getModelPricing,
+  summarizeDeepSeekOffPeakOptimization,
   sumAiUsageStages,
   type AiUsageLog,
   type AiUsageStageRow,
 } from "@/lib/gemini/usage";
+import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 
 type DialogTab = "usage" | "watsonx";
+
+const TOOLTIP_VIEWPORT_MARGIN = 8;
+
+function InfoCircleIcon() {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 24 24"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </svg>
+  );
+}
+
+function computeTooltipPosition(
+  triggerRect: DOMRect,
+  popoverWidth: number,
+  popoverHeight: number,
+): CSSProperties {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const spaceAbove = triggerRect.top - TOOLTIP_VIEWPORT_MARGIN;
+  const spaceBelow = viewportHeight - triggerRect.bottom - TOOLTIP_VIEWPORT_MARGIN;
+  const showAbove = spaceAbove >= popoverHeight || spaceAbove >= spaceBelow;
+
+  let top: number;
+  if (showAbove) {
+    top = Math.max(
+      TOOLTIP_VIEWPORT_MARGIN,
+      triggerRect.top - TOOLTIP_VIEWPORT_MARGIN - popoverHeight,
+    );
+  } else {
+    top = Math.min(
+      viewportHeight - TOOLTIP_VIEWPORT_MARGIN - popoverHeight,
+      triggerRect.bottom + TOOLTIP_VIEWPORT_MARGIN,
+    );
+  }
+
+  let left = triggerRect.left + triggerRect.width / 2 - popoverWidth / 2;
+  left = Math.min(
+    Math.max(left, TOOLTIP_VIEWPORT_MARGIN),
+    viewportWidth - TOOLTIP_VIEWPORT_MARGIN - popoverWidth,
+  );
+
+  return {
+    position: "fixed",
+    top,
+    left,
+    zIndex: 60,
+  };
+}
+
+function DeepSeekPromptCacheInfoTooltip() {
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const hover = useHoverPopover({ scanGroup: "deepseek-prompt-cache" });
+  const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
+    position: "fixed",
+    visibility: "hidden",
+    zIndex: 60,
+  });
+
+  useLayoutEffect(() => {
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
+
+    const triggerRect = rootRef.current.getBoundingClientRect();
+    const popoverRect = popoverRef.current.getBoundingClientRect();
+    setPopoverStyle({
+      ...computeTooltipPosition(triggerRect, popoverRect.width, popoverRect.height),
+      visibility: "visible",
+    });
+  }, [hover.open]);
+
+  return (
+    <>
+      <span
+        ref={rootRef}
+        className="inline-flex shrink-0 align-middle"
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onFocus={hover.onTriggerFocus}
+        onBlur={hover.onTriggerBlur}
+      >
+        <button
+          type="button"
+          className="inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+          aria-label="How DeepSeek prompt caching affects cost"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          <InfoCircleIcon />
+        </button>
+      </span>
+
+      {hover.open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={popoverRef}
+              role="tooltip"
+              style={popoverStyle}
+              className="w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              {...hover.popoverProps}
+            >
+              <p className="text-sm font-semibold text-slate-900">DeepSeek prompt caching</p>
+              <div className="mt-2 space-y-2 text-sm leading-snug text-slate-700">
+                <p>
+                  When a later API call reuses the same prompt prefix — system instructions,
+                  tool definitions, or other unchanged context — DeepSeek bills those input
+                  tokens as <span className="font-medium">cache hits</span> instead of fresh input.
+                </p>
+                <p>
+                  Investigate runs many tool rounds against the same system prompt, so later
+                  rounds often have a high cache-hit ratio. The API reports this as{" "}
+                  <span className="font-mono text-xs">prompt_cache_hit_tokens</span> and{" "}
+                  <span className="font-mono text-xs">prompt_cache_miss_tokens</span>.
+                </p>
+                <p>
+                  Off-peak cache hits are{" "}
+                  {formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheHitPerMillion)}
+                  /M versus{" "}
+                  {formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheMissPerMillion)}
+                  /M for cache misses. Peak hours double both rates.
+                </p>
+                <p className="text-slate-600">
+                  The optimized total below assumes every call ran during off-peak hours while
+                  keeping the same cached vs uncached split recorded for this meeting.
+                </p>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
 
 type Props = {
   open: boolean;
@@ -107,6 +261,16 @@ function UsageStageRow({
         </div>
         <div className="mt-0.5 font-mono text-[11px] text-slate-400">
           {stage.modelName}
+          {breakdown.deepSeekTier ? (
+            <span className="ml-2 text-slate-500">
+              ·{" "}
+              {breakdown.deepSeekTier === "mixed"
+                ? "Peak + off-peak"
+                : breakdown.deepSeekTier === "peak"
+                  ? "Peak"
+                  : "Off-peak"}
+            </span>
+          ) : null}
         </div>
       </td>
       <td className="px-4 py-3 text-right align-top">
@@ -202,12 +366,18 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
     () => sumAiUsageStages(resolvedStages),
     [resolvedStages],
   );
+  const offPeakOptimization = useMemo(
+    () => summarizeDeepSeekOffPeakOptimization(resolvedStages),
+    [resolvedStages],
+  );
   const uniqueModels = useMemo(
     () => [...new Set(resolvedStages.filter((stage) => !stage.notApplicable).map((stage) => stage.modelName))],
     [resolvedStages],
   );
   const headerPricing =
     uniqueModels.length === 1 ? getModelPricing(uniqueModels[0]) : null;
+  const headerDeepSeekOffPeak = uniqueModels.length === 1 &&
+    isDeepSeekModelName(uniqueModels[0]);
   const showRatesInCells = uniqueModels.length !== 1;
 
   if (!open) return null;
@@ -301,9 +471,11 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
                     >
                       <div>Input tokens</div>
                       <div className="mt-1 text-xs font-normal text-slate-500">
-                        {headerPricing
-                          ? `${formatPricePerMillion(headerPricing.inputPerMillion)}/M`
-                          : "Rate varies by model"}
+                        {headerDeepSeekOffPeak
+                          ? `${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheMissPerMillion)}/M miss · ${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheHitPerMillion)}/M hit`
+                          : headerPricing
+                            ? `${formatPricePerMillion(headerPricing.inputPerMillion)}/M`
+                            : "Rate varies by model"}
                       </div>
                     </th>
                     <th
@@ -312,9 +484,11 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
                     >
                       <div>Output tokens</div>
                       <div className="mt-1 text-xs font-normal text-slate-500">
-                        {headerPricing
-                          ? `${formatPricePerMillion(headerPricing.outputPerMillion)}/M`
-                          : "Rate varies by model"}
+                        {headerDeepSeekOffPeak
+                          ? `${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.outputPerMillion)}/M off-peak`
+                          : headerPricing
+                            ? `${formatPricePerMillion(headerPricing.outputPerMillion)}/M`
+                            : "Rate varies by model"}
                       </div>
                     </th>
                     <th
@@ -356,6 +530,30 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
                         <div className="font-mono text-xs font-semibold text-slate-600">
                           {formatCostUsd(totals.inputCostUsd)}
                         </div>
+                        {offPeakOptimization ? (
+                          <div className="mt-2 space-y-1 border-t border-slate-200 pt-2 text-[11px] leading-snug text-slate-500">
+                            <div>
+                              Cached in{" "}
+                              <span className="font-mono text-slate-700">
+                                {formatTokenCount(offPeakOptimization.cacheHitTokens)}
+                              </span>
+                              <span className="font-mono text-slate-600">
+                                {" "}
+                                → {formatCostUsd(offPeakOptimization.offPeakInputCacheHitCostUsd)}
+                              </span>
+                            </div>
+                            <div>
+                              Uncached in{" "}
+                              <span className="font-mono text-slate-700">
+                                {formatTokenCount(offPeakOptimization.cacheMissTokens)}
+                              </span>
+                              <span className="font-mono text-slate-600">
+                                {" "}
+                                → {formatCostUsd(offPeakOptimization.offPeakInputCacheMissCostUsd)}
+                              </span>
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right align-top">
@@ -366,13 +564,33 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
                         <div className="font-mono text-xs font-semibold text-slate-600">
                           {formatCostUsd(totals.outputCostUsd)}
                         </div>
+                        {offPeakOptimization ? (
+                          <div className="mt-2 border-t border-slate-200 pt-2 text-[11px] text-slate-500">
+                            <span className="font-mono text-slate-600">
+                              Off-peak out → {formatCostUsd(offPeakOptimization.offPeakOutputCostUsd)}
+                            </span>
+                          </div>
+                        ) : null}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right align-top font-mono font-semibold text-slate-900">
                       {formatTokenCount(totals.totalTokens)}
                     </td>
-                    <td className="px-4 py-3 text-right align-top font-mono font-semibold text-teal-800">
-                      {formatCostUsd(totals.costUsd)}
+                    <td className="px-4 py-3 text-right align-top">
+                      <div className="font-mono font-semibold text-teal-800">
+                        {formatCostUsd(totals.costUsd)}
+                      </div>
+                      {offPeakOptimization ? (
+                        <div className="mt-2 space-y-1 border-t border-slate-200 pt-2">
+                          <div className="flex items-center justify-end gap-1.5 text-[11px] font-medium text-slate-600">
+                            <span>Off-peak optimized</span>
+                            <DeepSeekPromptCacheInfoTooltip />
+                          </div>
+                          <div className="font-mono text-xs font-semibold text-emerald-700">
+                            {formatCostUsd(offPeakOptimization.offPeakTotalCostUsd)}
+                          </div>
+                        </div>
+                      ) : null}
                     </td>
                   </tr>
                 </tfoot>
@@ -383,13 +601,17 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
           {resolvedStages.length > 0 ? (
             <p className="mt-4 text-xs text-slate-500">
               Costs are recalculated from token counts stored for this meeting using
-              published model pricing. Validate-stage usage is included from runs
-              after this update; older meetings may under-report that stage. Your
-              provider dashboard may show a higher total when it includes retries,
-              tool-round billing, or runs not yet written to the database. Ingest
-              Docling page counts appear when markdown extraction was stored;
-              dollar cost for Docling is on the WatsonX tab. Manual review steps
-              have no API usage unless a draft was generated.
+              published DeepSeek V4 Flash rates (non-thinking mode): off-peak input
+              $0.22/M cache miss and $0.007/M cache hit, output $0.66/M; peak rates
+              are double those amounts. The totals row also shows an off-peak optimized
+              estimate with cached vs uncached input broken out. Peak hours are 01:00–04:00
+              and 06:00–10:00 UTC Monday–Friday. Each API call is priced at the tier active
+              when it ran; stages that cross an hour boundary may show &quot;Peak + off-peak&quot;.
+              Validate-stage usage is included from runs after this update; older
+              meetings may under-report that stage. Your provider dashboard may still
+              differ slightly when billing includes retries or calls not yet written
+              to the database. Ingest Docling page counts appear when markdown
+              extraction was stored; dollar cost for Docling is on the WatsonX tab.
             </p>
           ) : null}
             </>

@@ -1,6 +1,13 @@
 import type { UsageMetadata } from "@google/generative-ai";
 
 import {
+  estimateDeepSeekCostBreakdown,
+  estimateDeepSeekOffPeakOptimizedBreakdown,
+  isDeepSeekModelName,
+  resolveInputCacheSplit,
+  type DeepSeekPricingTier,
+} from "@/lib/deepseek/pricing";
+import {
   billedPricingForModel,
   type ModelTokenPricing,
 } from "@/lib/gemini/pricing";
@@ -9,6 +16,8 @@ export type TokenUsage = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cacheHitTokens?: number;
+  cacheMissTokens?: number;
 };
 
 export type GeminiUsageCall = TokenUsage & {
@@ -50,6 +59,18 @@ export type AiUsageStageRow = {
   stageKind?: "pipeline" | "user";
   /** Non-token detail (e.g. Docling page count). */
   usageDetail?: string;
+  /** DeepSeek prompt-cache hit tokens when recorded per API call. */
+  cacheHitTokens?: number;
+  /** DeepSeek prompt-cache miss tokens when recorded per API call. */
+  cacheMissTokens?: number;
+  /** UTC instant used for peak/off-peak DeepSeek pricing when a single tier applies. */
+  billedAtMs?: number;
+  /** Server-precomputed costs (per-call peak/off-peak + cache mix). */
+  inputCostUsd?: number;
+  outputCostUsd?: number;
+  totalCostUsd?: number;
+  /** When set, this stage spans multiple peak/off-peak windows. */
+  pricingTier?: DeepSeekPricingTier | "mixed";
 };
 
 export type AiUsageLog = {
@@ -118,6 +139,7 @@ export type CostBreakdown = {
   outputCostUsd: number;
   totalCostUsd: number;
   pricing: ModelPricing;
+  deepSeekTier?: DeepSeekPricingTier | "mixed";
 };
 
 function toModelPricing(pricing: ModelTokenPricing): ModelPricing {
@@ -148,11 +170,62 @@ export function getModelPricing(modelName: string, nowMs?: number): ModelPricing
   return pricingForModel(modelName, nowMs);
 }
 
+export type BillableUsageInput = Pick<
+  TokenUsage,
+  "inputTokens" | "outputTokens"
+> & {
+  cacheHitTokens?: number;
+  cacheMissTokens?: number;
+  billedAtMs?: number;
+  inputCostUsd?: number;
+  outputCostUsd?: number;
+  totalCostUsd?: number;
+  pricingTier?: DeepSeekPricingTier | "mixed";
+};
+
 export function estimateCostBreakdown(
   modelName: string,
-  usage: Pick<TokenUsage, "inputTokens" | "outputTokens">,
+  usage: BillableUsageInput,
   nowMs?: number,
 ): CostBreakdown {
+  if (
+    typeof usage.totalCostUsd === "number" &&
+    typeof usage.inputCostUsd === "number" &&
+    typeof usage.outputCostUsd === "number"
+  ) {
+    const pricing = pricingForModel(modelName, nowMs);
+    return {
+      inputCostUsd: usage.inputCostUsd,
+      outputCostUsd: usage.outputCostUsd,
+      totalCostUsd: usage.totalCostUsd,
+      pricing,
+      deepSeekTier: usage.pricingTier,
+    };
+  }
+
+  if (isDeepSeekModelName(modelName)) {
+    const deepSeek = estimateDeepSeekCostBreakdown(
+      {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheHitTokens: usage.cacheHitTokens,
+        cacheMissTokens: usage.cacheMissTokens,
+        billedAtMs: usage.billedAtMs,
+      },
+      usage.billedAtMs ?? nowMs,
+    );
+    return {
+      inputCostUsd: deepSeek.inputCostUsd,
+      outputCostUsd: deepSeek.outputCostUsd,
+      totalCostUsd: deepSeek.totalCostUsd,
+      pricing: {
+        inputPerMillion: deepSeek.rates.inputCacheMissPerMillion,
+        outputPerMillion: deepSeek.rates.outputPerMillion,
+      },
+      deepSeekTier: deepSeek.tier,
+    };
+  }
+
   const pricing = pricingForModel(modelName, nowMs);
   const inputCostUsd =
     (usage.inputTokens / 1_000_000) * pricing.inputPerMillion;
@@ -373,6 +446,57 @@ export function flattenAiUsageToStages(
   }
 
   return stages;
+}
+
+export type DeepSeekOffPeakOptimizationSummary = {
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  deepSeekOutputTokens: number;
+  offPeakInputCacheHitCostUsd: number;
+  offPeakInputCacheMissCostUsd: number;
+  offPeakOutputCostUsd: number;
+  offPeakTotalCostUsd: number;
+};
+
+export function summarizeDeepSeekOffPeakOptimization(
+  stages: AiUsageStageRow[],
+): DeepSeekOffPeakOptimizationSummary | null {
+  const billableStages = stages.filter(
+    (stage) => !stage.notApplicable && isDeepSeekModelName(stage.modelName),
+  );
+  if (billableStages.length === 0) return null;
+
+  let cacheHitTokens = 0;
+  let cacheMissTokens = 0;
+  let deepSeekOutputTokens = 0;
+
+  for (const stage of billableStages) {
+    const split = resolveInputCacheSplit({
+      inputTokens: stage.inputTokens,
+      outputTokens: 0,
+      cacheHitTokens: stage.cacheHitTokens,
+      cacheMissTokens: stage.cacheMissTokens,
+    });
+    cacheHitTokens += split.cacheHitTokens;
+    cacheMissTokens += split.cacheMissTokens;
+    deepSeekOutputTokens += stage.outputTokens;
+  }
+
+  const offPeak = estimateDeepSeekOffPeakOptimizedBreakdown({
+    cacheHitTokens,
+    cacheMissTokens,
+    outputTokens: deepSeekOutputTokens,
+  });
+
+  return {
+    cacheHitTokens,
+    cacheMissTokens,
+    deepSeekOutputTokens,
+    offPeakInputCacheHitCostUsd: offPeak.inputCacheHitCostUsd,
+    offPeakInputCacheMissCostUsd: offPeak.inputCacheMissCostUsd,
+    offPeakOutputCostUsd: offPeak.outputCostUsd,
+    offPeakTotalCostUsd: offPeak.totalCostUsd,
+  };
 }
 
 export function sumAiUsageStages(stages: AiUsageStageRow[]): {

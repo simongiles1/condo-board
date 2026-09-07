@@ -40,6 +40,8 @@ type DeepSeekChatCompletionResponse = {
     completion_tokens_details?: {
       reasoning_tokens?: number;
     };
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
   };
   error?: { message?: string };
 };
@@ -101,6 +103,8 @@ export async function generateDeepSeekJson(options: {
     payload.usage?.total_tokens ?? inputTokens + outputTokens;
   const reasoningTokens =
     payload.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+  const cacheHitTokens = payload.usage?.prompt_cache_hit_tokens ?? 0;
+  const cacheMissTokens = payload.usage?.prompt_cache_miss_tokens ?? 0;
 
   if (!text) {
     throw new Error(
@@ -123,6 +127,8 @@ export async function generateDeepSeekJson(options: {
       inputTokens,
       outputTokens,
       totalTokens,
+      cacheHitTokens,
+      cacheMissTokens,
     },
     finishReason,
   };

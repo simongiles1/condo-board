@@ -11,6 +11,10 @@ import {
   AiUsageIconButton,
 } from "@/components/AiUsageDialog";
 import { DeleteMeetingButton } from "@/components/DeleteMeetingButton";
+import {
+  PipelineRunConfirmDialog,
+  type PipelineConfirmAction,
+} from "@/components/PipelineRunConfirmDialog";
 import type { EditableAttendance } from "@/lib/minutes/attendance-edit";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
@@ -491,8 +495,6 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   }
 
   async function handleRestartPipeline() {
-    const confirmed = window.confirm("Are you sure you want to restart from scratch? This will wipe all extracted data, investigations, and drafts for this meeting.");
-    if (!confirmed) return;
     setRunBusy(true);
     kickPollWindow();
     try {
@@ -839,12 +841,39 @@ function PipelineActionButton({
   pipelineValidated?: boolean;
   disabled?: boolean;
   disabledReason?: string | null;
-  onRun: () => void;
-  onRestart: () => void;
+  onRun: () => void | Promise<void>;
+  onRestart: () => void | Promise<void>;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<PipelineConfirmAction>("start");
   const containerRef = useRef<HTMLDivElement>(null);
   const isDisabled = runBusy || disabled;
+
+  function openConfirm(action: PipelineConfirmAction) {
+    setPendingAction(action);
+    setConfirmOpen(true);
+    setMenuOpen(false);
+  }
+
+  function resolvePrimaryAction(): PipelineConfirmAction {
+    if (pipelineNotStarted) return "start";
+    if (pipelineValidated) return "rerun";
+    return "resume";
+  }
+
+  async function handleConfirm() {
+    try {
+      if (pendingAction === "restart") {
+        await onRestart();
+      } else {
+        await onRun();
+      }
+      setConfirmOpen(false);
+    } catch {
+      // Parent handlers swallow errors today; keep dialog open if thrown.
+    }
+  }
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -884,7 +913,7 @@ function PipelineActionButton({
         <button
           className="inline-flex items-center bg-teal-500 px-3 py-2 text-sm font-semibold text-slate-950 transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={isDisabled}
-          onClick={onRun}
+          onClick={() => openConfirm(resolvePrimaryAction())}
           type="button"
           title={title}
         >
@@ -912,15 +941,21 @@ function PipelineActionButton({
             role="menuitem"
             type="button"
             className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-            onClick={() => {
-              setMenuOpen(false);
-              onRestart();
-            }}
+            onClick={() => openConfirm("restart")}
           >
             Restart from Beginning
           </button>
         </div>
       ) : null}
+      <PipelineRunConfirmDialog
+        open={confirmOpen}
+        action={pendingAction}
+        busy={runBusy}
+        onConfirm={() => void handleConfirm()}
+        onCancel={() => {
+          if (!runBusy) setConfirmOpen(false);
+        }}
+      />
     </div>
   );
 }

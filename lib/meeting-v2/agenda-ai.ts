@@ -977,7 +977,7 @@ export async function extractAgendaItemsWithAi(
     });
   const transcriptChunks = storedChunks
     .filter((chunk) => chunk.chunkKind === "transcript")
-    .map((chunk) => {
+    .map((chunk, transcriptIndex) => {
       const metadata = safeParseObject<{ aiChunkId?: string; sequenceRange?: [number, number] }>(
         chunk.metadataJson,
       );
@@ -985,8 +985,10 @@ export async function extractAgendaItemsWithAi(
         id: chunk.id,
         sourceArtifactId: chunk.sourceArtifactId,
         aiChunkId:
-          metadata?.aiChunkId ?? `transcript_chunk_${String(chunk.sortOrder + 1).padStart(3, "0")}`,
+          metadata?.aiChunkId ??
+          `transcript_chunk_${String(transcriptIndex + 1).padStart(3, "0")}`,
         index: chunk.sortOrder,
+        transcriptIndex,
         sequenceRange:
           metadata?.sequenceRange ?? [chunk.sequenceStart ?? 0, chunk.sequenceEnd ?? 0],
         text: chunk.text,
@@ -1072,18 +1074,18 @@ export async function extractAgendaItemsWithAi(
   }
 
   for (const chunk of remainingTranscriptChunks) {
-    const current = packageChunks.length + chunk.index + 1;
+    const current = packageChunks.length + chunk.transcriptIndex + 1;
     await options?.onProgress?.({
       current,
       total: totalChunks,
-      label: `Extracting transcript chunk ${chunk.index + 1}/${transcriptChunks.length}`,
+      label: `Extracting transcript chunk ${chunk.transcriptIndex + 1}/${transcriptChunks.length}`,
     });
     const response = await generateDeepSeekJson({
       systemInstruction: TRANSCRIPT_SYSTEM_PROMPT,
       userText: buildTranscriptUserText({
         meetingId,
         state,
-        chunkIndex: chunk.index,
+        chunkIndex: chunk.transcriptIndex,
         chunkTotal: transcriptChunks.length,
         chunkId: chunk.aiChunkId,
         sequenceRange: chunk.sequenceRange,

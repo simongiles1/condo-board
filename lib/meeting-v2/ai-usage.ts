@@ -16,6 +16,11 @@ import {
   type AiUsageStageRow,
   type TokenUsage,
 } from "@/lib/gemini/usage";
+import {
+  estimateDeepSeekCostBreakdown,
+  type DeepSeekBillableUsage,
+  type DeepSeekPricingTier,
+} from "@/lib/deepseek/pricing";
 import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { isLikelyDoclingMarkdown } from "@/lib/meeting-v2/pdf";
 import { MEETING_V2_USAGE_STAGE_DEFINITIONS } from "@/lib/meeting-v2/workflow-progress";
@@ -63,15 +68,99 @@ function readTokenUsage(value: unknown): TokenUsage | null {
   return null;
 }
 
-function sumTokenUsages(usages: TokenUsage[]): TokenUsage {
-  return usages.reduce(
-    (acc, usage) => ({
-      inputTokens: acc.inputTokens + usage.inputTokens,
-      outputTokens: acc.outputTokens + usage.outputTokens,
-      totalTokens: acc.totalTokens + usage.totalTokens,
-    }),
-    { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-  );
+type DeepSeekUsageRecord = DeepSeekBillableUsage & TokenUsage;
+
+function readDeepSeekUsageRecord(value: unknown): DeepSeekUsageRecord | null {
+  const usage = readTokenUsage(value);
+  if (!usage) return null;
+
+  const record = value as Record<string, unknown>;
+  const cacheHitTokens =
+    typeof record.cacheHitTokens === "number"
+      ? record.cacheHitTokens
+      : typeof record.prompt_cache_hit_tokens === "number"
+        ? record.prompt_cache_hit_tokens
+        : undefined;
+  const cacheMissTokens =
+    typeof record.cacheMissTokens === "number"
+      ? record.cacheMissTokens
+      : typeof record.prompt_cache_miss_tokens === "number"
+        ? record.prompt_cache_miss_tokens
+        : undefined;
+
+  return {
+    ...usage,
+    cacheHitTokens,
+    cacheMissTokens,
+  };
+}
+
+function parseBilledAtMs(value: string | null | undefined): number | undefined {
+  if (!value?.trim()) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function sumDeepSeekUsageRecords(
+  records: Array<DeepSeekUsageRecord & { billedAtMs?: number }>,
+): {
+  usage: TokenUsage;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  inputCostUsd: number;
+  outputCostUsd: number;
+  totalCostUsd: number;
+  pricingTier: DeepSeekPricingTier | "mixed";
+} {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let cacheHitTokens = 0;
+  let cacheMissTokens = 0;
+  let inputCostUsd = 0;
+  let outputCostUsd = 0;
+  let totalCostUsd = 0;
+  let pricingTier: DeepSeekPricingTier | "mixed" | null = null;
+
+  for (const record of records) {
+    inputTokens += record.inputTokens;
+    outputTokens += record.outputTokens;
+    totalTokens += record.totalTokens;
+
+    const breakdown = estimateDeepSeekCostBreakdown(record, record.billedAtMs);
+    cacheHitTokens += breakdown.cacheHitTokens;
+    cacheMissTokens += breakdown.cacheMissTokens;
+    inputCostUsd += breakdown.inputCostUsd;
+    outputCostUsd += breakdown.outputCostUsd;
+    totalCostUsd += breakdown.totalCostUsd;
+
+    if (pricingTier === null) {
+      pricingTier = breakdown.tier;
+    } else if (pricingTier !== breakdown.tier) {
+      pricingTier = "mixed";
+    }
+  }
+
+  return {
+    usage: { inputTokens, outputTokens, totalTokens },
+    cacheHitTokens,
+    cacheMissTokens,
+    inputCostUsd,
+    outputCostUsd,
+    totalCostUsd,
+    pricingTier: pricingTier ?? "off_peak",
+  };
+}
+
+function readNestedUsageRecord(
+  value: unknown,
+): DeepSeekUsageRecord | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (record.usage && typeof record.usage === "object") {
+    return readDeepSeekUsageRecord(record.usage);
+  }
+  return readDeepSeekUsageRecord(record);
 }
 
 function buildStageRow(options: {
@@ -80,6 +169,13 @@ function buildStageRow(options: {
   modelName: string;
   usage: TokenUsage;
   stageKind?: "pipeline" | "user";
+  cacheHitTokens?: number;
+  cacheMissTokens?: number;
+  billedAtMs?: number;
+  inputCostUsd?: number;
+  outputCostUsd?: number;
+  totalCostUsd?: number;
+  pricingTier?: DeepSeekPricingTier | "mixed";
 }): AiUsageStageRow {
   return {
     id: options.id,
@@ -89,6 +185,13 @@ function buildStageRow(options: {
     outputTokens: options.usage.outputTokens,
     totalTokens: options.usage.totalTokens,
     stageKind: options.stageKind ?? "pipeline",
+    cacheHitTokens: options.cacheHitTokens,
+    cacheMissTokens: options.cacheMissTokens,
+    billedAtMs: options.billedAtMs,
+    inputCostUsd: options.inputCostUsd,
+    outputCostUsd: options.outputCostUsd,
+    totalCostUsd: options.totalCostUsd,
+    pricingTier: options.pricingTier,
   };
 }
 
@@ -123,12 +226,16 @@ export async function loadMeetingV2AiUsageStages(
         .from(meetings)
         .where(eq(meetings.id, meetingId)),
       db
-        .select({ settings: meetingsV2.settings })
+        .select({
+          settings: meetingsV2.settings,
+          updatedAt: meetingsV2.updatedAt,
+        })
         .from(meetingsV2)
         .where(eq(meetingsV2.id, meetingId)),
       db
         .select({
           usageJson: meetingsV2AgendaChunkSnapshots.usageJson,
+          createdAt: meetingsV2AgendaChunkSnapshots.createdAt,
         })
         .from(meetingsV2AgendaChunkSnapshots)
         .where(eq(meetingsV2AgendaChunkSnapshots.meetingV2Id, meetingId)),
@@ -136,6 +243,7 @@ export async function loadMeetingV2AiUsageStages(
         .select({
           modelName: meetingsV2AgendaItemInvestigations.modelName,
           usageJson: meetingsV2AgendaItemInvestigations.usageJson,
+          createdAt: meetingsV2AgendaItemInvestigations.createdAt,
         })
         .from(meetingsV2AgendaItemInvestigations)
         .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
@@ -186,68 +294,114 @@ export async function loadMeetingV2AiUsageStages(
     );
   }
 
-  const extractionUsages = chunkSnapshots
-    .map((row) => readTokenUsage(safeJsonParse(row.usageJson, null)))
-    .filter((usage): usage is TokenUsage => usage !== null);
+  const extractionRecords = chunkSnapshots
+    .map((row) => {
+      const usage = readDeepSeekUsageRecord(safeJsonParse(row.usageJson, null));
+      if (!usage) return null;
+      return {
+        ...usage,
+        billedAtMs: parseBilledAtMs(row.createdAt),
+      };
+    })
+    .filter((record): record is DeepSeekUsageRecord & { billedAtMs?: number } => record !== null);
 
-  if (extractionUsages.length > 0) {
-    const usage = sumTokenUsages(extractionUsages);
+  if (extractionRecords.length > 0) {
+    const billed = sumDeepSeekUsageRecords(extractionRecords);
     usageByStageId.set(
       "extract",
       buildStageRow({
         id: "extract",
         label: "Extract",
         modelName: "deepseek-v4-flash",
-        usage,
+        usage: billed.usage,
         stageKind: "pipeline",
+        cacheHitTokens: billed.cacheHitTokens,
+        cacheMissTokens: billed.cacheMissTokens,
+        inputCostUsd: billed.inputCostUsd,
+        outputCostUsd: billed.outputCostUsd,
+        totalCostUsd: billed.totalCostUsd,
+        pricingTier: billed.pricingTier,
       }),
     );
   }
 
-  const investigationUsages: TokenUsage[] = [];
+  const investigationRecords: Array<DeepSeekUsageRecord & { billedAtMs?: number }> = [];
   let investigationModel = "deepseek-v4-flash";
 
   for (const investigation of investigations) {
-    const parsed = safeJsonParse<Record<string, unknown>>(
-      investigation.usageJson,
-      {},
+    const usage = readNestedUsageRecord(
+      safeJsonParse(investigation.usageJson, null),
     );
-    const usage = readTokenUsage(parsed.usage ?? parsed);
     if (!usage) continue;
 
-    investigationUsages.push(usage);
+    investigationRecords.push({
+      ...usage,
+      billedAtMs: parseBilledAtMs(investigation.createdAt),
+    });
     if (investigation.modelName?.trim()) {
       investigationModel = investigation.modelName.trim();
     }
   }
 
-  if (investigationUsages.length > 0) {
+  if (investigationRecords.length > 0) {
+    const billed = sumDeepSeekUsageRecords(investigationRecords);
     usageByStageId.set(
       "investigate",
       buildStageRow({
         id: "investigate",
         label: "Investigate",
         modelName: investigationModel,
-        usage: sumTokenUsages(investigationUsages),
+        usage: billed.usage,
         stageKind: "pipeline",
+        cacheHitTokens: billed.cacheHitTokens,
+        cacheMissTokens: billed.cacheMissTokens,
+        inputCostUsd: billed.inputCostUsd,
+        outputCostUsd: billed.outputCostUsd,
+        totalCostUsd: billed.totalCostUsd,
+        pricingTier: billed.pricingTier,
       }),
     );
   }
 
   const settings = readMeetingV2Settings(v2Meeting[0]?.settings ?? null);
   if (settings.validationUsage && settings.validationUsage.totalTokens > 0) {
+    const validationSegments = settings.validationUsage.segments ?? [];
+    const validationRecords =
+      validationSegments.length > 0
+        ? validationSegments
+            .map((segment) => ({
+              inputTokens: segment.inputTokens,
+              outputTokens: segment.outputTokens,
+              totalTokens: segment.totalTokens,
+              cacheHitTokens: segment.cacheHitTokens,
+              cacheMissTokens: segment.cacheMissTokens,
+              billedAtMs: segment.billedAtMs,
+            }))
+            .filter((segment) => segment.totalTokens > 0)
+        : [
+            {
+              inputTokens: settings.validationUsage.inputTokens,
+              outputTokens: settings.validationUsage.outputTokens,
+              totalTokens: settings.validationUsage.totalTokens,
+              billedAtMs: parseBilledAtMs(v2Meeting[0]?.updatedAt ?? null),
+            },
+          ];
+
+    const billed = sumDeepSeekUsageRecords(validationRecords);
     usageByStageId.set(
       "validate",
       buildStageRow({
         id: "validate",
         label: "Validate",
         modelName: settings.validationUsage.modelName,
-        usage: {
-          inputTokens: settings.validationUsage.inputTokens,
-          outputTokens: settings.validationUsage.outputTokens,
-          totalTokens: settings.validationUsage.totalTokens,
-        },
+        usage: billed.usage,
         stageKind: "pipeline",
+        cacheHitTokens: billed.cacheHitTokens,
+        cacheMissTokens: billed.cacheMissTokens,
+        inputCostUsd: billed.inputCostUsd,
+        outputCostUsd: billed.outputCostUsd,
+        totalCostUsd: billed.totalCostUsd,
+        pricingTier: billed.pricingTier,
       }),
     );
   }

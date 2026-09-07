@@ -542,35 +542,117 @@ export async function getMeetingV2Counts(meetingId: string): Promise<{
   validations: number;
   drafts: number;
 }> {
+  const counts = await getMeetingV2CountsBulk([meetingId]);
+  return counts.get(meetingId) ?? emptyMeetingV2Counts();
+}
+
+type MeetingV2Counts = Awaited<ReturnType<typeof getMeetingV2Counts>>;
+
+type MeetingV2CountMetric =
+  | "sourceArtifacts"
+  | "transcriptSegments"
+  | "documentPages"
+  | "documentSections"
+  | "documentChunks"
+  | "agendaItems"
+  | "evidenceContexts"
+  | "investigations"
+  | "validations"
+  | "drafts";
+
+function emptyMeetingV2Counts(): MeetingV2Counts {
+  return {
+    sourceArtifacts: 0,
+    transcriptSegments: 0,
+    documentPages: 0,
+    documentSections: 0,
+    documentChunks: 0,
+    agendaItems: 0,
+    evidenceContexts: 0,
+    investigations: 0,
+    validations: 0,
+    drafts: 0,
+  };
+}
+
+/** One round-trip for all count metrics — avoids Supabase session-pool exhaustion. */
+export async function getMeetingV2CountsBulk(
+  meetingIds: string[],
+): Promise<Map<string, MeetingV2Counts>> {
+  if (meetingIds.length === 0) return new Map();
+
   const db = getDb();
+  const meetingIdFilter = sql.join(meetingIds.map((id) => sql`${id}`), sql`, `);
   const result = await db.execute(sql`
-    SELECT
-      (SELECT count(*)::int FROM "meetings_v2_source_artifacts" WHERE "meeting_v2_id" = ${meetingId}) AS "sourceArtifacts",
-      (SELECT count(*)::int FROM "meetings_v2_transcript_segments" WHERE "meeting_v2_id" = ${meetingId}) AS "transcriptSegments",
-      (SELECT count(*)::int FROM "meetings_v2_document_pages" WHERE "meeting_v2_id" = ${meetingId}) AS "documentPages",
-      (SELECT count(*)::int FROM "meetings_v2_document_sections" WHERE "meeting_v2_id" = ${meetingId}) AS "documentSections",
-      (SELECT count(*)::int FROM "meetings_v2_document_chunks" WHERE "meeting_v2_id" = ${meetingId}) AS "documentChunks",
-      (SELECT count(*)::int FROM "meetings_v2_agenda_items" WHERE "meeting_v2_id" = ${meetingId}) AS "agendaItems",
-      (SELECT count(*)::int FROM "meetings_v2_agenda_item_contexts" WHERE "meeting_v2_id" = ${meetingId}) AS "evidenceContexts",
-      (SELECT count(*)::int FROM "meetings_v2_agenda_item_investigations" WHERE "meeting_v2_id" = ${meetingId}) AS "investigations",
-      (SELECT count(*)::int FROM "meetings_v2_validation_results" WHERE "meeting_v2_id" = ${meetingId}) AS "validations",
-      (SELECT count(*)::int FROM "meetings_v2_minutes_drafts" WHERE "meeting_v2_id" = ${meetingId}) AS "drafts"
+    SELECT "meeting_v2_id" AS "meetingV2Id", 'sourceArtifacts' AS "metric", count(*)::int AS "value"
+    FROM "meetings_v2_source_artifacts"
+    WHERE "meeting_v2_id" IN (${meetingIdFilter})
+    GROUP BY "meeting_v2_id"
+    UNION ALL
+    SELECT "meeting_v2_id", 'transcriptSegments', count(*)::int
+    FROM "meetings_v2_transcript_segments"
+    WHERE "meeting_v2_id" IN (${meetingIdFilter})
+    GROUP BY "meeting_v2_id"
+    UNION ALL
+    SELECT "meeting_v2_id", 'documentPages', count(*)::int
+    FROM "meetings_v2_document_pages"
+    WHERE "meeting_v2_id" IN (${meetingIdFilter})
+    GROUP BY "meeting_v2_id"
+    UNION ALL
+    SELECT "meeting_v2_id", 'documentSections', count(*)::int
+    FROM "meetings_v2_document_sections"
+    WHERE "meeting_v2_id" IN (${meetingIdFilter})
+    GROUP BY "meeting_v2_id"
+    UNION ALL
+    SELECT "meeting_v2_id", 'documentChunks', count(*)::int
+    FROM "meetings_v2_document_chunks"
+    WHERE "meeting_v2_id" IN (${meetingIdFilter})
+    GROUP BY "meeting_v2_id"
+    UNION ALL
+    SELECT "meeting_v2_id", 'agendaItems', count(*)::int
+    FROM "meetings_v2_agenda_items"
+    WHERE "meeting_v2_id" IN (${meetingIdFilter})
+    GROUP BY "meeting_v2_id"
+    UNION ALL
+    SELECT "meeting_v2_id", 'evidenceContexts', count(*)::int
+    FROM "meetings_v2_agenda_item_contexts"
+    WHERE "meeting_v2_id" IN (${meetingIdFilter})
+    GROUP BY "meeting_v2_id"
+    UNION ALL
+    SELECT "meeting_v2_id", 'investigations', count(*)::int
+    FROM "meetings_v2_agenda_item_investigations"
+    WHERE "meeting_v2_id" IN (${meetingIdFilter})
+    GROUP BY "meeting_v2_id"
+    UNION ALL
+    SELECT "meeting_v2_id", 'validations', count(*)::int
+    FROM "meetings_v2_validation_results"
+    WHERE "meeting_v2_id" IN (${meetingIdFilter})
+    GROUP BY "meeting_v2_id"
+    UNION ALL
+    SELECT "meeting_v2_id", 'drafts', count(*)::int
+    FROM "meetings_v2_minutes_drafts"
+    WHERE "meeting_v2_id" IN (${meetingIdFilter})
+    GROUP BY "meeting_v2_id"
   `);
 
-  const row = (result.rows?.[0] ?? (result as unknown as Record<string, unknown>[])[0] ?? {}) as Record<string, unknown>;
+  const rows = (result.rows ?? result) as Array<{
+    meetingV2Id: string;
+    metric: MeetingV2CountMetric;
+    value: number;
+  }>;
 
-  return {
-    sourceArtifacts: Number(row.sourceArtifacts ?? 0),
-    transcriptSegments: Number(row.transcriptSegments ?? 0),
-    documentPages: Number(row.documentPages ?? 0),
-    documentSections: Number(row.documentSections ?? 0),
-    documentChunks: Number(row.documentChunks ?? 0),
-    agendaItems: Number(row.agendaItems ?? 0),
-    evidenceContexts: Number(row.evidenceContexts ?? 0),
-    investigations: Number(row.investigations ?? 0),
-    validations: Number(row.validations ?? 0),
-    drafts: Number(row.drafts ?? 0),
-  };
+  const resultMap = new Map<string, MeetingV2Counts>();
+  for (const meetingId of meetingIds) {
+    resultMap.set(meetingId, emptyMeetingV2Counts());
+  }
+
+  for (const row of rows) {
+    const counts = resultMap.get(row.meetingV2Id);
+    if (!counts) continue;
+    counts[row.metric] = Number(row.value);
+  }
+
+  return resultMap;
 }
 
 export function deriveMeetingV2ComputedStatus(counts: {
@@ -667,96 +749,120 @@ export type MeetingV2DashboardCard = Pick<
 export async function loadMeetingsV2DashboardCards(
   meetingRows: MeetingV2Row[],
 ): Promise<MeetingV2DashboardCard[]> {
+  if (meetingRows.length === 0) return [];
+
   const db = getDb();
+  const meetingIds = meetingRows.map((meeting) => meeting.id);
 
-  return Promise.all(
-    meetingRows.map(async (meeting) => {
-      const [counts, investigations, validations, latestDraft] = await Promise.all([
-        getMeetingV2Counts(meeting.id),
-        db
-          .select({
-            openQuestionsJson: meetingsV2AgendaItemInvestigations.openQuestionsJson,
-          })
-          .from(meetingsV2AgendaItemInvestigations)
-          .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meeting.id)),
-        db
-          .select({
-            agendaItemId: meetingsV2ValidationResults.agendaItemId,
-            severity: meetingsV2ValidationResults.severity,
-          })
-          .from(meetingsV2ValidationResults)
-          .where(eq(meetingsV2ValidationResults.meetingV2Id, meeting.id)),
-        db
-          .select({ id: meetingsV2MinutesDrafts.id })
-          .from(meetingsV2MinutesDrafts)
-          .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meeting.id))
-          .limit(1),
-      ]);
+  const countsByMeetingId = await getMeetingV2CountsBulk(meetingIds);
+  const investigationRows = await db
+    .select({
+      meetingV2Id: meetingsV2AgendaItemInvestigations.meetingV2Id,
+      openQuestionsJson: meetingsV2AgendaItemInvestigations.openQuestionsJson,
+    })
+    .from(meetingsV2AgendaItemInvestigations)
+    .where(inArray(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingIds));
+  const validationRows = await db
+    .select({
+      meetingV2Id: meetingsV2ValidationResults.meetingV2Id,
+      agendaItemId: meetingsV2ValidationResults.agendaItemId,
+      severity: meetingsV2ValidationResults.severity,
+    })
+    .from(meetingsV2ValidationResults)
+    .where(inArray(meetingsV2ValidationResults.meetingV2Id, meetingIds));
+  const draftRows = await db
+    .select({
+      meetingV2Id: meetingsV2MinutesDrafts.meetingV2Id,
+      id: meetingsV2MinutesDrafts.id,
+    })
+    .from(meetingsV2MinutesDrafts)
+    .where(inArray(meetingsV2MinutesDrafts.meetingV2Id, meetingIds));
 
-      const pipelineNotStarted = isMeetingV2PipelineNotStarted(meeting.pipelineState);
-      const pipelineActivelyRunning = isMeetingV2PipelineActivelyRunning({
-        pipelineState: meeting.pipelineState,
-        lastError: meeting.lastError,
-      });
-      const stages = buildMeetingV2Stages({
-        counts,
-        extractionQuality: {
-          likelyIncomplete: false,
-          note: "",
-        } as MeetingV2ExtractionQuality,
-        pipelineNotStarted,
-      });
-      const needsClarificationCount = investigations.filter((investigation) => {
-        const openQuestions = safeJsonParse<string[]>(investigation.openQuestionsJson, []);
-        return openQuestions.length > 0;
-      }).length;
-      const flaggedAgendaItemIds = new Set(
-        validations
-          .filter(
-            (validation) => validation.severity === "error" || validation.severity === "warning",
-          )
-          .map((validation) => validation.agendaItemId),
-      );
-      const workflowProgress = buildMeetingV2WorkflowProgress({
-        pipelineStages: stages.map((stage) => ({
-          key: stage.key,
-          label: stage.label,
-          status: stage.status,
-          note: stage.note,
-        })),
-        agendaItemCount: counts.agendaItems,
-        needsClarificationCount,
-        flaggedCount: flaggedAgendaItemIds.size,
-        draftCount: counts.drafts,
-        hasLatestDraft: latestDraft.length > 0,
-      });
-      const displayProgress = buildMeetingV2DisplayProgress({
-        pipelineNotStarted,
-        pipelineActivelyRunning,
-        pipelineState: meeting.pipelineState,
-        storedProgressPercent: meeting.progressPercent,
-        storedCurrentStep: meeting.currentStep,
-        workflowProgress,
-      });
-      const activeStep =
-        workflowProgress.steps.find((step) => step.status === "in_progress") ??
-        workflowProgress.steps.find((step) => step.status !== "complete") ??
-        workflowProgress.steps[workflowProgress.steps.length - 1];
-      const activeStepIndex = workflowProgress.steps.findIndex((step) => step.key === activeStep.key);
+  const investigationsByMeetingId = new Map<string, typeof investigationRows>();
+  for (const row of investigationRows) {
+    const bucket = investigationsByMeetingId.get(row.meetingV2Id) ?? [];
+    bucket.push(row);
+    investigationsByMeetingId.set(row.meetingV2Id, bucket);
+  }
 
-      return {
-        id: meeting.id,
-        title: meeting.title,
-        meetingDate: meeting.meetingDate,
-        pipelineState: meeting.pipelineState,
-        progressLabel: displayProgress.currentLabel,
-        progressStepNumber: activeStepIndex >= 0 ? activeStepIndex + 1 : workflowProgress.totalCount,
-        progressTotalSteps: workflowProgress.totalCount,
-        progressNote: displayProgress.currentStep,
-        progressStatus: activeStep?.status ?? "incomplete",
-      };
-    }),
-  );
+  const validationsByMeetingId = new Map<string, typeof validationRows>();
+  for (const row of validationRows) {
+    const bucket = validationsByMeetingId.get(row.meetingV2Id) ?? [];
+    bucket.push(row);
+    validationsByMeetingId.set(row.meetingV2Id, bucket);
+  }
+
+  const draftMeetingIds = new Set(draftRows.map((row) => row.meetingV2Id));
+
+  return meetingRows.map((meeting) => {
+    const counts = countsByMeetingId.get(meeting.id) ?? emptyMeetingV2Counts();
+    const investigations = investigationsByMeetingId.get(meeting.id) ?? [];
+    const validations = validationsByMeetingId.get(meeting.id) ?? [];
+    const hasLatestDraft = draftMeetingIds.has(meeting.id);
+
+    const pipelineNotStarted = isMeetingV2PipelineNotStarted(meeting.pipelineState);
+    const pipelineActivelyRunning = isMeetingV2PipelineActivelyRunning({
+      pipelineState: meeting.pipelineState,
+      lastError: meeting.lastError,
+    });
+    const stages = buildMeetingV2Stages({
+      counts,
+      extractionQuality: {
+        likelyIncomplete: false,
+        note: "",
+      } as MeetingV2ExtractionQuality,
+      pipelineNotStarted,
+    });
+    const needsClarificationCount = investigations.filter((investigation) => {
+      const openQuestions = safeJsonParse<string[]>(investigation.openQuestionsJson, []);
+      return openQuestions.length > 0;
+    }).length;
+    const flaggedAgendaItemIds = new Set(
+      validations
+        .filter(
+          (validation) => validation.severity === "error" || validation.severity === "warning",
+        )
+        .map((validation) => validation.agendaItemId),
+    );
+    const workflowProgress = buildMeetingV2WorkflowProgress({
+      pipelineStages: stages.map((stage) => ({
+        key: stage.key,
+        label: stage.label,
+        status: stage.status,
+        note: stage.note,
+      })),
+      agendaItemCount: counts.agendaItems,
+      needsClarificationCount,
+      flaggedCount: flaggedAgendaItemIds.size,
+      draftCount: counts.drafts,
+      hasLatestDraft,
+    });
+    const displayProgress = buildMeetingV2DisplayProgress({
+      pipelineNotStarted,
+      pipelineActivelyRunning,
+      pipelineState: meeting.pipelineState,
+      storedProgressPercent: meeting.progressPercent,
+      storedCurrentStep: meeting.currentStep,
+      workflowProgress,
+    });
+    const activeStep =
+      workflowProgress.steps.find((step) => step.status === "in_progress") ??
+      workflowProgress.steps.find((step) => step.status !== "complete") ??
+      workflowProgress.steps[workflowProgress.steps.length - 1];
+    const activeStepIndex = workflowProgress.steps.findIndex((step) => step.key === activeStep.key);
+
+    return {
+      id: meeting.id,
+      title: meeting.title,
+      meetingDate: meeting.meetingDate,
+      pipelineState: meeting.pipelineState,
+      progressLabel: displayProgress.currentLabel,
+      progressStepNumber: activeStepIndex >= 0 ? activeStepIndex + 1 : workflowProgress.totalCount,
+      progressTotalSteps: workflowProgress.totalCount,
+      progressNote: displayProgress.currentStep,
+      progressStatus: activeStep?.status ?? "incomplete",
+    };
+  });
 }
 
 function buildMeetingV2Stages(options: {

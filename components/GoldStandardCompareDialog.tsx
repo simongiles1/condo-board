@@ -69,11 +69,16 @@ export function GoldStandardCompareDialog({
       const payload = await response.json().catch(() => null);
 
       if (!response.ok) {
+        const detailLines = Array.isArray(payload?.details)
+          ? payload.details.filter((line: unknown) => typeof line === "string")
+          : [];
         const message =
           typeof payload?.error === "string"
             ? payload.error
             : "Comparison failed.";
-        throw new Error(message);
+        throw new Error(
+          detailLines.length ? `${message}\n${detailLines.join("\n")}` : message,
+        );
       }
 
       const validation = payload?.validation as

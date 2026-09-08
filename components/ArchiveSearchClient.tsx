@@ -4,8 +4,10 @@ import Link from "next/link";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { formatDateTime } from "@/lib/format/datetime";
+import { formatCostUsd, formatTokenCount } from "@/lib/gemini/usage";
+import type { CorpusEmbeddingCostSummary } from "@/lib/rag/cost";
 import type { CorpusIndexStatus, IndexSliceResult } from "@/lib/rag/indexer";
-import type { CorpusSearchResult } from "@/lib/rag/search";
+import type { CorpusSearchResult, CorpusSearchUsage } from "@/lib/rag/search";
 
 const EXAMPLE_QUERIES = [
   "reserve fund study",
@@ -19,6 +21,7 @@ const EXAMPLE_QUERIES = [
 export function ArchiveSearchClient() {
   // Index Status State
   const [indexStatus, setIndexStatus] = useState<CorpusIndexStatus | null>(null);
+  const [indexCosts, setIndexCosts] = useState<CorpusEmbeddingCostSummary | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [indexerRunning, setIndexerRunning] = useState(false);
   const [continuousIndexing, setContinuousIndexing] = useState(false);
@@ -26,6 +29,8 @@ export function ArchiveSearchClient() {
   const [indexerMode, setIndexerMode] = useState<"all" | "emails" | "attachments" | "vision">("all");
   const [indexerMessage, setIndexerMessage] = useState<string | null>(null);
   const [indexerError, setIndexerError] = useState<string | null>(null);
+  const [sessionIndexCostUsd, setSessionIndexCostUsd] = useState(0);
+  const [sessionSearchCostUsd, setSessionSearchCostUsd] = useState(0);
 
   // Search State
   const [query, setQuery] = useState("");
@@ -33,6 +38,7 @@ export function ArchiveSearchClient() {
   const [searching, setSearching] = useState(false);
   const [searchDurationMs, setSearchDurationMs] = useState<number | null>(null);
   const [searchResults, setSearchResults] = useState<CorpusSearchResult[] | null>(null);
+  const [lastSearchUsage, setLastSearchUsage] = useState<CorpusSearchUsage | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [expandedChunkIds, setExpandedChunkIds] = useState<Set<string>>(new Set());
 
@@ -46,6 +52,9 @@ export function ArchiveSearchClient() {
       const data = await res.json();
       if (res.ok && data.status) {
         setIndexStatus(data.status);
+      }
+      if (res.ok && data.costs) {
+        setIndexCosts(data.costs);
       }
     } catch {
       // Non-fatal
@@ -76,6 +85,7 @@ export function ArchiveSearchClient() {
         const data = (await res.json()) as {
           result?: IndexSliceResult;
           status?: CorpusIndexStatus;
+          costs?: CorpusEmbeddingCostSummary;
           error?: string;
         };
 
@@ -86,12 +96,20 @@ export function ArchiveSearchClient() {
         if (data.status) {
           setIndexStatus(data.status);
         }
+        if (data.costs) {
+          setIndexCosts(data.costs);
+        }
 
         const r = data.result;
         if (r) {
+          if (r.costUsd > 0) {
+            setSessionIndexCostUsd((prev) => prev + r.costUsd);
+          }
           const processed =
             r.emailsProcessed + r.attachmentsProcessed + r.visionPagesProcessed;
-          const msg = `Slice finished: ${processed} docs indexed (${r.chunksCreated} chunks, ${r.embeddingsComputed} embedded, ${r.embeddingsReused} reused). Remaining: ${r.remainingEmails} emails, ${r.remainingAttachments} attachments.`;
+          const costLabel = formatCostUsd(r.costUsd);
+          const tokenLabel = formatTokenCount(r.inputTokens);
+          const msg = `Slice finished: ${processed} docs indexed (${r.chunksCreated} chunks, ${r.embeddingsComputed} embedded, ${r.embeddingsReused} reused) · ${tokenLabel} tokens · ${costLabel}. Remaining: ${r.remainingEmails} emails, ${r.remainingAttachments} attachments.`;
           setIndexerMessage(msg);
 
           const hasMore =
@@ -159,6 +177,7 @@ export function ArchiveSearchClient() {
       const data = (await res.json()) as {
         results?: CorpusSearchResult[];
         count?: number;
+        usage?: CorpusSearchUsage;
         error?: string;
       };
 
@@ -167,6 +186,10 @@ export function ArchiveSearchClient() {
       }
 
       setSearchResults(data.results ?? []);
+      setLastSearchUsage(data.usage ?? null);
+      if (data.usage?.costUsd) {
+        setSessionSearchCostUsd((prev) => prev + data.usage!.costUsd);
+      }
       setSearchDurationMs(Math.round(performance.now() - start));
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : "Search failed");
@@ -388,6 +411,53 @@ export function ArchiveSearchClient() {
           </div>
         )}
 
+        {/* Embedding cost summary */}
+        {indexCosts ? (
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-lg border border-teal-100 bg-teal-50/60 p-3">
+              <div className="text-xs text-teal-800">Indexed Embedding Cost</div>
+              <div className="mt-1 text-lg font-bold tabular-nums text-teal-950">
+                {formatCostUsd(indexCosts.indexedCostUsd)}
+              </div>
+              <div className="mt-1 text-xs text-teal-800">
+                {formatTokenCount(indexCosts.indexedInputTokens)} input tokens ·{" "}
+                {indexCosts.modelName}
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-amber-100 bg-amber-50/60 p-3">
+              <div className="text-xs text-amber-900">Est. Remaining Index Cost</div>
+              <div className="mt-1 text-lg font-bold tabular-nums text-amber-950">
+                {indexCosts.extrapolation.formattedRemaining}
+              </div>
+              <div className="mt-1 text-xs text-amber-900">
+                ~{indexCosts.extrapolation.estimatedRemainingChunks.toLocaleString()} chunks left
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="text-xs text-slate-600">Est. Total Index Cost</div>
+              <div className="mt-1 text-lg font-bold tabular-nums text-slate-900">
+                {indexCosts.extrapolation.formattedTotal}
+              </div>
+              <div className="mt-1 text-xs text-slate-600">
+                ${indexCosts.pricePerMillionInput.toFixed(2)} / 1M input tokens
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="text-xs text-slate-600">This Session</div>
+              <div className="mt-1 text-lg font-bold tabular-nums text-slate-900">
+                {formatCostUsd(sessionIndexCostUsd + sessionSearchCostUsd)}
+              </div>
+              <div className="mt-1 text-xs text-slate-600">
+                Index {formatCostUsd(sessionIndexCostUsd)} · Search{" "}
+                {formatCostUsd(sessionSearchCostUsd)}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {/* Indexer Status Messages */}
         {indexerMessage ? (
           <p className="mt-3 rounded-lg bg-teal-50 px-3 py-2 text-xs text-teal-800">
@@ -489,6 +559,12 @@ export function ArchiveSearchClient() {
           <span className="text-xs font-semibold text-slate-600 uppercase">
             Found {searchResults.length} matching excerpts
             {searchDurationMs !== null ? ` in ${searchDurationMs}ms` : ""}
+            {lastSearchUsage ? (
+              <span className="ml-2 normal-case font-medium text-teal-800">
+                · Query embed {formatCostUsd(lastSearchUsage.costUsd)} (
+                {formatTokenCount(lastSearchUsage.inputTokens)} tokens)
+              </span>
+            ) : null}
           </span>
         </div>
       )}

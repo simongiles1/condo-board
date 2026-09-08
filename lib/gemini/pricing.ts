@@ -20,6 +20,8 @@ export const MODEL_LIST_PRICING_USD_PER_MILLION: Record<
   "gemini-3.5-flash": { input: 1.5, output: 9 },
   "gemini-3.6-flash": { input: 1.5, output: 7.5 },
   "gemini-3.7-flash": { input: 1.5, output: 7.5 },
+  /** Input-only billing; output dimension vectors are not token-billed. */
+  "gemini-embedding-001": { input: 0.15, output: 0 },
 };
 
 /**
@@ -50,6 +52,7 @@ const MODEL_PRICING_ALIASES: Array<{
   { match: /gemini-2\.0-flash-lite/i, id: "gemini-2.0-flash-lite" },
   { match: /gemini-2\.0-flash/i, id: "gemini-2.0-flash" },
   { match: /gemini-2\.5-pro/i, id: "gemini-2.5-pro" },
+  { match: /gemini-embedding-001/i, id: "gemini-embedding-001" },
 ];
 
 export function geminiFlashIntroPricingActive(nowMs = Date.now()): boolean {

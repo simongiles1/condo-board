@@ -207,6 +207,57 @@ export const MEETING_V2_USAGE_STAGE_DEFINITIONS: Array<{
   { id: "draft_generated", label: "Draft generated", kind: "user" },
 ];
 
+/** Cumulative % when each step reaches `complete` — matches Inngest stored pipeline progress. */
+export const MEETING_V2_STEP_COMPLETE_PERCENT: Record<string, number> = {
+  ingest: 20,
+  extract: 40,
+  evidence: 60,
+  investigate: 80,
+  validate: 90,
+  agenda_review: 95,
+  draft_generated: 100,
+};
+
+const MEETING_V2_WORKFLOW_STEP_ORDER = MEETING_V2_USAGE_STAGE_DEFINITIONS.map((stage) => stage.id);
+
+/** Weighted progress so post-pipeline agenda review does not drop below late validation %. */
+export function computeMeetingV2WorkflowProgressPercent(
+  steps: MeetingV2WorkflowStep[],
+  options: {
+    agendaItemCount: number;
+    needsClarificationCount: number;
+    flaggedCount: number;
+  },
+): number {
+  if (steps.length === 0) return 0;
+  if (steps.every((step) => step.status === "complete")) return 100;
+
+  const inProgress = steps.find((step) => step.status === "in_progress");
+  const activeStep =
+    inProgress ?? steps.find((step) => step.status !== "complete") ?? steps[steps.length - 1];
+  const activeIndex = MEETING_V2_WORKFLOW_STEP_ORDER.indexOf(activeStep.key);
+  const floor =
+    activeIndex > 0
+      ? MEETING_V2_STEP_COMPLETE_PERCENT[MEETING_V2_WORKFLOW_STEP_ORDER[activeIndex - 1]] ?? 0
+      : 0;
+  const ceiling = MEETING_V2_STEP_COMPLETE_PERCENT[activeStep.key] ?? 100;
+
+  if (activeStep.status !== "in_progress") {
+    return floor;
+  }
+
+  if (activeStep.key === "agenda_review" && options.agendaItemCount > 0) {
+    const readyCount = Math.max(
+      0,
+      options.agendaItemCount - options.needsClarificationCount - options.flaggedCount,
+    );
+    const ratio = Math.max(0, Math.min(1, readyCount / options.agendaItemCount));
+    return Math.round(floor + (ceiling - floor) * ratio);
+  }
+
+  return floor;
+}
+
 type PipelineStage = {
   key: string;
   label: string;
@@ -293,7 +344,11 @@ export function buildMeetingV2WorkflowProgress(options: {
 
   const completedCount = steps.filter((step) => step.status === "complete").length;
   const totalCount = steps.length;
-  const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+  const progressPercent = computeMeetingV2WorkflowProgressPercent(steps, {
+    agendaItemCount,
+    needsClarificationCount,
+    flaggedCount,
+  });
   const firstIncomplete = steps.find((step) => step.status !== "complete");
   const inProgress = steps.find((step) => step.status === "in_progress");
 

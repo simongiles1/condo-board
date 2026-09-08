@@ -446,6 +446,12 @@ function meetingV2PipelinePhase(pipelineState: string): string | null {
   return null;
 }
 
+/** Agenda items are not expected until extract finishes — suppress no-items alerts while ingest/extract runs. */
+export function isExpectedNoAgendaItemsYetDuringActiveRun(pipelineState: string): boolean {
+  const phase = meetingV2PipelinePhase(pipelineState);
+  return phase === "ingest" || pipelineState === "extracting";
+}
+
 /** Count/data lag that matches the current running stage — not a user-facing alert. */
 export function isExpectedMeetingV2IntegrityMismatchDuringActiveRun(
   pipelineState: string,
@@ -631,7 +637,10 @@ export function buildMeetingV2Alerts(options: {
     });
   } else if (
     extractionQuality.issueCode === "no_items" &&
-    !(pipelineActivelyRunning && (pipelineState === "extracting" || pipelineState === "ingested"))
+    !(
+      pipelineActivelyRunning &&
+      isExpectedNoAgendaItemsYetDuringActiveRun(pipelineState)
+    )
   ) {
     alerts.push({
       id: "no-items",

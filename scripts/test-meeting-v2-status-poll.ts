@@ -125,10 +125,40 @@ describe("shouldPollMeetingV2Status", () => {
     });
 
     assert.equal(workflowProgress.currentLabel, "Agenda review");
+    assert.equal(workflowProgress.progressPercent, 94);
     assert.deepEqual(getMeetingV2CurrentStepPosition(workflowProgress), {
       stepNumber: 6,
       totalCount: 7,
       activeStatus: "in_progress",
     });
+  });
+
+  it("does not drop progress when entering agenda review after validation", () => {
+    const workflowProgress = buildMeetingV2WorkflowProgress({
+      pipelineStages: [
+        { key: "ingest", label: "Ingest", status: "complete", note: "" },
+        { key: "extract", label: "Extract", status: "complete", note: "" },
+        { key: "evidence", label: "Evidence", status: "complete", note: "" },
+        { key: "investigate", label: "Investigate", status: "complete", note: "" },
+        { key: "validate", label: "Validate", status: "complete", note: "" },
+      ],
+      agendaItemCount: 30,
+      needsClarificationCount: 1,
+      flaggedCount: 0,
+      draftCount: 0,
+      hasLatestDraft: false,
+    });
+
+    const display = buildMeetingV2DisplayProgress({
+      pipelineNotStarted: false,
+      pipelineActivelyRunning: false,
+      pipelineState: "validated",
+      storedProgressPercent: 95,
+      storedCurrentStep: "Ready for review",
+      workflowProgress,
+    });
+
+    assert.equal(display.progressPercent, 95);
+    assert.equal(display.currentLabel, "Agenda review");
   });
 });

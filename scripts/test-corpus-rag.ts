@@ -129,6 +129,26 @@ describe("Corpus RAG - Text Chunking", () => {
   });
 });
 
+describe("Corpus RAG - Embedding cost helpers", () => {
+  it("estimates embedding tokens from text length", async () => {
+    const {
+      estimateEmbeddingTokensFromText,
+      estimateEmbeddingCostUsd,
+      EMBEDDING_CHARS_PER_TOKEN,
+    } = await import("../lib/rag/cost");
+
+    assert.equal(
+      estimateEmbeddingTokensFromText("a".repeat(EMBEDDING_CHARS_PER_TOKEN)),
+      1,
+    );
+    assert.equal(
+      estimateEmbeddingTokensFromText("a".repeat(EMBEDDING_CHARS_PER_TOKEN + 1)),
+      2,
+    );
+    assert.equal(estimateEmbeddingCostUsd(1_000_000), 0.15);
+  });
+});
+
 describe("Corpus RAG - Cosine Similarity & Excerpt Extraction", () => {
   it("computes cosine similarity accurately", () => {
     // Identical
@@ -176,16 +196,19 @@ describe("Corpus RAG - Database & API Integration", () => {
     const sliceResult = await runIncrementalIndexSlice({ batchSize: 5 });
 
     assert.ok(sliceResult.chunksCreated >= 0);
+    assert.ok(typeof sliceResult.costUsd === "number");
+    assert.ok(typeof sliceResult.inputTokens === "number");
     assert.equal(sliceResult.errors.length, 0, `Expected 0 errors, got: ${sliceResult.errors.join("; ")}`);
   });
 
   it("performs semantic corpus search for 'reserve fund study'", async () => {
     if (!fs.existsSync(".env.local") || !process.env.GEMINI_API_KEY) return;
     const { searchCorpus } = await import("../lib/rag/search");
-    const results = await searchCorpus({ query: "reserve fund study", limit: 5 });
+    const { results, usage } = await searchCorpus({ query: "reserve fund study", limit: 5 });
 
     assert.ok(Array.isArray(results));
-    console.log(`\n  [searchCorpus] Found ${results.length} matches for 'reserve fund study':`);
+    assert.ok(typeof usage.costUsd === "number");
+    console.log(`\n  [searchCorpus] Found ${results.length} matches for 'reserve fund study' (${usage.inputTokens} tokens, ${usage.costUsd} USD):`);
     for (const res of results) {
       assert.ok(res.id);
       assert.ok(res.chunkText);

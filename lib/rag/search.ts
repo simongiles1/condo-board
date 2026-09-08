@@ -3,6 +3,7 @@ import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { documentChunks } from "@/lib/db/schema";
 import { embedQuery } from "@/lib/rag/embed";
+import { summarizeEmbeddingUsage } from "@/lib/rag/cost";
 
 export type CorpusSearchOptions = {
   query: string;
@@ -33,6 +34,17 @@ export type CorpusSearchResult = {
   };
   sourceLink: string | null;
   emailLink: string | null;
+};
+
+export type CorpusSearchUsage = {
+  inputTokens: number;
+  costUsd: number;
+  tokenSource: "api" | "estimate";
+};
+
+export type CorpusSearchResponse = {
+  results: CorpusSearchResult[];
+  usage: CorpusSearchUsage;
 };
 
 /**
@@ -105,15 +117,22 @@ export function extractExcerpt(
  */
 export async function searchCorpus(
   options: CorpusSearchOptions,
-): Promise<CorpusSearchResult[]> {
+): Promise<CorpusSearchResponse> {
   const query = options.query.trim();
-  if (!query) return [];
+  if (!query) {
+    return {
+      results: [],
+      usage: { inputTokens: 0, costUsd: 0, tokenSource: "estimate" },
+    };
+  }
 
   const limit = Math.max(1, Math.min(50, options.limit ?? 10));
   const minSimilarity = options.minSimilarity ?? 0.2;
   const sourceKind = options.sourceKind ?? "all";
 
-  const queryVector = await embedQuery(query);
+  const embedded = await embedQuery(query);
+  const queryVector = embedded.vector;
+  const usage = summarizeEmbeddingUsage(embedded.usage);
   const vectorStr = `[${queryVector.join(",")}]`;
 
   const db = getDb();
@@ -146,7 +165,8 @@ export async function searchCorpus(
     .orderBy(distanceExpr)
     .limit(limit);
 
-  return rows.map((row) => {
+  return {
+    results: rows.map((row) => {
     let metadata: CorpusSearchResult["metadata"] = {};
     try {
       metadata = JSON.parse(row.metadataJson || "{}");
@@ -181,5 +201,7 @@ export async function searchCorpus(
       sourceLink,
       emailLink,
     };
-  });
+    }),
+    usage,
+  };
 }

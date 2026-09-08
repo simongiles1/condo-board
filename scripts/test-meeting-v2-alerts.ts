@@ -111,6 +111,26 @@ describe("buildMeetingV2Alerts", () => {
     assert.equal(alerts.length, 0);
   });
 
+  it("suppresses no-items alerts during active ingest before extraction starts", () => {
+    const alerts = buildMeetingV2Alerts({
+      extractionQuality: quality({
+        likelyIncomplete: true,
+        issueCode: "no_items",
+        note: "No agenda items were extracted yet.",
+      }),
+      integrityNote: "Base source ingest is incomplete.",
+      isConsistent: false,
+      lastError: null,
+      pipelineState: "ingesting",
+      pipelineActivelyRunning: true,
+      updatedAt: "2026-09-08T01:14:00.000Z",
+    });
+
+    assert.equal(alerts.some((alert) => alert.id === "no-items"), false);
+    assert.equal(alerts.some((alert) => alert.id === "pipeline-progress"), false);
+    assert.equal(alerts.length, 0);
+  });
+
   it("shows unexpected in-progress integrity mismatches as warnings without blocking", () => {
     const alerts = buildMeetingV2Alerts({
       extractionQuality: quality({

@@ -1,10 +1,30 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import {
+  GoogleGenerativeAI,
+  type UsageMetadata,
+} from "@google/generative-ai";
+
+import {
+  buildEmbeddingUsage,
+  estimateEmbeddingTokensFromText,
+  estimateEmbeddingTokensFromTexts,
+  type EmbeddingUsage,
+} from "@/lib/rag/cost";
 
 export const EMBEDDING_MODEL = "gemini-embedding-001";
 export const EMBEDDING_DIMENSION = 768;
 export const EMBEDDING_BATCH_SIZE = 50;
 const MAX_RETRIES = 3;
 const MAX_CHUNK_CHARS = 8000;
+
+export type EmbedQueryResult = {
+  vector: number[];
+  usage: EmbeddingUsage;
+};
+
+export type EmbedTextsResult = {
+  vectors: number[][];
+  usage: EmbeddingUsage;
+};
 
 function requireApiKey(): string {
   const key = process.env.GEMINI_API_KEY;
@@ -47,13 +67,30 @@ function isRetryableError(error: unknown): boolean {
   );
 }
 
+function usageFromMetadata(
+  metadata: UsageMetadata | undefined,
+  fallbackTexts: string[],
+): EmbeddingUsage {
+  const inputTokens = metadata?.promptTokenCount ?? 0;
+  if (inputTokens > 0) {
+    return buildEmbeddingUsage(inputTokens, "api");
+  }
+  return buildEmbeddingUsage(
+    estimateEmbeddingTokensFromTexts(fallbackTexts),
+    "estimate",
+  );
+}
+
 /**
  * Generate embedding vector for a search query.
  */
-export async function embedQuery(query: string): Promise<number[]> {
+export async function embedQuery(query: string): Promise<EmbedQueryResult> {
   const trimmed = query.trim().slice(0, MAX_CHUNK_CHARS);
   if (!trimmed) {
-    return new Array(EMBEDDING_DIMENSION).fill(0);
+    return {
+      vector: new Array(EMBEDDING_DIMENSION).fill(0),
+      usage: buildEmbeddingUsage(0, "estimate"),
+    };
   }
 
   const model = getEmbeddingModel();
@@ -65,7 +102,10 @@ export async function embedQuery(query: string): Promise<number[]> {
         content: { role: "user", parts: [{ text: trimmed }] },
         outputDimensionality: EMBEDDING_DIMENSION,
       });
-      return res.embedding.values;
+      return {
+        vector: res.embedding.values,
+        usage: usageFromMetadata(res.usageMetadata, [trimmed]),
+      };
     } catch (err) {
       attempt++;
       if (attempt >= MAX_RETRIES || !isRetryableError(err)) {
@@ -82,11 +122,18 @@ export async function embedQuery(query: string): Promise<number[]> {
  * Generate embeddings for a list of texts in batches.
  * Preserves the exact array order and length.
  */
-export async function embedTexts(texts: string[]): Promise<number[][]> {
-  if (texts.length === 0) return [];
+export async function embedTexts(texts: string[]): Promise<EmbedTextsResult> {
+  if (texts.length === 0) {
+    return {
+      vectors: [],
+      usage: buildEmbeddingUsage(0, "estimate"),
+    };
+  }
 
   const model = getEmbeddingModel();
   const results: number[][] = [];
+  let inputTokens = 0;
+  let tokenSource: EmbeddingUsage["tokenSource"] = "api";
 
   for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
     const batch = texts.slice(i, i + EMBEDDING_BATCH_SIZE);
@@ -107,6 +154,16 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
         for (const emb of res.embeddings) {
           results.push(emb.values);
         }
+
+        const batchUsage = usageFromMetadata(
+          res.usageMetadata,
+          batch.map((text) => text || " "),
+        );
+        inputTokens += batchUsage.inputTokens;
+        if (batchUsage.tokenSource === "estimate") {
+          tokenSource = "estimate";
+        }
+
         batchSucceeded = true;
         break;
       } catch (err) {
@@ -125,7 +182,10 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
     }
   }
 
-  return results;
+  return {
+    vectors: results,
+    usage: buildEmbeddingUsage(inputTokens, tokenSource),
+  };
 }
 
 /**
@@ -145,3 +205,5 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   if (denom === 0) return 0;
   return dot / denom;
 }
+
+export { estimateEmbeddingTokensFromText };

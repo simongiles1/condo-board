@@ -25,6 +25,27 @@ function requireApiKey(): string {
   return key;
 }
 
+/** User-facing message for Gemini API failures (billing, auth, rate limits). */
+export function formatGeminiApiErrorMessage(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/GEMINI_API_KEY is missing/i.test(message)) {
+    return "GEMINI_API_KEY is not configured on this server.";
+  }
+  if (/prepayment credits? (are )?depleted|prepayment credit/i.test(message)) {
+    return "Gemini prepaid credits are depleted. Add credits or enable billing in Google AI Studio, then try again.";
+  }
+  if (/exceeded its monthly spending cap/i.test(message)) {
+    return "Gemini monthly spending cap reached. Raise the cap in Google AI Studio, then try again.";
+  }
+  if (/429\s*Too Many Requests|RESOURCE_EXHAUSTED/i.test(message)) {
+    return "Gemini rate limit hit. Wait a moment and try again.";
+  }
+  if (/GoogleGenerativeAI/i.test(message)) {
+    return "Gemini API error during comparison. Check server logs for details.";
+  }
+  return null;
+}
+
 export type GeminiGenerationResult = {
   text: string;
   finishReason?: FinishReason;

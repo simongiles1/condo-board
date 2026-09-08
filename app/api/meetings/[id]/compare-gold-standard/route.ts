@@ -10,7 +10,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { meetings } from "@/lib/db/schema";
 import { meetingsV2, meetingsV2MinutesDrafts } from "@/lib/db/schema-v2";
-import { generateOmissionsAnalysis } from "@/lib/gemini/client";
+import { generateOmissionsAnalysis, formatGeminiApiErrorMessage } from "@/lib/gemini/client";
 import { parseGoldStandardValidationResponse } from "@/lib/gemini/parse-output";
 import { GOLD_STANDARD_VALIDATION_SYSTEM_PROMPT } from "@/lib/gemini/prompts";
 import {
@@ -344,9 +344,12 @@ export async function POST(
     });
   } catch (error) {
     console.error("[meetings:compare-gold-standard]", error);
+    const friendly = formatGeminiApiErrorMessage(error);
+    const billingBlocked =
+      friendly?.includes("credits") || friendly?.includes("spending cap");
     return NextResponse.json(
-      { error: "Could not compare against gold standard." },
-      { status: 500 },
+      { error: friendly ?? "Could not compare against gold standard." },
+      { status: billingBlocked ? 402 : 500 },
     );
   }
 }

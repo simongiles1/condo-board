@@ -7,11 +7,15 @@ import {
   runIncrementalIndexSlice,
   type IndexSliceOptions,
 } from "@/lib/rag/indexer";
+import { getCorpusEmbeddingCostSummary } from "@/lib/rag/cost";
 
 export async function GET() {
   try {
-    const status = await getCorpusIndexStatus();
-    return NextResponse.json({ status });
+    const [status, costs] = await Promise.all([
+      getCorpusIndexStatus(),
+      getCorpusEmbeddingCostSummary(),
+    ]);
+    return NextResponse.json({ status, costs });
   } catch (err) {
     console.error("[corpus-index] GET status error:", err);
     return NextResponse.json(
@@ -36,11 +40,15 @@ export async function POST(request: Request) {
     };
 
     const result = await runIncrementalIndexSlice(options);
-    const status = await getCorpusIndexStatus();
+    const [status, costs] = await Promise.all([
+      getCorpusIndexStatus(),
+      getCorpusEmbeddingCostSummary(),
+    ]);
 
     return NextResponse.json({
       result,
       status,
+      costs,
     });
   } catch (err) {
     console.error("[corpus-index] POST run error:", err);

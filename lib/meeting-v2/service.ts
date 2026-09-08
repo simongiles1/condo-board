@@ -731,7 +731,7 @@ export function deriveMeetingV2ComputedStatus(counts: {
   return {
     pipelineState: "validated",
     currentStep: "Ready for review",
-    progressPercent: 100,
+    progressPercent: 90,
     isConsistent: true,
     note: "Stored pipeline data is complete through validation.",
   };
@@ -3373,7 +3373,7 @@ export async function finalizeMeetingV2PipelineStatus(meetingId: string): Promis
     return;
   }
 
-  await updateMeetingV2Status(meetingId, "validated", "Ready for review", 100, null);
+  await updateMeetingV2Status(meetingId, "validated", "Ready for review", 90, null);
 }
 
 export async function resetMeetingV2DerivedData(meetingId: string): Promise<void> {

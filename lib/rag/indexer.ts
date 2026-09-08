@@ -15,6 +15,10 @@ import {
   type CorpusChunk,
 } from "@/lib/rag/chunk";
 import { embedTexts, EMBEDDING_MODEL } from "@/lib/rag/embed";
+import {
+  estimateEmbeddingCostUsd,
+  type EmbeddingUsage,
+} from "@/lib/rag/cost";
 import { sanitizePageVisionMarkdown } from "@/lib/email/page-vision-shared";
 import { resolveAttachmentStoragePath } from "@/lib/email/attachment-markdown-shared";
 import { readExtractArtifactText } from "@/lib/storage/extract-artifacts";
@@ -33,6 +37,9 @@ export type IndexSliceResult = {
   chunksCreated: number;
   embeddingsComputed: number;
   embeddingsReused: number;
+  inputTokens: number;
+  costUsd: number;
+  tokenSource: "api" | "estimate";
   remainingEmails: number;
   remainingAttachments: number;
   remainingVisionPages: number;
@@ -164,6 +171,9 @@ export async function runIncrementalIndexSlice(
     chunksCreated: 0,
     embeddingsComputed: 0,
     embeddingsReused: 0,
+    inputTokens: 0,
+    costUsd: 0,
+    tokenSource: "api",
     remainingEmails: 0,
     remainingAttachments: 0,
     remainingVisionPages: 0,
@@ -222,14 +232,15 @@ export async function runIncrementalIndexSlice(
 
     if (chunksNeedingEmbed.length > 0) {
       const textsToEmbed = chunksNeedingEmbed.map((c) => c.text);
-      const computedVectors = await embedTexts(textsToEmbed);
+      const embedded = await embedTexts(textsToEmbed);
       for (let j = 0; j < chunksNeedingEmbed.length; j++) {
         const itemIdx = chunksNeedingEmbed[j].index;
         const hash = items[itemIdx].chunk.contentHashDedup;
-        const vec = computedVectors[j];
+        const vec = embedded.vectors[j];
         knownEmbeddingMap.set(hash, vec);
       }
-      result.embeddingsComputed += computedVectors.length;
+      result.embeddingsComputed += embedded.vectors.length;
+      accumulateEmbeddingUsage(result, embedded.usage);
     }
 
     result.embeddingsReused += items.length - chunksNeedingEmbed.length;
@@ -493,4 +504,15 @@ export async function runIncrementalIndexSlice(
   );
 
   return result;
+}
+
+function accumulateEmbeddingUsage(
+  result: IndexSliceResult,
+  usage: EmbeddingUsage,
+): void {
+  result.inputTokens += usage.inputTokens;
+  result.costUsd = estimateEmbeddingCostUsd(result.inputTokens);
+  if (usage.tokenSource === "estimate") {
+    result.tokenSource = "estimate";
+  }
 }

@@ -24,11 +24,12 @@ export async function POST(request: Request) {
       sourceKind: body.sourceKind,
     };
 
-    const results = await searchCorpus(options);
+    const { results, usage } = await searchCorpus(options);
     return NextResponse.json({
       query,
       count: results.length,
       results,
+      usage,
     });
   } catch (err) {
     console.error("[corpus-search] error:", err);

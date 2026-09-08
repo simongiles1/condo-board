@@ -36,6 +36,12 @@ const ARTIFACT_TYPE_PREFERENCE = ["markdown", "md", "text", "json"] as const;
 
 const POLL_MS = 2_000;
 const MAX_WAIT_MS = 10 * 60 * 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 const SUBMIT_TIMEOUT_MS = 120_000;
 const DEFAULT_IBM_JOB_CONCURRENCY = 4;
 const MAX_IBM_JOB_CONCURRENCY = 8;
@@ -518,14 +524,28 @@ function artifactRefsFromDocument(value: unknown): IbmArtifactRef[] {
 export function selectIbmMarkdownArtifact(
   data: unknown,
 ): IbmArtifactRef | null {
+  return listIbmMarkdownArtifacts(data)[0] ?? null;
+}
+
+/** All artifact refs in preference order (markdown → md → text → json). */
+export function listIbmMarkdownArtifacts(data: unknown): IbmArtifactRef[] {
+  const out: IbmArtifactRef[] = [];
+  const seen = new Set<string>();
   for (const document of documentItems(data)) {
     const refs = artifactRefsFromDocument(document);
     for (const preferred of ARTIFACT_TYPE_PREFERENCE) {
       const match = refs.find((ref) => ref.artifactType === preferred);
-      if (match) return match;
+      if (!match || seen.has(match.uri)) continue;
+      seen.add(match.uri);
+      out.push(match);
+    }
+    for (const ref of refs) {
+      if (seen.has(ref.uri)) continue;
+      seen.add(ref.uri);
+      out.push(ref);
     }
   }
-  return null;
+  return out;
 }
 
 export function markdownFromIbmArtifactBytes(
@@ -635,10 +655,51 @@ export function ibmConversionFailureSummary(data: unknown): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-function emptyIbmMarkdownError(data: unknown, detail: string): IbmDoclingEmptyResultError {
+/**
+ * When IBM reports num_succeeded > 0 but artifacts are empty, treat it as a
+ * conversion/download glitch — do not mark the API key exhausted.
+ */
+export function shouldRotateOnEmptyIbmResult(data: unknown): boolean {
+  const root = asRecord(data);
+  if (!root) return true;
+  const numFailed = numberField(root, "num_failed", "numFailed");
+  const numSucceeded = numberField(root, "num_succeeded", "numSucceeded");
+  if (numFailed != null && numFailed > 0) return true;
+  if (numSucceeded != null && numSucceeded > 0) return false;
+  const summary = ibmConversionFailureSummary(data) ?? "";
+  if (QUOTA_MESSAGE_RE.test(summary)) return true;
+  return true;
+}
+
+function throwOnEmptyIbmMarkdown(data: unknown, detail: string): never {
   const stats = ibmConversionFailureSummary(data);
   const suffix = stats ? ` (${stats})` : "";
-  return new IbmDoclingEmptyResultError(`${detail}${suffix}`);
+  const message = `${detail}${suffix}`;
+  if (shouldRotateOnEmptyIbmResult(data)) {
+    throw new IbmDoclingEmptyResultError(message);
+  }
+  throw new Error(message);
+}
+
+async function downloadIbmMarkdownFromResult(data: unknown): Promise<string> {
+  const inline = extractIbmMarkdown(data);
+  if (inline) return inline;
+
+  const artifacts = listIbmMarkdownArtifacts(data);
+  const root = asRecord(data);
+  const numSucceeded = numberField(root, "num_succeeded", "numSucceeded");
+  const maxAttempts = numSucceeded != null && numSucceeded > 0 ? 3 : 1;
+
+  for (const artifact of artifacts) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const markdown = await downloadIbmArtifactMarkdown(artifact);
+      if (markdown) return markdown;
+      if (attempt < maxAttempts) {
+        await sleep(400 * attempt);
+      }
+    }
+  }
+  return "";
 }
 
 function taskIdOf(task: IbmTask): string | null {
@@ -899,22 +960,21 @@ async function fetchTaskResult(options: {
   if (status === "failure") {
     throw new Error("IBM Docling result status=failure.");
   }
-  const inline = extractIbmMarkdown(data);
-  if (inline) return inline;
+  const markdown = await downloadIbmMarkdownFromResult(data);
+  if (markdown) return markdown;
 
-  const artifact = selectIbmMarkdownArtifact(data);
-  if (artifact) {
-    const fromArtifact = await downloadIbmArtifactMarkdown(artifact);
-    if (fromArtifact) return fromArtifact;
-    throw emptyIbmMarkdownError(
+  const artifacts = listIbmMarkdownArtifacts(data);
+  if (artifacts.length > 0) {
+    const types = [...new Set(artifacts.map((a) => a.artifactType))].join(", ");
+    throwOnEmptyIbmMarkdown(
       data,
-      `IBM Docling artifact (${artifact.artifactType}) had no markdown.`,
+      `IBM Docling artifact(s) (${types}) had no markdown.`,
     );
   }
 
   const kind = ibmResultKind(data);
   const keys = ibmResultKeys(data) || "(none)";
-  throw emptyIbmMarkdownError(
+  throwOnEmptyIbmMarkdown(
     data,
     `IBM Docling returned empty markdown (kind=${kind || "unknown"}; keys=${keys}).`,
   );
@@ -925,10 +985,7 @@ function isRotatableIbmError(error: unknown): boolean {
   if (error instanceof IbmDoclingKeyRejectedError) return true;
   if (error instanceof IbmDoclingEmptyResultError) return true;
   const message = error instanceof Error ? error.message : String(error);
-  return (
-    QUOTA_MESSAGE_RE.test(message) ||
-    /artifact \(markdown\) had no markdown|returned empty markdown/i.test(message)
-  );
+  return QUOTA_MESSAGE_RE.test(message);
 }
 
 function rotatableReason(error: unknown): "quota" | "auth" {
@@ -947,8 +1004,12 @@ async function withIbmCredential<T>(
   while (true) {
     const cred = await slots.withIbmSlotLock(() => slots.pickLiveIbmCredential());
     if (!cred || tried.has(cred.slot)) {
+      const keyCount = listIbmDoclingCredentials().length;
+      const nextSlot = keyCount + 1;
       throw new IbmDoclingAllKeysExhaustedError(
-        "All IBM Docling API keys are exhausted or rejected. Add DOCLING_IBM_API_KEY_2 (and _3 / _4) in .env.local.",
+        `All ${keyCount} configured IBM Docling API key(s) are exhausted or rejected. ` +
+          `Provision a fresh watsonx Docling trial and add DOCLING_IBM_URL_${nextSlot} / ` +
+          `DOCLING_IBM_API_KEY_${nextSlot} in Coolify (or .env.local).`,
       );
     }
     tried.add(cred.slot);

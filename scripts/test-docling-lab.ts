@@ -14,6 +14,8 @@ import {
   ibmJobConcurrencyFromEnv,
   ibmConversionFailureSummary,
   isFatalIbmDoclingError,
+  listIbmMarkdownArtifacts,
+  shouldRotateOnEmptyIbmResult,
   isIbmQuotaExhausted,
   listIbmDoclingCredentials,
   markdownFromIbmArtifactBytes,
@@ -357,6 +359,33 @@ describe("isFatalIbmDoclingError", () => {
         documents: [{ status: "failure", errors: [{ message: "usage_limit_exceeded" }] }],
       }),
       "1 failed · 0 succeeded · 0 converted · document status=failure · usage_limit_exceeded",
+    );
+  });
+
+  it("does not rotate keys when IBM reports success but artifacts are empty", () => {
+    const data = {
+      num_succeeded: 1,
+      num_converted: 1,
+      documents: [
+        {
+          artifacts: [
+            { artifact_type: "markdown", uri: "https://example.org/a.md" },
+            { artifact_type: "json", uri: "https://example.org/a.json" },
+          ],
+        },
+      ],
+    };
+    assert.equal(shouldRotateOnEmptyIbmResult(data), false);
+    assert.deepEqual(listIbmMarkdownArtifacts(data).map((a) => a.artifactType), [
+      "markdown",
+      "json",
+    ]);
+  });
+
+  it("rotates keys when IBM reports zero successes", () => {
+    assert.equal(
+      shouldRotateOnEmptyIbmResult({ num_succeeded: 0, num_failed: 0 }),
+      true,
     );
   });
 

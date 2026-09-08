@@ -2,14 +2,8 @@
 
 import { useEffect, useState } from "react";
 
-import {
-  formatDeepSeekPricingTierLabel,
-  formatDurationMs,
-  formatInstantLocal,
-  getDeepSeekPeakWindowRows,
-  getDeepSeekPricingStatus,
-  getLocalTimeZoneShort,
-} from "@/lib/deepseek/pricing";
+import { DeepSeekPricingTimeline } from "@/components/DeepSeekPricingTimeline";
+import { getDeepSeekPricingStatus } from "@/lib/deepseek/pricing";
 
 export type PipelineConfirmAction = "start" | "resume" | "rerun" | "restart";
 
@@ -61,23 +55,21 @@ export function PipelineRunConfirmDialog({
   onConfirm,
   onCancel,
 }: Props) {
-  const [pricingStatus, setPricingStatus] = useState(() => getDeepSeekPricingStatus());
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const pricingStatus = getDeepSeekPricingStatus(nowMs);
 
   useEffect(() => {
     if (!open) return;
-    setPricingStatus(getDeepSeekPricingStatus());
+    setNowMs(Date.now());
     const interval = window.setInterval(() => {
-      setPricingStatus(getDeepSeekPricingStatus());
-    }, 30_000);
+      setNowMs(Date.now());
+    }, 60_000);
     return () => window.clearInterval(interval);
   }, [open]);
 
   if (!open) return null;
 
   const copy = ACTION_COPY[action];
-  const inPeak = pricingStatus.tier === "peak";
-  const peakWindows = getDeepSeekPeakWindowRows();
-  const localTimeZone = getLocalTimeZoneShort();
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
@@ -99,51 +91,8 @@ export function PipelineRunConfirmDialog({
         </h2>
         <p className="mt-2 text-sm text-slate-600">{copy.description}</p>
 
-        <div
-          className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
-            inPeak
-              ? "border-amber-200 bg-amber-50 text-amber-950"
-              : "border-teal-200 bg-teal-50 text-teal-950"
-          }`}
-        >
-          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-            <p className="font-semibold">
-              DeepSeek pricing: {formatDeepSeekPricingTierLabel(pricingStatus.tier)} hours
-            </p>
-            {inPeak ? (
-              <span className="text-xs font-medium uppercase tracking-wide opacity-80">
-                2× cost now
-              </span>
-            ) : null}
-          </div>
-
-          <p className="mt-2 text-xs font-medium uppercase tracking-wide opacity-70">
-            Peak hours · Mon–Fri · {localTimeZone}
-          </p>
-          <ul className="mt-1.5 list-inside list-disc space-y-1 text-[13px] leading-snug">
-            {peakWindows.map((window, index) => (
-              <li key={index}>{window.localRange}</li>
-            ))}
-          </ul>
-
-          {inPeak && pricingStatus.msUntilOffPeak != null && pricingStatus.nextOffPeakAtMs != null ? (
-            <div
-              className={`mt-3 border-t pt-3 ${
-                inPeak ? "border-amber-200/80" : "border-teal-200/80"
-              }`}
-            >
-              <p className="text-[13px] font-medium">
-                Off-peak starts in {formatDurationMs(pricingStatus.msUntilOffPeak)}
-              </p>
-              <p className="mt-0.5 text-[13px] opacity-90">
-                {formatInstantLocal(pricingStatus.nextOffPeakAtMs)}
-              </p>
-            </div>
-          ) : (
-            <p className="mt-3 border-t border-teal-200/80 pt-3 text-[13px] font-medium">
-              You are currently in off-peak hours — lowest DeepSeek rates apply.
-            </p>
-          )}
+        <div className="mt-4">
+          <DeepSeekPricingTimeline pricingStatus={pricingStatus} atMs={nowMs} />
         </div>
 
         <div className="mt-6 flex flex-wrap justify-end gap-3">

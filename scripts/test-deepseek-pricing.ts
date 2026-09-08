@@ -12,7 +12,9 @@ import {
   DEEPSEEK_V4_FLASH_PEAK_RATES,
   estimateDeepSeekCostBreakdown,
   estimateDeepSeekOffPeakOptimizedBreakdown,
+  formatDeepSeekTierCountdown,
   formatDurationMs,
+  getDeepSeekLocalDayTimeline,
   getDeepSeekPricingStatus,
 } from "../lib/deepseek/pricing";
 
@@ -99,27 +101,39 @@ describe("estimateDeepSeekCostBreakdown", () => {
 });
 
 describe("getDeepSeekPricingStatus", () => {
-  it("returns null wait when off-peak", () => {
-    const status = getDeepSeekPricingStatus(Date.parse("2026-09-07T05:00:00.000Z"));
+  it("returns wait until next peak when off-peak on a weekday", () => {
+    const at = Date.parse("2026-09-07T05:00:00.000Z");
+    const status = getDeepSeekPricingStatus(at);
     assert.equal(status.tier, "off_peak");
-    assert.equal(status.msUntilOffPeak, null);
-    assert.equal(status.nextOffPeakAtMs, null);
+    assert.equal(status.nextTier, "peak");
+    assert.equal(status.msUntilTierChange, 60 * 60 * 1000);
+    assert.equal(status.nextTierChangeAtMs, Date.parse("2026-09-07T06:00:00.000Z"));
   });
 
   it("returns wait until 04:00 UTC during morning peak", () => {
     const at = Date.parse("2026-09-07T02:30:00.000Z");
     const status = getDeepSeekPricingStatus(at);
     assert.equal(status.tier, "peak");
-    assert.equal(status.msUntilOffPeak, 90 * 60 * 1000);
-    assert.equal(status.nextOffPeakAtMs, Date.parse("2026-09-07T04:00:00.000Z"));
+    assert.equal(status.nextTier, "off_peak");
+    assert.equal(status.msUntilTierChange, 90 * 60 * 1000);
+    assert.equal(status.nextTierChangeAtMs, Date.parse("2026-09-07T04:00:00.000Z"));
   });
 
   it("returns wait until 10:00 UTC during day peak", () => {
     const at = Date.parse("2026-09-07T08:00:00.000Z");
     const status = getDeepSeekPricingStatus(at);
     assert.equal(status.tier, "peak");
-    assert.equal(status.msUntilOffPeak, 2 * 60 * 60 * 1000);
-    assert.equal(status.nextOffPeakAtMs, Date.parse("2026-09-07T10:00:00.000Z"));
+    assert.equal(status.nextTier, "off_peak");
+    assert.equal(status.msUntilTierChange, 2 * 60 * 60 * 1000);
+    assert.equal(status.nextTierChangeAtMs, Date.parse("2026-09-07T10:00:00.000Z"));
+  });
+
+  it("returns wait until Monday morning peak from Saturday off-peak", () => {
+    const at = Date.parse("2026-09-06T15:00:00.000Z");
+    const status = getDeepSeekPricingStatus(at);
+    assert.equal(status.tier, "off_peak");
+    assert.equal(status.nextTier, "peak");
+    assert.equal(status.nextTierChangeAtMs, Date.parse("2026-09-07T01:00:00.000Z"));
   });
 });
 
@@ -130,6 +144,33 @@ describe("formatDurationMs", () => {
 
   it("formats hour and minute durations", () => {
     assert.equal(formatDurationMs(90 * 60 * 1000), "1h 30m");
+  });
+});
+
+describe("formatDeepSeekTierCountdown", () => {
+  it("formats remaining and until variants", () => {
+    const status = getDeepSeekPricingStatus(Date.parse("2026-09-07T08:00:00.000Z"));
+    assert.match(formatDeepSeekTierCountdown(status, "remaining"), /left in peak/i);
+    assert.match(formatDeepSeekTierCountdown(status, "until"), /until off-peak/i);
+  });
+});
+
+describe("getDeepSeekLocalDayTimeline", () => {
+  it("builds contiguous segments that cover the local day", () => {
+    const at = Date.parse("2026-09-06T12:00:00.000Z");
+    const timeline = getDeepSeekLocalDayTimeline(at);
+    assert.ok(timeline.segments.length > 0);
+    assert.equal(timeline.segments[0]?.startFraction, 0);
+    assert.equal(timeline.segments.at(-1)?.endFraction, 1);
+    assert.ok(timeline.nowFraction >= 0 && timeline.nowFraction <= 1);
+  });
+
+  it("includes peak segments on a weekday", () => {
+    const localMondayNoon = new Date(2026, 8, 7, 12, 0, 0, 0);
+    const timeline = getDeepSeekLocalDayTimeline(localMondayNoon.getTime());
+    assert.equal(timeline.isAllOffPeakDay, false);
+    assert.ok(timeline.segments.some((segment) => segment.tier === "peak"));
+    assert.ok(timeline.segments.some((segment) => segment.tier === "off_peak"));
   });
 });
 

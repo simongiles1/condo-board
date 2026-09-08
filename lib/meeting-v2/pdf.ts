@@ -251,26 +251,31 @@ function extractMajorSectionHeading(
       : `Email Attachment (Page ${pageNumber})`;
   }
 
+  // Detect the master meeting agenda outline page
+  if (
+    /\bAGENDA\b/i.test(raw) ||
+    (/\bCall to Order\b/i.test(raw) && /\bAdjournment\b/i.test(raw))
+  ) {
+    return "Meeting Agenda";
+  }
+
   for (const line of lines.slice(0, 8)) {
     const cleanLine = line.replace(/^#{1,4}\s+/, "").trim();
     if (!cleanLine || cleanLine.startsWith("<!--") || cleanLine.length < 3) continue;
 
     if (SUBORDINATE_HEADER_RE.test(cleanLine)) continue;
 
-    // Check for major numbered project / item: "1. Booster Pump...", "2. Heat Exchanger..."
-    const numMatch = cleanLine.match(/^(\d+\.\s+[A-Za-z].+)$/);
-    if (numMatch && cleanLine.length < 120) {
-      return numMatch[1];
-    }
-
-    // Check for major lettered section: "A. Ratification...", "B. Review and approval...", "C. Items completed"
+    // Check for major lettered section inside reports: "A. Ratification...", "B. Review and approval...", "C. Items completed", "D. Items for Discussion"
     const letMatch = cleanLine.match(/^([A-E]\.\s+[A-Za-z].+)$/);
     if (letMatch && cleanLine.length < 120) {
-      return letMatch[1];
+      return `Property Management Report: ${letMatch[1]}`;
     }
 
     // Check for named major sections
     if (MAJOR_SECTION_RE.test(cleanLine) && cleanLine.length < 120) {
+      if (cleanLine.toLowerCase().startsWith("call to order") && (raw.includes("Adjournment") || raw.includes("AGENDA"))) {
+        return "Meeting Agenda";
+      }
       return cleanLine;
     }
   }

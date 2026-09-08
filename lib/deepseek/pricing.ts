@@ -130,36 +130,126 @@ export const DEEPSEEK_PEAK_WINDOWS_UTC: ReadonlyArray<{
 
 export type DeepSeekPricingStatus = {
   tier: DeepSeekPricingTier;
-  /** Null when already off-peak. */
-  msUntilOffPeak: number | null;
-  /** Null when already off-peak. */
-  nextOffPeakAtMs: number | null;
+  nextTier: DeepSeekPricingTier;
+  msUntilTierChange: number;
+  nextTierChangeAtMs: number;
 };
+
+export type DeepSeekTimelineSegment = {
+  /** Fraction of the local calendar day [0, 1). */
+  startFraction: number;
+  endFraction: number;
+  tier: DeepSeekPricingTier;
+};
+
+export type DeepSeekLocalDayTimeline = {
+  segments: DeepSeekTimelineSegment[];
+  /** Fraction of the local calendar day where `atMs` falls. */
+  nowFraction: number;
+  /** True when every segment in the local day is off-peak. */
+  isAllOffPeakDay: boolean;
+};
+
+function collectTierTransitionInstants(startMs: number, endMs: number): number[] {
+  const instants = new Set<number>([startMs, endMs]);
+
+  const dayCursor = new Date(startMs);
+  dayCursor.setUTCHours(0, 0, 0, 0);
+  const lastUtcDay = new Date(endMs);
+  lastUtcDay.setUTCHours(0, 0, 0, 0);
+
+  while (dayCursor.getTime() <= lastUtcDay.getTime() + 24 * 60 * 60 * 1000) {
+    const utcDayStart = dayCursor.getTime();
+    if (utcDayStart > startMs && utcDayStart < endMs) {
+      instants.add(utcDayStart);
+    }
+
+    for (const { startHour, endHour } of DEEPSEEK_PEAK_WINDOWS_UTC) {
+      const peakStart = utcDayStart + startHour * 60 * 60 * 1000;
+      const peakEnd = utcDayStart + endHour * 60 * 60 * 1000;
+      if (peakStart > startMs && peakStart < endMs) instants.add(peakStart);
+      if (peakEnd > startMs && peakEnd < endMs) instants.add(peakEnd);
+    }
+
+    dayCursor.setUTCDate(dayCursor.getUTCDate() + 1);
+  }
+
+  return [...instants].sort((a, b) => a - b);
+}
+
+function getNextTierChangeAt(atMs: number): { nextTier: DeepSeekPricingTier; atMs: number } {
+  const currentTier = deepSeekPricingTierAt(atMs);
+  const horizonMs = atMs + 8 * 24 * 60 * 60 * 1000;
+  const candidates = collectTierTransitionInstants(atMs, horizonMs).filter((instant) => instant > atMs);
+
+  for (const candidate of candidates) {
+    const nextTier = deepSeekPricingTierAt(candidate);
+    if (nextTier !== currentTier) {
+      return { nextTier, atMs: candidate };
+    }
+  }
+
+  return {
+    nextTier: currentTier === "peak" ? "off_peak" : "peak",
+    atMs: atMs + 60 * 60 * 1000,
+  };
+}
 
 export function getDeepSeekPricingStatus(atMs = Date.now()): DeepSeekPricingStatus {
   const tier = deepSeekPricingTierAt(atMs);
-  if (tier === "off_peak") {
-    return { tier, msUntilOffPeak: null, nextOffPeakAtMs: null };
-  }
-
-  const date = new Date(atMs);
-  const hour = date.getUTCHours();
-  const nextOffPeakHour = hour >= 1 && hour < 4 ? 4 : 10;
-  const nextOffPeakAtMs = Date.UTC(
-    date.getUTCFullYear(),
-    date.getUTCMonth(),
-    date.getUTCDate(),
-    nextOffPeakHour,
-    0,
-    0,
-    0,
-  );
+  const nextChange = getNextTierChangeAt(atMs);
 
   return {
     tier,
-    msUntilOffPeak: Math.max(0, nextOffPeakAtMs - atMs),
-    nextOffPeakAtMs,
+    nextTier: nextChange.nextTier,
+    msUntilTierChange: Math.max(0, nextChange.atMs - atMs),
+    nextTierChangeAtMs: nextChange.atMs,
   };
+}
+
+export function getDeepSeekLocalDayTimeline(atMs = Date.now()): DeepSeekLocalDayTimeline {
+  const date = new Date(atMs);
+  const localDayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+  const localDayEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0, 0);
+  const startMs = localDayStart.getTime();
+  const endMs = localDayEnd.getTime();
+  const dayMs = endMs - startMs;
+
+  const instants = collectTierTransitionInstants(startMs, endMs);
+  const segments: DeepSeekTimelineSegment[] = [];
+
+  for (let index = 0; index < instants.length - 1; index += 1) {
+    const segmentStart = instants[index];
+    const segmentEnd = instants[index + 1];
+    if (segmentEnd <= segmentStart) continue;
+
+    segments.push({
+      startFraction: (segmentStart - startMs) / dayMs,
+      endFraction: (segmentEnd - startMs) / dayMs,
+      tier: deepSeekPricingTierAt(segmentStart + 1),
+    });
+  }
+
+  const elapsedMs = atMs - startMs;
+  const nowFraction = Math.min(1, Math.max(0, elapsedMs / dayMs));
+  const isAllOffPeakDay = segments.every((segment) => segment.tier === "off_peak");
+
+  return { segments, nowFraction, isAllOffPeakDay };
+}
+
+export function formatDeepSeekTierCountdown(
+  status: DeepSeekPricingStatus,
+  style: "remaining" | "until" = "remaining",
+): string {
+  const duration = formatDurationMs(status.msUntilTierChange);
+  const currentLabel = formatDeepSeekPricingTierLabel(status.tier).toLowerCase();
+  const nextLabel = formatDeepSeekPricingTierLabel(status.nextTier).toLowerCase();
+
+  if (style === "until") {
+    return `${duration} until ${nextLabel}`;
+  }
+
+  return `${duration} left in ${currentLabel}`;
 }
 
 export function formatDurationMs(ms: number): string {

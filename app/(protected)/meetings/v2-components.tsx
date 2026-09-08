@@ -39,6 +39,8 @@ import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
 import { serializeMinutesDoc } from "@/lib/minutes/doc-v2-edits";
 import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
+import { ChunkPreviewModal } from "@/components/ChunkPreviewModal";
+import { TranscriptRangeModal } from "@/components/TranscriptRangeModal";
 import {
   buildMeetingV2DisplayProgress,
   buildMeetingV2WorkflowProgress,
@@ -790,15 +792,18 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const pipelineSourcesReady = Boolean(
     status?.sources.transcript?.available && status?.sources.boardPackage?.available,
   );
+  const pipelineRunning = pipelineActivelyRunning && !pipelineHalted;
   const pipelineDisabledReason = !status
     ? "Loading meeting sources…"
-    : !status.sources.transcript?.available && !status.sources.boardPackage?.available
-      ? "Transcript and board package are not available on this machine."
-      : !status.sources.transcript?.available
-        ? "Transcript file is not available on this machine."
-        : !status.sources.boardPackage?.available
-          ? "Board package is not available on this machine."
-          : null;
+    : pipelineRunning
+      ? "Pipeline is already running."
+      : !status.sources.transcript?.available && !status.sources.boardPackage?.available
+        ? "Transcript and board package are not available on this machine."
+        : !status.sources.transcript?.available
+          ? "Transcript file is not available on this machine."
+          : !status.sources.boardPackage?.available
+            ? "Board package is not available on this machine."
+            : null;
 
   return (
     <div className="space-y-3">
@@ -922,7 +927,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   runBusy={runBusy}
                   pipelineNotStarted={pipelineNotStarted}
                   pipelineValidated={pipelineValidated}
-                  disabled={!pipelineSourcesReady}
+                  pipelineActivelyRunning={pipelineRunning}
+                  disabled={!pipelineSourcesReady || pipelineRunning}
                   disabledReason={pipelineDisabledReason}
                   onRun={handleRunPipeline}
                   onRestart={handleRestartPipeline}
@@ -1093,6 +1099,7 @@ function PipelineActionButton({
   runBusy,
   pipelineNotStarted,
   pipelineValidated = false,
+  pipelineActivelyRunning = false,
   disabled = false,
   disabledReason,
   onRun,
@@ -1101,6 +1108,7 @@ function PipelineActionButton({
   runBusy: boolean;
   pipelineNotStarted: boolean;
   pipelineValidated?: boolean;
+  pipelineActivelyRunning?: boolean;
   disabled?: boolean;
   disabledReason?: string | null;
   onRun: () => void | Promise<void>;
@@ -1160,11 +1168,13 @@ function PipelineActionButton({
       : pipelineValidated
         ? "Re-running..."
         : "Resuming..."
-    : pipelineNotStarted
-      ? "Start Pipeline"
-      : pipelineValidated
-        ? "Re-run Pipeline"
-        : "Resume Pipeline";
+    : pipelineActivelyRunning
+      ? "Pipeline Running"
+      : pipelineNotStarted
+        ? "Start Pipeline"
+        : pipelineValidated
+          ? "Re-run Pipeline"
+          : "Resume Pipeline";
 
   const title = isDisabled && disabledReason ? disabledReason : undefined;
   const showDropdown = pipelineValidated || !pipelineNotStarted;
@@ -1610,6 +1620,61 @@ function HealthCallout({
   );
 }
 
+function parseSourceSnippet(rawText: string, itemTitle: string) {
+  const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  let timing: string | null = null;
+  const chunkIds: string[] = [];
+  let evidenceStrength: string | null = null;
+  let status: string | null = null;
+  const contentLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("Discussion status:")) {
+      status = line.replace("Discussion status:", "").trim();
+    } else if (line.startsWith("Discussion timing:")) {
+      timing = line.replace("Discussion timing:", "").trim();
+    } else if (line.startsWith("Chunk IDs:")) {
+      const parts = line.replace("Chunk IDs:", "").split(",");
+      for (const p of parts) {
+        const id = p.trim();
+        if (id) chunkIds.push(id);
+      }
+    } else if (line.startsWith("Transcript ranges:")) {
+      // Ignored: internal database sequence indices
+    } else if (line.startsWith("Evidence strength:")) {
+      evidenceStrength = line.replace("Evidence strength:", "").trim();
+    } else {
+      // Check if line duplicates the item title
+      const normLine = line.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const normTitle = itemTitle.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (
+        normLine &&
+        normTitle &&
+        (normLine === normTitle ||
+          normTitle.startsWith(normLine) ||
+          normLine.startsWith(normTitle))
+      ) {
+        // Skip duplicate title line
+        continue;
+      }
+      contentLines.push(line);
+    }
+  }
+
+  const isUncertain =
+    evidenceStrength?.toUpperCase() === "UNCERTAIN" ||
+    rawText.includes("UNCERTAIN");
+
+  return {
+    timing,
+    chunkIds,
+    evidenceStrength,
+    status,
+    contentLines,
+    isUncertain,
+  };
+}
+
 function HitlAgendaApprovalWorkspace({
   meetingId,
   status,
@@ -1671,6 +1736,8 @@ function HitlAgendaApprovalWorkspace({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [expandedSourceItemId, setExpandedSourceItemId] = useState<string | null>(null);
+  const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
+  const [selectedTimeRange, setSelectedTimeRange] = useState<string | null>(null);
 
   const isApproved = Boolean(status.meeting.agendaApproval?.approvedAt);
 
@@ -1931,6 +1998,8 @@ function HitlAgendaApprovalWorkspace({
                   const displayTitle = editedTitles[item.id] ?? item.title;
                   const isEditingThis = editingItemId === item.id;
                   const isSourceExpanded = expandedSourceItemId === item.id;
+                  const parsedSnippet = parseSourceSnippet(item.sourceText || "", displayTitle);
+                  const isRyanRatcliffGuestItem = displayTitle.toLowerCase().includes("ryan ratcliff");
 
                   return (
                     <div
@@ -2007,11 +2076,24 @@ function HitlAgendaApprovalWorkspace({
                               <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
                                 Ad-Hoc Discussion
                               </span>
+                            ) : parsedSnippet.isUncertain ? (
+                              <span className="rounded bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 border border-amber-300">
+                                ⚠️ Uncertain Match
+                              </span>
                             ) : (
                               <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 border border-emerald-200">
                                 Verified in Audio
                               </span>
                             )}
+
+                            {isRyanRatcliffGuestItem ? (
+                              <span
+                                className="rounded bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-800 border border-rose-200 cursor-help"
+                                title="Ryan Ratcliff was not present in this recording; discussion was only mentioned while amending prior minutes."
+                              >
+                                ℹ️ Presenter not in audio
+                              </span>
+                            ) : null}
                           </div>
 
                           {/* Source Snippet toggle if available */}
@@ -2027,9 +2109,60 @@ function HitlAgendaApprovalWorkspace({
                                 {isSourceExpanded ? "Hide source text" : "Show source text snippet"}
                               </button>
                               {isSourceExpanded ? (
-                                <p className="mt-1.5 rounded-lg bg-slate-100 p-2 text-xs text-slate-600 font-mono whitespace-pre-wrap">
-                                  {item.sourceText}
-                                </p>
+                                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs space-y-2">
+                                  {parsedSnippet.timing ? (
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-semibold text-slate-600 text-[11px]">Timing:</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedTimeRange(parsedSnippet.timing)}
+                                        className="inline-flex items-center gap-1.5 rounded-md bg-teal-50 hover:bg-teal-100 border border-teal-200 px-2 py-0.5 font-mono text-[11px] font-semibold text-teal-800 transition"
+                                        title="Click to view and highlight discussion in transcript"
+                                      >
+                                        <span>🎧</span> {parsedSnippet.timing}
+                                        <span className="text-[10px] text-teal-600 underline">view transcript</span>
+                                      </button>
+                                    </div>
+                                  ) : null}
+
+                                  {parsedSnippet.chunkIds.length > 0 ? (
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <span className="font-semibold text-slate-600 text-[11px]">Referenced Chunks:</span>
+                                      {parsedSnippet.chunkIds.map((cid) => (
+                                        <button
+                                          key={cid}
+                                          type="button"
+                                          onClick={() => setSelectedChunkId(cid)}
+                                          className="inline-flex items-center gap-1 rounded-md bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2 py-0.5 font-mono text-[11px] font-semibold text-indigo-700 transition"
+                                          title={`Click to inspect ${cid}`}
+                                        >
+                                          <span>{cid.startsWith("doc") ? "📄" : "🎙️"}</span> {cid}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  ) : null}
+
+                                  {parsedSnippet.evidenceStrength ? (
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-semibold text-slate-600 text-[11px]">Evidence strength:</span>
+                                      <span
+                                        className={`rounded px-1.5 py-0.2 font-mono text-[11px] font-bold ${
+                                          parsedSnippet.isUncertain
+                                            ? "bg-amber-100 text-amber-800 border border-amber-300"
+                                            : "bg-emerald-100 text-emerald-800"
+                                        }`}
+                                      >
+                                        {parsedSnippet.evidenceStrength}
+                                      </span>
+                                    </div>
+                                  ) : null}
+
+                                  {parsedSnippet.contentLines.length > 0 ? (
+                                    <div className="pt-1 border-t border-slate-200/80 font-mono text-[11px] text-slate-600 whitespace-pre-wrap leading-relaxed">
+                                      {parsedSnippet.contentLines.join("\n")}
+                                    </div>
+                                  ) : null}
+                                </div>
                               ) : null}
                             </div>
                           ) : null}
@@ -2255,6 +2388,20 @@ function HitlAgendaApprovalWorkspace({
           </div>
         </div>
       </div>
+
+      <ChunkPreviewModal
+        open={Boolean(selectedChunkId)}
+        meetingId={meetingId}
+        chunkId={selectedChunkId}
+        onClose={() => setSelectedChunkId(null)}
+      />
+
+      <TranscriptRangeModal
+        open={Boolean(selectedTimeRange)}
+        meetingId={meetingId}
+        timeRange={selectedTimeRange}
+        onClose={() => setSelectedTimeRange(null)}
+      />
     </SectionCard>
   );
 }

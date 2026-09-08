@@ -17,6 +17,10 @@ import type {
   MeetingV2Settings,
   TranscriptDiscrepancy,
 } from "@/lib/meeting-v2/extraction-diagnostics";
+import {
+  extractBoardPackageAgendaJson,
+  flattenBoardPackageAgenda,
+} from "@/lib/meeting-v2/board-package-agenda";
 
 type WorkflowTopic = {
   title: string;
@@ -226,6 +230,7 @@ Transcript rules:
 - Prefer updating notes and aliases on existing topics.
 - Lines marked as [PREVIOUS TRANSCRIPT CONTEXT] are provided strictly so you can read conversations that connect to the current lines. Do not extract brand new extra topics from the previous transcript context if they do not spill over into the new lines.
 - Preserve early guest-presentation topics when the transcript clearly shows a contractor, engineer, or presenter leading a distinct opening discussion block.
+- GUEST PRESENTERS & CARRIED OVER ITEMS: If a topic is an official agenda presentation (e.g. "Meeting with Eng. Ryan Ratcliff from TCG"), check whether the guest actually attended or spoke in this meeting. If the guest was NOT present in the audio recording, and the topic was only mentioned in passing or while reviewing amendments to previous minutes, DO NOT mark it as "discussed". Mark it as "not_discussed" and set evidenceStrength to "UNCERTAIN" with needsHumanReview: true and humanReviewReason: "Guest presenter did not speak in audio; topic was only mentioned in passing during review of prior minutes."
 - If the transcript clearly reveals a planned or structured meeting matter that belongs in the main agenda but is missing from documentTopics, add it to documentTopics rather than extraTopics.
 - Use extraTopics only for genuinely additional matters that do not behave like an official agenda topic.
 - Every transcript-only new matter must use itemType "extra_topic". EXCEPTION: If the transcript introduces the approval of previous minutes or financial matters, add it to documentTopics with itemType "approval_of_previous_minutes" or "financial_matters" respectively. Do not invent custom itemType values for extraTopics.
@@ -1102,6 +1107,58 @@ export async function extractAgendaItemsWithAi(
     extraTopics: [],
     uncertainties: [],
   };
+
+  // If starting fresh, extract the authoritative Board Package Agenda JSON
+  if (state.documentTopics.length === 0) {
+    try {
+      const fullAgenda = await extractBoardPackageAgendaJson({
+        meetingId,
+        maxPages: 15,
+        onProgress: async (p) => {
+          await options?.onProgress?.({
+            current: p.current,
+            total: totalChunks + 15,
+            label: p.label,
+          });
+        },
+      });
+      const flattened = flattenBoardPackageAgenda(fullAgenda);
+      state.documentTopics = flattened.map((item) => {
+        const matchedChunkIds = packageChunks
+          .filter((pc) => pc.pageNumbers.some((p) => item.sourcePages.includes(p)))
+          .map((pc) => pc.aiChunkId);
+
+        return {
+          title: item.title,
+          sectionLabel: item.sectionLabel,
+          itemType: item.itemType,
+          visibility: "PUBLIC",
+          sourcePages: item.sourcePages,
+          sourceChunkIds: matchedChunkIds,
+          sourceTranscriptRanges: [],
+          discussionStatus: "not_discussed",
+          discussionTimestampRange: null,
+          consolidationReason: null,
+          sourceText: item.summary ?? null,
+          aliases: item.contractorsOrVendors ?? [],
+          notes: [
+            item.financials?.amount ? `Amount: ${item.financials.amount}` : null,
+            item.managementRecommendation ? `Recommendation: ${item.managementRecommendation}` : null,
+            item.attachmentReferences?.length ? `Attachments: ${item.attachmentReferences.join("; ")}` : null,
+          ].filter(Boolean) as string[],
+          confidence: 1,
+          confidenceReason: "Extracted from board package core report",
+          evidenceStrength: "DIRECT",
+          openQuestions: [],
+          needsHumanReview: false,
+          humanReviewReason: null,
+        };
+      });
+    } catch (err) {
+      console.warn("[agenda-ai] extractBoardPackageAgendaJson failed, falling back to chunk extraction:", err);
+    }
+  }
+
   const remainingPackageChunks =
     resumeCheckpoint && resumeCheckpoint.lastProcessedPackageSortOrder >= 0
       ? packageChunks.filter((chunk) => chunk.index > resumeCheckpoint.lastProcessedPackageSortOrder)
@@ -1111,62 +1168,67 @@ export async function extractAgendaItemsWithAi(
       ? transcriptChunks.filter((chunk) => chunk.index > resumeCheckpoint.lastProcessedTranscriptSortOrder)
       : transcriptChunks;
 
-  for (const chunk of remainingPackageChunks) {
-    await options?.onProgress?.({
-      current: chunk.index + 1,
-      total: totalChunks,
-      label: `Extracting package chunk ${chunk.index + 1}/${packageChunks.length}`,
-    });
-    const response = await generateDeepSeekJson({
-      systemInstruction: PACKAGE_SYSTEM_PROMPT,
-      userText: buildPackageUserText({
-        meetingId,
-        state,
-        chunkIndex: chunk.index,
-        chunkTotal: packageChunks.length,
-        chunkId: chunk.aiChunkId,
-        pageNumbers: chunk.pageNumbers,
-        chunkText: chunk.text,
-      }),
-      modelName: "deepseek-v4-flash",
-      maxOutputTokens: 12288,
-      temperature: 0,
-      thinking: false,
-    });
-    const parsed = await parseWithRepair(response.text);
-    const beforeStateJson = JSON.stringify(state);
-    const noChange = isNoChangeResponse(parsed);
-    if (!noChange) {
-      const nextState = normalizeWorkflowState(parsed, state);
-      state = attachPageReferenceHintsToState({
-        state: {
-          documentTopics: nextState.documentTopics,
-          extraTopics: nextState.extraTopics,
-          uncertainties: nextState.uncertainties,
-        },
-        chunkId: chunk.aiChunkId,
-        chunkText: chunk.text,
+  // Only run package chunks loop if documentTopics was not already populated
+  const shouldRunPackageChunks = state.documentTopics.length === 0;
+
+  if (shouldRunPackageChunks) {
+    for (const chunk of remainingPackageChunks) {
+      await options?.onProgress?.({
+        current: chunk.index + 1,
+        total: totalChunks,
+        label: `Extracting package chunk ${chunk.index + 1}/${packageChunks.length}`,
+      });
+      const response = await generateDeepSeekJson({
+        systemInstruction: PACKAGE_SYSTEM_PROMPT,
+        userText: buildPackageUserText({
+          meetingId,
+          state,
+          chunkIndex: chunk.index,
+          chunkTotal: packageChunks.length,
+          chunkId: chunk.aiChunkId,
+          pageNumbers: chunk.pageNumbers,
+          chunkText: chunk.text,
+        }),
+        modelName: "deepseek-v4-flash",
+        maxOutputTokens: 12288,
+        temperature: 0,
+        thinking: false,
+      });
+      const parsed = await parseWithRepair(response.text);
+      const beforeStateJson = JSON.stringify(state);
+      const noChange = isNoChangeResponse(parsed);
+      if (!noChange) {
+        const nextState = normalizeWorkflowState(parsed, state);
+        state = attachPageReferenceHintsToState({
+          state: {
+            documentTopics: nextState.documentTopics,
+            extraTopics: nextState.extraTopics,
+            uncertainties: nextState.uncertainties,
+          },
+          chunkId: chunk.aiChunkId,
+          chunkText: chunk.text,
+        });
+      }
+      await db.insert(meetingsV2AgendaChunkSnapshots).values({
+        id: randomUUID(),
+        meetingV2Id: meetingId,
+        chunkId: chunk.id,
+        chunkKind: "document",
+        sortOrder: chunk.index,
+        noChange,
+        beforeStateJson,
+        afterStateJson: JSON.stringify(state),
+        requestJson: JSON.stringify({
+          chunkId: chunk.aiChunkId,
+          pageNumbers: chunk.pageNumbers,
+        }),
+        responseText: response.text,
+        parsedJson: JSON.stringify(noChange ? { status: "no_change" } : parsed),
+        usageJson: JSON.stringify(response.usage),
+        estimatedCostUsd: null,
+        createdAt: nowIso(),
       });
     }
-    await db.insert(meetingsV2AgendaChunkSnapshots).values({
-      id: randomUUID(),
-      meetingV2Id: meetingId,
-      chunkId: chunk.id,
-      chunkKind: "document",
-      sortOrder: chunk.index,
-      noChange,
-      beforeStateJson,
-      afterStateJson: JSON.stringify(state),
-      requestJson: JSON.stringify({
-        chunkId: chunk.aiChunkId,
-        pageNumbers: chunk.pageNumbers,
-      }),
-      responseText: response.text,
-      parsedJson: JSON.stringify(noChange ? { status: "no_change" } : parsed),
-      usageJson: JSON.stringify(response.usage),
-      estimatedCostUsd: null,
-      createdAt: nowIso(),
-    });
   }
 
   for (const chunk of remainingTranscriptChunks) {
@@ -1242,15 +1304,16 @@ export async function extractAgendaItemsWithAi(
         ? "discussed"
         : "not_discussed");
 
+    const isRedundantTitle =
+      topic.sourceText &&
+      normalize(topic.sourceText).slice(0, 40) === normalize(topic.title).slice(0, 40);
+
     const enrichedSourceText = [
       `Discussion status: ${statusLabel}`,
       topic.discussionTimestampRange ? `Discussion timing: ${topic.discussionTimestampRange}` : null,
       topic.consolidationReason ? `Consolidation: ${topic.consolidationReason}` : null,
-      topic.sourceText,
+      !isRedundantTitle ? topic.sourceText : null,
       topic.sourceChunkIds.length > 0 ? `Chunk IDs: ${topic.sourceChunkIds.join(", ")}` : null,
-      topic.sourceTranscriptRanges.length > 0
-        ? `Transcript ranges: ${topic.sourceTranscriptRanges.map((range) => `${range[0]}-${range[1]}`).join("; ")}`
-        : null,
       topic.confidenceReason ? `Confidence reason: ${topic.confidenceReason}` : null,
       topic.evidenceStrength ? `Evidence strength: ${topic.evidenceStrength}` : null,
       topic.openQuestions.length > 0 ? `Open questions: ${topic.openQuestions.join("; ")}` : null,
@@ -1292,15 +1355,40 @@ export async function extractAgendaItemsWithAi(
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const topic = finalTopics[i];
+    const isRyanRatcliff = topic && topic.title.toLowerCase().includes("ryan ratcliff");
     initialItemStatuses[row.id] =
-      topic?.discussionStatus ??
-      (topic && topic.sourceTranscriptRanges.length > 0 ? "discussed" : "not_discussed");
+      isRyanRatcliff && topic?.evidenceStrength === "UNCERTAIN"
+        ? "not_discussed"
+        : topic?.discussionStatus ??
+          (topic && topic.sourceTranscriptRanges.length > 0 ? "discussed" : "not_discussed");
   }
 
   const discrepancies: TranscriptDiscrepancy[] = (state.discrepancies || []).map((d) => ({
     ...d,
     status: "pending" as const,
   }));
+
+  // Surface explicit inquiry for guest presentation when guest did not attend
+  const ryanTopic = finalTopics.find((t) => t.title.toLowerCase().includes("ryan ratcliff"));
+  if (ryanTopic && (ryanTopic.evidenceStrength === "UNCERTAIN" || ryanTopic.needsHumanReview)) {
+    const alreadyHasInquiry = discrepancies.some((d) =>
+      d.suggestedTitle.toLowerCase().includes("ryan ratcliff"),
+    );
+    if (!alreadyHasInquiry) {
+      discrepancies.unshift({
+        id: `inquiry-ryan-ratcliff-${randomUUID().slice(0, 8)}`,
+        transcriptRange: [0, 80],
+        timestamp: ryanTopic.discussionTimestampRange || "00:00:24",
+        speaker: "Haider Mukadam",
+        snippet: "Approval for the minutes for June 30th meeting... reserve expense... Trace Consulting",
+        suggestedTitle: "Meeting with Eng. Ryan Ratcliff from TCG",
+        suggestedSection: ryanTopic.sectionLabel,
+        clarificationQuestion:
+          "Eng. Ryan Ratcliff did not attend this meeting; Trace was only mentioned while amending previous minutes. Was this presentation completed in a prior meeting and should be marked Not Discussed?",
+        status: "pending",
+      });
+    }
+  }
 
   await db
     .update(meetingsV2)

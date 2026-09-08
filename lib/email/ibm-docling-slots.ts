@@ -35,6 +35,8 @@ export function ibmInstanceHint(url: string): string {
 }
 
 const memoryExhausted = new Set<number>();
+/** Run-scoped skip after a soft failure — do not persist to DB. */
+const memorySkipped = new Set<number>();
 let slotsSynced = false;
 
 function createAsyncMutex() {
@@ -175,9 +177,68 @@ async function ensureSlotsSynced(): Promise<void> {
 }
 
 export async function pickLiveIbmCredential(): Promise<IbmDoclingCredential | null> {
+  const ordered = await listOrderedIbmCredentials();
+  return ordered[0] ?? null;
+}
+
+/** Prefer keys with the most trial pages remaining (e.g. key 5 over key 3 at 4999/5000). */
+export async function listOrderedIbmCredentials(): Promise<IbmDoclingCredential[]> {
   await ensureSlotsSynced();
   const creds = listIbmDoclingCredentials();
-  return creds.find((cred) => !memoryExhausted.has(cred.slot)) ?? null;
+  const db = getDb();
+  const rows = await db
+    .select({
+      envSlot: ibmDoclingAccounts.envSlot,
+      billedPages: ibmDoclingAccounts.billedPages,
+      trialPages: ibmDoclingAccounts.trialPages,
+    })
+    .from(ibmDoclingAccounts);
+
+  const bySlot = new Map(rows.map((row) => [row.envSlot, row]));
+
+  return creds
+    .filter(
+      (cred) =>
+        !memoryExhausted.has(cred.slot) && !memorySkipped.has(cred.slot),
+    )
+    .sort((a, b) => {
+      const ra = bySlot.get(a.slot);
+      const rb = bySlot.get(b.slot);
+      const remA =
+        (ra?.trialPages ?? IBM_DOCLING_TRIAL_PAGES) - (ra?.billedPages ?? 0);
+      const remB =
+        (rb?.trialPages ?? IBM_DOCLING_TRIAL_PAGES) - (rb?.billedPages ?? 0);
+      if (remB !== remA) return remB - remA;
+      return a.slot - b.slot;
+    });
+}
+
+/** Soft-fail this key for the current process only (empty artifact, etc.). */
+export function skipIbmSlotForRun(slot: number): void {
+  memorySkipped.add(slot);
+}
+
+export function clearIbmSlotRunSkips(): void {
+  memorySkipped.clear();
+}
+
+/** Only persist DB exhaustion when the trial is actually spent or IBM rejected auth. */
+export async function shouldPersistIbmSlotExhaustion(
+  slot: number,
+): Promise<boolean> {
+  await ensureSlotsSynced();
+  const db = getDb();
+  const [row] = await db
+    .select({
+      billedPages: ibmDoclingAccounts.billedPages,
+      trialPages: ibmDoclingAccounts.trialPages,
+    })
+    .from(ibmDoclingAccounts)
+    .where(eq(ibmDoclingAccounts.envSlot, slot))
+    .limit(1);
+  if (!row) return true;
+  const trialPages = row.trialPages ?? IBM_DOCLING_TRIAL_PAGES;
+  return (row.billedPages ?? 0) >= trialPages;
 }
 
 export async function markIbmSlotExhausted(

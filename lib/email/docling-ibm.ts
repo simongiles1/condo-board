@@ -327,7 +327,7 @@ function isFatalSubmitFailure(status: number, data: unknown): boolean {
 }
 
 export function isFatalIbmDoclingError(error: unknown): boolean {
-  if (error instanceof IbmDoclingAllKeysExhaustedError) return true;
+  if (error instanceof IbmDoclingAllKeysExhaustedError) return false;
   if (error instanceof IbmDoclingConnectivityError) return true;
   if (error instanceof IbmDoclingQuotaError) return false;
   if (error instanceof IbmDoclingKeyRejectedError) return false;
@@ -566,33 +566,49 @@ export function markdownFromIbmArtifactBytes(
 
 async function downloadIbmArtifactMarkdown(
   artifact: IbmArtifactRef,
+  apiKey?: string,
 ): Promise<string> {
   if (!/^https:\/\//i.test(artifact.uri)) {
     throw new Error("IBM Docling artifact URI is not https.");
   }
-  let response: Response;
-  try {
-    response = await fetch(artifact.uri, {
-      method: "GET",
-      signal: AbortSignal.timeout(ARTIFACT_DOWNLOAD_TIMEOUT_MS),
+  const headerSets: Array<Record<string, string> | undefined> = [
+    undefined,
+    apiKey ? { "X-Api-Key": apiKey } : undefined,
+  ];
+  let lastBytes = 0;
+  for (const headers of headerSets) {
+    let response: Response;
+    try {
+      response = await fetch(artifact.uri, {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(ARTIFACT_DOWNLOAD_TIMEOUT_MS),
+      });
+    } catch (error) {
+      rethrowIfIbmConnectivity(error, "downloading the result artifact");
+    }
+    if (!response.ok) {
+      continue;
+    }
+    const lengthHeader = response.headers.get("content-length");
+    if (lengthHeader && Number(lengthHeader) > MAX_ARTIFACT_BYTES) {
+      throw new Error("IBM Docling artifact exceeds 32 MB.");
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    lastBytes = bytes.length;
+    if (bytes.length > MAX_ARTIFACT_BYTES) {
+      throw new Error("IBM Docling artifact exceeds 32 MB.");
+    }
+    const markdown = markdownFromIbmArtifactBytes(artifact.artifactType, bytes);
+    if (markdown) return markdown;
+  }
+  if (lastBytes === 0) {
+    console.warn("[ibm-docling] artifact download returned 0 bytes", {
+      artifactType: artifact.artifactType,
+      uri: artifact.uri.slice(0, 120),
     });
-  } catch (error) {
-    rethrowIfIbmConnectivity(error, "downloading the result artifact");
   }
-  if (!response.ok) {
-    throw new Error(
-      `IBM artifact download returned ${response.status} (${artifact.artifactType}).`,
-    );
-  }
-  const lengthHeader = response.headers.get("content-length");
-  if (lengthHeader && Number(lengthHeader) > MAX_ARTIFACT_BYTES) {
-    throw new Error("IBM Docling artifact exceeds 32 MB.");
-  }
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (bytes.length > MAX_ARTIFACT_BYTES) {
-    throw new Error("IBM Docling artifact exceeds 32 MB.");
-  }
-  return markdownFromIbmArtifactBytes(artifact.artifactType, bytes);
+  return "";
 }
 
 function ibmResultKeys(data: unknown): string {
@@ -681,21 +697,24 @@ function throwOnEmptyIbmMarkdown(data: unknown, detail: string): never {
   throw new Error(message);
 }
 
-async function downloadIbmMarkdownFromResult(data: unknown): Promise<string> {
+async function downloadIbmMarkdownFromResult(
+  data: unknown,
+  apiKey?: string,
+): Promise<string> {
   const inline = extractIbmMarkdown(data);
   if (inline) return inline;
 
   const artifacts = listIbmMarkdownArtifacts(data);
   const root = asRecord(data);
   const numSucceeded = numberField(root, "num_succeeded", "numSucceeded");
-  const maxAttempts = numSucceeded != null && numSucceeded > 0 ? 3 : 1;
+  const maxAttempts = numSucceeded != null && numSucceeded > 0 ? 6 : 1;
 
   for (const artifact of artifacts) {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const markdown = await downloadIbmArtifactMarkdown(artifact);
+      const markdown = await downloadIbmArtifactMarkdown(artifact, apiKey);
       if (markdown) return markdown;
       if (attempt < maxAttempts) {
-        await sleep(400 * attempt);
+        await sleep(600 * attempt);
       }
     }
   }
@@ -756,13 +775,10 @@ export async function checkIbmDoclingHealth(): Promise<IbmDoclingHealth> {
   const paths = ["/health", "/v1/health", "/docs", "/openapi.json"];
   let lastUrl: string | null = null;
   let lastDetail = "No health endpoint responded.";
-  const tried = new Set<number>();
+  const ordered = await slots.listOrderedIbmCredentials();
+  const candidates = ordered.length > 0 ? ordered : creds;
 
-  while (tried.size < creds.length) {
-    const live = await slots.pickLiveIbmCredential();
-    if (!live || tried.has(live.slot)) break;
-    tried.add(live.slot);
-
+  for (const live of candidates) {
     lastUrl = live.url;
     let authRejected = false;
 
@@ -971,7 +987,7 @@ async function fetchTaskResult(options: {
   if (status === "failure") {
     throw new Error("IBM Docling result status=failure.");
   }
-  const markdown = await downloadIbmMarkdownFromResult(data);
+  const markdown = await downloadIbmMarkdownFromResult(data, options.apiKey);
   if (markdown) return markdown;
 
   const artifacts = listIbmMarkdownArtifacts(data);
@@ -1013,8 +1029,11 @@ async function withIbmCredential<T>(
   const tried = new Set<number>();
 
   while (true) {
-    const cred = await slots.withIbmSlotLock(() => slots.pickLiveIbmCredential());
-    if (!cred || tried.has(cred.slot)) {
+    const ordered = await slots.withIbmSlotLock(() =>
+      slots.listOrderedIbmCredentials(),
+    );
+    const cred = ordered.find((c) => !tried.has(c.slot));
+    if (!cred) {
       const keyCount = listIbmDoclingCredentials().length;
       const nextSlot = keyCount + 1;
       throw new IbmDoclingAllKeysExhaustedError(
@@ -1029,14 +1048,25 @@ async function withIbmCredential<T>(
       return { value, slot: cred.slot };
     } catch (error) {
       if (!isRotatableIbmError(error)) throw error;
+      const reason = rotatableReason(error);
+      const persist =
+        error instanceof IbmDoclingKeyRejectedError ||
+        error instanceof IbmDoclingQuotaError ||
+        (error instanceof IbmDoclingEmptyResultError &&
+          (await slots.shouldPersistIbmSlotExhaustion(cred.slot)));
       console.warn("[ibm-docling] rotating API key", {
         fromSlot: cred.slot,
-        reason: rotatableReason(error),
+        reason,
+        persist,
         message: error instanceof Error ? error.message : String(error),
       });
-      await slots.withIbmSlotLock(() =>
-        slots.markIbmSlotExhausted(cred.slot, rotatableReason(error)),
-      );
+      await slots.withIbmSlotLock(async () => {
+        if (persist) {
+          await slots.markIbmSlotExhausted(cred.slot, reason);
+        } else {
+          slots.skipIbmSlotForRun(cred.slot);
+        }
+      });
     }
   }
 }

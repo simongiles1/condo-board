@@ -417,7 +417,7 @@ describe("isFatalIbmDoclingError", () => {
       isFatalIbmDoclingError(
         new IbmDoclingAllKeysExhaustedError("All IBM Docling API keys are exhausted."),
       ),
-      true,
+      false,
     );
   });
 });

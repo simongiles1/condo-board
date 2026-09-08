@@ -153,3 +153,29 @@ function collapseWhitespace(text: string): string {
 export function formatVttTimestamp(start: string): string {
   return start.replace(/\.\d+$/, "");
 }
+
+/** Parse a VTT timestamp (HH:MM:SS.mmm or MM:SS.mmm) to milliseconds. */
+export function parseVttTimestampMs(timestamp: string): number {
+  const parts = timestamp.split(":");
+  let hours = 0;
+  let minutes = 0;
+  let seconds = 0;
+  if (parts.length === 3) {
+    hours = parseFloat(parts[0]);
+    minutes = parseFloat(parts[1]);
+    seconds = parseFloat(parts[2]);
+  } else if (parts.length === 2) {
+    minutes = parseFloat(parts[0]);
+    seconds = parseFloat(parts[1]);
+  }
+  return (hours * 3600 + minutes * 60 + seconds) * 1000;
+}
+
+/** Parse a display time range like `00:08:21 - 00:13:37` into millisecond bounds. */
+export function parseVttTimeRangeMs(timeRange: string): [number, number] {
+  const match = timeRange.match(
+    /(\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)\s*[-–]\s*(\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)/,
+  );
+  if (!match) return [0, Infinity];
+  return [parseVttTimestampMs(match[1]), parseVttTimestampMs(match[2])];
+}

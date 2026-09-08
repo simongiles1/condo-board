@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+import { formatChunkTextForDisplay } from "@/lib/meeting-v2/chunk-display";
 
 type ChunkData = {
   id: string;
@@ -68,6 +70,12 @@ export function ChunkPreviewModal({
     };
   }, [open, meetingId, chunkId]);
 
+  const isDoc = chunk?.chunkKind === "document";
+  const displayText = useMemo(() => {
+    if (!chunk?.text) return "";
+    return formatChunkTextForDisplay(chunk.text, chunk.chunkKind);
+  }, [chunk?.chunkKind, chunk?.text]);
+
   if (!open || !chunkId) return null;
 
   async function handleCopy() {
@@ -80,8 +88,6 @@ export function ChunkPreviewModal({
       setCopied(false);
     }
   }
-
-  const isDoc = chunk?.chunkKind === "document";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
@@ -148,12 +154,12 @@ export function ChunkPreviewModal({
           ) : chunk ? (
             <div className="space-y-4">
               {chunk.chunkLabel ? (
-                <div className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700">
+                <div className="rounded-lg bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-900">
                   {chunk.chunkLabel}
                 </div>
               ) : null}
-              <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-4 font-mono text-xs leading-relaxed text-slate-800 whitespace-pre-wrap">
-                {chunk.text}
+              <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm leading-7 whitespace-pre-wrap text-slate-800 font-sans">
+                {displayText}
               </div>
             </div>
           ) : null}

@@ -12,6 +12,7 @@ import {
   DEEPSEEK_V4_FLASH_PEAK_RATES,
   estimateDeepSeekCostBreakdown,
   estimateDeepSeekOffPeakOptimizedBreakdown,
+  estimateDeepSeekPeakOptimizedBreakdown,
   formatDeepSeekTierCountdown,
   formatDurationMs,
   getDeepSeekLocalDayTimeline,
@@ -97,6 +98,19 @@ describe("estimateDeepSeekCostBreakdown", () => {
       (500_000 / 1_000_000) * DEEPSEEK_V4_FLASH_PEAK_RATES.inputCacheHitPerMillion +
         (500_000 / 1_000_000) * DEEPSEEK_V4_FLASH_PEAK_RATES.inputCacheMissPerMillion,
     );
+  });
+});
+
+describe("estimateDeepSeekPeakOptimizedBreakdown", () => {
+  it("doubles off-peak optimized totals for the same token profile", () => {
+    const usage = {
+      cacheHitTokens: 125_440,
+      cacheMissTokens: 112_174,
+      outputTokens: 96_458,
+    };
+    const offPeak = estimateDeepSeekOffPeakOptimizedBreakdown(usage);
+    const peak = estimateDeepSeekPeakOptimizedBreakdown(usage);
+    assert.equal(peak.totalCostUsd, offPeak.totalCostUsd * 2);
   });
 });
 

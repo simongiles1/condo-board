@@ -28,6 +28,8 @@ export type MeetingV2StageTokenUsage = {
 
 export type AgendaItemDiscussionStatus = "discussed" | "not_discussed" | "ad_hoc";
 
+export type TranscriptDiscrepancyKind = "add_to_agenda" | "status_inquiry";
+
 export type TranscriptDiscrepancy = {
   id: string;
   transcriptRange: [number, number];
@@ -37,6 +39,8 @@ export type TranscriptDiscrepancy = {
   suggestedTitle: string;
   suggestedSection?: string | null;
   clarificationQuestion: string;
+  /** Distinguishes "add missing topic" vs "confirm existing item status" inquiries. */
+  kind?: TranscriptDiscrepancyKind;
   status: "pending" | "accepted" | "dismissed";
 };
 

@@ -21,11 +21,17 @@ import {
   extractBoardPackageAgendaJson,
   flattenBoardPackageAgenda,
 } from "@/lib/meeting-v2/board-package-agenda";
+import {
+  compareAgendaItemCodes,
+  inferPropertyManagementReportNumber,
+  planAdHocPlacement,
+} from "@/lib/meeting-v2/agenda-outline";
 
 type WorkflowTopic = {
   title: string;
   sectionLabel: string;
   itemType: string;
+  itemNumber?: string;
   visibility: "PUBLIC" | "RESTRICTED" | "UNKNOWN";
   sourcePages: number[];
   sourceChunkIds: string[];
@@ -89,8 +95,9 @@ Important rules:
 - Preserve exact factual details when they matter to the business issue, especially money amounts, rates, balances, unit numbers, contract terms, deadlines, and dates.
 - Do not create one topic per attachment page.
 - Use the package as the source of truth for official agenda topics.
-- Maintain topics in the exact chronological order of the official meeting agenda as presented in the package (e.g. Item 1 before Item 2, sub-items in their original outline order). Do not reorder topics alphabetically.
-- When the package shows one umbrella heading with numbered or lettered sub-items, create one topic per real sub-item instead of one umbrella topic.
+- Maintain topics in the official meeting outline order using hierarchical itemNumber codes (1, 1.A, 4.A, 4.A.1, 4.D.a, 4.E.a). Never rewrite those codes into a sequential 1, 2, 3 list.
+- When the package shows one umbrella heading with numbered or lettered sub-items, keep the parent heading AND create one topic per real sub-item.
+- Guest-presentation outline bullets (1.A, 1.B) stay under item 1. Later Property Management Report project items (4.B.1) stay under the management report even when they concern the same project. Do not unify them into one topic.
 - When guest presenters lead substantial opening discussion before regular board business, keep those as distinct presentation topics instead of folding them into later management report items.
 - Use the transcript to enrich existing package topics and to add extraTopics only when they are genuinely separate.
 - If a person, contractor, or role is only partially known, preserve the partial wording in aliases or notes instead of inventing a full name or title.
@@ -120,6 +127,7 @@ Otherwise return strict JSON with this shape:
     {
       "title": "string",
       "sectionLabel": "string",
+      "itemNumber": "1 | 1.A | 4.A.1 | 4.D.a",
       "itemType": "guest_presentation | approval_of_previous_minutes | financial_matters | ratification_line_item | discussion_approval | discussion_topic | completed_items | discussion_subitem | legal_matter | new_other_business | extra_topic | other",
       "visibility": "PUBLIC | RESTRICTED | UNKNOWN",
       "sourcePages": [1],
@@ -146,7 +154,8 @@ Otherwise return strict JSON with this shape:
 }
 
 Package chunk rules:
-- CRITICAL DEDUPLICATION: If an item or project appears in multiple places in the board package (e.g. mentioned in the opening guest presentation outline like '1.A Booster Pump' AND described in the Property Management Report project list like '4.B Booster Pump Replacement' or supporting quotes), DO NOT create two separate topics. Unify them into a single comprehensive topic! In sourcePages, include ALL relevant pages across the package (e.g. [2, 4, 5]). In consolidationReason, briefly state: 'Unified opening presentation mention with Property Management Report project'.
+- Preserve existing itemNumber outline codes. Do not renumber topics sequentially.
+- Guest-presentation outline bullets (1.A Booster Pump) and Property Management Report project items (4.B.1 Booster Pump Replacement) are different outline slots. Keep both. Do not unify them into one topic.
 - Favor numbered or clearly separated business items.
 - If a package section contains numbered sub-items like 1., 2., 3. under one heading, create separate topics for those numbered items.
 - If a discussion section contains lettered sub-items like a., b., c., create separate topics for those lettered items.
@@ -204,7 +213,7 @@ Use the transcript chunk to:
   - attach sequence numbers to sourceTranscriptRanges
   - attach human-readable start/end time to discussionTimestampRange (e.g. "00:15:58 - 01:42:10")
 - add aliases or notes when the transcript uses shorthand
-- add extraTopics ONLY for genuinely new board business matters discussed in the transcript but not on the agenda (itemType "ad_hoc_discussion" or "extra_topic", discussionStatus "ad_hoc")
+- add extraTopics ONLY for genuinely new board business matters discussed in the transcript but not on the agenda (itemType "ad_hoc_discussion" or "extra_topic", discussionStatus "ad_hoc"). Those extraTopics will be nested under a synthesized Property Management Report section 4.E.
 - detect unaligned discussion discrepancies:
   - if there is substantial discussion in this chunk that does not map to any recognized agenda item, add an entry to "discrepancies":
     {
@@ -440,6 +449,10 @@ export function normalizeTopic(raw: Partial<WorkflowTopic>): WorkflowTopic | nul
     title,
     sectionLabel: normalizeWhitespace(raw.sectionLabel ?? "") || "Unknown",
     itemType: normalizeWhitespace(raw.itemType ?? "") || "other",
+    itemNumber:
+      typeof raw.itemNumber === "string" && raw.itemNumber.trim()
+        ? raw.itemNumber.trim()
+        : undefined,
     visibility:
       raw.visibility === "PUBLIC" || raw.visibility === "RESTRICTED" || raw.visibility === "UNKNOWN"
         ? raw.visibility
@@ -768,6 +781,16 @@ function normalizeChanges(raw: unknown): WorkflowChanges | undefined {
   return summary.length > 0 ? { summary } : undefined;
 }
 
+function dedupeDiscrepancies(discrepancies: WorkflowDiscrepancy[]): WorkflowDiscrepancy[] {
+  const byId = new Map<string, WorkflowDiscrepancy>();
+  for (const disc of discrepancies) {
+    if (!byId.has(disc.id)) {
+      byId.set(disc.id, disc);
+    }
+  }
+  return [...byId.values()];
+}
+
 export function normalizeDiscrepancies(raw: unknown): WorkflowDiscrepancy[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -814,31 +837,110 @@ export function normalizeWorkflowState(value: unknown, fallback: WorkflowState):
       .filter((topic): topic is WorkflowTopic => Boolean(topic)),
   );
   return {
-    documentTopics: documentTopics.length > 0 ? documentTopics : fallback.documentTopics,
-    extraTopics: extraTopics.length > 0 || record.extraTopics ? extraTopics : fallback.extraTopics,
+    documentTopics: preserveItemNumbers(
+      documentTopics.length > 0 ? documentTopics : fallback.documentTopics,
+      fallback.documentTopics,
+    ),
+    extraTopics: preserveItemNumbers(
+      extraTopics.length > 0 || record.extraTopics ? extraTopics : fallback.extraTopics,
+      fallback.extraTopics,
+    ),
     uncertainties: unique(
       (Array.isArray(record.uncertainties) ? record.uncertainties : [])
         .flatMap((entry) => (typeof entry === "string" ? [normalizeWhitespace(entry)] : []))
         .filter(Boolean),
     ).slice(0, 20),
-    discrepancies: [
+    discrepancies: dedupeDiscrepancies([
       ...(fallback.discrepancies || []),
       ...normalizeDiscrepancies(record.discrepancies),
-    ],
+    ]),
     changes: normalizeChanges(record.changes),
   };
+}
+
+function preserveItemNumbers(next: WorkflowTopic[], previous: WorkflowTopic[]): WorkflowTopic[] {
+  if (previous.length === 0) return next;
+  const byTitle = new Map(previous.map((topic) => [normalize(topic.title), topic]));
+  return next.map((topic) => {
+    if (topic.itemNumber) return topic;
+    const prior = byTitle.get(normalize(topic.title));
+    return prior?.itemNumber ? { ...topic, itemNumber: prior.itemNumber } : topic;
+  });
 }
 
 function sortTopics(topics: WorkflowTopic[]): WorkflowTopic[] {
   return topics
     .map((topic, originalIndex) => ({ topic, originalIndex }))
     .sort((left, right) => {
-      const leftPage = left.topic.sourcePages[0] ?? Number.MAX_SAFE_INTEGER;
-      const rightPage = right.topic.sourcePages[0] ?? Number.MAX_SAFE_INTEGER;
-      if (leftPage !== rightPage) return leftPage - rightPage;
+      const compared = compareAgendaItemCodes(left.topic.itemNumber, right.topic.itemNumber);
+      if (compared !== 0) return compared;
       return left.originalIndex - right.originalIndex;
     })
     .map(({ topic }) => topic);
+}
+
+function emptyAdHocSectionTopic(itemNumber: string): WorkflowTopic {
+  return {
+    title: "Ad-hoc items",
+    sectionLabel: "Property Management Report",
+    itemType: "ad_hoc_discussion",
+    itemNumber,
+    visibility: "PUBLIC",
+    sourcePages: [],
+    sourceChunkIds: [],
+    sourceTranscriptRanges: [],
+    discussionStatus: "ad_hoc",
+    discussionTimestampRange: null,
+    consolidationReason:
+      "Synthesized section for transcript-only matters that are not on the official agenda.",
+    sourceText: null,
+    aliases: [],
+    notes: [],
+    confidence: 1,
+    confidenceReason: "Ad-hoc bucket created so extra items nest under the Property Management Report",
+    evidenceStrength: "DIRECT",
+    openQuestions: [],
+    needsHumanReview: false,
+    humanReviewReason: null,
+  };
+}
+
+function applyAdHocOutlinePlacement(state: WorkflowState): WorkflowState {
+  const extraTopics = state.extraTopics.filter((topic) => topic.title.trim());
+  if (extraTopics.length === 0) return state;
+
+  const pmReportNumber =
+    inferPropertyManagementReportNumber(state.documentTopics) || "4";
+  const placement = planAdHocPlacement(
+    state.documentTopics.map((topic) => topic.itemNumber),
+    extraTopics.length,
+    pmReportNumber,
+  );
+  if (!placement) return state;
+
+  const numberedExtra = extraTopics.map((topic, index) => ({
+    ...topic,
+    itemNumber: topic.itemNumber || placement.nextItemCodes[index],
+    sectionLabel:
+      topic.sectionLabel && topic.sectionLabel !== "Unknown"
+        ? topic.sectionLabel
+        : "Property Management Report: Ad-hoc items",
+    discussionStatus: topic.discussionStatus ?? "ad_hoc",
+    itemType:
+      topic.itemType === "other" || !topic.itemType ? "ad_hoc_discussion" : topic.itemType,
+  }));
+
+  const documentTopics =
+    placement.sectionMissing &&
+    !state.documentTopics.some((topic) => topic.itemNumber === placement.sectionCode)
+      ? [...state.documentTopics, emptyAdHocSectionTopic(placement.sectionCode)]
+      : state.documentTopics;
+
+  return {
+    ...state,
+    documentTopics,
+    extraTopics: numberedExtra,
+  };
 }
 
 async function getAgendaResumeCheckpoint(meetingId: string): Promise<{
@@ -1132,6 +1234,7 @@ export async function extractAgendaItemsWithAi(
           title: item.title,
           sectionLabel: item.sectionLabel,
           itemType: item.itemType,
+          itemNumber: item.itemNumber,
           visibility: "PUBLIC",
           sourcePages: item.sourcePages,
           sourceChunkIds: matchedChunkIds,
@@ -1287,7 +1390,8 @@ export async function extractAgendaItemsWithAi(
     });
   }
 
-  const finalTopics = [...sortTopics(state.documentTopics), ...sortTopics(state.extraTopics)];
+  const placed = applyAdHocOutlinePlacement(state);
+  const finalTopics = sortTopics([...placed.documentTopics, ...placed.extraTopics]);
 
   await db.delete(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));
 
@@ -1333,7 +1437,7 @@ export async function extractAgendaItemsWithAi(
       sectionLabel: topic.sectionLabel,
       title: topic.title,
       normalizedTitle: normalize(topic.title),
-      itemNumber: String(sortOrder + 1),
+      itemNumber: topic.itemNumber || String(sortOrder + 1),
       itemType: topic.itemType,
       sourcePagesJson: JSON.stringify(topic.sourcePages),
       sourceText: enrichedSourceText,
@@ -1363,10 +1467,12 @@ export async function extractAgendaItemsWithAi(
           (topic && topic.sourceTranscriptRanges.length > 0 ? "discussed" : "not_discussed");
   }
 
-  const discrepancies: TranscriptDiscrepancy[] = (state.discrepancies || []).map((d) => ({
-    ...d,
-    status: "pending" as const,
-  }));
+  const discrepancies: TranscriptDiscrepancy[] = dedupeDiscrepancies(state.discrepancies || []).map(
+    (d) => ({
+      ...d,
+      status: "pending" as const,
+    }),
+  );
 
   // Surface explicit inquiry for guest presentation when guest did not attend
   const ryanTopic = finalTopics.find((t) => t.title.toLowerCase().includes("ryan ratcliff"));
@@ -1385,6 +1491,7 @@ export async function extractAgendaItemsWithAi(
         suggestedSection: ryanTopic.sectionLabel,
         clarificationQuestion:
           "Eng. Ryan Ratcliff did not attend this meeting; Trace was only mentioned while amending previous minutes. Was this presentation completed in a prior meeting and should be marked Not Discussed?",
+        kind: "status_inquiry",
         status: "pending",
       });
     }

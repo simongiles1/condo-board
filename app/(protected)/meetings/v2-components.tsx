@@ -15,7 +15,6 @@ import { MeetingDocumentsDialog } from "@/components/MeetingDocumentsDialog";
 import { PullMeetingSourcesButton } from "@/components/PullMeetingSourcesButton";
 import {
   AiUsageDialog,
-  AiUsageIconButton,
 } from "@/components/AiUsageDialog";
 import { DeleteMeetingButton } from "@/components/DeleteMeetingButton";
 import {
@@ -32,6 +31,7 @@ import {
 } from "@/components/AgendaItemDetailSidePanel";
 import {
   parseStoredGoldStandardValidation,
+  validationScoreLabel,
   type GoldStandardValidationResult,
 } from "@/lib/minutes/gold-standard-schema";
 import type { EditableAttendance } from "@/lib/minutes/attendance-edit";
@@ -42,12 +42,20 @@ import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
 import { ChunkPreviewModal } from "@/components/ChunkPreviewModal";
 import { TranscriptRangeModal } from "@/components/TranscriptRangeModal";
 import {
+  buildAgendaOutlineTree,
+  inferPropertyManagementReportNumber,
+  planAdHocPlacement,
+  type AgendaListMarker,
+  type AgendaOutlineNode as OutlineTreeNode,
+} from "@/lib/meeting-v2/agenda-outline";
+import {
   buildMeetingV2DisplayProgress,
   buildMeetingV2WorkflowProgress,
   getMeetingV2PipelineStateDescription,
   shouldPollMeetingV2Status,
   type MeetingV2WorkflowProgress,
 } from "@/lib/meeting-v2/workflow-progress";
+import { useMeetingV2StepRateEta } from "@/lib/ui/use-meeting-v2-step-rate-eta";
 import type { MeetingV2DashboardCard } from "@/lib/meeting-v2/service";
 import type {
   MeetingV2Alert,
@@ -111,6 +119,7 @@ type MeetingV2Status = {
         suggestedTitle: string;
         suggestedSection?: string | null;
         clarificationQuestion: string;
+        kind?: "add_to_agenda" | "status_inquiry";
         status: "pending" | "accepted" | "dismissed";
       }>;
     } | null;
@@ -421,6 +430,7 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
 export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [status, setStatus] = useState<MeetingV2Status | null>(null);
   const [loading, setLoading] = useState(true);
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [runBusy, setRunBusy] = useState(false);
@@ -569,7 +579,10 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         if (seq !== statusRequestSeq.current) return;
         if (error instanceof DOMException && error.name === "AbortError") return;
         console.error("[MeetingV2Detail] status refresh failed:", error);
-        if (active) setLoading(false);
+        if (active) {
+          setStatusError("Could not load this meeting workspace. Check your connection and try again.");
+          setLoading(false);
+        }
       }
     },
     [meetingId],
@@ -779,6 +792,11 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   });
   const displayStep = displayProgressState.currentStep;
   const displayProgress = displayProgressState.progressPercent;
+  const stepRateEta = useMeetingV2StepRateEta({
+    active: pipelineActivelyRunning && !pipelineHalted,
+    currentStep: displayStep,
+    progressPercent: displayProgress,
+  });
   const displayLabel = pipelineNotStarted
     ? "Ready to start"
     : pipelineHalted && displayState !== "failed"
@@ -852,16 +870,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   title="0 = Always ask user | 1 = Fully autonomous"
                 />
               </div>
-              {hasSuccessfulRun ? (
-                <div className="grid gap-2 sm:grid-cols-3">
-                  <SummaryStat label="Agenda Items" value={String(status?.meeting.counts.agendaItems ?? 0)} />
-                  <SummaryStat label="Items Flagged" value={String(flaggedCount)} />
-                  <SummaryStat label="Latest Drafts" value={String(status?.meeting.counts.drafts ?? 0)} />
-                </div>
-              ) : null}
             </div>
 
-            <div className="w-full max-w-md rounded-xl border border-white/10 bg-black/15 p-3 xl:mx-4 xl:flex-1">
+            <div className="w-full min-w-0 rounded-xl border border-white/10 bg-black/15 p-3 xl:mx-4 xl:flex-1">
               <div className="flex items-start justify-between gap-3">
                 <span className="text-sm font-medium text-white/80">Current Progress</span>
                 <span
@@ -892,56 +903,50 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   {displayProgress}%
                 </span>
               </div>
+              {pipelineActivelyRunning && !pipelineHalted ? (
+                <div className="mt-2 grid gap-2 border-t border-white/10 pt-2 sm:grid-cols-2">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/50">
+                      Current rate
+                    </p>
+                    <p className="mt-0.5 text-sm font-medium tabular-nums text-white/85">
+                      {stepRateEta?.rateLabel ?? "Calculating…"}
+                    </p>
+                  </div>
+                  <div className="sm:text-right">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/50">
+                      Step ETA
+                    </p>
+                    <p className="mt-0.5 text-sm font-medium tabular-nums text-white/85">
+                      {stepRateEta?.etaLabel ?? "Calculating…"}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
-              {hasMeetingDocuments ? (
-                <button
-                  className="inline-flex items-center justify-center rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
-                  onClick={() => setDocumentsDialogOpen(true)}
-                  type="button"
-                >
-                  Meeting Documents
-                </button>
-              ) : null}
-              <div className="flex items-center gap-2">
-                <GoldStandardValidationBadge
-                  validationScore={validationScore}
-                  onClick={handleValidationBadgeClick}
-                />
-                <AiUsageIconButton
-                  tone="inverse"
-                  onClick={() => setUsageDialogOpen(true)}
-                  title="View AI usage and cost"
-                />
-                {status ? (
-                  <DeleteMeetingButton
-                    meetingId={meetingId}
-                    meetingTitle={status.meeting.title}
-                    redirectTo="/operations/meetings"
-                    apiVersion="v2"
-                    tone="inverse"
-                  />
-                ) : null}
-                <PipelineActionButton
-                  runBusy={runBusy}
-                  pipelineNotStarted={pipelineNotStarted}
-                  pipelineValidated={pipelineValidated}
-                  pipelineActivelyRunning={pipelineRunning}
-                  disabled={!pipelineSourcesReady || pipelineRunning}
-                  disabledReason={pipelineDisabledReason}
-                  onRun={handleRunPipeline}
-                  onRestart={handleRestartPipeline}
-                />
-              </div>
-              {!pipelineSourcesReady ? (
-                <PullMeetingSourcesButton
-                  meetingId={meetingId}
-                  showWhenSourcesMissing
-                  sourcesMissing={!pipelineSourcesReady}
-                  onPulled={() => void refreshStatus()}
-                />
-              ) : null}
+              <MeetingWorkspaceMoreMenu
+                hasMeetingDocuments={hasMeetingDocuments}
+                validationScore={validationScore}
+                meetingId={meetingId}
+                meetingTitle={status?.meeting.title ?? "Meeting"}
+                sourcesMissing={!pipelineSourcesReady}
+                onCompare={handleValidationBadgeClick}
+                onOpenDocuments={() => setDocumentsDialogOpen(true)}
+                onOpenUsage={() => setUsageDialogOpen(true)}
+                onSourcesPulled={() => void refreshStatus()}
+              />
+              <PipelineActionButton
+                runBusy={runBusy}
+                pipelineNotStarted={pipelineNotStarted}
+                pipelineValidated={pipelineValidated}
+                pipelineActivelyRunning={pipelineRunning}
+                disabled={!pipelineSourcesReady || pipelineRunning}
+                disabledReason={pipelineDisabledReason}
+                onRun={handleRunPipeline}
+                onRestart={handleRestartPipeline}
+              />
               {status?.latestDraft ? (
                 <a
                   href={`/api/v2/meetings/${meetingId}/draft/file?download=1`}
@@ -998,6 +1003,16 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
 
       <div className="space-y-4">
         {loading && !status ? <LoadingWorkspace /> : null}
+        {!loading && !status && statusError ? (
+          <StatusLoadError
+            message={statusError}
+            onRetry={() => {
+              setLoading(true);
+              setStatusError(null);
+              void refreshStatus();
+            }}
+          />
+        ) : null}
         {status ? (
           <>
             {hasSuccessfulRun ? (
@@ -1092,6 +1107,203 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         }}
       />
     </div>
+  );
+}
+
+function MeetingWorkspaceMoreMenu({
+  hasMeetingDocuments,
+  validationScore,
+  meetingId,
+  meetingTitle,
+  sourcesMissing,
+  onCompare,
+  onOpenDocuments,
+  onOpenUsage,
+  onSourcesPulled,
+}: {
+  hasMeetingDocuments: boolean;
+  validationScore: number | null;
+  meetingId: string;
+  meetingTitle: string;
+  sourcesMissing: boolean;
+  onCompare: () => void;
+  onOpenDocuments: () => void;
+  onOpenUsage: () => void;
+  onSourcesPulled: () => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const validated = validationScore !== null;
+  const compareLabel = validated
+    ? `Gold standard · ${validationScoreLabel(validationScore)}`
+    : "Compare against gold standard";
+  const compareDescription = validated
+    ? "View validation results and diff"
+    : "Compare AI minutes against approved PDF";
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuOpen]);
+
+  function closeMenu() {
+    setMenuOpen(false);
+  }
+
+  return (
+    <div className="relative self-end" ref={containerRef}>
+      <button
+        type="button"
+        onClick={() => setMenuOpen((open) => !open)}
+        aria-expanded={menuOpen}
+        aria-haspopup="menu"
+        aria-label="More meeting actions"
+        title="More actions"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/15 bg-white/10 text-white shadow-sm transition hover:border-white/25 hover:bg-white/15"
+      >
+        <EllipsisVerticalIcon />
+      </button>
+      {menuOpen ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-50 mt-1 w-72 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+        >
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              closeMenu();
+              onCompare();
+            }}
+            className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+          >
+            <DocumentsCompareIcon className="h-5 w-5 shrink-0 text-slate-500" />
+            <span>
+              <span className="block font-medium text-slate-900">{compareLabel}</span>
+              <span className="block text-xs text-slate-500">{compareDescription}</span>
+            </span>
+          </button>
+          {hasMeetingDocuments ? (
+            <button
+              role="menuitem"
+              type="button"
+              onClick={() => {
+                closeMenu();
+                onOpenDocuments();
+              }}
+              className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+            >
+              <MeetingDocumentsIcon className="h-5 w-5 shrink-0 text-slate-500" />
+              <span>
+                <span className="block font-medium text-slate-900">Meeting documents</span>
+                <span className="block text-xs text-slate-500">Transcript and board package</span>
+              </span>
+            </button>
+          ) : null}
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              closeMenu();
+              onOpenUsage();
+            }}
+            className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+          >
+            <AiUsageMenuIcon className="h-5 w-5 shrink-0 text-slate-500" />
+            <span>
+              <span className="block font-medium text-slate-900">AI usage &amp; cost</span>
+              <span className="block text-xs text-slate-500">Token usage and spend by stage</span>
+            </span>
+          </button>
+          <PullMeetingSourcesButton
+            meetingId={meetingId}
+            showWhenSourcesMissing
+            sourcesMissing={sourcesMissing}
+            presentation="menuItem"
+            onMenuOpen={closeMenu}
+            onPulled={onSourcesPulled}
+          />
+          <div className="my-1 border-t border-slate-100" />
+          <DeleteMeetingButton
+            meetingId={meetingId}
+            meetingTitle={meetingTitle}
+            redirectTo="/operations/meetings"
+            apiVersion="v2"
+            presentation="menuItem"
+            onMenuOpen={closeMenu}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function EllipsisVerticalIcon() {
+  return (
+    <svg aria-hidden className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+      <circle cx="12" cy="5" r="1.75" />
+      <circle cx="12" cy="12" r="1.75" />
+      <circle cx="12" cy="19" r="1.75" />
+    </svg>
+  );
+}
+
+function DocumentsCompareIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg aria-hidden className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M5 4.5h9a1 1 0 0 1 1 1v12.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1Z"
+      />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M10 6.5h9a1 1 0 0 1 1 1v12.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V7.5a1 1 0 0 1 1-1Z"
+      />
+      <path strokeLinecap="round" d="M12.5 10h4.5M12.5 13h3.5M12.5 16h4" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 20.5h4M6 18.5l-2 2 2 2" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M20 20.5h-4M18 18.5l2 2-2 2" />
+    </svg>
+  );
+}
+
+function MeetingDocumentsIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg aria-hidden className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8 4.5h8l3 3v12a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1v-14a1 1 0 0 1 1-1Z"
+      />
+      <path strokeLinecap="round" d="M16 4.5v3h3M9 12h6M9 15.5h4.5" />
+    </svg>
+  );
+}
+
+function AiUsageMenuIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg aria-hidden className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path strokeLinecap="round" d="M12 6v12M9.5 8.5c0-1.25 1.12-2.25 2.5-2.25s2.5 1 2.5 2.25M9.5 15.5c0 1.25 1.12 2.25 2.5 2.25s2.5-1 2.5-2.25" />
+    </svg>
   );
 }
 
@@ -1324,15 +1536,6 @@ function formatExtractionQualitySummary(quality: MeetingV2ExtractionQuality): st
           : "Unknown extractor";
 
   return `${extractorLabel}. ${quality.note}`;
-}
-
-function SummaryStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/55">{label}</div>
-      <div className="mt-0.5 text-lg font-semibold text-white">{value}</div>
-    </div>
-  );
 }
 
 function SectionCard({
@@ -1675,6 +1878,473 @@ function parseSourceSnippet(rawText: string, itemTitle: string) {
   };
 }
 
+type AgendaReviewTab = "agenda" | "discrepancies";
+type AgendaReviewItem = MeetingV2Status["items"][number];
+type AgendaOutlineNode = OutlineTreeNode<AgendaReviewItem> & {
+  subItems: Array<{ label: string; title: string }>;
+};
+
+function getDiscrepancyKind(disc: {
+  kind?: "add_to_agenda" | "status_inquiry";
+  id?: string;
+  clarificationQuestion?: string;
+}): "add_to_agenda" | "status_inquiry" {
+  if (disc.kind === "status_inquiry") return "status_inquiry";
+  if (disc.id?.startsWith("inquiry-")) return "status_inquiry";
+  if (/marked Not Discussed/i.test(disc.clarificationQuestion ?? "")) {
+    return "status_inquiry";
+  }
+  return "add_to_agenda";
+}
+
+function extractAgendaSubItemsFromSource(
+  item: MeetingV2Status["items"][number],
+): Array<{ label: string; title: string }> {
+  const sourceText = item.sourceText ?? "";
+  const notesMatch = sourceText.match(/Notes:\s*(.+?)(?:\n|$)/i);
+  if (notesMatch) {
+    const parts = notesMatch[1]
+      .split(/[;•|]/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length > 1) {
+      return parts.map((title, index) => ({
+        label: String.fromCharCode(97 + index),
+        title,
+      }));
+    }
+  }
+
+  const aliasesMatch = sourceText.match(/Aliases:\s*(.+?)(?:\n|$)/i);
+  if (aliasesMatch) {
+    const parts = aliasesMatch[1]
+      .split(/[;•|]/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length > 1) {
+      return parts.map((title, index) => ({
+        label: String.fromCharCode(97 + index),
+        title,
+      }));
+    }
+  }
+
+  return [];
+}
+
+function attachSourceSubItems(nodes: Array<OutlineTreeNode<AgendaReviewItem>>): AgendaOutlineNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    subItems: node.children.length > 0 ? [] : extractAgendaSubItemsFromSource(node.item),
+    children: attachSourceSubItems(node.children),
+  }));
+}
+
+function syntheticReviewItem(options: {
+  id: string;
+  title: string;
+  itemNumber: string;
+  sectionLabel: string;
+  discussionStatus: "discussed" | "ad_hoc";
+}): AgendaReviewItem {
+  return {
+    id: options.id,
+    title: options.title,
+    itemNumber: options.itemNumber,
+    itemType: "ad_hoc_discussion",
+    sectionLabel: options.sectionLabel,
+    sourceText: `Discussion status: ${options.discussionStatus}`,
+    discussionStatus: options.discussionStatus,
+    sourceSectionId: null,
+    sourcePages: [],
+    discussionSummary: null,
+    confidence: null,
+    outcome: null,
+    openQuestions: [],
+    userAnswers: null,
+    validation: [],
+    evidence: [],
+  };
+}
+
+function mergeAdHocItemsIntoReview(
+  items: AgendaReviewItem[],
+  newItems: Array<{
+    id: string;
+    title: string;
+    sectionLabel: string;
+    discussionStatus: "discussed" | "ad_hoc";
+  }>,
+): AgendaReviewItem[] {
+  if (newItems.length === 0) return items;
+  const placement = planAdHocPlacement(
+    items.map((item) => item.itemNumber),
+    newItems.length,
+    inferPropertyManagementReportNumber(items),
+  );
+  if (!placement) return items;
+
+  const extras: AgendaReviewItem[] = [];
+  if (placement.sectionMissing) {
+    extras.push(
+      syntheticReviewItem({
+        id: "synthetic-adhoc-section",
+        title: "Ad-hoc items",
+        itemNumber: placement.sectionCode,
+        sectionLabel: "Property Management Report",
+        discussionStatus: "ad_hoc",
+      }),
+    );
+  }
+  newItems.forEach((item, index) => {
+    extras.push(
+      syntheticReviewItem({
+        id: item.id,
+        title: item.title,
+        itemNumber: placement.nextItemCodes[index],
+        sectionLabel: item.sectionLabel || "Property Management Report: Ad-hoc items",
+        discussionStatus: item.discussionStatus,
+      }),
+    );
+  });
+  return [...items, ...extras];
+}
+
+function buildAgendaOutline(items: MeetingV2Status["items"]): AgendaOutlineNode[] {
+  return attachSourceSubItems(buildAgendaOutlineTree(items));
+}
+
+function findAgendaItemForDiscrepancy(
+  items: MeetingV2Status["items"],
+  suggestedTitle: string,
+): MeetingV2Status["items"][number] | null {
+  const normalizedSuggested = suggestedTitle.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (!normalizedSuggested) return null;
+
+  let best: MeetingV2Status["items"][number] | null = null;
+  let bestScore = 0;
+
+  for (const item of items) {
+    const normalizedTitle = item.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (!normalizedTitle) continue;
+    if (
+      normalizedTitle === normalizedSuggested ||
+      normalizedTitle.includes(normalizedSuggested) ||
+      normalizedSuggested.includes(normalizedTitle)
+    ) {
+      const score = Math.min(normalizedTitle.length, normalizedSuggested.length);
+      if (score > bestScore) {
+        best = item;
+        bestScore = score;
+      }
+    }
+  }
+
+  return best;
+}
+
+function SourceSnippetPopover({
+  parsedSnippet,
+  onSelectChunkId,
+  onSelectTimeRange,
+}: {
+  parsedSnippet: ReturnType<typeof parseSourceSnippet>;
+  onSelectChunkId: (chunkId: string) => void;
+  onSelectTimeRange: (timeRange: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="text-[11px] text-slate-500 underline underline-offset-2 hover:text-slate-700"
+      >
+        {open ? "Hide source text" : "Show source text snippet"}
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-full z-30 mt-1 w-[min(22rem,calc(100vw-2rem))] space-y-2 rounded-xl border border-slate-200 bg-white p-3 text-xs shadow-lg">
+          {parsedSnippet.timing ? (
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold text-slate-600">Timing:</span>
+              <button
+                type="button"
+                onClick={() => onSelectTimeRange(parsedSnippet.timing!)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-teal-800 transition hover:bg-teal-100"
+                title="Click to view discussion in transcript"
+              >
+                <span>🎧</span> {parsedSnippet.timing}
+              </button>
+            </div>
+          ) : null}
+
+          {parsedSnippet.chunkIds.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-semibold text-slate-600">Referenced Chunks:</span>
+              {parsedSnippet.chunkIds.map((chunkId) => (
+                <button
+                  key={chunkId}
+                  type="button"
+                  onClick={() => onSelectChunkId(chunkId)}
+                  className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-indigo-700 transition hover:bg-indigo-100"
+                  title={`Click to inspect ${chunkId}`}
+                >
+                  <span>{chunkId.startsWith("doc") ? "📄" : "🎙️"}</span> {chunkId}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {parsedSnippet.evidenceStrength ? (
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold text-slate-600">Evidence strength:</span>
+              <span
+                className={`rounded px-1.5 py-0.2 font-mono text-[11px] font-bold ${
+                  parsedSnippet.isUncertain
+                    ? "border border-amber-300 bg-amber-100 text-amber-800"
+                    : "bg-emerald-100 text-emerald-800"
+                }`}
+              >
+                {parsedSnippet.evidenceStrength}
+              </span>
+            </div>
+          ) : null}
+
+          {parsedSnippet.contentLines.length > 0 ? (
+            <div className="border-t border-slate-200/80 pt-1 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-slate-600">
+              {parsedSnippet.contentLines.join("\n")}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AgendaReviewListItem({
+  item,
+  displayNumber,
+  listMarker = "decimal",
+  subItems = [],
+  itemStatuses,
+  excludedItemIds,
+  editedTitles,
+  editingItemId,
+  onToggleStatus,
+  onToggleExclude,
+  onEditTitle,
+  onSetEditingItemId,
+  onSelectChunkId,
+  onSelectTimeRange,
+}: {
+  item: MeetingV2Status["items"][number];
+  displayNumber: string;
+  listMarker?: AgendaListMarker;
+  subItems?: Array<{ label: string; title: string }>;
+  itemStatuses: Record<string, "discussed" | "not_discussed" | "ad_hoc">;
+  excludedItemIds: Set<string>;
+  editedTitles: Record<string, string>;
+  editingItemId: string | null;
+  onToggleStatus: (itemId: string, nextStatus: "discussed" | "not_discussed" | "ad_hoc") => void;
+  onToggleExclude: (itemId: string) => void;
+  onEditTitle: (itemId: string, title: string) => void;
+  onSetEditingItemId: (itemId: string | null) => void;
+  onSelectChunkId: (chunkId: string) => void;
+  onSelectTimeRange: (timeRange: string) => void;
+}) {
+  const isExcluded = excludedItemIds.has(item.id);
+    const currentStatus = itemStatuses[item.id] || item.discussionStatus || "discussed";
+  const displayTitle = editedTitles[item.id] ?? item.title;
+  const isEditingThis = editingItemId === item.id;
+  const parsedSnippet = parseSourceSnippet(item.sourceText || "", displayTitle);
+  const isRyanRatcliffGuestItem = displayTitle.toLowerCase().includes("ryan ratcliff");
+
+  return (
+    <li
+      className={`border-b border-slate-100 last:border-b-0 ${
+        isExcluded
+          ? "bg-slate-50/60 opacity-60"
+          : currentStatus === "not_discussed"
+            ? "bg-slate-50/30"
+            : "hover:bg-slate-50/40"
+      }`}
+    >
+      <div className="flex gap-3 px-4 py-3">
+        <div
+          className={`shrink-0 pt-0.5 text-sm font-semibold tabular-nums text-slate-700 ${
+            listMarker === "decimal" ? "w-8" : "w-6"
+          }`}
+        >
+          {`${displayNumber}.`}
+        </div>
+
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                {isEditingThis ? (
+                  <input
+                    type="text"
+                    value={displayTitle}
+                    onChange={(event) => onEditTitle(item.id, event.target.value)}
+                    onBlur={() => onSetEditingItemId(null)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") onSetEditingItemId(null);
+                    }}
+                    autoFocus
+                    className="rounded-md border border-teal-500 px-2 py-0.5 text-sm font-semibold text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                  />
+                ) : (
+                  <span
+                    onDoubleClick={() => onSetEditingItemId(item.id)}
+                    className={`cursor-pointer text-sm font-semibold ${
+                      isExcluded ? "line-through text-slate-400" : "text-slate-900"
+                    }`}
+                    title="Double-click to edit title"
+                  >
+                    {displayTitle}
+                  </span>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => onSetEditingItemId(isEditingThis ? null : item.id)}
+                  className="text-[11px] text-slate-400 hover:text-slate-600"
+                  title="Edit title"
+                >
+                  ✏️
+                </button>
+
+                {item.sourcePages && item.sourcePages.length > 0 ? (
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
+                    📄 p. {item.sourcePages.join(", ")}
+                  </span>
+                ) : null}
+
+                {currentStatus === "not_discussed" ? (
+                  <span className="rounded bg-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                    Deferred (Zero LLM Tokens)
+                  </span>
+                ) : currentStatus === "ad_hoc" ? (
+                  <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                    Ad-Hoc Discussion
+                  </span>
+                ) : parsedSnippet.isUncertain ? (
+                  <span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                    ⚠️ Uncertain Match
+                  </span>
+                ) : (
+                  <span className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                    Verified in Audio
+                  </span>
+                )}
+
+                {isRyanRatcliffGuestItem ? (
+                  <span
+                    className="cursor-help rounded border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-800"
+                    title="Ryan Ratcliff was not present in this recording; discussion was only mentioned while amending prior minutes."
+                  >
+                    ℹ️ Presenter not in audio
+                  </span>
+                ) : null}
+              </div>
+
+              {subItems.length > 0 ? (
+                <ol className="ml-1 list-[lower-alpha] space-y-1 pl-5 text-sm text-slate-700 marker:font-semibold marker:text-slate-500">
+                  {subItems.map((subItem) => (
+                    <li key={`${item.id}-${subItem.label}`}>{subItem.title}</li>
+                  ))}
+                </ol>
+              ) : null}
+            </div>
+
+            <div className="flex shrink-0 flex-col items-end gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium">
+                <button
+                  type="button"
+                  onClick={() => onToggleStatus(item.id, "discussed")}
+                  disabled={isExcluded}
+                  className={`rounded-md px-2.5 py-1 transition ${
+                    currentStatus === "discussed" && !isExcluded
+                      ? "bg-emerald-600 font-semibold text-white shadow-sm"
+                      : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
+                  }`}
+                  title="Verified in audio transcript"
+                >
+                  🟢 Discussed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onToggleStatus(item.id, "not_discussed")}
+                  disabled={isExcluded}
+                  className={`rounded-md px-2.5 py-1 transition ${
+                    currentStatus === "not_discussed" && !isExcluded
+                      ? "bg-slate-700 font-semibold text-white shadow-sm"
+                      : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
+                  }`}
+                  title="Adjourned / not reached in this recording (skips LLM investigation)"
+                >
+                  ⏸️ Not Discussed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onToggleStatus(item.id, "ad_hoc")}
+                  disabled={isExcluded}
+                  className={`rounded-md px-2.5 py-1 transition ${
+                    currentStatus === "ad_hoc" && !isExcluded
+                      ? "bg-amber-600 font-semibold text-white shadow-sm"
+                      : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
+                  }`}
+                  title="Informal / ad-hoc discussion not in formal agenda"
+                >
+                  ⚡ Ad-Hoc
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => onToggleExclude(item.id)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-medium border transition ${
+                  isExcluded
+                    ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                    : "border-transparent text-rose-600 hover:bg-rose-50"
+                }`}
+              >
+                {isExcluded ? "↩️ Restore" : "Exclude"}
+              </button>
+              </div>
+
+              {item.sourceText ? (
+                <SourceSnippetPopover
+                  parsedSnippet={parsedSnippet}
+                  onSelectChunkId={onSelectChunkId}
+                  onSelectTimeRange={onSelectTimeRange}
+                />
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </li>
+  );
+}
+
 function HitlAgendaApprovalWorkspace({
   meetingId,
   status,
@@ -1705,7 +2375,13 @@ function HitlAgendaApprovalWorkspace({
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
 
   const initialDiscrepancies = useMemo(() => {
-    return status.meeting.agendaApproval?.discrepancies || [];
+    const raw = status.meeting.agendaApproval?.discrepancies || [];
+    const seen = new Set<string>();
+    return raw.filter((disc) => {
+      if (seen.has(disc.id)) return false;
+      seen.add(disc.id);
+      return true;
+    });
   }, [status.meeting.agendaApproval?.discrepancies]);
 
   const [discrepancyActions, setDiscrepancyActions] = useState<
@@ -1735,9 +2411,9 @@ function HitlAgendaApprovalWorkspace({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
-  const [expandedSourceItemId, setExpandedSourceItemId] = useState<string | null>(null);
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
   const [selectedTimeRange, setSelectedTimeRange] = useState<string | null>(null);
+  const [activeReviewTab, setActiveReviewTab] = useState<AgendaReviewTab>("agenda");
 
   const isApproved = Boolean(status.meeting.agendaApproval?.approvedAt);
 
@@ -1782,12 +2458,14 @@ function HitlAgendaApprovalWorkspace({
     suggestedSection?: string | null;
   }) {
     setDiscrepancyActions((prev) => ({ ...prev, [disc.id]: "accepted" }));
+    const newId = `disc-${disc.id}`;
+    setItemStatuses((prev) => ({ ...prev, [newId]: "ad_hoc" }));
     setNewItems((prev) => [
       ...prev,
       {
-        id: `disc-${disc.id}`,
+        id: newId,
         title: disc.suggestedTitle,
-        sectionLabel: disc.suggestedSection || "Ad-Hoc Discussion",
+        sectionLabel: disc.suggestedSection || "Property Management Report: Ad-hoc items",
         discussionStatus: "ad_hoc",
       },
     ]);
@@ -1797,14 +2475,31 @@ function HitlAgendaApprovalWorkspace({
     setDiscrepancyActions((prev) => ({ ...prev, [discId]: "dismissed" }));
   }
 
+  function handleMarkNotDiscussedFromInquiry(disc: {
+    id: string;
+    suggestedTitle: string;
+  }) {
+    const matchingItem = findAgendaItemForDiscrepancy(status.items, disc.suggestedTitle);
+    if (matchingItem) {
+      setItemStatuses((prev) => ({ ...prev, [matchingItem.id]: "not_discussed" }));
+    }
+    setDiscrepancyActions((prev) => ({ ...prev, [disc.id]: "dismissed" }));
+  }
+
+  function handleKeepAgendaItemFromInquiry(discId: string) {
+    setDiscrepancyActions((prev) => ({ ...prev, [discId]: "dismissed" }));
+  }
+
   function handleAddNewItem() {
     if (!newTitle.trim()) return;
+    const newId = `custom-${Date.now()}`;
+    setItemStatuses((prev) => ({ ...prev, [newId]: newStatus }));
     setNewItems((prev) => [
       ...prev,
       {
-        id: `custom-${Date.now()}`,
+        id: newId,
         title: newTitle.trim(),
-        sectionLabel: newSection.trim() || "Additional Business",
+        sectionLabel: newSection.trim() || "Property Management Report: Ad-hoc items",
         discussionStatus: newStatus,
       },
     ]);
@@ -1837,11 +2532,13 @@ function HitlAgendaApprovalWorkspace({
           sectionLabel: item.sectionLabel,
           discussionStatus: item.discussionStatus,
         })),
-        discrepancyActions: Object.entries(discrepancyActions).map(([id, action]) => ({
-          id,
-          action,
-          title: initialDiscrepancies.find((d) => d.id === id)?.suggestedTitle,
-        })),
+        discrepancyActions: Object.entries(discrepancyActions)
+          .filter(([, action]) => action !== "pending")
+          .map(([id, action]) => ({
+            id,
+            action: action === "accepted" ? "accept" : "dismiss",
+            title: initialDiscrepancies.find((d) => d.id === id)?.suggestedTitle,
+          })),
       };
 
       const res = await fetch(`/api/v2/meetings/${meetingId}/agenda/approve`, {
@@ -1864,7 +2561,7 @@ function HitlAgendaApprovalWorkspace({
     }
   }
 
-  // Group status.items by sectionLabel
+  // Group status.items by sectionLabel for optional section headings
   const itemsBySection = useMemo(() => {
     const map = new Map<string, typeof status.items>();
     for (const item of status.items) {
@@ -1877,6 +2574,56 @@ function HitlAgendaApprovalWorkspace({
     return map;
   }, [status.items]);
 
+  const adHocPlacement = useMemo(
+    () =>
+      planAdHocPlacement(
+        status.items.map((item) => item.itemNumber),
+        newItems.length,
+        inferPropertyManagementReportNumber(status.items),
+      ),
+    [status.items, newItems.length],
+  );
+
+  const agendaOutline = useMemo(
+    () => buildAgendaOutline(mergeAdHocItemsIntoReview(status.items, newItems)),
+    [status.items, newItems],
+  );
+
+  function renderOutlineNodes(nodes: AgendaOutlineNode[], depth = 0): ReactNode {
+    return nodes.map((node) => (
+      <div key={node.item.id}>
+        <AgendaReviewListItem
+          item={node.item}
+          displayNumber={node.displayNumber}
+          listMarker={node.listMarker}
+          subItems={node.subItems}
+          itemStatuses={itemStatuses}
+          excludedItemIds={excludedItemIds}
+          editedTitles={editedTitles}
+          editingItemId={editingItemId}
+          onToggleStatus={handleToggleStatus}
+          onToggleExclude={handleToggleExclude}
+          onEditTitle={(itemId, title) =>
+            setEditedTitles((prev) => ({ ...prev, [itemId]: title }))
+          }
+          onSetEditingItemId={setEditingItemId}
+          onSelectChunkId={setSelectedChunkId}
+          onSelectTimeRange={setSelectedTimeRange}
+        />
+        {node.children.length > 0 ? (
+          <ol
+            className={`list-none ${
+              depth === 0 ? "border-t border-slate-100 bg-slate-50/40" : "bg-white/70"
+            }`}
+            style={depth > 0 ? { paddingLeft: 16 } : undefined}
+          >
+            {renderOutlineNodes(node.children, depth + 1)}
+          </ol>
+        ) : null}
+      </div>
+    ));
+  }
+
   return (
     <SectionCard
       eyebrow="Human-in-the-Loop Agenda Review"
@@ -1884,444 +2631,262 @@ function HitlAgendaApprovalWorkspace({
       description="The AI synthesized this candidate agenda by cross-referencing the Board Package and the recording transcript. Confirm which topics were discussed vs. adjourned or skipped, resolve any detected transcript discrepancies, and approve to proceed with targeted evidence gathering and investigation."
     >
       <div className="space-y-6">
-        {/* Discrepancy Alerts */}
-        {pendingDiscrepancies.length > 0 ? (
-          <div className="rounded-2xl border border-amber-300 bg-amber-50/70 p-5 shadow-sm space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-white">
-                    !
-                  </span>
-                  <h3 className="font-semibold text-slate-900 text-sm">
-                    AI Discrepancy Inquiries ({pendingDiscrepancies.length} unaligned discussion{pendingDiscrepancies.length > 1 ? "s" : ""})
-                  </h3>
-                </div>
-                <p className="mt-1 text-xs text-slate-600">
-                  The AI detected substantive discussions in the recording that do not appear to match any agenda item in the board package. Review below:
-                </p>
-              </div>
-            </div>
+        <div className="flex flex-wrap gap-1.5 rounded-xl bg-slate-50 p-1">
+          <button
+            type="button"
+            onClick={() => setActiveReviewTab("agenda")}
+            className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${tabTone(activeReviewTab === "agenda")}`}
+          >
+            Agenda
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveReviewTab("discrepancies")}
+            className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${tabTone(activeReviewTab === "discrepancies")}`}
+          >
+            AI Discrepancies
+            {pendingDiscrepancies.length > 0 ? (
+              <span className="ml-1.5 inline-flex items-center rounded-full bg-amber-200/90 px-2 py-0.5 text-xs font-bold text-amber-900">
+                {pendingDiscrepancies.length}
+              </span>
+            ) : null}
+          </button>
+        </div>
 
-            <div className="space-y-3">
-              {pendingDiscrepancies.map((disc) => (
-                <div
-                  key={disc.id}
-                  className="rounded-xl border border-amber-200 bg-white p-4 text-xs shadow-sm"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                    <div className="space-y-1.5 flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
-                          {disc.timestamp}
-                        </span>
-                        {disc.speaker ? (
-                          <span className="font-semibold text-slate-700">{disc.speaker}</span>
-                        ) : null}
-                        <span className="font-semibold text-amber-900">
-                          {disc.suggestedTitle}
-                        </span>
-                      </div>
-                      <p className="text-slate-800 font-medium">{disc.clarificationQuestion}</p>
-                      <p className="italic text-slate-500 border-l-2 border-slate-200 pl-2 mt-1">
-                        &ldquo;{disc.snippet}&rdquo;
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0">
-                      <button
-                        type="button"
-                        onClick={() => handleAcceptDiscrepancy(disc)}
-                        className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition"
-                      >
-                        + Add to Agenda
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDismissDiscrepancy(disc.id)}
-                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {/* User-Added / Accepted Discrepancies */}
-        {newItems.length > 0 ? (
-          <div className="rounded-2xl border border-teal-200 bg-teal-50/50 p-4 space-y-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-teal-800">
-              New Ad-Hoc / Custom Agenda Items ({newItems.length})
-            </h4>
-            <div className="space-y-2">
-              {newItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-teal-200 bg-white px-4 py-2.5 text-xs"
-                >
+        {activeReviewTab === "discrepancies" ? (
+          <div className="space-y-4">
+            {pendingDiscrepancies.length > 0 ? (
+              <div className="rounded-2xl border border-amber-300 bg-amber-50/70 p-5 shadow-sm space-y-4">
+                <div>
                   <div className="flex items-center gap-2">
-                    <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
-                      Ad-Hoc
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-white">
+                      !
                     </span>
-                    <span className="font-semibold text-slate-800">{item.title}</span>
-                    <span className="text-slate-500">({item.sectionLabel})</span>
+                    <h3 className="font-semibold text-slate-900 text-sm">
+                      AI Discrepancy Inquiries ({pendingDiscrepancies.length} pending)
+                    </h3>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveNewItem(item.id)}
-                    className="text-xs text-rose-600 hover:text-rose-800 font-medium"
-                  >
-                    Remove
-                  </button>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Resolve transcript mismatches before approving the agenda. Some inquiries ask you to add a missing topic; others ask you to confirm whether an existing agenda item should stay on the list.
+                  </p>
                 </div>
-              ))}
-            </div>
+
+                <div className="space-y-3">
+                  {pendingDiscrepancies.map((disc) => {
+                    const inquiryKind = getDiscrepancyKind(disc);
+                    return (
+                      <div
+                        key={disc.id}
+                        className="rounded-xl border border-amber-200 bg-white p-4 text-xs shadow-sm"
+                      >
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0 flex-1 space-y-1.5">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
+                                {disc.timestamp}
+                              </span>
+                              {disc.speaker ? (
+                                <span className="font-semibold text-slate-700">{disc.speaker}</span>
+                              ) : null}
+                              <span className="font-semibold text-amber-900">{disc.suggestedTitle}</span>
+                              <span className="rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
+                                {inquiryKind === "status_inquiry" ? "Status check" : "Missing topic"}
+                              </span>
+                            </div>
+                            <p className="font-medium text-slate-800">{disc.clarificationQuestion}</p>
+                            <p className="mt-1 border-l-2 border-slate-200 pl-2 italic text-slate-500">
+                              &ldquo;{disc.snippet}&rdquo;
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap items-center gap-2 pt-1 sm:pt-0">
+                            {inquiryKind === "status_inquiry" ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMarkNotDiscussedFromInquiry(disc)}
+                                  className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                                >
+                                  Yes, Mark Not Discussed
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleKeepAgendaItemFromInquiry(disc.id)}
+                                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+                                >
+                                  No, Keep on Agenda
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAcceptDiscrepancy(disc)}
+                                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+                                >
+                                  + Add to Agenda
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDismissDiscrepancy(disc.id)}
+                                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+                                >
+                                  Dismiss
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-sm text-slate-600">
+                No pending AI discrepancy inquiries. Switch to the Agenda tab to review extracted items.
+              </div>
+            )}
           </div>
         ) : null}
 
-        {/* Agenda items list grouped by section */}
-        <div className="space-y-6">
-          {Array.from(itemsBySection.entries()).map(([sectionName, items]) => (
-            <div key={sectionName} className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
-              <div className="border-b border-slate-100 bg-slate-50/80 px-4 py-3">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                  {sectionName}
+        {activeReviewTab === "agenda" ? (
+          <>
+            {newItems.length > 0 && !adHocPlacement ? (
+              <div className="rounded-2xl border border-teal-200 bg-teal-50/50 p-4 space-y-3">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-teal-800">
+                  New Ad-Hoc / Custom Agenda Items ({newItems.length})
                 </h4>
-              </div>
-              <div className="divide-y divide-slate-100">
-                {items.map((item, index) => {
-                  const isExcluded = excludedItemIds.has(item.id);
-                  const currentStatus = itemStatuses[item.id] || "discussed";
-                  const displayTitle = editedTitles[item.id] ?? item.title;
-                  const isEditingThis = editingItemId === item.id;
-                  const isSourceExpanded = expandedSourceItemId === item.id;
-                  const parsedSnippet = parseSourceSnippet(item.sourceText || "", displayTitle);
-                  const isRyanRatcliffGuestItem = displayTitle.toLowerCase().includes("ryan ratcliff");
-
-                  return (
+                <div className="space-y-2">
+                  {newItems.map((item) => (
                     <div
                       key={item.id}
-                      className={`p-4 transition ${
-                        isExcluded
-                          ? "bg-slate-50/60 opacity-60"
-                          : currentStatus === "not_discussed"
-                            ? "bg-slate-50/30"
-                            : "hover:bg-slate-50/40"
-                      }`}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-teal-200 bg-white px-4 py-2.5 text-xs"
                     >
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                        {/* Title & Metadata */}
-                        <div className="space-y-1.5 flex-1 min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-slate-200 text-[11px] font-semibold text-slate-700">
-                              {item.itemNumber || index + 1}
-                            </span>
-
-                            {isEditingThis ? (
-                              <input
-                                type="text"
-                                value={displayTitle}
-                                onChange={(e) =>
-                                  setEditedTitles((prev) => ({
-                                    ...prev,
-                                    [item.id]: e.target.value,
-                                  }))
-                                }
-                                onBlur={() => setEditingItemId(null)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") setEditingItemId(null);
-                                }}
-                                autoFocus
-                                className="rounded-md border border-teal-500 px-2 py-0.5 text-sm font-semibold text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                              />
-                            ) : (
-                              <span
-                                onDoubleClick={() => setEditingItemId(item.id)}
-                                className={`text-sm font-semibold cursor-pointer ${
-                                  isExcluded
-                                    ? "line-through text-slate-400"
-                                    : "text-slate-900"
-                                }`}
-                                title="Double-click to edit title"
-                              >
-                                {displayTitle}
-                              </span>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={() => setEditingItemId(isEditingThis ? null : item.id)}
-                              className="text-[11px] text-slate-400 hover:text-slate-600"
-                              title="Edit title"
-                            >
-                              ✏️
-                            </button>
-
-                            {/* Source Pages Chip */}
-                            {item.sourcePages && item.sourcePages.length > 0 ? (
-                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
-                                📄 p. {item.sourcePages.join(", ")}
-                              </span>
-                            ) : null}
-
-                            {/* Discussion Status Badge */}
-                            {currentStatus === "not_discussed" ? (
-                              <span className="rounded bg-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                                Deferred (Zero LLM Tokens)
-                              </span>
-                            ) : currentStatus === "ad_hoc" ? (
-                              <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                                Ad-Hoc Discussion
-                              </span>
-                            ) : parsedSnippet.isUncertain ? (
-                              <span className="rounded bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 border border-amber-300">
-                                ⚠️ Uncertain Match
-                              </span>
-                            ) : (
-                              <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 border border-emerald-200">
-                                Verified in Audio
-                              </span>
-                            )}
-
-                            {isRyanRatcliffGuestItem ? (
-                              <span
-                                className="rounded bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-800 border border-rose-200 cursor-help"
-                                title="Ryan Ratcliff was not present in this recording; discussion was only mentioned while amending prior minutes."
-                              >
-                                ℹ️ Presenter not in audio
-                              </span>
-                            ) : null}
-                          </div>
-
-                          {/* Source Snippet toggle if available */}
-                          {item.sourceText ? (
-                            <div>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setExpandedSourceItemId(isSourceExpanded ? null : item.id)
-                                }
-                                className="text-[11px] text-slate-500 hover:text-slate-700 underline underline-offset-2"
-                              >
-                                {isSourceExpanded ? "Hide source text" : "Show source text snippet"}
-                              </button>
-                              {isSourceExpanded ? (
-                                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs space-y-2">
-                                  {parsedSnippet.timing ? (
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-semibold text-slate-600 text-[11px]">Timing:</span>
-                                      <button
-                                        type="button"
-                                        onClick={() => setSelectedTimeRange(parsedSnippet.timing)}
-                                        className="inline-flex items-center gap-1.5 rounded-md bg-teal-50 hover:bg-teal-100 border border-teal-200 px-2 py-0.5 font-mono text-[11px] font-semibold text-teal-800 transition"
-                                        title="Click to view and highlight discussion in transcript"
-                                      >
-                                        <span>🎧</span> {parsedSnippet.timing}
-                                        <span className="text-[10px] text-teal-600 underline">view transcript</span>
-                                      </button>
-                                    </div>
-                                  ) : null}
-
-                                  {parsedSnippet.chunkIds.length > 0 ? (
-                                    <div className="flex flex-wrap items-center gap-1.5">
-                                      <span className="font-semibold text-slate-600 text-[11px]">Referenced Chunks:</span>
-                                      {parsedSnippet.chunkIds.map((cid) => (
-                                        <button
-                                          key={cid}
-                                          type="button"
-                                          onClick={() => setSelectedChunkId(cid)}
-                                          className="inline-flex items-center gap-1 rounded-md bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2 py-0.5 font-mono text-[11px] font-semibold text-indigo-700 transition"
-                                          title={`Click to inspect ${cid}`}
-                                        >
-                                          <span>{cid.startsWith("doc") ? "📄" : "🎙️"}</span> {cid}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  ) : null}
-
-                                  {parsedSnippet.evidenceStrength ? (
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-semibold text-slate-600 text-[11px]">Evidence strength:</span>
-                                      <span
-                                        className={`rounded px-1.5 py-0.2 font-mono text-[11px] font-bold ${
-                                          parsedSnippet.isUncertain
-                                            ? "bg-amber-100 text-amber-800 border border-amber-300"
-                                            : "bg-emerald-100 text-emerald-800"
-                                        }`}
-                                      >
-                                        {parsedSnippet.evidenceStrength}
-                                      </span>
-                                    </div>
-                                  ) : null}
-
-                                  {parsedSnippet.contentLines.length > 0 ? (
-                                    <div className="pt-1 border-t border-slate-200/80 font-mono text-[11px] text-slate-600 whitespace-pre-wrap leading-relaxed">
-                                      {parsedSnippet.contentLines.join("\n")}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : null}
-                        </div>
-
-                        {/* Controls: Status Toggles & Exclude */}
-                        <div className="flex flex-wrap items-center gap-3 shrink-0">
-                          <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium">
-                            <button
-                              type="button"
-                              onClick={() => handleToggleStatus(item.id, "discussed")}
-                              disabled={isExcluded}
-                              className={`rounded-md px-2.5 py-1 transition ${
-                                currentStatus === "discussed" && !isExcluded
-                                  ? "bg-emerald-600 text-white shadow-sm font-semibold"
-                                  : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
-                              }`}
-                              title="Verified in audio transcript"
-                            >
-                              🟢 Discussed
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleToggleStatus(item.id, "not_discussed")}
-                              disabled={isExcluded}
-                              className={`rounded-md px-2.5 py-1 transition ${
-                                currentStatus === "not_discussed" && !isExcluded
-                                  ? "bg-slate-700 text-white shadow-sm font-semibold"
-                                  : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
-                              }`}
-                              title="Adjourned / not reached in this recording (skips LLM investigation)"
-                            >
-                              ⏸️ Not Discussed
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleToggleStatus(item.id, "ad_hoc")}
-                              disabled={isExcluded}
-                              className={`rounded-md px-2.5 py-1 transition ${
-                                currentStatus === "ad_hoc" && !isExcluded
-                                  ? "bg-amber-600 text-white shadow-sm font-semibold"
-                                  : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
-                              }`}
-                              title="Informal / ad-hoc discussion not in formal agenda"
-                            >
-                              ⚡ Ad-Hoc
-                            </button>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => handleToggleExclude(item.id)}
-                            className={`rounded-lg px-2.5 py-1 text-xs font-medium border transition ${
-                              isExcluded
-                                ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                                : "border-transparent text-rose-600 hover:bg-rose-50"
-                            }`}
-                          >
-                            {isExcluded ? "↩️ Restore" : "Exclude"}
-                          </button>
-                        </div>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                          Ad-Hoc
+                        </span>
+                        <span className="font-semibold text-slate-800">{item.title}</span>
+                        <span className="text-slate-500">({item.sectionLabel})</span>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveNewItem(item.id)}
+                        className="text-xs font-medium text-rose-600 hover:text-rose-800"
+                      >
+                        Remove
+                      </button>
                     </div>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ) : null}
 
-        {/* Add custom item */}
-        <div>
-          {showAddForm ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                Add Custom Agenda Item
-              </h4>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    Item Title
-                  </label>
-                  <input
-                    type="text"
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                    placeholder="e.g. Roof Membrane Inspection Update"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    Section Name (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={newSection}
-                    onChange={(e) => setNewSection(e.target.value)}
-                    placeholder="e.g. Property Management Report - Projects"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                  />
-                </div>
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-100 bg-slate-50/80 px-4 py-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                  Candidate Meeting Agenda
+                </h4>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Official agenda order is preserved (1, 2, 3, 4.A.1, 4.D.a). Transcript-only items nest under 4.E.
+                </p>
               </div>
-              <div className="flex items-center justify-between pt-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-600 font-medium">Type:</span>
-                  <button
-                    type="button"
-                    onClick={() => setNewStatus("discussed")}
-                    className={`rounded px-2.5 py-1 text-xs font-medium transition ${
-                      newStatus === "discussed"
-                        ? "bg-emerald-600 text-white"
-                        : "bg-slate-100 text-slate-600"
-                    }`}
-                  >
-                    Discussed
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewStatus("ad_hoc")}
-                    className={`rounded px-2.5 py-1 text-xs font-medium transition ${
-                      newStatus === "ad_hoc"
-                        ? "bg-amber-600 text-white"
-                        : "bg-slate-100 text-slate-600"
-                    }`}
-                  >
-                    Ad-Hoc
-                  </button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowAddForm(false)}
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleAddNewItem}
-                    disabled={!newTitle.trim()}
-                    className="rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition disabled:opacity-40"
-                  >
-                    Add to Agenda
-                  </button>
-                </div>
-              </div>
+
+              <ol className="list-none">
+                {renderOutlineNodes(agendaOutline)}
+              </ol>
             </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setShowAddForm(true)}
-              className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 hover:border-slate-400 transition flex items-center gap-1.5"
-            >
-              <span>+</span>
-              <span>Add Custom Agenda Item</span>
-            </button>
-          )}
-        </div>
+
+            <div>
+              {showAddForm ? (
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                    Add Custom Agenda Item
+                  </h4>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                        Item Title
+                      </label>
+                      <input
+                        type="text"
+                        value={newTitle}
+                        onChange={(event) => setNewTitle(event.target.value)}
+                        placeholder="e.g. Roof Membrane Inspection Update"
+                        className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                        Section Name (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={newSection}
+                        onChange={(event) => setNewSection(event.target.value)}
+                        placeholder="e.g. Property Management Report - Projects"
+                        className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between pt-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-slate-600">Type:</span>
+                      <button
+                        type="button"
+                        onClick={() => setNewStatus("discussed")}
+                        className={`rounded px-2.5 py-1 text-xs font-medium transition ${
+                          newStatus === "discussed"
+                            ? "bg-emerald-600 text-white"
+                            : "bg-slate-100 text-slate-600"
+                        }`}
+                      >
+                        Discussed
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNewStatus("ad_hoc")}
+                        className={`rounded px-2.5 py-1 text-xs font-medium transition ${
+                          newStatus === "ad_hoc"
+                            ? "bg-amber-600 text-white"
+                            : "bg-slate-100 text-slate-600"
+                        }`}
+                      >
+                        Ad-Hoc
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowAddForm(false)}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleAddNewItem}
+                        disabled={!newTitle.trim()}
+                        className="rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-40"
+                      >
+                        Add to Agenda
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowAddForm(true)}
+                  className="flex items-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-100"
+                >
+                  <span>+</span>
+                  <span>Add Custom Agenda Item</span>
+                </button>
+              )}
+            </div>
+          </>
+        ) : null}
 
         {/* Feedback messages */}
         {submitError ? (
@@ -3147,6 +3712,28 @@ function LoadingWorkspace() {
           <div className="h-24 rounded-2xl bg-slate-100" />
         </div>
       </div>
+    </div>
+  );
+}
+
+function StatusLoadError({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 shadow-sm">
+      <p className="text-sm font-semibold text-rose-900">Could not load workspace</p>
+      <p className="mt-1 text-sm text-rose-800">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-4 rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm font-medium text-rose-900 transition hover:bg-rose-100"
+      >
+        Retry
+      </button>
     </div>
   );
 }

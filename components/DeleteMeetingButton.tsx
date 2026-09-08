@@ -13,6 +13,8 @@ type Props = {
   /** Which meeting API to call. Defaults to legacy v1 meetings. */
   apiVersion?: "v1" | "v2";
   tone?: "default" | "inverse";
+  presentation?: "icon" | "menuItem";
+  onMenuOpen?: () => void;
 };
 
 export function DeleteMeetingButton({
@@ -21,6 +23,8 @@ export function DeleteMeetingButton({
   redirectTo,
   apiVersion = "v1",
   tone = "default",
+  presentation = "icon",
+  onMenuOpen,
 }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -72,18 +76,37 @@ export function DeleteMeetingButton({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => {
-          setError(null);
-          setOpen(true);
-        }}
-        aria-label={`Delete workspace: ${meetingTitle}`}
-        title="Delete workspace"
-        className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition ${toneClass}`}
-      >
-        <TrashIcon />
-      </button>
+      {presentation === "menuItem" ? (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            setError(null);
+            onMenuOpen?.();
+            setOpen(true);
+          }}
+          className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50"
+        >
+          <TrashIcon className="h-4 w-4 shrink-0" />
+          <span>
+            <span className="block font-medium">Delete workspace</span>
+            <span className="block text-xs text-red-600/80">Permanently remove this meeting</span>
+          </span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setError(null);
+            setOpen(true);
+          }}
+          aria-label={`Delete workspace: ${meetingTitle}`}
+          title="Delete workspace"
+          className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition ${toneClass}`}
+        >
+          <TrashIcon />
+        </button>
+      )}
 
       <ConfirmDialog
         open={open}
@@ -118,11 +141,11 @@ export function DeleteMeetingButton({
   );
 }
 
-function TrashIcon() {
+function TrashIcon({ className = "h-4 w-4" }: { className?: string }) {
   return (
     <svg
       aria-hidden
-      className="h-4 w-4"
+      className={className}
       fill="none"
       viewBox="0 0 24 24"
       stroke="currentColor"

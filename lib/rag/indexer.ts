@@ -53,6 +53,16 @@ export type IndexSliceOptions = {
   batchSize?: number;
   /** Whether to prioritize emails first, attachments, or all. Default "balanced" */
   mode?: "all" | "emails" | "attachments" | "vision";
+  /**
+   * Remaining unindexed counts from the prior slice. When set, avoids a full
+   * corpus status query at the end of the slice (saves a DB round-trip during
+   * continuous indexing).
+   */
+  priorRemaining?: {
+    emails: number;
+    attachments: number;
+    visionPages: number;
+  };
 };
 
 export type IndexSliceResult = {
@@ -528,19 +538,71 @@ export async function runIncrementalIndexSlice(
     await persistPreparedChunks(visionPrepared);
   }
 
-  // Calculate remaining counts
-  const status = await getCorpusIndexStatus();
-  result.remainingEmails = Math.max(0, status.totalEmails - status.indexedEmails);
-  result.remainingAttachments = Math.max(
-    0,
-    status.totalParsedAttachments - status.indexedAttachments,
-  );
-  result.remainingVisionPages = Math.max(
-    0,
-    status.totalDoneVisionPages - status.indexedVisionPages,
-  );
+  // Calculate remaining counts without a full dashboard status query when possible.
+  if (options?.priorRemaining) {
+    result.remainingEmails = Math.max(
+      0,
+      options.priorRemaining.emails - result.emailsProcessed,
+    );
+    result.remainingAttachments = Math.max(
+      0,
+      options.priorRemaining.attachments - result.attachmentsProcessed,
+    );
+    result.remainingVisionPages = Math.max(
+      0,
+      options.priorRemaining.visionPages - result.visionPagesProcessed,
+    );
+  } else {
+    const remaining = await getCorpusIndexRemainingCounts();
+    result.remainingEmails = remaining.emails;
+    result.remainingAttachments = remaining.attachments;
+    result.remainingVisionPages = remaining.visionPages;
+  }
 
   return result;
+}
+
+async function getCorpusIndexRemainingCounts(): Promise<{
+  emails: number;
+  attachments: number;
+  visionPages: number;
+}> {
+  const db = getDb();
+  const result = await db.execute(sql`
+    SELECT
+      (SELECT count(*)::int FROM emails e WHERE NOT EXISTS (
+        SELECT 1 FROM document_chunks dc
+        WHERE dc.email_id = e.id AND dc.source_kind = 'email_body'
+      )) AS remaining_emails,
+      (SELECT count(*)::int FROM attachment_documents ad
+        WHERE ad.parse_status = 'parsed' AND ad.markdown_path IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM document_chunks dc
+            WHERE dc.content_hash = ad.content_hash
+              AND dc.source_kind = 'attachment_markdown'
+          )) AS remaining_attachments,
+      (SELECT count(*)::int FROM attachment_document_pages adp
+        WHERE adp.vision_status = 'done' AND adp.artifact_path IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM document_chunks dc
+            WHERE dc.content_hash = adp.content_hash
+              AND dc.page_no = adp.page_no
+              AND dc.source_kind = 'attachment_vision_page'
+          )) AS remaining_vision_pages
+  `);
+
+  const rows = (result.rows ?? result) as Array<{
+    remaining_emails: number;
+    remaining_attachments: number;
+    remaining_vision_pages: number;
+  }>;
+  const row = rows[0];
+
+  return {
+    emails: row?.remaining_emails ?? 0,
+    attachments: row?.remaining_attachments ?? 0,
+    visionPages: row?.remaining_vision_pages ?? 0,
+  };
 }
 
 function accumulateEmbeddingUsage(

@@ -6,6 +6,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Meetings V2 agenda outline order** — Candidate agendas now keep the official package hierarchy (1 / 1.A / 4.A.1 / 4.D.l) instead of flattening everything into a sequential 1–30 list. Date and adjournment stay last. Transcript-only matters nest under a synthesized **4.E Ad-hoc items** section even though E is not printed on the package agenda. Guest-presentation outline bullets stay under item 1 and are not merged into later Property Management Report projects.
+
+- **Chunk preview Rules of Hooks crash** — Opening a referenced document chunk (for example `document_chunk_006`) no longer crashes `ChunkPreviewModal` after the first render.
+
 ### Changed
 
 - **Build-out progress modal mobile layout** — On small screens the Gantt chart now uses the full modal height with narrower columns and horizontal scroll. The details sidebar is hidden; tapping any timeline row or phase bar opens a bottom sheet with the item summary and remaining work.

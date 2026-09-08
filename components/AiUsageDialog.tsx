@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { IbmDoclingSpendPanel, type IbmDoclingSpendSummary } from "@/components/IbmDoclingSpendPanel";
 import { PipelineStageInfoTooltip } from "@/components/PipelineStageInfoTooltip";
 import {
   DEEPSEEK_V4_FLASH_OFF_PEAK_RATES,
+  DEEPSEEK_V4_FLASH_PEAK_RATES,
   isDeepSeekModelName,
 } from "@/lib/deepseek/pricing";
 import {
@@ -84,6 +85,81 @@ function computeTooltipPosition(
     left,
     zIndex: 60,
   };
+}
+
+function UsageColumnHeaderTooltip({
+  label,
+  ariaLabel,
+  scanGroup,
+  children,
+}: {
+  label: string;
+  ariaLabel: string;
+  scanGroup: string;
+  children: ReactNode;
+}) {
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const hover = useHoverPopover({ scanGroup });
+  const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
+    position: "fixed",
+    visibility: "hidden",
+    zIndex: 60,
+  });
+
+  useLayoutEffect(() => {
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
+
+    const triggerRect = rootRef.current.getBoundingClientRect();
+    const popoverRect = popoverRef.current.getBoundingClientRect();
+    setPopoverStyle({
+      ...computeTooltipPosition(triggerRect, popoverRect.width, popoverRect.height),
+      visibility: "visible",
+    });
+  }, [hover.open]);
+
+  return (
+    <>
+      <span
+        ref={rootRef}
+        className="inline-flex shrink-0 align-middle"
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onFocus={hover.onTriggerFocus}
+        onBlur={hover.onTriggerBlur}
+      >
+        <button
+          type="button"
+          className="inline-flex h-4 w-4 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-200/80 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+          aria-label={ariaLabel}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          <InfoCircleIcon />
+        </button>
+      </span>
+
+      {hover.open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={popoverRef}
+              role="tooltip"
+              style={popoverStyle}
+              className="w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white p-3 shadow-xl"
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              {...hover.popoverProps}
+            >
+              <p className="text-sm font-semibold text-slate-900">{label}</p>
+              <div className="mt-2 space-y-2 text-sm leading-snug text-slate-700">{children}</div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
 }
 
 function AiUsageCostInfoTooltip() {
@@ -588,23 +664,75 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
                   Stage
                 </div>
                 <div className="px-4 py-3 text-right font-semibold text-slate-700">
-                  <div>Input tokens</div>
-                  <div className="mt-1 text-xs font-normal text-slate-500">
-                    {headerDeepSeekOffPeak
-                      ? `${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheMissPerMillion)}/M miss · ${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheHitPerMillion)}/M hit`
-                      : headerPricing
-                        ? `${formatPricePerMillion(headerPricing.inputPerMillion)}/M`
-                        : "Rate varies by model"}
+                  <div className="inline-flex items-center justify-end gap-1">
+                    <span>Input tokens</span>
+                    <UsageColumnHeaderTooltip
+                      label="Input token rates"
+                      ariaLabel="Input token pricing"
+                      scanGroup="usage-input-token-rates"
+                    >
+                      {headerDeepSeekOffPeak ? (
+                        <>
+                          <div>
+                            <p className="font-medium text-slate-900">Off-peak</p>
+                            <p className="mt-0.5 font-mono text-xs text-slate-600">
+                              {formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheMissPerMillion)}
+                              /M cache miss ·{" "}
+                              {formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.inputCacheHitPerMillion)}
+                              /M cache hit
+                            </p>
+                          </div>
+                          <div>
+                            <p className="font-medium text-slate-900">Peak (2×)</p>
+                            <p className="mt-0.5 font-mono text-xs text-slate-600">
+                              {formatPricePerMillion(DEEPSEEK_V4_FLASH_PEAK_RATES.inputCacheMissPerMillion)}
+                              /M cache miss ·{" "}
+                              {formatPricePerMillion(DEEPSEEK_V4_FLASH_PEAK_RATES.inputCacheHitPerMillion)}
+                              /M cache hit
+                            </p>
+                          </div>
+                        </>
+                      ) : headerPricing ? (
+                        <p className="font-mono text-xs text-slate-600">
+                          {formatPricePerMillion(headerPricing.inputPerMillion)}/M
+                        </p>
+                      ) : (
+                        <p className="text-slate-600">Rate varies by model across stages.</p>
+                      )}
+                    </UsageColumnHeaderTooltip>
                   </div>
                 </div>
                 <div className="px-4 py-3 text-right font-semibold text-slate-700">
-                  <div>Output tokens</div>
-                  <div className="mt-1 text-xs font-normal text-slate-500">
-                    {headerDeepSeekOffPeak
-                      ? `${formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.outputPerMillion)}/M off-peak`
-                      : headerPricing
-                        ? `${formatPricePerMillion(headerPricing.outputPerMillion)}/M`
-                        : "Rate varies by model"}
+                  <div className="inline-flex items-center justify-end gap-1">
+                    <span>Output tokens</span>
+                    <UsageColumnHeaderTooltip
+                      label="Output token rates"
+                      ariaLabel="Output token pricing"
+                      scanGroup="usage-output-token-rates"
+                    >
+                      {headerDeepSeekOffPeak ? (
+                        <>
+                          <div>
+                            <p className="font-medium text-slate-900">Off-peak</p>
+                            <p className="mt-0.5 font-mono text-xs text-slate-600">
+                              {formatPricePerMillion(DEEPSEEK_V4_FLASH_OFF_PEAK_RATES.outputPerMillion)}/M
+                            </p>
+                          </div>
+                          <div>
+                            <p className="font-medium text-slate-900">Peak (2×)</p>
+                            <p className="mt-0.5 font-mono text-xs text-slate-600">
+                              {formatPricePerMillion(DEEPSEEK_V4_FLASH_PEAK_RATES.outputPerMillion)}/M
+                            </p>
+                          </div>
+                        </>
+                      ) : headerPricing ? (
+                        <p className="font-mono text-xs text-slate-600">
+                          {formatPricePerMillion(headerPricing.outputPerMillion)}/M
+                        </p>
+                      ) : (
+                        <p className="text-slate-600">Rate varies by model across stages.</p>
+                      )}
+                    </UsageColumnHeaderTooltip>
                   </div>
                 </div>
                 <div className="px-4 py-3 text-right font-semibold text-slate-700">

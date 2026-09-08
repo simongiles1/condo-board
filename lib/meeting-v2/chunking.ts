@@ -4,8 +4,11 @@ import type {
   meetingsV2DocumentPages,
   meetingsV2TranscriptSegments,
 } from "@/lib/db/schema";
+import { formatChunkTextForDisplay } from "@/lib/meeting-v2/chunk-display";
 import { buildSemanticDocumentSections } from "@/lib/meeting-v2/pdf";
 import { formatReadableCueLine } from "@/lib/parsers/vtt";
+
+export { formatChunkTextForDisplay };
 
 type DocumentPageRow = typeof meetingsV2DocumentPages.$inferSelect;
 type TranscriptSegmentRow = typeof meetingsV2TranscriptSegments.$inferSelect;
@@ -249,3 +252,4 @@ export function chunkTranscriptSegments(segments: TranscriptSegmentRow[]): Trans
     };
   });
 }
+

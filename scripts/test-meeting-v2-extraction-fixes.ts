@@ -19,6 +19,15 @@ import {
   normalizeDiscrepancies,
   normalizeWorkflowState,
 } from "../lib/meeting-v2/agenda-ai";
+import {
+  flattenBoardPackageAgenda,
+  normalizeBoardPackageAgendaSkeleton,
+} from "../lib/meeting-v2/board-package-agenda";
+import {
+  buildAgendaOutlineTree,
+  compareAgendaItemCodes,
+  planAdHocPlacement,
+} from "../lib/meeting-v2/agenda-outline";
 
 describe("analyzeExtractionQuality", () => {
   it("does not false-positive halt on DeepSeek items with sourceSectionId", () => {
@@ -310,4 +319,174 @@ describe("Dual-Source Agenda Extraction & Synthesis", () => {
     assert.equal(result.discrepancies?.length, 1);
     assert.equal(result.discrepancies?.[0].suggestedTitle, "Hallway HVAC Noise Complaints");
   });
+
+  it("deduplicates discrepancies when the model echoes existing ids", () => {
+    const existing = {
+      id: "disc-034-1",
+      transcriptRange: [10, 20] as [number, number],
+      timestamp: "00:10:00",
+      snippet: "Discussion about hallway HVAC noise.",
+      suggestedTitle: "Hallway HVAC Noise",
+      clarificationQuestion: "Should hallway HVAC noise be added as an agenda item?",
+    };
+
+    const result = normalizeWorkflowState(
+      { discrepancies: [existing] },
+      {
+        documentTopics: [],
+        extraTopics: [],
+        uncertainties: [],
+        discrepancies: [existing],
+      },
+    );
+
+    assert.equal(result.discrepancies?.length, 1);
+    assert.equal(result.discrepancies?.[0].id, "disc-034-1");
+  });
 });
+
+describe("Hierarchical board-package agenda outline", () => {
+  it("inserts Property Management Report before Date/Adjournment when the TOC skipped it", () => {
+    const normalized = normalizeBoardPackageAgendaSkeleton({
+      meetingTitle: "Board Meeting",
+      agendaItems: [
+        { itemNumber: "1", title: "Meeting with Eng. Ryan Ratcliff from TCG, to discuss projects" },
+        { itemNumber: "2", title: "Review and Approval of Minutes of June 30, 2026" },
+        { itemNumber: "3", title: "Review and approval of the unaudited financial statements for June 2026" },
+        { itemNumber: "4", title: "Date and time of the next Board Meeting" },
+        { itemNumber: "5", title: "Adjournment" },
+      ],
+    });
+
+    assert.deepEqual(
+      normalized.agendaItems.map((item) => `${item.itemNumber}. ${item.title}`),
+      [
+        "1. Meeting with Eng. Ryan Ratcliff from TCG, to discuss projects",
+        "2. Review and Approval of Minutes of June 30, 2026",
+        "3. Review and approval of the unaudited financial statements for June 2026",
+        "4. Property Management Report",
+        "5. Date and time of the next Board Meeting",
+        "6. Adjournment",
+      ],
+    );
+    assert.ok(normalized.agendaItems[3].subSections?.some((section) => section.code === "4.D"));
+  });
+
+  it("flattens the official outline plus third-level PM report items", () => {
+    const topics = flattenBoardPackageAgenda({
+      meetingTitle: "Board Meeting",
+      agendaItems: [
+        {
+          itemNumber: "1",
+          title: "Meeting with Eng. Ryan Ratcliff from TCG, to discuss projects",
+          sourcePages: [2],
+          subItems: [
+            { title: "Booster Pump", sourcePages: [2] },
+            { title: "Riser Expansion", sourcePages: [2] },
+          ],
+        },
+        {
+          itemNumber: "2",
+          title: "Review and Approval of Minutes of June 30, 2026",
+          sourcePages: [2],
+        },
+        {
+          itemNumber: "3",
+          title: "Review and approval of the unaudited financial statements for June 2026",
+          sourcePages: [2],
+        },
+        {
+          itemNumber: "4",
+          title: "Property Management Report",
+          sourcePages: [6],
+          subSections: [
+            {
+              code: "4.A",
+              title: "Ratification of email decisions made since the last board meeting.",
+              items: [
+                {
+                  itemCode: "4.A.1",
+                  title: "Steam Room Heat Pump Design, Tender and Construction Review",
+                  sourcePages: [6],
+                },
+              ],
+            },
+            {
+              code: "4.B",
+              title: "Review and approval of the project",
+              items: [{ itemCode: "4.B.1", title: "Booster Pump Replacement", sourcePages: [7] }],
+            },
+            { code: "4.C", title: "Items completed.", items: [] },
+            {
+              code: "4.D",
+              title: "The items for discussion",
+              items: [
+                { itemCode: "4.D.1", title: "2026 Annual General Meeting - Tentative Date", sourcePages: [12] },
+                {
+                  itemCode: "4.D.12",
+                  title: "Share Reserve Fund Information - Condominium Consumer Protection (CAO)",
+                  sourcePages: [12],
+                },
+              ],
+            },
+          ],
+        },
+        { itemNumber: "5", title: "Date and time of the next Board Meeting", sourcePages: [2] },
+        { itemNumber: "6", title: "Adjournment", sourcePages: [2] },
+      ],
+    });
+
+    assert.deepEqual(
+      topics.map((topic) => topic.itemNumber),
+      [
+        "1",
+        "1.A",
+        "1.B",
+        "2",
+        "3",
+        "4",
+        "4.A",
+        "4.A.1",
+        "4.B",
+        "4.B.1",
+        "4.C",
+        "4.D",
+        "4.D.a",
+        "4.D.l",
+        "5",
+        "6",
+      ],
+    );
+    assert.equal(topics.find((topic) => topic.itemNumber === "4.D.l")?.title.includes("CAO"), true);
+  });
+
+  it("nests 4.D.l under 4.D and places 4.E ad-hoc items before Date", () => {
+    const tree = buildAgendaOutlineTree([
+      { id: "1", itemNumber: "1", title: "Meeting with Eng. Ryan Ratcliff" },
+      { id: "4", itemNumber: "4", title: "Property Management Report" },
+      { id: "4d", itemNumber: "4.D", title: "The items for discussion" },
+      { id: "4dl", itemNumber: "4.D.l", title: "Share Reserve Fund Information" },
+      { id: "4e", itemNumber: "4.E", title: "Ad-hoc items" },
+      { id: "4ea", itemNumber: "4.E.a", title: "Carpet Cleaning Oversight" },
+      { id: "5", itemNumber: "5", title: "Date and time of the next Board Meeting" },
+    ]);
+
+    assert.equal(tree.map((node) => node.displayNumber).join(","), "1,4,5");
+    const pm = tree.find((node) => node.item.id === "4");
+    assert.ok(pm);
+    assert.deepEqual(
+      pm.children.map((child) => child.displayNumber),
+      ["D", "E"],
+    );
+    assert.equal(pm.children[0].children[0].displayNumber, "l");
+    assert.equal(pm.children[1].children[0].item.title, "Carpet Cleaning Oversight");
+
+    const placement = planAdHocPlacement(["1", "4", "4.D", "4.D.l", "5"], 2, "4");
+    assert.ok(placement);
+    assert.equal(placement.sectionCode, "4.E");
+    assert.equal(placement.sectionMissing, true);
+    assert.deepEqual(placement.nextItemCodes, ["4.E.a", "4.E.b"]);
+    assert.ok(compareAgendaItemCodes("4.E.a", "5") < 0);
+  });
+});
+

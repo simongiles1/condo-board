@@ -3080,7 +3080,8 @@ export async function generateMeetingV2Draft(meetingId: string): Promise<{
 
 export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2Detail> {
   const db = getDb();
-  const [meeting, legacyMeeting, agendaItems, investigations, validationRows, drafts, counts, documentSections, sourceArtifacts, boardPackageMeta, evidenceRows, documentPages, transcriptSegments] = await Promise.all([
+  // Batch queries to stay within Supabase session pool limits (dev pool max is 10).
+  const [meeting, legacyMeeting, agendaItems, investigations] = await Promise.all([
     db.select().from(meetingsV2).where(eq(meetingsV2.id, meetingId)),
     db
       .select({
@@ -3118,6 +3119,9 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       })
       .from(meetingsV2AgendaItemInvestigations)
       .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
+  ]);
+
+  const [validationRows, drafts, counts, documentSections] = await Promise.all([
     db
       .select({
         agendaItemId: meetingsV2ValidationResults.agendaItemId,
@@ -3149,6 +3153,10 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       .from(meetingsV2DocumentSections)
       .where(eq(meetingsV2DocumentSections.meetingV2Id, meetingId))
       .orderBy(asc(meetingsV2DocumentSections.sortOrder)),
+  ]);
+
+  const [sourceArtifacts, boardPackageMeta, evidenceRows, documentPages, transcriptSegments] =
+    await Promise.all([
     db
       .select({
         type: meetingsV2SourceArtifacts.type,

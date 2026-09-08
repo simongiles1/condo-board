@@ -1,7 +1,18 @@
+import type { RefObject } from "react";
+
 import type { MergedVttCue } from "@/lib/parsers/vtt";
-import { formatVttTimestamp } from "@/lib/parsers/vtt";
+import { formatVttTimestamp, parseVttTimestampMs } from "@/lib/parsers/vtt";
 import { SearchHighlightedText } from "@/components/SearchHighlightedText";
 import type { CueTextMatch } from "@/lib/transcript/search";
+
+function cueOverlapsRange(
+  cue: MergedVttCue,
+  [startMs, endMs]: [number, number],
+): boolean {
+  const cueStart = parseVttTimestampMs(cue.start);
+  const cueEnd = parseVttTimestampMs(cue.end);
+  return cueEnd >= startMs && cueStart <= endMs;
+}
 
 /** Stable, very light background per speaker name. */
 export function speakerBackgroundColor(speaker: string): string {
@@ -19,6 +30,8 @@ type Props = {
   searchQuery?: string;
   matches?: CueTextMatch[];
   currentMatchIndex?: number;
+  highlightRangeMs?: [number, number];
+  firstHighlightRef?: RefObject<HTMLElement | null>;
 };
 
 export function ReadableTranscriptView({
@@ -26,8 +39,11 @@ export function ReadableTranscriptView({
   searchQuery = "",
   matches = [],
   currentMatchIndex = 0,
+  highlightRangeMs,
+  firstHighlightRef,
 }: Props) {
   const hasSearch = searchQuery.trim().length > 0;
+  let firstHighlightAssigned = false;
 
   return (
     <div>
@@ -40,11 +56,27 @@ export function ReadableTranscriptView({
             globalIndex: match.globalIndex,
           }));
 
+        const inHighlightRange =
+          highlightRangeMs ? cueOverlapsRange(cue, highlightRangeMs) : true;
+
+        let cueRef: RefObject<HTMLElement | null> | undefined;
+        if (highlightRangeMs && inHighlightRange && firstHighlightRef && !firstHighlightAssigned) {
+          cueRef = firstHighlightRef;
+          firstHighlightAssigned = true;
+        }
+
         return (
           <article
             key={`${cue.start}-${cue.speaker}-${index}`}
-            className="px-2.5 py-1"
-            style={{ backgroundColor: speakerBackgroundColor(cue.speaker) }}
+            ref={cueRef}
+            className={`px-2.5 py-1 transition-opacity ${
+              highlightRangeMs && !inHighlightRange ? "opacity-35" : ""
+            }`}
+            style={{
+              backgroundColor: highlightRangeMs && !inHighlightRange
+                ? "transparent"
+                : speakerBackgroundColor(cue.speaker),
+            }}
           >
             <div className="flex items-baseline justify-between gap-3">
               <span className="text-sm font-semibold text-slate-900">

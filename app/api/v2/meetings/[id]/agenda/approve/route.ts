@@ -5,6 +5,10 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2AgendaItems } from "@/lib/db/schema-v2";
 import { inngest } from "@/lib/inngest/client";
+import {
+  inferPropertyManagementReportNumber,
+  planAdHocPlacement,
+} from "@/lib/meeting-v2/agenda-outline";
 import type {
   AgendaItemDiscussionStatus,
   MeetingV2Settings,
@@ -121,68 +125,62 @@ export async function POST(
       return d;
     });
 
-    const acceptedDiscrepancies = discrepancies.filter((d) => {
-      const act = discrepancyMap.get(d.id);
-      return act?.action === "accept";
-    });
+    const pendingNewItems = (body.newItems || []).filter((item) => item.title?.trim());
+    const placement = planAdHocPlacement(
+      existingItems.map((item) => item.itemNumber),
+      pendingNewItems.length,
+      inferPropertyManagementReportNumber(existingItems),
+    );
 
-    for (const disc of acceptedDiscrepancies) {
-      const act = discrepancyMap.get(disc.id);
-      const title = act?.title?.trim() || disc.suggestedTitle || "Ad-hoc Discussion";
-      const sectionLabel = act?.section?.trim() || disc.suggestedSection || "Other Business / Ad-Hoc Discussion";
+    if (placement?.sectionMissing && pendingNewItems.length > 0) {
+      await db.insert(meetingsV2AgendaItems).values({
+        id: randomUUID(),
+        meetingV2Id: meetingId,
+        sourceArtifactId: existingItems[0]?.sourceArtifactId ?? null,
+        sourceSectionId: null,
+        sectionLabel: "Property Management Report",
+        title: "Ad-hoc items",
+        normalizedTitle: normalize("Ad-hoc items"),
+        itemNumber: placement.sectionCode,
+        itemType: "ad_hoc_discussion",
+        sourcePagesJson: "[]",
+        sourceText:
+          "Discussion status: ad_hoc\nSynthesized section for transcript-only matters not on the official agenda.",
+        sortOrder: nextSort++,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    let adHocCodeIndex = 0;
+    function nextAdHocItemNumber(): string {
+      if (placement && adHocCodeIndex < placement.nextItemCodes.length) {
+        return placement.nextItemCodes[adHocCodeIndex++];
+      }
+      return String(nextSort + 1);
+    }
+
+    for (const item of pendingNewItems) {
+      const title = item.title?.trim();
+      if (!title) continue;
       const newItemId = randomUUID();
-      finalItemStatuses[newItemId] = "ad_hoc";
+      const status = item.discussionStatus || "ad_hoc";
+      finalItemStatuses[newItemId] = status;
 
       await db.insert(meetingsV2AgendaItems).values({
         id: newItemId,
         meetingV2Id: meetingId,
         sourceArtifactId: existingItems[0]?.sourceArtifactId ?? null,
         sourceSectionId: null,
-        sectionLabel,
+        sectionLabel: item.sectionLabel?.trim() || "Property Management Report: Ad-hoc items",
         title,
         normalizedTitle: normalize(title),
-        itemNumber: String(nextSort + 1),
-        itemType: "ad_hoc_discussion",
+        itemNumber: nextAdHocItemNumber(),
+        itemType: item.itemType?.trim() || "ad_hoc_discussion",
         sourcePagesJson: "[]",
-        sourceText: [
-          "Discussion status: ad_hoc",
-          `Timing: ${disc.timestamp}`,
-          `Transcript ranges: ${disc.transcriptRange[0]}-${disc.transcriptRange[1]}`,
-          disc.snippet ? `Snippet: ${disc.snippet}` : null,
-          "Converted from transcript discrepancy inquiry during agenda review.",
-        ]
-          .filter(Boolean)
-          .join("\n"),
+        sourceText: `Discussion status: ${status}\nCreated during agenda review.`,
         sortOrder: nextSort++,
         createdAt: new Date().toISOString(),
       });
-    }
-
-    // 5. Add any explicitly specified newItems
-    if (body.newItems && body.newItems.length > 0) {
-      for (const item of body.newItems) {
-        const title = item.title?.trim();
-        if (!title) continue;
-        const newItemId = randomUUID();
-        const status = item.discussionStatus || "ad_hoc";
-        finalItemStatuses[newItemId] = status;
-
-        await db.insert(meetingsV2AgendaItems).values({
-          id: newItemId,
-          meetingV2Id: meetingId,
-          sourceArtifactId: existingItems[0]?.sourceArtifactId ?? null,
-          sourceSectionId: null,
-          sectionLabel: item.sectionLabel?.trim() || "Other Business / Ad-Hoc Discussion",
-          title,
-          normalizedTitle: normalize(title),
-          itemNumber: String(nextSort + 1),
-          itemType: item.itemType?.trim() || "ad_hoc_discussion",
-          sourcePagesJson: "[]",
-          sourceText: `Discussion status: ${status}\nCreated manually by user during agenda review.`,
-          sortOrder: nextSort++,
-          createdAt: new Date().toISOString(),
-        });
-      }
     }
 
     // 6. Update meeting settings with approved state

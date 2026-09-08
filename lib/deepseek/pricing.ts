@@ -377,7 +377,42 @@ export function estimateDeepSeekOffPeakOptimizedBreakdown(usage: {
   outputCostUsd: number;
   totalCostUsd: number;
 } {
-  const rates = DEEPSEEK_V4_FLASH_OFF_PEAK_RATES;
+  return estimateDeepSeekTierOptimizedBreakdown(
+    usage,
+    DEEPSEEK_V4_FLASH_OFF_PEAK_RATES,
+  );
+}
+
+/** Hypothetical cost if every DeepSeek call ran during peak at published cache-hit/miss rates. */
+export function estimateDeepSeekPeakOptimizedBreakdown(usage: {
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  outputTokens: number;
+}): {
+  inputCacheHitCostUsd: number;
+  inputCacheMissCostUsd: number;
+  outputCostUsd: number;
+  totalCostUsd: number;
+} {
+  return estimateDeepSeekTierOptimizedBreakdown(
+    usage,
+    DEEPSEEK_V4_FLASH_PEAK_RATES,
+  );
+}
+
+function estimateDeepSeekTierOptimizedBreakdown(
+  usage: {
+    cacheHitTokens: number;
+    cacheMissTokens: number;
+    outputTokens: number;
+  },
+  rates: DeepSeekTokenRates,
+): {
+  inputCacheHitCostUsd: number;
+  inputCacheMissCostUsd: number;
+  outputCostUsd: number;
+  totalCostUsd: number;
+} {
   const cacheHitTokens = Math.max(0, usage.cacheHitTokens);
   const cacheMissTokens = Math.max(0, usage.cacheMissTokens);
   const outputTokens = Math.max(0, usage.outputTokens);

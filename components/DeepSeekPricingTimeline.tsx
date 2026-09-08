@@ -59,31 +59,33 @@ export function DeepSeekPricingTimeline({ pricingStatus, atMs = Date.now() }: Pr
       <p className="mt-1 text-[13px] opacity-90">Now: {formatCurrentLocalTime(atMs)}</p>
 
       <div className="mt-3">
-        <div className="relative h-3 overflow-hidden rounded-full bg-teal-200/80">
-          {timeline.segments.map((segment, index) => {
-            const widthPercent = (segment.endFraction - segment.startFraction) * 100;
-            const leftPercent = segment.startFraction * 100;
-            const isPeak = segment.tier === "peak";
+        <div className="relative pt-1.5">
+          <div className="relative h-3 overflow-hidden rounded-full bg-teal-200/80">
+            {timeline.segments.map((segment, index) => {
+              const widthPercent = (segment.endFraction - segment.startFraction) * 100;
+              const leftPercent = segment.startFraction * 100;
+              const isPeak = segment.tier === "peak";
 
-            return (
-              <div
-                key={`${segment.startFraction}-${segment.endFraction}-${index}`}
-                className={`absolute inset-y-0 ${
-                  isPeak ? "bg-amber-400" : "bg-teal-300/70"
-                }`}
-                style={{ left: `${leftPercent}%`, width: `${widthPercent}%` }}
-                title={`${formatDeepSeekPricingTierLabel(segment.tier)}`}
-              />
-            );
-          })}
+              return (
+                <div
+                  key={`${segment.startFraction}-${segment.endFraction}-${index}`}
+                  className={`absolute inset-y-0 ${
+                    isPeak ? "bg-amber-400" : "bg-teal-300/70"
+                  }`}
+                  style={{ left: `${leftPercent}%`, width: `${widthPercent}%` }}
+                  title={`${formatDeepSeekPricingTierLabel(segment.tier)}`}
+                />
+              );
+            })}
+          </div>
 
           <div
-            className="absolute inset-y-0 z-10 w-0.5 -translate-x-1/2 bg-slate-900 shadow-sm"
+            className="pointer-events-none absolute bottom-0 top-1.5 z-10 w-0.5 -translate-x-1/2 bg-slate-900 shadow-sm"
             style={{ left: `${timeline.nowFraction * 100}%` }}
             aria-hidden="true"
           />
           <div
-            className="absolute -top-1 z-10 h-2.5 w-2.5 -translate-x-1/2 rounded-full border-2 border-white bg-slate-900 shadow"
+            className="pointer-events-none absolute top-0 z-10 h-2.5 w-2.5 -translate-x-1/2 rounded-full border-2 border-white bg-slate-900 shadow"
             style={{ left: `${timeline.nowFraction * 100}%` }}
             aria-hidden="true"
           />

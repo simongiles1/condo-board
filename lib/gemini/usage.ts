@@ -715,7 +715,8 @@ export function formatPricePerMillion(value: number): string {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    // DeepSeek cache-hit rates publish at $0.007/M and $0.014/M — two digits rounds to $0.01.
+    maximumFractionDigits: 3,
   });
 }
 

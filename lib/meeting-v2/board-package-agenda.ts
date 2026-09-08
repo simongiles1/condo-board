@@ -3,6 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { meetingsV2DocumentPages } from "@/lib/db/schema-v2";
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
+import { canonicalLeafItemCode } from "@/lib/meeting-v2/agenda-outline";
 
 export type BoardPackageAgendaSkeleton = {
   meetingTitle: string;
@@ -58,6 +59,87 @@ export type FullBoardPackageAgenda = {
   agendaItems: DetailedAgendaItem[];
 };
 
+const DEFAULT_PM_SUBSECTIONS = [
+  { codeSuffix: "A", title: "Ratification of email decisions made since the last board meeting." },
+  { codeSuffix: "B", title: "Review and approval of the project" },
+  { codeSuffix: "C", title: "Items completed." },
+  { codeSuffix: "D", title: "The items for discussion" },
+] as const;
+
+export function normalizeBoardPackageAgendaSkeleton(
+  skeleton: BoardPackageAgendaSkeleton,
+): BoardPackageAgendaSkeleton {
+  const items = Array.isArray(skeleton.agendaItems) ? [...skeleton.agendaItems] : [];
+  const isDate = (title: string) => /date and time of the next/i.test(title);
+  const isAdjournment = (title: string) => /^\s*adjournment\b/i.test(title);
+  const isPmReport = (title: string) => /property management report/i.test(title);
+
+  const dateItems = items.filter((item) => isDate(item.title));
+  const adjournItems = items.filter((item) => isAdjournment(item.title));
+  const core = items.filter((item) => !isDate(item.title) && !isAdjournment(item.title));
+
+  let pm = core.find((item) => isPmReport(item.title));
+  if (!pm) {
+    pm = {
+      itemNumber: String(core.length + 1),
+      title: "Property Management Report",
+      subSections: [],
+    };
+    core.push(pm);
+  }
+  if (!pm.subSections || pm.subSections.length === 0) {
+    pm.subSections = DEFAULT_PM_SUBSECTIONS.map((section) => ({
+      code: `${pm!.itemNumber}.${section.codeSuffix}`,
+      title: section.title,
+    }));
+  }
+
+  const trailing = [
+    ...(dateItems.length > 0
+      ? dateItems
+      : [{ itemNumber: "5", title: "Date and time of the next Board Meeting" }]),
+    ...(adjournItems.length > 0 ? adjournItems : [{ itemNumber: "6", title: "Adjournment" }]),
+  ];
+
+  const rebuilt = [...core, ...trailing].map((item, index) => {
+    const itemNumber = String(index + 1);
+    return {
+      ...item,
+      itemNumber,
+      subSections: item.subSections?.map((section) => ({
+        ...section,
+        code: section.code.replace(/^\d+/, itemNumber),
+      })),
+    };
+  });
+
+  return {
+    ...skeleton,
+    agendaItems: rebuilt,
+  };
+}
+
+function inferTopLevelItemType(title: string): string {
+  const normalized = title.toLowerCase();
+  if (normalized.includes("approval of minutes")) return "approval_of_previous_minutes";
+  if (normalized.includes("financial statement")) return "financial_matters";
+  if (normalized.includes("meeting with")) return "guest_presentation";
+  if (normalized.includes("property management report")) return "agenda_section";
+  if (normalized.includes("ratification")) return "ratification_line_item";
+  if (normalized.includes("items completed")) return "completed_items";
+  if (normalized.includes("ad-hoc") || normalized.includes("ad hoc")) return "ad_hoc_discussion";
+  return "discussion_topic";
+}
+
+function inferSectionItemType(title: string): string {
+  const normalized = title.toLowerCase();
+  if (normalized.includes("ratification")) return "ratification_line_item";
+  if (normalized.includes("review and approval")) return "discussion_approval";
+  if (normalized.includes("completed")) return "completed_items";
+  if (normalized.includes("ad-hoc") || normalized.includes("ad hoc")) return "ad_hoc_discussion";
+  return "discussion_topic";
+}
+
 type PageExtractedItem = {
   sectionCode: string;
   itemCode?: string;
@@ -82,7 +164,9 @@ Guidelines:
 - Extract the official numbered business items (e.g. Item 1, Item 2, Item 3, Item 4, Item 5, Item 6).
 - If lines like "Call to Order" or "Ratification of Agenda" appear before Item 1 without a number, do NOT label them as Item 1. Maintain the document's actual numbered items (e.g. if "1. Meeting with Eng. Ryan Ratcliff..." is numbered 1, keep it as itemNumber "1").
 - For items like "Property Management Report", extract its sub-sections (e.g. "A. Ratification of email decisions...", "B. Review and approval of projects...", "C. Items completed...", "D. The items for discussion...") with codes like "4.A", "4.B", "4.C", "4.D".
-- For presentation items with listed projects (e.g. "Meeting with Engineer... A. Booster Pump, B. Riser Expansion"), record those in subItems.
+- If the printed Agenda/TOC jumps from Financial Statements to "Date and time of the next Board Meeting", that does NOT mean Property Management Report is missing. The later management-report body (sections A–D) IS that numbered agenda item. Insert it before Date/Adjournment.
+- Always keep Date/Adjournment as the last numbered official items. Never place them before the Property Management Report body.
+- For presentation items with listed projects (e.g. "Meeting with Engineer... A. Booster Pump, B. Riser Expansion"), record those in subItems. These outline bullets stay under item 1; they are not the same slots as later Property Management Report project items.
 - DO NOT extract details, paragraphs, or vendor quotes yet. Only extract the clean outline structure.
 
 Return strict JSON:
@@ -139,8 +223,10 @@ Rules:
 1. Keep the hierarchy aligned:
    - If Section "B. Review and approval of projects" (code 4.B) is active, all numbered project items (e.g. 1, 2, 3, 4, 5, 6, 7) belong under "4.B" (e.g. "4.B.5", "4.B.6", "4.B.7"), NOT 4.D.
    - Section 4.D ("The items for discussion") begins only when the text explicitly introduces "D. Items for Discussion:".
+   - Never assign package items to 4.E. That slot is reserved for transcript-only ad-hoc matters.
 2. Distinct numbered or titled items on the page (e.g. "1. Steam Room Heat Pump...", "2. Main Lobby / Elevator Lobby...") are SEPARATE items ("isContinuationOfPrevious": false).
 3. "isContinuationOfPrevious" should ONLY be true if the top of this page is a paragraph, pricing table, or recommendation continuing the item from "lastActiveItem" without introducing a new heading or project number.
+4. Guest-presentation outline bullets (1.A, 1.B, 1.C) stay under item 1. A later Property Management Report project about the same work (4.B.1) is a different outline slot — do not collapse them.
 
 For each item on this page:
 - "sectionCode": which agenda section/subsection it belongs to (e.g. "1", "2", "3", "4.A", "4.B", "4.C", "4.D", "5", "6").
@@ -172,45 +258,77 @@ Return strict JSON:
   ]
 }`;
 
+function enrichAgendaSubItem(target: AgendaSubItem, item: PageExtractedItem, pageNumber: number) {
+  if (!target.sourcePages.includes(pageNumber)) {
+    target.sourcePages.push(pageNumber);
+  }
+  if (item.summary) {
+    target.summary = `${target.summary || ""} ${item.summary}`.trim();
+  }
+  if (item.financials) {
+    target.financials = { ...target.financials, ...item.financials };
+  }
+  if (item.contractorsOrVendors) {
+    target.contractorsOrVendors = Array.from(
+      new Set([...(target.contractorsOrVendors || []), ...item.contractorsOrVendors]),
+    );
+  }
+  if (item.attachmentReferences) {
+    target.attachmentReferences = Array.from(
+      new Set([...(target.attachmentReferences || []), ...item.attachmentReferences]),
+    );
+  }
+  if (item.managementRecommendation) {
+    target.managementRecommendation = item.managementRecommendation;
+  }
+}
+
+function ensureAgendaSection(
+  agenda: FullBoardPackageAgenda,
+  sectionCode: string,
+): DetailedAgendaSection | null {
+  const match = sectionCode.trim().match(/^(\d+)\.([A-Za-z])$/);
+  if (!match) return null;
+
+  const itemNumber = match[1];
+  const letter = match[2].toUpperCase();
+  const normalizedCode = `${itemNumber}.${letter}`;
+  const parent = agenda.agendaItems.find((ai) => ai.itemNumber === itemNumber);
+  if (!parent) return null;
+
+  parent.subSections = parent.subSections || [];
+  let section = parent.subSections.find((s) => s.code.toLowerCase() === normalizedCode.toLowerCase());
+  if (!section) {
+    const fallback = DEFAULT_PM_SUBSECTIONS.find((entry) => entry.codeSuffix === letter);
+    section = {
+      code: normalizedCode,
+      title: fallback?.title || letter,
+      items: [],
+    };
+    parent.subSections.push(section);
+  }
+  return section;
+}
+
 function mergePageItemsIntoAgenda(
   agenda: FullBoardPackageAgenda,
   extractedItems: PageExtractedItem[],
   pageNumber: number,
+  previousLast: AgendaSubItem | null,
 ): AgendaSubItem | null {
-  let lastItem: AgendaSubItem | null = null;
+  let lastItem: AgendaSubItem | null = previousLast;
 
   for (const item of extractedItems) {
-    const targetSection = agenda.agendaItems
-      .flatMap((ai) => ai.subSections || [])
-      .find((s) => s.code.toLowerCase() === item.sectionCode.toLowerCase());
+    const targetSection =
+      agenda.agendaItems
+        .flatMap((ai) => ai.subSections || [])
+        .find((s) => s.code.toLowerCase() === item.sectionCode.toLowerCase()) ||
+      ensureAgendaSection(agenda, item.sectionCode);
 
-    const targetTopItem = agenda.agendaItems.find(
-      (ai) => ai.itemNumber === item.sectionCode,
-    );
+    const targetTopItem = agenda.agendaItems.find((ai) => ai.itemNumber === item.sectionCode);
 
     if (item.isContinuationOfPrevious && lastItem) {
-      if (!lastItem.sourcePages.includes(pageNumber)) {
-        lastItem.sourcePages.push(pageNumber);
-      }
-      if (item.summary) {
-        lastItem.summary = `${lastItem.summary || ""} ${item.summary}`.trim();
-      }
-      if (item.financials) {
-        lastItem.financials = { ...lastItem.financials, ...item.financials };
-      }
-      if (item.contractorsOrVendors) {
-        lastItem.contractorsOrVendors = Array.from(
-          new Set([...(lastItem.contractorsOrVendors || []), ...item.contractorsOrVendors]),
-        );
-      }
-      if (item.attachmentReferences) {
-        lastItem.attachmentReferences = Array.from(
-          new Set([...(lastItem.attachmentReferences || []), ...item.attachmentReferences]),
-        );
-      }
-      if (item.managementRecommendation) {
-        lastItem.managementRecommendation = item.managementRecommendation;
-      }
+      enrichAgendaSubItem(lastItem, item, pageNumber);
       continue;
     }
 
@@ -222,32 +340,11 @@ function mergePageItemsIntoAgenda(
       );
 
       if (existing) {
-        if (!existing.sourcePages.includes(pageNumber)) {
-          existing.sourcePages.push(pageNumber);
-        }
-        if (item.summary) {
-          existing.summary = `${existing.summary || ""} ${item.summary}`.trim();
-        }
-        if (item.financials) {
-          existing.financials = { ...existing.financials, ...item.financials };
-        }
-        if (item.contractorsOrVendors) {
-          existing.contractorsOrVendors = Array.from(
-            new Set([...(existing.contractorsOrVendors || []), ...item.contractorsOrVendors]),
-          );
-        }
-        if (item.attachmentReferences) {
-          existing.attachmentReferences = Array.from(
-            new Set([...(existing.attachmentReferences || []), ...item.attachmentReferences]),
-          );
-        }
-        if (item.managementRecommendation) {
-          existing.managementRecommendation = item.managementRecommendation;
-        }
+        enrichAgendaSubItem(existing, item, pageNumber);
         lastItem = existing;
       } else {
         const newItem: AgendaSubItem = {
-          itemCode: item.itemCode || `${targetSection.code}.${targetSection.items.length + 1}`,
+          itemCode: canonicalLeafItemCode(targetSection.code, targetSection.items.length, item.itemCode),
           title: item.title,
           sourcePages: [pageNumber],
           summary: item.summary,
@@ -265,6 +362,27 @@ function mergePageItemsIntoAgenda(
       }
       if (item.summary) {
         targetTopItem.summary = `${targetTopItem.summary || ""} ${item.summary}`.trim();
+      }
+
+      if (item.itemCode && !targetTopItem.subSections?.length) {
+        const existingChild = targetTopItem.subItems?.find(
+          (sub) => sub.title.toLowerCase() === item.title.toLowerCase(),
+        );
+        if (existingChild) {
+          if (!existingChild.sourcePages.includes(pageNumber)) {
+            existingChild.sourcePages.push(pageNumber);
+          }
+          if (item.summary) {
+            existingChild.summary = `${existingChild.summary || ""} ${item.summary}`.trim();
+          }
+        } else {
+          targetTopItem.subItems = targetTopItem.subItems || [];
+          targetTopItem.subItems.push({
+            title: item.title,
+            sourcePages: [pageNumber],
+            summary: item.summary,
+          });
+        }
       }
     }
   }
@@ -315,7 +433,9 @@ export async function extractBoardPackageAgendaJson(options: {
     thinking: false,
   });
 
-  const skeleton = JSON.parse(skeletonResponse.text) as BoardPackageAgendaSkeleton;
+  const skeleton = normalizeBoardPackageAgendaSkeleton(
+    JSON.parse(skeletonResponse.text) as BoardPackageAgendaSkeleton,
+  );
 
   const fullAgenda: FullBoardPackageAgenda = {
     meetingTitle: skeleton.meetingTitle || "Board Meeting",
@@ -373,7 +493,12 @@ export async function extractBoardPackageAgendaJson(options: {
       const parsed = JSON.parse(pageExtractResponse.text) as { items: PageExtractedItem[] };
       const items = parsed.items || [];
       if (items.length > 0) {
-        const updatedLast = mergePageItemsIntoAgenda(fullAgenda, items, page.pageNumber);
+        const updatedLast = mergePageItemsIntoAgenda(
+          fullAgenda,
+          items,
+          page.pageNumber,
+          lastActiveItem,
+        );
         if (updatedLast) {
           lastActiveItem = updatedLast;
         }
@@ -403,20 +528,53 @@ export type FlattenedAgendaTopic = {
   managementRecommendation?: string;
 };
 
-/** Converts the hierarchical FullBoardPackageAgenda into a flat list of reviewable agenda topics */
+/** Converts the hierarchical FullBoardPackageAgenda into outline-coded reviewable topics */
 export function flattenBoardPackageAgenda(agenda: FullBoardPackageAgenda): FlattenedAgendaTopic[] {
   const topics: FlattenedAgendaTopic[] = [];
 
   for (const item of agenda.agendaItems) {
-    // If the item has subSections (e.g. Property Management Report with 4.A, 4.B, 4.C, 4.D)
+    topics.push({
+      itemNumber: item.itemNumber,
+      sectionLabel: item.title,
+      title: item.title,
+      itemType: inferTopLevelItemType(item.title),
+      sourcePages: item.sourcePages.length > 0 ? item.sourcePages : [],
+      summary: item.summary,
+    });
+
+    if (item.subItems && item.subItems.length > 0) {
+      item.subItems.forEach((subItem, index) => {
+        topics.push({
+          itemNumber: `${item.itemNumber}.${alphaUpper(index)}`,
+          sectionLabel: item.title,
+          title: subItem.title,
+          itemType: "guest_presentation",
+          sourcePages: subItem.sourcePages,
+          summary: subItem.summary,
+        });
+      });
+    }
+
     if (item.subSections && item.subSections.length > 0) {
       for (const section of item.subSections) {
-        for (const subItem of section.items) {
+        topics.push({
+          itemNumber: section.code,
+          sectionLabel: item.title,
+          title: section.title,
+          itemType: inferSectionItemType(section.title),
+          sourcePages: [],
+        });
+
+        section.items.forEach((subItem, index) => {
+          const sectionType = inferSectionItemType(section.title);
           topics.push({
-            itemNumber: subItem.itemCode,
+            itemNumber: canonicalLeafItemCode(section.code, index, subItem.itemCode),
             sectionLabel: `${item.title}: ${section.title}`,
             title: subItem.title,
-            itemType: "discussion_topic",
+            itemType:
+              sectionType === "ratification_line_item" || sectionType === "discussion_approval"
+                ? sectionType
+                : "discussion_topic",
             sourcePages: subItem.sourcePages,
             summary: subItem.summary,
             financials: subItem.financials,
@@ -424,30 +582,14 @@ export function flattenBoardPackageAgenda(agenda: FullBoardPackageAgenda): Flatt
             attachmentReferences: subItem.attachmentReferences,
             managementRecommendation: subItem.managementRecommendation,
           });
-        }
+        });
       }
-      continue;
     }
-
-    // Top-level item without subSections (e.g. Item 1 Meeting with Engineer, Item 2 Approval of Minutes, Item 3 Financials)
-    let itemType = "discussion_topic";
-    if (item.title.toLowerCase().includes("approval of minutes")) {
-      itemType = "approval_of_previous_minutes";
-    } else if (item.title.toLowerCase().includes("financial statement")) {
-      itemType = "financial_matters";
-    } else if (item.title.toLowerCase().includes("meeting with eng")) {
-      itemType = "guest_presentation";
-    }
-
-    topics.push({
-      itemNumber: item.itemNumber,
-      sectionLabel: item.title,
-      title: item.title,
-      itemType,
-      sourcePages: item.sourcePages.length > 0 ? item.sourcePages : [2],
-      summary: item.summary,
-    });
   }
 
   return topics;
+}
+
+function alphaUpper(index: number): string {
+  return index >= 0 && index < 26 ? String.fromCharCode(65 + index) : String(index + 1);
 }

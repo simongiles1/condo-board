@@ -63,6 +63,11 @@ export function ArchiveSearchClient() {
   // Ref to cancel continuous indexing if user unchecks or unmounts
   const continuousRef = useRef(false);
   continuousRef.current = continuousIndexing;
+  const priorRemainingRef = useRef<{
+    emails: number;
+    attachments: number;
+    visionPages: number;
+  } | null>(null);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -92,10 +97,9 @@ export function ArchiveSearchClient() {
     if (!indexerRunning) return;
     const timer = window.setInterval(() => {
       setTimingTick((value) => value + 1);
-      void loadStatus();
-    }, 5000);
+    }, 1000);
     return () => window.clearInterval(timer);
-  }, [indexerRunning, loadStatus]);
+  }, [indexerRunning]);
 
   const beginIndexStint = useCallback(
     (mode: typeof indexerMode) => {
@@ -125,7 +129,14 @@ export function ArchiveSearchClient() {
 
   // Indexer execution
   const runIndexerSlice = useCallback(
-    async (overrideContinuous?: boolean): Promise<boolean> => {
+    async (options?: {
+      continuous?: boolean;
+      priorRemaining?: {
+        emails: number;
+        attachments: number;
+        visionPages: number;
+      };
+    }): Promise<boolean> => {
       setIndexerRunning(true);
       setIndexerError(null);
       try {
@@ -135,6 +146,8 @@ export function ArchiveSearchClient() {
           body: JSON.stringify({
             batchSize: indexerBatchSize,
             mode: indexerMode,
+            refreshDashboard: !options?.continuous,
+            priorRemaining: options?.priorRemaining,
           }),
         });
 
@@ -152,6 +165,20 @@ export function ArchiveSearchClient() {
 
         if (data.status) {
           setIndexStatus(data.status);
+        } else if (data.result) {
+          setIndexStatus((prev) => {
+            if (!prev) return prev;
+            const r = data.result!;
+            return {
+              ...prev,
+              indexedEmails: prev.indexedEmails + r.emailsProcessed,
+              indexedAttachments: prev.indexedAttachments + r.attachmentsProcessed,
+              indexedVisionPages: prev.indexedVisionPages + r.visionPagesProcessed,
+              totalChunks: prev.totalChunks + r.chunksCreated,
+              lastIndexedAt:
+                r.chunksCreated > 0 ? new Date().toISOString() : prev.lastIndexedAt,
+            };
+          });
         }
         if (data.costs) {
           setIndexCosts(data.costs);
@@ -175,6 +202,12 @@ export function ArchiveSearchClient() {
           const msg = `Slice finished: ${processed} docs indexed (${r.chunksCreated} chunks, ${r.embeddingsComputed} embedded, ${r.embeddingsReused} reused) · ${tokenLabel} ${sourceLabel} · ${costLabel}. Remaining: ${r.remainingEmails} emails, ${r.remainingAttachments} attachments.`;
           setIndexerMessage(msg);
 
+          priorRemainingRef.current = {
+            emails: r.remainingEmails,
+            attachments: r.remainingAttachments,
+            visionPages: r.remainingVisionPages,
+          };
+
           const hasMore =
             r.remainingEmails > 0 ||
             r.remainingAttachments > 0 ||
@@ -187,7 +220,7 @@ export function ArchiveSearchClient() {
         setIndexerError(err instanceof Error ? err.message : "Indexing failed");
         return false;
       } finally {
-        if (!overrideContinuous && !continuousRef.current) {
+        if (!options?.continuous && !continuousRef.current) {
           setIndexerRunning(false);
         }
       }
@@ -197,6 +230,7 @@ export function ArchiveSearchClient() {
 
   const handleRunIndexerClick = async () => {
     beginIndexStint(indexerMode);
+    priorRemainingRef.current = null;
     await runIndexerSlice();
   };
 
@@ -206,16 +240,32 @@ export function ArchiveSearchClient() {
     if (enable && !indexerRunning) {
       beginIndexStint(indexerMode);
       setIndexerRunning(true);
+      priorRemainingRef.current = indexStatus
+        ? {
+            emails: Math.max(0, indexStatus.totalEmails - indexStatus.indexedEmails),
+            attachments: Math.max(
+              0,
+              indexStatus.totalParsedAttachments - indexStatus.indexedAttachments,
+            ),
+            visionPages: Math.max(
+              0,
+              indexStatus.totalDoneVisionPages - indexStatus.indexedVisionPages,
+            ),
+          }
+        : null;
       while (continuousRef.current) {
-        const hasMore = await runIndexerSlice(true);
+        const hasMore = await runIndexerSlice({
+          continuous: true,
+          priorRemaining: priorRemainingRef.current ?? undefined,
+        });
         if (!hasMore || !continuousRef.current) {
           break;
         }
-        // Small breathing delay between slices
         await new Promise((resolve) => setTimeout(resolve, 800));
       }
       setIndexerRunning(false);
       setContinuousIndexing(false);
+      void loadStatus();
     }
   };
 

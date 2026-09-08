@@ -256,6 +256,17 @@ export class IbmDoclingAllKeysExhaustedError extends Error {
   }
 }
 
+/**
+ * IBM returned HTTP 200 / task success but no markdown (common when a trial
+ * instance is out of pages). Rotate to the next env key like a soft quota hit.
+ */
+export class IbmDoclingEmptyResultError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IbmDoclingEmptyResultError";
+  }
+}
+
 const QUOTA_MESSAGE_RE =
   /usage_limit_exceeded|usage limit|quota (exceeded|exhausted)|out of (credits|funds)|insufficient (credits|funds)|trial.{0,24}(exceeded|exhausted)|page limit/i;
 
@@ -569,6 +580,67 @@ function ibmResultKeys(data: unknown): string {
   return root ? Object.keys(root).join(",") : "";
 }
 
+function numberField(
+  record: Record<string, unknown> | null,
+  ...keys: string[]
+): number | null {
+  if (!record) return null;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return null;
+}
+
+/** Summarize hosted IBM conversion counters when markdown is missing. */
+export function ibmConversionFailureSummary(data: unknown): string | null {
+  const root = asRecord(data);
+  if (!root) return null;
+  const numFailed = numberField(root, "num_failed", "numFailed");
+  const numSucceeded = numberField(root, "num_succeeded", "numSucceeded");
+  const numConverted = numberField(root, "num_converted", "numConverted");
+  const parts: string[] = [];
+  if (numFailed != null && numFailed > 0) {
+    parts.push(`${numFailed} failed`);
+  }
+  if (numSucceeded != null) {
+    parts.push(`${numSucceeded} succeeded`);
+  }
+  if (numConverted != null) {
+    parts.push(`${numConverted} converted`);
+  }
+  for (const document of documentItems(data)) {
+    const record = asRecord(document);
+    if (!record) continue;
+    const status = stringField(record, "status").toLowerCase();
+    const errors = record.errors;
+    if (status === "failure" || status === "failed") {
+      parts.push("document status=failure");
+    }
+    if (Array.isArray(errors) && errors.length > 0) {
+      const first = errors[0];
+      const message =
+        typeof first === "string"
+          ? first
+          : asRecord(first)
+            ? stringField(asRecord(first), "message", "detail", "error")
+            : "";
+      if (message) parts.push(message.slice(0, 160));
+    }
+  }
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function emptyIbmMarkdownError(data: unknown, detail: string): IbmDoclingEmptyResultError {
+  const stats = ibmConversionFailureSummary(data);
+  const suffix = stats ? ` (${stats})` : "";
+  return new IbmDoclingEmptyResultError(`${detail}${suffix}`);
+}
+
 function taskIdOf(task: IbmTask): string | null {
   const id = task.task_id ?? task.taskId;
   return typeof id === "string" && id.trim() ? id.trim() : null;
@@ -834,14 +906,16 @@ async function fetchTaskResult(options: {
   if (artifact) {
     const fromArtifact = await downloadIbmArtifactMarkdown(artifact);
     if (fromArtifact) return fromArtifact;
-    throw new Error(
+    throw emptyIbmMarkdownError(
+      data,
       `IBM Docling artifact (${artifact.artifactType}) had no markdown.`,
     );
   }
 
   const kind = ibmResultKind(data);
   const keys = ibmResultKeys(data) || "(none)";
-  throw new Error(
+  throw emptyIbmMarkdownError(
+    data,
     `IBM Docling returned empty markdown (kind=${kind || "unknown"}; keys=${keys}).`,
   );
 }
@@ -849,13 +923,18 @@ async function fetchTaskResult(options: {
 function isRotatableIbmError(error: unknown): boolean {
   if (error instanceof IbmDoclingQuotaError) return true;
   if (error instanceof IbmDoclingKeyRejectedError) return true;
+  if (error instanceof IbmDoclingEmptyResultError) return true;
   const message = error instanceof Error ? error.message : String(error);
-  return QUOTA_MESSAGE_RE.test(message);
+  return (
+    QUOTA_MESSAGE_RE.test(message) ||
+    /artifact \(markdown\) had no markdown|returned empty markdown/i.test(message)
+  );
 }
 
 function rotatableReason(error: unknown): "quota" | "auth" {
   if (error instanceof IbmDoclingKeyRejectedError) return "auth";
   if (error instanceof IbmDoclingQuotaError) return "quota";
+  if (error instanceof IbmDoclingEmptyResultError) return "quota";
   return "quota";
 }
 

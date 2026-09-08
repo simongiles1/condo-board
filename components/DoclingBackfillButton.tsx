@@ -312,7 +312,11 @@ function BackfillRemainingWork({
           <ul className="space-y-1">
             {doclingLeft > 0 ? (
               <li className="flex items-baseline justify-between gap-3">
-                <span>Docling not cached — retry will resend</span>
+                <span>
+                  {run.failedDocs > 0
+                    ? "Docling failed — IBM returned no markdown"
+                    : "Docling not cached — retry will resend"}
+                </span>
                 <span className="shrink-0 tabular-nums font-medium">
                   {doclingLeft.toLocaleString()} pages
                 </span>

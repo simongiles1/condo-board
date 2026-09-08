@@ -7,10 +7,12 @@ import {
   extractIbmMarkdown,
   IbmDoclingAllKeysExhaustedError,
   IbmDoclingConnectivityError,
+  IbmDoclingEmptyResultError,
   IbmDoclingQuotaError,
   IbmDoclingRequestError,
   IBM_TARGET_TYPE,
   ibmJobConcurrencyFromEnv,
+  ibmConversionFailureSummary,
   isFatalIbmDoclingError,
   isIbmQuotaExhausted,
   listIbmDoclingCredentials,
@@ -335,6 +337,26 @@ describe("isFatalIbmDoclingError", () => {
         ),
       ),
       false,
+    );
+    assert.equal(
+      isFatalIbmDoclingError(
+        new IbmDoclingEmptyResultError(
+          "IBM Docling artifact (markdown) had no markdown.",
+        ),
+      ),
+      false,
+    );
+  });
+
+  it("summarizes num_failed on hosted IBM envelopes", () => {
+    assert.equal(
+      ibmConversionFailureSummary({
+        num_converted: 0,
+        num_succeeded: 0,
+        num_failed: 1,
+        documents: [{ status: "failure", errors: [{ message: "usage_limit_exceeded" }] }],
+      }),
+      "1 failed · 0 succeeded · 0 converted · document status=failure · usage_limit_exceeded",
     );
   });
 

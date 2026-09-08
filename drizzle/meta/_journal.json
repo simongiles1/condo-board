@@ -484,6 +484,34 @@
       "when": 1789200000000,
       "tag": "0068_meetings_v2_status_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1789300000000,
+      "tag": "0069_project_field_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1789400000000,
+      "tag": "0070_project_anchor_gating_and_tiers",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1789500000000,
+      "tag": "0071_equipment_registry_expansion",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1789600000000,
+      "tag": "0072_document_chunks_pgvector",
+      "breakpoints": true
     }
   ]
 }

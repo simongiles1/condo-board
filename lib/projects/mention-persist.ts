@@ -10,7 +10,9 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { projectMentions } from "@/lib/db/schema";
 import type { ProjectEntityCard } from "@/lib/email-analysis/project-highlight-shared";
+import { loadActiveEquipmentRegistryDocuments } from "@/lib/equipment/mention-resolve";
 import { loadOrganizationIdentityNameKeys } from "@/lib/projects/org-identity-keys";
+import { resolveProjectAnchor } from "@/lib/projects/project-anchor-resolve";
 import {
   cardToProjectMentionCard,
   projectMentionFingerprint,
@@ -33,9 +35,10 @@ export async function upsertProjectMentionsForEmail(params: {
   const sourceEmailId = params.sourceEmailId.trim();
   if (!sourceEmailId) return { written: 0, skipped: 0 };
 
-  const orgNameKeys = await loadOrganizationIdentityNameKeys().catch(
-    () => new Set<string>(),
-  );
+  const [orgNameKeys, equipmentRegistry] = await Promise.all([
+    loadOrganizationIdentityNameKeys().catch(() => new Set<string>()),
+    loadActiveEquipmentRegistryDocuments().catch(() => []),
+  ]);
   const db = getDb();
   const now = new Date().toISOString();
   let written = 0;
@@ -56,6 +59,14 @@ export async function upsertProjectMentionsForEmail(params: {
     const nameKey = normalizeProjectNameKey(card.raw_name) || null;
     const identityKey = projectMentionIdentityKey(card);
     const minted = projectMentionIsMinted(card, orgNameKeys);
+    const anchor = resolveProjectAnchor(
+      {
+        rawName: card.raw_name,
+        equipmentMentions: card.equipment_mentions,
+        location: card.location,
+      },
+      equipmentRegistry,
+    );
 
     const [existing] = await db
       .select({ id: projectMentions.id })
@@ -80,6 +91,9 @@ export async function upsertProjectMentionsForEmail(params: {
           nameKey,
           identityKey,
           minted,
+          extractedAnchorType: anchor.extractedAnchorType,
+          extractedAnchorHint: anchor.extractedAnchorHint,
+          resolvedAnchorId: anchor.resolvedAnchorId,
           modelId: params.modelId ?? null,
           fingerprintMergeId: params.fingerprintMergeId ?? null,
           updatedAt: now,
@@ -103,6 +117,9 @@ export async function upsertProjectMentionsForEmail(params: {
       identityKey,
       fingerprint,
       minted,
+      extractedAnchorType: anchor.extractedAnchorType,
+      extractedAnchorHint: anchor.extractedAnchorHint,
+      resolvedAnchorId: anchor.resolvedAnchorId,
       resolutionStatus: "unresolved",
       resolvedProjectId: null,
       resolutionReason: null,

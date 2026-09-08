@@ -87,3 +87,11 @@ export function getDb(): NodePgDatabase<typeof schema> {
   }
   return globalForDb.db;
 }
+
+export async function closePool(): Promise<void> {
+  if (globalForDb.pool) {
+    await globalForDb.pool.end();
+    globalForDb.pool = undefined;
+    globalForDb.db = undefined;
+  }
+}

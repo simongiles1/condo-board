@@ -25,6 +25,7 @@ export type ProjectMentionCard = {
   year_hint: string | null;
   phase: string | null;
   location: string | null;
+  equipment_mentions?: string | null;
 };
 
 export function cardToProjectMentionCard(
@@ -38,6 +39,7 @@ export function cardToProjectMentionCard(
     year_hint: normalizeProjectYearHint(card.year_hint),
     phase: card.phase?.trim() || null,
     location: card.location?.trim() || null,
+    equipment_mentions: card.equipment_mentions?.trim() || null,
   };
 }
 

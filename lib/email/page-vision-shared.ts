@@ -269,6 +269,9 @@ export function classifyVisionError(message: string): {
   if (/PDFDict/i.test(m)) {
     return { kind: "pdf_corrupt", label: "Malformed PDF" };
   }
+  if (/Expected instance of/i.test(m) || /unsupported page structure/i.test(m)) {
+    return { kind: "pdf_corrupt", label: "Malformed PDF page slice" };
+  }
   return {
     kind: "other",
     label: m.length > 80 ? `${m.slice(0, 77)}…` : m,

@@ -1,5 +1,7 @@
 /** Multi-value project fields (contractor, location) + name aliases. */
 
+import { isActionPhrase } from "@/lib/equipment/mention-resolve-shared";
+
 export const PROJECT_MULTI_VALUE_SEP = "\n";
 
 export function splitProjectMultiValue(
@@ -124,7 +126,8 @@ export function mergeProjectAliasLists(
     if (!list) continue;
     for (const alias of list) {
       const trimmed = alias.trim();
-      if (!trimmed) continue;
+      if (!trimmed || trimmed.length > 70) continue;
+      if (isActionPhrase(trimmed)) continue;
       const key = normalizeProjectNameKey(trimmed);
       if (!key || (primaryKey && key === primaryKey) || seen.has(key)) continue;
       seen.add(key);
@@ -139,11 +142,14 @@ export function foldProjectNames(params: {
   otherName: string | null;
   preferredAliases?: string[] | null;
   otherAliases?: string[] | null;
+  includeOtherAsAlias?: boolean;
 }): { name: string | null; aliases: string[] } {
   const preferred = params.preferredName?.trim() || null;
   const other = params.otherName?.trim() || null;
   const name = preferred || other;
+  const includeOther = params.includeOtherAsAlias !== false;
   const aliasFromOther =
+    includeOther &&
     preferred &&
     other &&
     normalizeProjectNameKey(preferred) !== normalizeProjectNameKey(other)

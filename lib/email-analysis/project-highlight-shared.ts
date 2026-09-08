@@ -831,6 +831,7 @@ function preferRicherProjectEntityCard(
     otherName: preferB ? aName : bName,
     preferredAliases: preferB ? b.aliases : a.aliases,
     otherAliases: preferB ? a.aliases : b.aliases,
+    includeOtherAsAlias: false,
   });
   return {
     name: folded.name,

@@ -7,6 +7,7 @@ import {
   real,
   text,
   uniqueIndex,
+  vector,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
@@ -729,10 +730,38 @@ export const projectFieldDenials = pgTable(
 );
 
 /**
+ * Positive associations: attach this field value to this project.
+ * Inverse of project_field_denials. Used to move an alias or multi-value
+ * field from one project card to another without merging the whole card.
+ */
+export const projectFieldAttachments = pgTable(
+  "project_field_attachments",
+  {
+    id: text("id").primaryKey(),
+    /** Target project identity key (name:…|year:…). */
+    projectKey: text("project_key").notNull(),
+    /** name_alias | contractor | location | equipment_mentions */
+    field: text("field").notNull(),
+    /** Display string as shown on the source card. */
+    attachedValue: text("attached_value").notNull(),
+    /** Normalized value for uniqueness (see field-denials.ts). */
+    valueKey: text("value_key").notNull(),
+    /** Normalized target project name at attach time; preferred match key when set. */
+    nameKey: text("name_key"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    projectFieldValueUnique: uniqueIndex(
+      "project_field_attachments_project_field_value_unique",
+    ).on(table.projectKey, table.field, table.valueKey),
+  }),
+);
+
+/**
  * Thin durable project registry (materialized from fingerprint keys).
  * identity_key is name:… or name:…|year:… — human merge decides if years
- * are the same initiative. Never slugify-only. aliases_json is the search
- * document's variant names (not a merge key).
+ * are the same initiative. Never slugify-only. aliases_json holds formal
+ * identifiers (RFP / contract / PO), not raw mention phrases.
  */
 export const projectEntities = pgTable(
   "project_entities",
@@ -747,8 +776,37 @@ export const projectEntities = pgTable(
     contractor: text("contractor"),
     location: text("location"),
     equipmentMentions: text("equipment_mentions"),
-    /** JSON string[] of variant work names from fingerprint coalesce / identity review. */
+    /**
+     * Formal identifiers only (RFP numbers, contract labels, PO / invoice codes).
+     * Raw mention phrases must not accumulate here — they cause transitive drift.
+     */
     aliasesJson: text("aliases_json").notNull().default("[]"),
+    /** Work significance: service_call stays on the asset history; capital_project is the registry roster. */
+    tier: text("tier", {
+      enum: ["service_call", "incident", "capital_project"],
+    })
+      .notNull()
+      .default("service_call"),
+    /**
+     * Anchor scope discriminator. NULL never matches another NULL — non-equipment
+     * work must use building_area or service_category, not a missing equipment id.
+     */
+    anchorType: text("anchor_type", {
+      enum: [
+        "equipment",
+        "building_area",
+        "service_category",
+        "provisional_equipment",
+      ],
+    }),
+    /** Canonical asset id, location zone, or category key. */
+    anchorId: text("anchor_id"),
+    /** Bundled assets for multi-equipment contracts (P1 + P2 doors). */
+    equipmentIds: text("equipment_ids").array(),
+    /** Set when work is complete; drives the 90-day trailing-invoice grace window. */
+    completedAt: text("completed_at"),
+    /** JSON string[] of promotion triggers (multiple_quotes, board_briefed, …). */
+    promotionReasonsJson: text("promotion_reasons_json").notNull().default("[]"),
     scope: text("scope", {
       enum: ["building", "multi_unit", "unit", "unknown"],
     }),
@@ -763,6 +821,11 @@ export const projectEntities = pgTable(
   },
   (table) => ({
     statusIdx: index("project_entities_status_idx").on(table.status),
+    tierIdx: index("project_entities_tier_idx").on(table.tier),
+    anchorIdx: index("project_entities_anchor_idx").on(
+      table.anchorType,
+      table.anchorId,
+    ),
   }),
 );
 
@@ -791,6 +854,13 @@ export const projectMentions = pgTable(
     identityKey: text("identity_key"),
     fingerprint: text("fingerprint").notNull(),
     minted: boolean("minted").notNull().default(false),
+    extractedAnchorType: text("extracted_anchor_type", {
+      enum: ["equipment", "building_area", "service_category"],
+    }),
+    /** Raw extracted keyword before canonical mapping (e.g. "visitor gate"). */
+    extractedAnchorHint: text("extracted_anchor_hint"),
+    /** Mapped canonical anchor id after register lookup. */
+    resolvedAnchorId: text("resolved_anchor_id"),
     resolutionStatus: text("resolution_status", {
       enum: ["unresolved", "provisional", "confirmed"],
     })
@@ -800,6 +870,11 @@ export const projectMentions = pgTable(
       () => projectEntities.id,
       { onDelete: "set null" },
     ),
+    /**
+     * Why this mention attached or stayed unresolved.
+     * Guardrail reasons include ambiguous_equipment, anchor_mismatch,
+     * trailing_invoice_attached, and completed_locked.
+     */
     resolutionReason: text("resolution_reason"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -815,6 +890,9 @@ export const projectMentions = pgTable(
     ),
     resolvedProjectIdx: index("project_mentions_resolved_project_idx").on(
       table.resolvedProjectId,
+    ),
+    resolvedAnchorIdx: index("project_mentions_resolved_anchor_idx").on(
+      table.resolvedAnchorId,
     ),
   }),
 );
@@ -1852,19 +1930,81 @@ export const floorPlansRelations = relations(floorPlans, ({ one }) => ({
   }),
 }));
 
-export const buildingEquipmentRegistry = pgTable("building_equipment_registry", {
-  id: text("id").primaryKey(),
-  canonicalName: text("canonical_name").notNull(),
-  manufacturer: text("manufacturer"),
-  model: text("model"),
-  floor: integer("floor"),
-  location: text("location"),
-  drawingReference: text("drawing_reference"),
-  category: text("category"),
-  specsJson: text("specs_json"),
-  positionJson: text("position_json"),
-  createdAt: text("created_at").notNull(),
-});
+export const buildingEquipmentRegistry = pgTable(
+  "building_equipment_registry",
+  {
+    id: text("id").primaryKey(),
+    canonicalName: text("canonical_name").notNull(),
+    manufacturer: text("manufacturer"),
+    model: text("model"),
+    floor: integer("floor"),
+    location: text("location"),
+    drawingReference: text("drawing_reference"),
+    category: text("category"),
+    specsJson: text("specs_json"),
+    positionJson: text("position_json"),
+    aliasesJson: text("aliases_json").notNull().default("[]"),
+    componentKeywordsJson: text("component_keywords_json")
+      .notNull()
+      .default("[]"),
+    status: text("status", {
+      enum: ["active", "provisional", "decommissioned"],
+    })
+      .notNull()
+      .default("active"),
+    parentEquipmentId: text("parent_equipment_id"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at"),
+  },
+  (table) => ({
+    statusIdx: index("building_equipment_registry_status_idx").on(table.status),
+    categoryIdx: index("building_equipment_registry_category_idx").on(
+      table.category,
+    ),
+  }),
+);
+
+export const equipmentMentions = pgTable(
+  "equipment_mentions",
+  {
+    id: text("id").primaryKey(),
+    sourceEmailId: text("source_email_id").references(() => emails.id, {
+      onDelete: "cascade",
+    }),
+    modelId: text("model_id"),
+    rawName: text("raw_name").notNull(),
+    extractedRole: text("extracted_role", {
+      enum: ["installed_system", "bid_alternative", "component"],
+    }),
+    parentSystemHint: text("parent_system_hint"),
+    category: text("category"),
+    resolvedEquipmentId: text("resolved_equipment_id").references(
+      () => buildingEquipmentRegistry.id,
+      { onDelete: "set null" },
+    ),
+    resolutionStatus: text("resolution_status", {
+      enum: ["unresolved", "provisional", "confirmed"],
+    })
+      .notNull()
+      .default("unresolved"),
+    resolutionReason: text("resolution_reason"),
+    confidence: text("confidence"),
+    sourceQuote: text("source_quote"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    sourceEmailIdx: index("equipment_mentions_source_email_idx").on(
+      table.sourceEmailId,
+    ),
+    resolvedEquipmentIdx: index("equipment_mentions_resolved_equipment_idx").on(
+      table.resolvedEquipmentId,
+    ),
+    statusIdx: index("equipment_mentions_status_idx").on(
+      table.resolutionStatus,
+    ),
+  }),
+);
 
 export const equipmentAssets = pgTable("equipment_assets", {
   id: text("id").primaryKey(),
@@ -2162,5 +2302,46 @@ export const extractionSourcesRelations = relations(
     }),
   }),
 );
+
+export const documentChunks = pgTable(
+  "document_chunks",
+  {
+    id: text("id").primaryKey(),
+    sourceKind: text("source_kind", {
+      enum: ["email_body", "attachment_markdown", "attachment_vision_page"],
+    }).notNull(),
+    emailId: text("email_id").references(() => emails.id, {
+      onDelete: "cascade",
+    }),
+    contentHash: text("content_hash"),
+    pageNo: integer("page_no"),
+    chunkIndex: integer("chunk_index").notNull(),
+    chunkText: text("chunk_text").notNull(),
+    charStart: integer("char_start"),
+    charEnd: integer("char_end"),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+    contentHashDedup: text("content_hash_dedup").notNull(),
+    embedding: vector("embedding", { dimensions: 768 }),
+    embedModel: text("embed_model").notNull().default("gemini-embedding-001"),
+    indexedAt: text("indexed_at").notNull(),
+  },
+  (table) => ({
+    sourceKindIdx: index("document_chunks_source_kind_idx").on(table.sourceKind),
+    emailIdIdx: index("document_chunks_email_id_idx").on(table.emailId),
+    contentHashIdx: index("document_chunks_content_hash_idx").on(
+      table.contentHash,
+    ),
+    contentHashDedupIdx: index("document_chunks_content_hash_dedup_idx").on(
+      table.contentHashDedup,
+    ),
+  }),
+);
+
+export const documentChunksRelations = relations(documentChunks, ({ one }) => ({
+  email: one(emails, {
+    fields: [documentChunks.emailId],
+    references: [emails.id],
+  }),
+}));
 
 export * from "./schema-v2";

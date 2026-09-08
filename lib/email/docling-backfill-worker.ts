@@ -135,6 +135,14 @@ async function processOneDoc(options: {
       }
       if (uncached.length === 0) return { pages: 0, costUsd: 0 };
 
+      console.info("[extraction-backfill-worker] Docling convert", {
+        runId,
+        contentHash: shortHash(contentHash),
+        docIndex,
+        pages: uncached.length,
+        provider,
+      });
+
       await updateDoclingBackfillRun(runId, {
         phase: "docling",
         currentDocIndex: docIndex,

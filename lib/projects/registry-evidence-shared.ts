@@ -41,6 +41,7 @@ export type ProjectEvidenceEmailSummary = {
   receivedAt: string;
   preview: string;
   matchReasons: ProjectEvidenceMatchReason[];
+  needles?: string[];
 };
 
 export type ProjectEvidencePayload = {
@@ -172,7 +173,7 @@ export function collectProjectIdentityNeedles(project: {
   return dedupeNeedles([project.name, ...(project.aliases ?? [])]);
 }
 
-function dedupeNeedles(raw: Array<string | null | undefined>): string[] {
+export function dedupeNeedles(raw: Array<string | null | undefined>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const part of raw) {
@@ -227,6 +228,114 @@ function namesMatch(left: string | null | undefined, right: string): boolean {
   return normalizeProjectNameKey(left) === key;
 }
 
+/**
+ * Action / work-type suffixes stripped to yield the core noun phrase / asset:
+ * e.g. "TNR garage door replacement" -> "TNR garage door"
+ *      "West Side Loading Bay Door - Scheduled Repairs" -> "West Side Loading Bay Door"
+ */
+const PROJECT_ACTION_SUFFIX_REGEX =
+  /(?:\s+[-–—/]\s*|\s+)(?:emergency\s+|scheduled\s+|routine\s+|annual\s+|preventative\s+|preventive\s+)?(?:repair\s*(?:and|\/|&)\s*replacement|replacement\s*(?:and|\/|&)\s*repair|repairs?|replacements?|installations?|installs?|maintenance|upgrades?|inspections?|servic(?:e|es|ing)|retrofits?|works?|projects?|quotes?|proposals?|contracts?|audits?|investigations?|reviews?|malfunctions?|breakdowns?|testing)\s*$/i;
+
+/**
+ * Action / work-type prefixes stripped to yield the core noun phrase / asset:
+ * e.g. "installation of a new TNR overhead garage door" -> "TNR overhead garage door"
+ *      "Repair for Public Garage Door" -> "Public Garage Door"
+ */
+const PROJECT_ACTION_PREFIX_REGEX =
+  /^(?:emergency\s+|scheduled\s+|routine\s+|annual\s+|preventative\s+|preventive\s+)?(?:repair\s*(?:and|\/|&)\s*replacement|replacement\s*(?:and|\/|&)\s*repair|repairs?|replacements?|installations?|installs?|maintenance|servic(?:e|es|ing)|retrofits?|inspections?|works?|reviews?|quotes?|proposals?|audits?|repaints?)\s+(?:of|for|to|at|on|in)\s+(?:(?:a|an|the)\s+)?(?:(?:new|faulty|damaged|broken|existing)\s+)?/i;
+
+const PROJECT_LEADING_DESCRIPTOR_REGEX =
+  /^(?:new|existing|proposed|damaged|faulty|broken)\s+/i;
+
+const GENERIC_SINGLE_WORDS = new Set([
+  "door",
+  "doors",
+  "work",
+  "works",
+  "repair",
+  "repairs",
+  "quote",
+  "quotes",
+  "unit",
+  "units",
+  "wall",
+  "walls",
+  "gate",
+  "gates",
+  "roof",
+  "pipe",
+  "pipes",
+  "line",
+  "lines",
+  "pump",
+  "pumps",
+  "panel",
+  "panels",
+  "part",
+  "parts",
+]);
+
+export function expandProjectNameNeedles(raw: string): string[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  const candidates: string[] = [trimmed];
+
+  // 1. Parentheses: "Overhead Door (OHD) Installation" -> "OHD", "Overhead Door Installation"
+  const parenMatch = trimmed.match(/\(([^)]+)\)/);
+  if (parenMatch) {
+    const inside = parenMatch[1]?.trim();
+    if (inside && inside.length >= 3) candidates.push(inside);
+    const withoutParens = trimmed
+      .replace(/\s*\([^)]*\)\s*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (withoutParens && withoutParens.length >= 3) {
+      candidates.push(withoutParens);
+    }
+  }
+
+  // 2. Dash/separator split: "West Side Loading Bay Door - Scheduled Repairs"
+  if (/[-–—:]/.test(trimmed)) {
+    const parts = trimmed
+      .split(/\s*[-–—:]\s*/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    for (const part of parts) {
+      if (part.length >= 3) candidates.push(part);
+    }
+  }
+
+  // 3. Prefix / suffix / descriptor stripped variants
+  const queue = [...candidates];
+  for (const item of queue) {
+    if (PROJECT_ACTION_SUFFIX_REGEX.test(item)) {
+      const stripped = item.replace(PROJECT_ACTION_SUFFIX_REGEX, "").trim();
+      if (stripped.length >= 3) candidates.push(stripped);
+    }
+    if (PROJECT_ACTION_PREFIX_REGEX.test(item)) {
+      const stripped = item.replace(PROJECT_ACTION_PREFIX_REGEX, "").trim();
+      if (stripped.length >= 3) candidates.push(stripped);
+    }
+    if (PROJECT_LEADING_DESCRIPTOR_REGEX.test(item)) {
+      const stripped = item.replace(PROJECT_LEADING_DESCRIPTOR_REGEX, "").trim();
+      if (stripped.length >= 3) candidates.push(stripped);
+    }
+  }
+
+  // Filter out bare generic single words that were stripped, keeping the original intact
+  const filtered = candidates.filter((item) => {
+    if (item.toLowerCase() === trimmed.toLowerCase()) return true;
+    if (!item.includes(" ")) {
+      if (GENERIC_SINGLE_WORDS.has(item.toLowerCase())) return false;
+      if (item.length < 3) return false;
+    }
+    return true;
+  });
+
+  return dedupeNeedles(filtered);
+}
+
 export function projectCardMatchesEvidenceValue(
   card: ProjectEntityCard,
   field: ProjectEvidenceField,
@@ -254,8 +363,11 @@ export function projectCardMatchesEvidenceValue(
   }
   if (field === "source_emails") return false;
   // Alias click: this string was originally a card name, then folded on merge.
-  if (namesMatch(card.name, trimmed)) return true;
-  return (card.aliases ?? []).some((alias) => namesMatch(alias, trimmed));
+  const needles = splitProjectEvidenceNeedles(field, value);
+  if (needles.some((needle) => namesMatch(card.name, needle))) return true;
+  return (card.aliases ?? []).some((alias) =>
+    needles.some((needle) => namesMatch(alias, needle)),
+  );
 }
 
 export function projectHighlightMatchesEvidenceValue(
@@ -282,7 +394,10 @@ export function projectHighlightMatchesEvidenceValue(
   if (field === "phase") {
     return extraction.phases.some((phase) => phasesMatch(phase, trimmed));
   }
-  return extraction.project_names.some((name) => namesMatch(name, trimmed));
+  const needles = splitProjectEvidenceNeedles(field, value);
+  return extraction.project_names.some((name) =>
+    needles.some((needle) => namesMatch(name, needle)),
+  );
 }
 
 export function splitProjectEvidenceNeedles(
@@ -309,6 +424,9 @@ export function splitProjectEvidenceNeedles(
       if (parsed.end !== parsed.start) needles.push(String(parsed.end));
     }
     return [...new Set(needles)];
+  }
+  if (field === "name" || field === "name_alias") {
+    return expandProjectNameNeedles(trimmed);
   }
   return [trimmed];
 }

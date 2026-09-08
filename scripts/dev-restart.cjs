@@ -54,6 +54,17 @@ function killPort(port) {
 
 killPort(PORT);
 
+try {
+  execSync("node scripts/db-migrate.cjs", {
+    cwd: root,
+    stdio: "inherit",
+    env: process.env,
+  });
+} catch {
+  console.error("[dev:restart] Database migration failed. Fix errors above, then retry.");
+  process.exit(1);
+}
+
 const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
 const child = spawn(npmCmd, ["run", "dev"], {
   cwd: root,

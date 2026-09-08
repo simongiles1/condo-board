@@ -73,12 +73,37 @@ export async function extractPdfPages(
   }
 
   const dst = await PDFDocument.create();
-  const copied = await dst.copyPages(
-    src,
-    uniqueSorted.map((n) => n - 1),
-  );
-  for (const page of copied) {
-    dst.addPage(page);
+  const failed: number[] = [];
+
+  // Copy one page at a time — batch copyPages throws on the first bad page ref
+  // (pdf-lib: "Expected instance of …, but got instance of undefined").
+  for (const pageNo of uniqueSorted) {
+    try {
+      const [copied] = await dst.copyPages(src, [pageNo - 1]);
+      if (!copied) {
+        failed.push(pageNo);
+        continue;
+      }
+      dst.addPage(copied);
+    } catch {
+      failed.push(pageNo);
+    }
+  }
+
+  if (dst.getPageCount() === 0) {
+    const detail =
+      failed.length === 1
+        ? `page ${failed[0]}`
+        : `pages ${failed.join(", ")}`;
+    throw new Error(
+      `Could not extract PDF ${detail} (corrupt or unsupported page structure).`,
+    );
+  }
+
+  if (failed.length > 0) {
+    throw new Error(
+      `Could not extract PDF pages ${failed.join(", ")} (corrupt or unsupported page structure).`,
+    );
   }
 
   return dst.save();

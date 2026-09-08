@@ -3,21 +3,31 @@
  * Identity-key unique match confirms. Otherwise an in-memory lexical
  * shortlist (name + aliases + contractor + year + location) feeds
  * decideProjectMentionResolution — no bulk UPDATE by name.
+ *
+ * When a mention has extracted_anchor_type without resolved_anchor_id,
+ * resolution fails closed (ambiguous_equipment). Canonical anchors
+ * hard-filter lexical candidates before ranking.
  */
 
 import { and, eq, inArray } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
-import { projectMentions } from "@/lib/db/schema";
+import { emails, projectMentions } from "@/lib/db/schema";
 import { invalidateProjectFingerprintSummariesCache } from "@/lib/projects/fingerprint-list";
 import {
   decideProjectMentionResolution,
+  extractProjectFormalIdentifiers,
+  projectMentionAnchorMatches,
+  projectMentionMissingCanonicalAnchor,
   shortlistProjectMentionCandidates,
+  type ProjectMentionQuery,
   type ProjectMentionSearchDocument,
 } from "@/lib/projects/mention-resolve-shared";
+import { refreshProjectMentionAnchors } from "@/lib/projects/refresh-project-mention-anchors";
 import {
   loadActiveProjectEntities,
   syncProjectEntitiesFromFingerprints,
+  type ProjectEntityRow,
 } from "@/lib/projects/registry-sync";
 
 export type ResolveProjectMentionsResult = {
@@ -26,17 +36,15 @@ export type ResolveProjectMentionsResult = {
   provisional: number;
   unresolved: number;
   retracted: number;
+  anchorRefresh?: {
+    mentionCount: number;
+    anchorsUpdated: number;
+    anchorsFound: number;
+    canonicalResolved: number;
+  };
 };
 
-function toSearchDocument(entity: {
-  id: string;
-  identityKey: string;
-  name: string | null;
-  aliases: string[];
-  contractor: string | null;
-  yearHint: string | null;
-  location: string | null;
-}): ProjectMentionSearchDocument {
+function toSearchDocument(entity: ProjectEntityRow): ProjectMentionSearchDocument {
   return {
     id: entity.id,
     identityKey: entity.identityKey,
@@ -45,6 +53,34 @@ function toSearchDocument(entity: {
     contractor: entity.contractor,
     yearHint: entity.yearHint,
     location: entity.location,
+    tier: entity.tier,
+    anchorType: entity.anchorType,
+    anchorId: entity.anchorId,
+    equipmentIds: entity.equipmentIds,
+    phase: entity.phase,
+    completedAt: entity.completedAt,
+  };
+}
+
+function mentionQueryFromRow(mention: {
+  rawName: string;
+  contractor: string | null;
+  yearHint: string | null;
+  location: string | null;
+  extractedAnchorType: string | null;
+  resolvedAnchorId: string | null;
+  receivedAt: string | null;
+}): ProjectMentionQuery {
+  const identifiers = extractProjectFormalIdentifiers(mention.rawName);
+  return {
+    rawName: mention.rawName,
+    contractor: mention.contractor,
+    yearHint: mention.yearHint,
+    location: mention.location,
+    anchorType: mention.extractedAnchorType as ProjectMentionQuery["anchorType"],
+    anchorId: mention.resolvedAnchorId,
+    explicitIdentifier: identifiers[0] ?? null,
+    mentionDate: mention.receivedAt,
   };
 }
 
@@ -55,7 +91,22 @@ function toSearchDocument(entity: {
 export async function refreshProjectEntitiesAndResolveMentions(params?: {
   emailIds?: string[];
   limit?: number;
+  skipAnchorRefresh?: boolean;
 }): Promise<ResolveProjectMentionsResult> {
+  let anchorRefresh: ResolveProjectMentionsResult["anchorRefresh"];
+  if (!params?.skipAnchorRefresh) {
+    try {
+      anchorRefresh = await refreshProjectMentionAnchors();
+    } catch (error) {
+      console.error("[project-mentions] anchor refresh failed", {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Project mention anchor refresh failed",
+      });
+    }
+  }
+
   try {
     invalidateProjectFingerprintSummariesCache();
     await syncProjectEntitiesFromFingerprints();
@@ -65,7 +116,9 @@ export async function refreshProjectEntitiesAndResolveMentions(params?: {
         error instanceof Error ? error.message : "Project entity sync failed",
     });
   }
-  return resolveProjectMentions(params);
+
+  const resolution = await resolveProjectMentions(params);
+  return anchorRefresh ? { ...resolution, anchorRefresh } : resolution;
 }
 
 /**
@@ -89,13 +142,43 @@ export async function resolveProjectMentions(params?: {
   const mentionRows =
     emailIds && emailIds.length > 0
       ? await db
-          .select()
+          .select({
+            id: projectMentions.id,
+            rawName: projectMentions.rawName,
+            contractor: projectMentions.contractor,
+            yearHint: projectMentions.yearHint,
+            location: projectMentions.location,
+            identityKey: projectMentions.identityKey,
+            minted: projectMentions.minted,
+            extractedAnchorType: projectMentions.extractedAnchorType,
+            resolvedAnchorId: projectMentions.resolvedAnchorId,
+            resolutionStatus: projectMentions.resolutionStatus,
+            resolvedProjectId: projectMentions.resolvedProjectId,
+            resolutionReason: projectMentions.resolutionReason,
+            receivedAt: emails.receivedAt,
+          })
           .from(projectMentions)
+          .leftJoin(emails, eq(projectMentions.sourceEmailId, emails.id))
           .where(and(statusFilter, inArray(projectMentions.sourceEmailId, emailIds)))
           .limit(limit)
       : await db
-          .select()
+          .select({
+            id: projectMentions.id,
+            rawName: projectMentions.rawName,
+            contractor: projectMentions.contractor,
+            yearHint: projectMentions.yearHint,
+            location: projectMentions.location,
+            identityKey: projectMentions.identityKey,
+            minted: projectMentions.minted,
+            extractedAnchorType: projectMentions.extractedAnchorType,
+            resolvedAnchorId: projectMentions.resolvedAnchorId,
+            resolutionStatus: projectMentions.resolutionStatus,
+            resolvedProjectId: projectMentions.resolvedProjectId,
+            resolutionReason: projectMentions.resolutionReason,
+            receivedAt: emails.receivedAt,
+          })
           .from(projectMentions)
+          .leftJoin(emails, eq(projectMentions.sourceEmailId, emails.id))
           .where(statusFilter)
           .limit(limit);
 
@@ -110,6 +193,7 @@ export async function resolveProjectMentions(params?: {
 
   const entities = await loadActiveProjectEntities();
   const documents = entities.map(toSearchDocument);
+  const entityById = new Map(entities.map((entity) => [entity.id, entity]));
   const idsByIdentityKey = new Map<string, string[]>();
   for (const entity of entities) {
     const list = idsByIdentityKey.get(entity.identityKey) ?? [];
@@ -119,27 +203,30 @@ export async function resolveProjectMentions(params?: {
 
   const now = new Date().toISOString();
   for (const mention of mentionRows) {
+    const query = mentionQueryFromRow(mention);
+    const missingAnchor = projectMentionMissingCanonicalAnchor(query);
     const identityKey = mention.identityKey?.trim() || "";
-    const uniqueIdentityMatches =
-      mention.minted && identityKey
+    const identityMatches =
+      mention.minted && identityKey && !missingAnchor
         ? (idsByIdentityKey.get(identityKey) ?? [])
         : [];
+    const uniqueIdentityMatches = query.anchorId?.trim()
+      ? identityMatches.filter((id) => {
+          const entity = entityById.get(id);
+          return entity
+            ? projectMentionAnchorMatches(query, toSearchDocument(entity))
+            : false;
+        })
+      : identityMatches;
     const lexicalCandidates =
       uniqueIdentityMatches.length > 0
         ? []
-        : shortlistProjectMentionCandidates(
-            {
-              rawName: mention.rawName,
-              contractor: mention.contractor,
-              yearHint: mention.yearHint,
-              location: mention.location,
-            },
-            documents,
-          );
+        : shortlistProjectMentionCandidates(query, documents);
 
     const decision = decideProjectMentionResolution({
       uniqueIdentityMatches,
       lexicalCandidates,
+      missingAnchor,
     });
 
     const wasProvisional = mention.resolutionStatus === "provisional";

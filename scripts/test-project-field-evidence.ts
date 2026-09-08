@@ -11,10 +11,12 @@ import {
   collectProjectIdentityNeedles,
   collectProjectSourceNeedles,
   emailBelongsInProjectSourceEvidence,
+  expandProjectNameNeedles,
   findNeedleRanges,
   isThinProjectEvidenceBody,
   projectCardMatchesEvidenceValue,
   projectHighlightMatchesEvidenceValue,
+  splitProjectEvidenceNeedles,
 } from "../lib/projects/registry-evidence-shared";
 
 describe("projectCardMatchesEvidenceValue", () => {
@@ -199,5 +201,90 @@ describe("findNeedleRanges", () => {
     assert.equal(ranges.length, 1);
     assert.equal(ranges[0]?.start, 0);
     assert.equal(ranges[0]?.end, "Applied System Technology".length);
+  });
+});
+
+describe("expandProjectNameNeedles", () => {
+  it("strips action suffix 'replacement' to yield core noun phrase", () => {
+    const needles = expandProjectNameNeedles("TNR garage door replacement");
+    assert.ok(needles.includes("TNR garage door replacement"));
+    assert.ok(needles.includes("TNR garage door"));
+  });
+
+  it("handles dash-separated repair descriptors", () => {
+    const needles = expandProjectNameNeedles(
+      "West Side Loading Bay Door - Scheduled Repairs",
+    );
+    assert.ok(
+      needles.includes("West Side Loading Bay Door - Scheduled Repairs"),
+    );
+    assert.ok(needles.includes("West Side Loading Bay Door"));
+  });
+
+  it("strips action prefix 'installation of a new'", () => {
+    const needles = expandProjectNameNeedles(
+      "installation of a new TNR overhead garage door",
+    );
+    assert.ok(
+      needles.includes("installation of a new TNR overhead garage door"),
+    );
+    assert.ok(needles.includes("TNR overhead garage door"));
+  });
+
+  it("decomposes parenthetical abbreviations and suffix", () => {
+    const needles = expandProjectNameNeedles(
+      "Public Parking Overhead Door (OHD) Installation",
+    );
+    assert.ok(
+      needles.includes("Public Parking Overhead Door (OHD) Installation"),
+    );
+    assert.ok(needles.includes("Public Parking Overhead Door"));
+    assert.ok(needles.includes("OHD"));
+  });
+});
+
+describe("alias evidence highlighting in email text", () => {
+  it("highlights 'TNR garage door' when alias is 'TNR garage door replacement'", () => {
+    const needles = splitProjectEvidenceNeedles(
+      "name_alias",
+      "TNR garage door replacement",
+    );
+    assert.ok(needles.includes("TNR garage door"));
+
+    const email1 =
+      "Hello Directors, Kindly see the revised proposal for installation of the new public parking TNR garage door. The approve...";
+    const ranges1 = findNeedleRanges(email1, needles);
+    assert.equal(ranges1.length, 1);
+    assert.equal(
+      email1.slice(ranges1[0]!.start, ranges1[0]!.end),
+      "TNR garage door",
+    );
+
+    const email2 =
+      "Good Afternoon Directors,\n\n* I have taken TNR Garage door quotes and provided to John to take approval from studio-1 and Studio-2 Boards.";
+    const ranges2 = findNeedleRanges(email2, needles);
+    assert.equal(ranges2.length, 1);
+    assert.equal(
+      email2.slice(ranges2[0]!.start, ranges2[0]!.end),
+      "TNR Garage door",
+    );
+  });
+
+  it("matches pass-1 project_names extraction using expanded alias needles", () => {
+    const extraction = {
+      project_names: ["TNR garage door"],
+      year_hints: [],
+      phases: [],
+      contractors: [],
+      locations: [],
+    };
+    assert.equal(
+      projectHighlightMatchesEvidenceValue(
+        extraction,
+        "name_alias",
+        "TNR garage door replacement",
+      ),
+      true,
+    );
   });
 });

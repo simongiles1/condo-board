@@ -21,6 +21,23 @@ export async function register() {
       const { ensureDefaultUsers } = await import("@/lib/auth/session");
       await ensureDefaultUsers();
 
+      if (process.env.NODE_ENV === "development") {
+        try {
+          const { runPendingMigrations } = await import("@/lib/db/run-migrations");
+          const migration = runPendingMigrations();
+          if (migration.ok) {
+            console.info("[instrumentation] Development database migrations applied.");
+          } else {
+            console.error(
+              "[instrumentation] Development database migration failed:",
+              migration.output,
+            );
+          }
+        } catch (error) {
+          console.error("[instrumentation] Development migration check failed", error);
+        }
+      }
+
       if (!backgroundWorkersEnabled()) {
         console.info(
           "[instrumentation] Background workers disabled (DISABLE_BACKGROUND_WORKERS=true); Telegram long-poll and fingerprint warmup skipped",

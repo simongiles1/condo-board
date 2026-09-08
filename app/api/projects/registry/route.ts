@@ -9,6 +9,7 @@ import {
   parseEntityListOffset,
 } from "@/lib/entities/registry-page";
 import { recordProjectFieldDenial } from "@/lib/projects/field-denials";
+import { moveProjectField } from "@/lib/projects/field-attachments";
 import {
   invalidateProjectFingerprintSummariesCache,
   loadProjectDuplicateGroups,
@@ -125,6 +126,10 @@ export async function POST(request: Request) {
     field?: string;
     value?: string;
     projectName?: string | null;
+    sourceProjectId?: string;
+    sourceProjectName?: string | null;
+    targetProjectId?: string;
+    targetProjectName?: string | null;
     limit?: number;
   } = {};
   try {
@@ -147,6 +152,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, denial: result.denial });
   }
 
+  if (body.action === "move_field") {
+    const result = await moveProjectField({
+      sourceProjectId: body.sourceProjectId ?? body.projectId ?? "",
+      targetProjectId: body.targetProjectId ?? "",
+      field: body.field ?? "",
+      value: body.value ?? "",
+      sourceProjectName: body.sourceProjectName ?? body.projectName,
+      targetProjectName: body.targetProjectName,
+    });
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    invalidateProjectFingerprintSummariesCache();
+    return NextResponse.json({ ok: true });
+  }
+
   if (body.action === "resolve_mentions") {
     try {
       const result = await refreshProjectEntitiesAndResolveMentions({
@@ -166,7 +187,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          'Unsupported action. Use action: "merge", "deny_field", or "resolve_mentions".',
+          'Unsupported action. Use action: "merge", "deny_field", "move_field", or "resolve_mentions".',
       },
       { status: 400 },
     );

@@ -13,6 +13,7 @@ import {
   MergeIcon,
   type MergeEntityOption,
 } from "@/components/MergeEntityDialog";
+import { ProjectActionTooltipButton } from "@/components/ProjectActionTooltipButton";
 import { ProjectDuplicatesPanel } from "@/components/ProjectDuplicatesPanel";
 import { ProjectEvidenceSidePanel } from "@/components/ProjectEvidenceSidePanel";
 import { ProjectMentionsPanel } from "@/components/ProjectMentionsPanel";
@@ -33,6 +34,7 @@ import type {
   ProjectFingerprintSummary,
 } from "@/lib/projects/fingerprint-list";
 import type { ProjectDeniableField } from "@/lib/projects/field-denials";
+import type { ProjectMovableField } from "@/lib/projects/field-attachments";
 import type { ProjectMentionStats } from "@/lib/projects/mention-queue-shared";
 import {
   clampEntityListPage,
@@ -71,7 +73,9 @@ import {
 } from "@/lib/projects/project-list-sort";
 import {
   foldProjectNames,
+  mergeProjectAliasLists,
   mergeProjectMultiValues,
+  removeProjectMultiValue,
   splitProjectMultiValue,
 } from "@/lib/projects/project-multi-values";
 
@@ -578,6 +582,21 @@ function SeverIcon({ className }: { className?: string }) {
   );
 }
 
+function MoveIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      aria-hidden="true"
+    >
+      <path d="M3 8h10M9 4l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function FieldRow({
   label,
   value,
@@ -633,12 +652,14 @@ function MultiValueField({
   values,
   disabled,
   onSever,
+  onMove,
   onEvidence,
 }: {
   label: string;
   values: string[];
   disabled?: boolean;
   onSever: (value: string) => void;
+  onMove?: (value: string) => void;
   onEvidence?: (value: string) => void;
 }) {
   if (values.length === 0) {
@@ -652,7 +673,7 @@ function MultiValueField({
           {values.map((value) => (
             <li
               key={`${label}:${value}`}
-              className="grid grid-cols-[1fr_auto] items-start gap-2"
+              className="grid grid-cols-[1fr_auto_auto] items-start gap-1"
             >
               {onEvidence ? (
                 <button
@@ -665,6 +686,18 @@ function MultiValueField({
               ) : (
                 <span className="break-words text-slate-900">{value}</span>
               )}
+              {onMove ? (
+                <button
+                  type="button"
+                  title={`Move this ${label.toLowerCase()} to another project`}
+                  aria-label={`Move ${label.toLowerCase()} “${value}”`}
+                  disabled={disabled}
+                  onClick={() => onMove(value)}
+                  className="shrink-0 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-orange-700 disabled:opacity-50"
+                >
+                  <MoveIcon className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
               <button
                 type="button"
                 title={`Stop associating this ${label.toLowerCase()}`}
@@ -913,8 +946,74 @@ function applyOptimisticProjectMerge(params: {
   return { projects, duplicateGroups, survivor };
 }
 
+function applyOptimisticProjectFieldMove(params: {
+  projects: ProjectFingerprintSummary[];
+  sourceId: string;
+  targetId: string;
+  field: ProjectMovableField;
+  value: string;
+}): {
+  projects: ProjectFingerprintSummary[];
+  target: ProjectFingerprintSummary | null;
+} {
+  const source = params.projects.find((project) => project.id === params.sourceId);
+  const target = params.projects.find((project) => project.id === params.targetId);
+  if (!source || !target || source.id === target.id) {
+    return { projects: params.projects, target: target ?? null };
+  }
+
+  let nextSource: ProjectFingerprintSummary = {
+    ...source,
+    aliases: [...(source.aliases ?? [])],
+  };
+  let nextTarget: ProjectFingerprintSummary = {
+    ...target,
+    aliases: [...(target.aliases ?? [])],
+  };
+  const value = params.value.trim();
+
+  if (params.field === "name_alias") {
+    const valueKey = value.toLowerCase();
+    nextSource = {
+      ...nextSource,
+      aliases: mergeProjectAliasLists(
+        nextSource.name,
+        nextSource.aliases.filter(
+          (alias) => alias.trim().toLowerCase() !== valueKey,
+        ),
+      ),
+    };
+    nextTarget = {
+      ...nextTarget,
+      aliases: mergeProjectAliasLists(nextTarget.name, nextTarget.aliases, [value]),
+    };
+  } else {
+    nextSource = {
+      ...nextSource,
+      [params.field]: removeProjectMultiValue(nextSource[params.field], value),
+    };
+    nextTarget = {
+      ...nextTarget,
+      [params.field]: mergeProjectMultiValues(nextTarget[params.field], value),
+    };
+  }
+
+  const projects = params.projects.map((project) => {
+    if (project.id === nextSource.id) return nextSource;
+    if (project.id === nextTarget.id) return nextTarget;
+    return project;
+  });
+  return { projects, target: nextTarget };
+}
+
 type PendingSever = {
   field: ProjectDeniableField;
+  label: string;
+  value: string;
+};
+
+type PendingMove = {
+  field: ProjectMovableField;
   label: string;
   value: string;
 };
@@ -944,6 +1043,8 @@ export function ProjectsRegistryClient({
   const [checkedProjectIds, setCheckedProjectIds] = useState<Set<string>>(new Set());
   const [pendingSever, setPendingSever] = useState<PendingSever | null>(null);
   const [severError, setSeverError] = useState<string | null>(null);
+  const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const [evidenceTarget, setEvidenceTarget] = useState<{
     projectId: string;
     projectName: string;
@@ -1260,14 +1361,23 @@ export function ProjectsRegistryClient({
           provisional?: number;
           unresolved?: number;
           retracted?: number;
+          anchorRefresh?: {
+            mentionCount: number;
+            anchorsUpdated: number;
+            anchorsFound: number;
+            canonicalResolved: number;
+          };
           error?: string;
         };
         if (!res.ok || !json.ok) {
           setMessage(json.error ?? "Could not resolve project mentions.");
           return;
         }
+        const anchorNote = json.anchorRefresh
+          ? ` Anchors: ${json.anchorRefresh.canonicalResolved} canonical on ${json.anchorRefresh.mentionCount} mentions (${json.anchorRefresh.anchorsUpdated} updated).`
+          : "";
         setMessage(
-          `Resolved ${json.scanned ?? 0} mention${json.scanned === 1 ? "" : "s"} → ${json.confirmed ?? 0} confirmed, ${json.provisional ?? 0} provisional, ${json.unresolved ?? 0} still unresolved${json.retracted ? `, ${json.retracted} retracted` : ""}.`,
+          `Resolved ${json.scanned ?? 0} mention${json.scanned === 1 ? "" : "s"} → ${json.confirmed ?? 0} confirmed, ${json.provisional ?? 0} provisional, ${json.unresolved ?? 0} still unresolved${json.retracted ? `, ${json.retracted} retracted` : ""}.${anchorNote}`,
         );
         await refreshData();
       } catch {
@@ -1641,6 +1751,60 @@ export function ProjectsRegistryClient({
     });
   }
 
+  function confirmMoveField(targetId: string) {
+    if (!selected || !pendingMove) return;
+    const project = selected;
+    const move = pendingMove;
+    const target = projects.find((item) => item.id === targetId);
+    if (!target) {
+      setMoveError("Pick a project from the search results.");
+      return;
+    }
+    startTransition(async () => {
+      setMoveError(null);
+      setMessage(null);
+      const res = await fetch("/api/projects/registry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "move_field",
+          sourceProjectId: project.id,
+          targetProjectId: target.id,
+          field: move.field,
+          value: move.value,
+          sourceProjectName: project.name ?? project.displayName,
+          targetProjectName: target.name ?? target.displayName,
+        }),
+      });
+      const json = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok) {
+        setMoveError(json.error ?? "Could not move that value.");
+        return;
+      }
+      const optimistic = applyOptimisticProjectFieldMove({
+        projects,
+        sourceId: project.id,
+        targetId: target.id,
+        field: move.field,
+        value: move.value,
+      });
+      setProjects(optimistic.projects);
+      setPendingMove(null);
+      setMessage(
+        `Moved ${move.label.toLowerCase()} “${move.value}” from “${project.displayName}” to “${target.displayName}”.`,
+      );
+      const next = await refreshData();
+      if (next) {
+        const byName = next.find(
+          (item) =>
+            (item.name ?? item.displayName).toLowerCase() ===
+            (target.name ?? target.displayName).toLowerCase(),
+        );
+        if (byName) setSelectedId(byName.id);
+      }
+    });
+  }
+
   return (
     <div>
       <header className="mb-6">
@@ -1686,20 +1850,21 @@ export function ProjectsRegistryClient({
           fold duplicates by hand — the absorbed name is kept as an alias, and
           contractors / locations / equipment mentions are combined. Different
           years stay separate until you merge them or AI review marks a
-          capital job as one spanning initiative. Use × on a field to sever a
-          wrong association; the system remembers not to reattach it. Check the
-          Duplicates tab for AI review and fuzzy name matches. Mentions shows
+          capital job as one spanning initiative. Use the arrow on a field to
+          move that value to another project without merging cards. Use × to
+          sever a wrong association; the system remembers not to reattach it.
+          Check the Duplicates tab for AI review and fuzzy name matches. Mentions shows
           unresolved / provisional / confirmed project observations — Process
-          pending project merges re-syncs the registry and re-runs the
-          matcher. Scan management
+          pending project merges refreshes equipment anchors, re-syncs the registry,
+          and re-runs the matcher. Scan management
           reports to tag the jobs the PM actually briefed the Board on — filter
           “In a management report” for the curated list. Click unmatched topics
           or waiting-on-markdown counts to inspect them; re-match with AI uses
           each card’s name and metadata, not fuzzy spelling.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
-          <button
-            type="button"
+          <ProjectActionTooltipButton
+            tooltipId="process_pending_merges"
             disabled={pending}
             onClick={processPendingProjectMerges}
             className="rounded-md bg-orange-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-800 disabled:opacity-50"
@@ -1708,17 +1873,17 @@ export function ProjectsRegistryClient({
             {mentionStats.mentionUnresolvedCount > 0
               ? ` (${mentionStats.mentionUnresolvedCount.toLocaleString()})`
               : ""}
-          </button>
-          <button
-            type="button"
+          </ProjectActionTooltipButton>
+          <ProjectActionTooltipButton
+            tooltipId="refresh"
             disabled={pending}
             onClick={refresh}
             className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
           >
             Refresh
-          </button>
-          <button
-            type="button"
+          </ProjectActionTooltipButton>
+          <ProjectActionTooltipButton
+            tooltipId="scan_management_reports"
             disabled={pending || boardScanRunning}
             onClick={startBoardScan}
             className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-950 hover:bg-emerald-100 disabled:opacity-50"
@@ -1728,7 +1893,7 @@ export function ProjectsRegistryClient({
               : boardScanRunning
                 ? "Scanning reports…"
                 : "Scan management reports"}
-          </button>
+          </ProjectActionTooltipButton>
           {boardScanRun && !boardScanRunning ? (
             <button
               type="button"
@@ -2226,6 +2391,14 @@ export function ProjectsRegistryClient({
                       value,
                     });
                   }}
+                  onMove={(value) => {
+                    setMoveError(null);
+                    setPendingMove({
+                      field: "name_alias",
+                      label: "Alias",
+                      value,
+                    });
+                  }}
                   onSever={(value) => {
                     setSeverError(null);
                     setPendingSever({
@@ -2307,6 +2480,14 @@ export function ProjectsRegistryClient({
                       value,
                     });
                   }}
+                  onMove={(value) => {
+                    setMoveError(null);
+                    setPendingMove({
+                      field: "contractor",
+                      label: "Contractor",
+                      value,
+                    });
+                  }}
                   onSever={(value) => {
                     setSeverError(null);
                     setPendingSever({
@@ -2328,6 +2509,14 @@ export function ProjectsRegistryClient({
                       value,
                     });
                   }}
+                  onMove={(value) => {
+                    setMoveError(null);
+                    setPendingMove({
+                      field: "location",
+                      label: "Location",
+                      value,
+                    });
+                  }}
                   onSever={(value) => {
                     setSeverError(null);
                     setPendingSever({
@@ -2346,6 +2535,14 @@ export function ProjectsRegistryClient({
                       projectId: selected.id,
                       projectName: selected.displayName,
                       field: "equipment_mentions",
+                      value,
+                    });
+                  }}
+                  onMove={(value) => {
+                    setMoveError(null);
+                    setPendingMove({
+                      field: "equipment_mentions",
+                      label: "Equipment",
                       value,
                     });
                   }}
@@ -2389,6 +2586,37 @@ export function ProjectsRegistryClient({
           setMergeError(null);
         }}
         onMerge={runMerge}
+      />
+
+      <MergeEntityDialog
+        open={pendingMove != null && selected != null}
+        entityLabel="destination"
+        sources={selected ? [projectToMergeOption(selected)] : []}
+        candidates={projects
+          .filter((project) => project.id !== selected?.id)
+          .map(projectToMergeOption)}
+        searchPlaceholder="Search projects…"
+        busy={pending}
+        error={moveError}
+        copy={
+          pendingMove && selected
+            ? {
+                title: `Move ${pendingMove.label.toLowerCase()}`,
+                description: `Move ${pendingMove.label.toLowerCase()} “${pendingMove.value}” from “${selected.displayName}” to another project. The source card keeps its other fields.`,
+                submitLabel: "Move",
+                busyLabel: "Moving…",
+                intoLabel: "Move to",
+                hideSources: true,
+                pickError: "Pick a project from the search results to move to.",
+              }
+            : undefined
+        }
+        onClose={() => {
+          if (pending) return;
+          setPendingMove(null);
+          setMoveError(null);
+        }}
+        onMerge={confirmMoveField}
       />
 
       <ConfirmDialog

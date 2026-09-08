@@ -7,10 +7,12 @@ import {
   parseEntityListLimit,
   parseEntityListOffset,
 } from "@/lib/entities/registry-page";
+import { harvestEquipmentMentions } from "@/lib/equipment/equipment-harvest-worker";
 import {
   loadEquipmentRegistry,
   manualMergeEquipment,
 } from "@/lib/equipment/registry";
+import { seedBuildingEquipmentRegistry } from "@/lib/equipment/seed-registry";
 
 export async function GET(request: Request) {
   const auth = await requireSession();
@@ -41,6 +43,7 @@ export async function POST(request: Request) {
     action?: string;
     sourceEquipmentId?: string;
     targetEquipmentId?: string;
+    limit?: number;
   } = {};
   try {
     body = (await request.json()) as typeof body;
@@ -48,9 +51,40 @@ export async function POST(request: Request) {
     body = {};
   }
 
+  if (body.action === "seed_canonical") {
+    try {
+      const result = await seedBuildingEquipmentRegistry();
+      return NextResponse.json({ ok: true, ...result });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not load canonical equipment register.";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
+
+  if (body.action === "harvest_mentions") {
+    try {
+      const result = await harvestEquipmentMentions({
+        limit: body.limit ?? 10_000,
+      });
+      return NextResponse.json({ ok: true, ...result });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not harvest equipment mentions.";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
+
   if (body.action !== "merge") {
     return NextResponse.json(
-      { error: "Unsupported action. Use action: \"merge\"." },
+      {
+        error:
+          'Unsupported action. Use action: "merge", "seed_canonical", or "harvest_mentions".',
+      },
       { status: 400 },
     );
   }

@@ -18,6 +18,7 @@ import {
 import {
   collectProjectIdentityNeedles,
   collectProjectSourceNeedles,
+  dedupeNeedles,
   emailBelongsInProjectSourceEvidence,
   findCaseInsensitiveRanges,
   isProjectEvidenceField,
@@ -31,6 +32,7 @@ import {
   PROJECT_EVIDENCE_DEFAULT_PAGE_SIZE,
   PROJECT_EVIDENCE_MAX_PAGE_SIZE,
 } from "@/lib/projects/registry-evidence-shared";
+import { normalizeProjectNameKey } from "@/lib/projects/project-multi-values";
 
 export type {
   ProjectEvidenceEmailSummary,
@@ -284,12 +286,27 @@ export async function loadProjectFieldEvidence(params: {
   }
 
   const needles = splitProjectEvidenceNeedles(field, value);
-  const ilikeNeedle = escapeIlikeNeedle(needles[0] ?? value);
-  if (!ilikeNeedle) return null;
+  const likeNeedles = [
+    ...new Set(
+      needles
+        .map((needle) => escapeIlikeNeedle(needle))
+        .filter((needle) => needle.length >= 3),
+    ),
+  ].slice(0, 5);
+  if (likeNeedles.length === 0) return null;
 
   const db = getDb();
   const byEmail = new Map<string, Set<ProjectEvidenceMatchReason>>();
-  const like = `%${ilikeNeedle}%`;
+  const emailNeedlesMap = new Map<string, Set<string>>();
+
+  const likeClauses = likeNeedles.flatMap((needle) => {
+    const like = `%${needle}%`;
+    return [
+      ilike(projectHighlightExtractions.thirdPassExtractionJson, like),
+      ilike(projectHighlightExtractions.extractionJson, like),
+      ilike(projectHighlightExtractions.secondPassExtractionJson, like),
+    ];
+  });
 
   const extractionRows = await db
     .select({
@@ -301,24 +318,26 @@ export async function loadProjectFieldEvidence(params: {
         projectHighlightExtractions.thirdPassExtractionJson,
     })
     .from(projectHighlightExtractions)
-    .where(
-      or(
-        ilike(projectHighlightExtractions.thirdPassExtractionJson, like),
-        ilike(projectHighlightExtractions.extractionJson, like),
-        ilike(projectHighlightExtractions.secondPassExtractionJson, like),
-      ),
-    )
+    .where(or(...likeClauses))
     .limit(MAX_CANDIDATE_EMAILS);
 
   for (const row of extractionRows) {
+    let emailNeedleSet = emailNeedlesMap.get(row.emailId);
+    if (!emailNeedleSet) {
+      emailNeedleSet = new Set(needles);
+      emailNeedlesMap.set(row.emailId, emailNeedleSet);
+    }
+
     if (row.thirdPassExtractionJson) {
       const parsed = parseProjectFingerprintJson(row.thirdPassExtractionJson);
-      if (
-        parsed.entity_cards.some((card) =>
-          projectCardMatchesEvidenceValue(card, field, value),
-        )
-      ) {
-        addReasons(byEmail, row.emailId, ["fingerprint"]);
+      for (const card of parsed.entity_cards) {
+        if (projectCardMatchesEvidenceValue(card, field, value)) {
+          addReasons(byEmail, row.emailId, ["fingerprint"]);
+          if (card.name) emailNeedleSet.add(card.name.trim());
+          for (const alias of card.aliases ?? []) {
+            if (alias.trim()) emailNeedleSet.add(alias.trim());
+          }
+        }
       }
     }
     const first = parseProjectHighlightJson(row.extractionJson ?? "");
@@ -328,6 +347,12 @@ export async function loadProjectFieldEvidence(params: {
       projectHighlightMatchesEvidenceValue(second, field, value)
     ) {
       addReasons(byEmail, row.emailId, ["highlight"]);
+      for (const name of [...first.project_names, ...second.project_names]) {
+        const nameKey = normalizeProjectNameKey(name);
+        if (needles.some((n) => normalizeProjectNameKey(n) === nameKey)) {
+          emailNeedleSet.add(name.trim());
+        }
+      }
     }
   }
 
@@ -370,7 +395,11 @@ export async function loadProjectFieldEvidence(params: {
   for (const row of rows) {
     const body = authored.get(row.id) ?? row.bodyText;
     const reasons = new Set(byEmail.get(row.id) ?? []);
-    for (const needle of needles) {
+    const rowNeedles = dedupeNeedles([
+      ...needles,
+      ...(emailNeedlesMap.get(row.id) ? [...emailNeedlesMap.get(row.id)!] : []),
+    ]);
+    for (const needle of rowNeedles) {
       if (findCaseInsensitiveRanges(body, needle).length > 0) {
         reasons.add("in_body");
       }
@@ -382,9 +411,10 @@ export async function loadProjectFieldEvidence(params: {
       receivedAt: row.receivedAt,
       preview: bodyPreviewAroundMention({
         text: body,
-        needles,
+        needles: rowNeedles,
       }),
       matchReasons: [...reasons],
+      needles: rowNeedles,
     });
   }
 

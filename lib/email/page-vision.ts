@@ -434,9 +434,15 @@ async function processClaimedPage(
     );
 
     let pagePdf: Uint8Array | null = null;
+    let useFullPdfFallback = false;
     let nativeText = "";
     if (isPdf) {
-      pagePdf = await extractPdfPages(bytes, [page.pageNo]);
+      try {
+        pagePdf = await extractPdfPages(bytes, [page.pageNo]);
+      } catch {
+        // pdf-lib cannot slice this page — Gemini still accepts the full PDF.
+        useFullPdfFallback = true;
+      }
       try {
         nativeText = await extractPdfPageText(bytes, page.pageNo);
       } catch {
@@ -444,12 +450,20 @@ async function processClaimedPage(
       }
     }
 
-    const filePart = resolvePageVisionFilePart(page, bytes, pagePdf);
+    const filePart = useFullPdfFallback
+      ? {
+          mimeType: "application/pdf",
+          data: bytes,
+          label: `document-page-${page.pageNo}.pdf`,
+          kind: "pdf" as const,
+        }
+      : resolvePageVisionFilePart(page, bytes, pagePdf);
 
     const result = await generatePageVision({
       systemInstruction: PAGE_VISION_SYSTEM_PROMPT,
       userText: pageVisionUserText(page.pageNo, nativeText, {
         kind: filePart.kind,
+        fullDocument: useFullPdfFallback,
       }),
       fileParts: [
         {

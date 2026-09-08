@@ -277,3 +277,24 @@ export async function recordProjectFieldDenial(params: {
     },
   };
 }
+
+/** Drop a denial so a later attach/move can put this value on this project. */
+export async function deleteProjectFieldDenial(params: {
+  projectId: string;
+  field: ProjectDeniableField;
+  value: string;
+}): Promise<void> {
+  const projectId = params.projectId.trim();
+  const deniedValue = normalizeProjectDeniedValue(params.field, params.value);
+  if (!projectId || !deniedValue) return;
+  const db = getDb();
+  await db
+    .delete(projectFieldDenials)
+    .where(
+      and(
+        eq(projectFieldDenials.projectKey, projectId),
+        eq(projectFieldDenials.field, params.field),
+        eq(projectFieldDenials.deniedValue, deniedValue),
+      ),
+    );
+}

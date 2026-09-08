@@ -82,6 +82,12 @@ describe("pageVisionUserText", () => {
     assert.ok(text.toLowerCase().includes("image"));
     assert.ok(!text.includes("PDF page"));
   });
+
+  it("scopes full-document fallback to one page", () => {
+    const text = pageVisionUserText(4, null, { fullDocument: true });
+    assert.ok(text.includes("ONLY page 4"));
+    assert.ok(text.includes("Ignore every other page"));
+  });
 });
 
 describe("isVisionImageMime", () => {
@@ -210,6 +216,13 @@ describe("Gemini vision quota classification", () => {
     const message =
       "Input document to `PDFDocument.load` is encrypted. You can use `PDFDocument.load(..., { ignoreEncryption: true })` if you wish to load the document anyways.";
     assert.equal(classifyVisionError(message).kind, "encrypted_pdf");
+  });
+
+  it("classifies pdf-lib page ref errors as malformed PDF", () => {
+    const message =
+      "Expected instance of b, but got instance of undefined";
+    assert.equal(classifyVisionError(message).kind, "pdf_corrupt");
+    assert.equal(classifyVisionError(message).label, "Malformed PDF page slice");
   });
 });
 

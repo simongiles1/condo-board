@@ -16,9 +16,31 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Phase A: Corpus Search / RAG ("Ask the archive")** — Shipped dev qualification search tool across the email and attachment archive using pgvector and Gemini embeddings (`gemini-embedding-001`, 768 dimensions). Added `document_chunks` table with pgvector HNSW index, SHA-256 chunk deduplication, and cascading source references. Implemented semantic chunking for email bodies (preferring `body_text_unique`), parsed attachment Markdown, and completed vision pages. Built idempotent incremental indexer (`/api/analysis/corpus-index`) safe to run concurrently with production vision backfill, search service (`/api/analysis/corpus-search`) with cosine similarity and keyword-centered excerpt extraction, and dev UI at `/admin/analysis/archive-search` with live coverage metrics, batch/continuous run controls, and direct click-through to source email threads and attachments.
+
+- **Pass A: Project mention anchor extraction, equipment resolution, and alias hygiene** — Connected project mentions to the canonical equipment register (`building_equipment_registry`). Extraction pass now resolves equipment mentions and raw project work names to canonical equipment IDs (`extracted_anchor_type`, `extracted_anchor_hint`, `resolved_anchor_id`). Populates equipment anchors onto `project_entities` during registry sync and fails closed (`ambiguous_equipment`) on mentions with unmapped or ambiguous equipment references. Stopped auto-accumulating raw per-email mention names into `aliases_json` during card coalescing and filtered operational action sentences from project aliases. Added dedicated `harvestEquipmentMentions` background worker to ingest and resolve equipment mentions across email corpus into `equipment_mentions`.
+
+- **Canonical equipment register and resolution engine (Stage 6)** — Established authoritative building equipment register on `building_equipment_registry` with structured IDs (`DOOR-PUBLIC-P1`, `DOOR-RES-P2`, `PUMP-DOM-BOOST-DUP`, `ELEV-HIGH-01`, etc.), true name aliases, and component keywords. Quarantined legacy extracted `equipment_assets` to avoid alias snowballing and arbitrary minting. Implemented resolution engine that maps mentions to canonical IDs, routes component parts (e.g., photo-eyes, torsion springs, impellers) to parent systems, suppresses bid alternatives from minting durable rows, and quarantines novel equipment into provisional status for human review. Updated Entities → Equipment interface to display canonical IDs, status badges, aliases, component keywords, and mention/event linkages with manual merge support.
+
+- **Project anchor gating and single-table promotion** — Project mention resolution now hard-filters candidates by a physical or scope anchor (equipment, building area, or service category) before lexical ranking, so recurring repairs on different assets no longer collapse into one alias bag. Completed work stays locked except for an explicit identifier match or a 90-day trailing invoice from the same contractor. Service calls and incidents live on the same `project_entities` row as capital projects and promote in place (`tier`) when they collect multiple quotes, appear in a board package, or span more than 30 days — mention foreign keys never move.
+
 - **Meetings V2 selective Docling extraction** — Integrated IBM Watsonx Docling into board package ingestion for the core meeting agenda and management report pages (first 10–20 pages, before email attachments). Provides high-fidelity Markdown and structured headings for agenda items, bid tables, and financials, while leaving the remaining 180+ email attachment pages to fast local PDF parsing.
 
 ### Fixed
+
+- **Page vision on corrupt PDF page refs** — When pdf-lib cannot slice a page
+  (`Expected instance of …, but got instance of undefined`), vision now falls
+  back to sending the full PDF with a page-scoped prompt instead of failing the
+  page. Per-page extraction also copies pages individually so one bad ref does
+  not block batch extraction.
+
+- **Project alias evidence mention highlighting** — Opening the evidence side panel
+  for an alias (e.g. `TNR garage door replacement`) now highlights the actual work
+  mention in both the collapsed list preview and the expanded message body. Action
+  and work-type suffixes/prefixes (such as `replacement`, `repair`, `installation of`,
+  or dash-separated descriptors) are decomposed into constituent needles (e.g. `TNR garage door`),
+  and per-message extractions are matched to ensure `<mark>` spans and `In body` chips
+  appear correctly on email mentions.
 
 - **Supabase database egress spike and connection pool exhaustion** — Consolidated
   Meetings V2 counts calculation from 10 parallel full-table queries into a single

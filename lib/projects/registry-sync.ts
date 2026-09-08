@@ -28,6 +28,8 @@ import {
 } from "@/lib/projects/project-multi-values";
 import { preferProjectPhase } from "@/lib/projects/project-phase";
 import { preferProjectYearHint } from "@/lib/projects/project-year-range";
+import { loadActiveEquipmentRegistryDocuments } from "@/lib/equipment/mention-resolve";
+import { resolveProjectAnchor } from "@/lib/projects/project-anchor-resolve";
 
 export type ProjectEntityRow = {
   id: string;
@@ -42,7 +44,42 @@ export type ProjectEntityRow = {
   scope: ProjectScope | null;
   status: "active" | "merged";
   mergedIntoId: string | null;
+  tier: "service_call" | "incident" | "capital_project";
+  anchorType:
+    | "equipment"
+    | "building_area"
+    | "service_category"
+    | "provisional_equipment"
+    | null;
+  anchorId: string | null;
+  equipmentIds: string[];
+  completedAt: string | null;
+  promotionReasons: string[];
 };
+
+function parseEquipmentIds(value: string[] | null | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(value.map((item) => String(item).trim()).filter(Boolean)),
+  ];
+}
+
+function parsePromotionReasonsJson(raw: string | null | undefined): string[] {
+  if (!raw?.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return [
+      ...new Set(
+        parsed
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter(Boolean),
+      ),
+    ];
+  } catch {
+    return [];
+  }
+}
 
 function preferString(a: string | null, b: string | null): string | null {
   const left = a?.trim() || null;
@@ -71,6 +108,12 @@ export async function loadActiveProjectEntities(): Promise<ProjectEntityRow[]> {
     scope: parseProjectScope(row.scope),
     status: row.status as "active" | "merged",
     mergedIntoId: row.mergedIntoId,
+    tier: (row.tier as ProjectEntityRow["tier"]) ?? "service_call",
+    anchorType: (row.anchorType as ProjectEntityRow["anchorType"]) ?? null,
+    anchorId: row.anchorId,
+    equipmentIds: parseEquipmentIds(row.equipmentIds),
+    completedAt: row.completedAt,
+    promotionReasons: parsePromotionReasonsJson(row.promotionReasonsJson),
   }));
 }
 
@@ -138,13 +181,15 @@ export async function upsertProjectEntitiesFromSummaries(
   const db = getDb();
   const nowIso = new Date().toISOString();
   const keys = summaries.map((s) => s.id);
-  const existing =
+  const [existing, equipmentRegistry] = await Promise.all([
     keys.length === 0
       ? []
       : await db
           .select()
           .from(projectEntities)
-          .where(inArray(projectEntities.identityKey, keys));
+          .where(inArray(projectEntities.identityKey, keys)),
+    loadActiveEquipmentRegistryDocuments().catch(() => []),
+  ]);
   const byKey = new Map(existing.map((row) => [row.identityKey, row]));
 
   let created = 0;
@@ -156,6 +201,18 @@ export async function upsertProjectEntitiesFromSummaries(
     if (!prior) {
       const id = randomUUID();
       const aliases = mergeProjectAliasLists(summary.name, summary.aliases);
+      const anchor = resolveProjectAnchor(
+        {
+          rawName: summary.name ?? "",
+          equipmentMentions: summary.equipment_mentions,
+          location: summary.location,
+        },
+        equipmentRegistry,
+      );
+      const anchorType = anchor.resolvedAnchorId ? "equipment" : null;
+      const anchorId = anchor.resolvedAnchorId;
+      const equipmentIds = anchor.resolvedAnchorId ? [anchor.resolvedAnchorId] : [];
+
       await db.insert(projectEntities).values({
         id,
         identityKey: summary.id,
@@ -169,6 +226,12 @@ export async function upsertProjectEntitiesFromSummaries(
         scope: resolveProjectScope(summary),
         status: "active",
         mergedIntoId: null,
+        tier: "service_call",
+        anchorType,
+        anchorId,
+        equipmentIds,
+        completedAt: null,
+        promotionReasonsJson: "[]",
         createdAt: nowIso,
         updatedAt: nowIso,
       });
@@ -186,6 +249,12 @@ export async function upsertProjectEntitiesFromSummaries(
         scope: resolveProjectScope(summary),
         status: "active",
         mergedIntoId: null,
+        tier: "service_call",
+        anchorType,
+        anchorId,
+        equipmentIds,
+        completedAt: null,
+        promotionReasons: [],
       });
       continue;
     }
@@ -211,6 +280,27 @@ export async function upsertProjectEntitiesFromSummaries(
       ),
     };
     const aliasesJson = serializeProjectAliasesJson(next.aliases);
+
+    const anchor = resolveProjectAnchor(
+      {
+        rawName: preferString(prior.name, summary.name) ?? "",
+        equipmentMentions: next.equipmentMentions,
+        location: next.location,
+      },
+      equipmentRegistry,
+    );
+    const nextAnchorType =
+      (prior.anchorType as ProjectEntityRow["anchorType"]) ??
+      (anchor.resolvedAnchorId ? "equipment" : null);
+    const nextAnchorId = prior.anchorId ?? anchor.resolvedAnchorId;
+    const priorEquipmentIds = parseEquipmentIds(prior.equipmentIds);
+    const nextEquipmentIds =
+      priorEquipmentIds.length > 0
+        ? priorEquipmentIds
+        : anchor.resolvedAnchorId
+          ? [anchor.resolvedAnchorId]
+          : [];
+
     const changed =
       next.name !== prior.name ||
       next.yearHint !== prior.yearHint ||
@@ -220,6 +310,8 @@ export async function upsertProjectEntitiesFromSummaries(
       next.equipmentMentions !== prior.equipmentMentions ||
       aliasesJson !== (prior.aliasesJson ?? "[]") ||
       next.scope !== parseProjectScope(prior.scope) ||
+      nextAnchorType !== prior.anchorType ||
+      nextAnchorId !== prior.anchorId ||
       prior.status !== "active";
 
     if (changed) {
@@ -234,6 +326,9 @@ export async function upsertProjectEntitiesFromSummaries(
           equipmentMentions: next.equipmentMentions,
           aliasesJson,
           scope: next.scope,
+          anchorType: nextAnchorType,
+          anchorId: nextAnchorId,
+          equipmentIds: nextEquipmentIds,
           status: "active",
           mergedIntoId: null,
           updatedAt: nowIso,
@@ -255,6 +350,12 @@ export async function upsertProjectEntitiesFromSummaries(
       scope: next.scope,
       status: "active",
       mergedIntoId: null,
+      tier: (prior.tier as ProjectEntityRow["tier"]) ?? "service_call",
+      anchorType: nextAnchorType,
+      anchorId: nextAnchorId,
+      equipmentIds: nextEquipmentIds,
+      completedAt: prior.completedAt,
+      promotionReasons: parsePromotionReasonsJson(prior.promotionReasonsJson),
     });
   }
 

@@ -26,6 +26,11 @@ import {
   type ProjectFieldDenial,
 } from "@/lib/projects/field-denials";
 import {
+  applyProjectFieldAttachmentsToCards,
+  loadProjectFieldAttachments,
+  type ProjectFieldAttachment,
+} from "@/lib/projects/field-attachments";
+import {
   loadProjectMergeMap,
   resolveProjectSurvivorKey,
 } from "@/lib/projects/manual-merge";
@@ -222,6 +227,29 @@ function applyFieldDenialsToSummaries(
     byId.set(project.id, foldProjectSummaries(existing, project, project.id));
   }
   return [...byId.values()];
+}
+
+function applyFieldAttachmentsToSummaries(
+  projects: ProjectSummaryBuild[],
+  attachments: ProjectFieldAttachment[],
+  mergeMap: Map<string, string>,
+): ProjectSummaryBuild[] {
+  if (attachments.length === 0) return projects;
+  return projects.map((project) => {
+    const next = applyProjectFieldAttachmentsToCards(
+      [project],
+      attachments,
+      mergeMap,
+    )[0];
+    if (!next) return project;
+    return {
+      ...project,
+      ...next,
+      aliases: [...(next.aliases ?? [])],
+      displayName: projectCardDisplayName(next),
+      id: project.id,
+    };
+  });
 }
 
 function parseEmailIdsJson(raw: string): string[] {
@@ -498,7 +526,7 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
   const started = Date.now();
   const db = getDb();
 
-  const [mergeRows, mergeMap, denials, orgNameKeys, policies, mentionIndex] =
+  const [mergeRows, mergeMap, denials, attachments, orgNameKeys, policies, mentionIndex] =
     await Promise.all([
       db
         .select({
@@ -511,6 +539,7 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
         .orderBy(desc(projectFingerprintMerges.updatedAt)),
       loadProjectMergeMap(),
       loadProjectFieldDenials(),
+      loadProjectFieldAttachments(),
       loadOrganizationIdentityNameKeys().catch(() => new Set<string>()),
       loadProjectIdentityPolicies().catch(() => []),
       loadBoardReportMentionIndex().catch(
@@ -665,12 +694,16 @@ async function computeAllProjectFingerprintSummaries(): Promise<ProjectFingerpri
     };
   });
 
-  const mergedProjects = applyFieldDenialsToSummaries(
-    applyProjectManualMerges(projects, mergeMap),
-    denials,
+  const mergedProjects = applyFieldAttachmentsToSummaries(
+    applyFieldDenialsToSummaries(
+      applyProjectManualMerges(projects, mergeMap),
+      denials,
+      mergeMap,
+      orgNameKeys,
+      identityKeyFn,
+    ),
+    attachments,
     mergeMap,
-    orgNameKeys,
-    identityKeyFn,
   );
 
   const allEmailIds = new Set<string>();

@@ -18,19 +18,23 @@ Rules:
 export function pageVisionUserText(
   pageNo: number,
   nativeText?: string | null,
-  options?: { kind?: "pdf" | "image" },
+  options?: { kind?: "pdf" | "image"; fullDocument?: boolean },
 ): string {
   const kind = options?.kind ?? "pdf";
   if (kind === "image") {
     return "Transcribe this image into Markdown. Include captions and a brief description of every photograph, diagram, stamp, or handwriting block.";
   }
 
+  const pageLead = options?.fullDocument
+    ? `Transcribe ONLY page ${pageNo} of the attached multi-page PDF into Markdown. Ignore every other page.`
+    : `Transcribe PDF page ${pageNo} into Markdown.`;
+
   const trimmed = nativeText?.trim() ?? "";
   if (!trimmed) {
-    return `Transcribe PDF page ${pageNo} into Markdown. Include captions and a brief description of every photograph or diagram.`;
+    return `${pageLead} Include captions and a brief description of every photograph or diagram.`;
   }
   return [
-    `Transcribe PDF page ${pageNo} into Markdown.`,
+    `${pageLead}`,
     "Selectable text already extracted from this page (ground truth for printed text — preserve it; focus extra attention on photographs/diagrams and their captions):",
     "-----",
     trimmed,

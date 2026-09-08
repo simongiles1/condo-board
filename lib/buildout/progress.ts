@@ -40,7 +40,7 @@ export type BuildoutSequenceStep = {
   relatedIds: string[];
 };
 
-export const BUILDOUT_REVIEWED_ON = "2026-09-04";
+export const BUILDOUT_REVIEWED_ON = "2026-09-07";
 
 /**
  * Corpus snapshot for the playbook header. Not queried live — refresh when
@@ -151,14 +151,12 @@ export const BUILDOUT_STAGES: BuildoutItem[] = [
     id: "equipment",
     stage: "6",
     title: "Equipment",
-    status: "not_started",
+    status: "in_progress",
     summary:
-      "Dedicated harvest is not built. The extraction calendar equipment lane is a placeholder. Older analysis-path mentions and a building_equipment_registry import stub exist; they are not Stage 6.",
+      "Canonical asset register established on `building_equipment_registry` with stable structured IDs (e.g. DOOR-PUBLIC-P1, PUMP-DOM-BOOST-DUP), true name aliases, and component keywords. Equipment resolution engine resolves mentions to canonical IDs, maps component parts to parent systems, suppresses bid alternatives from minting durable rows, and quarantines uncataloged kit as provisional equipment. Pass A wires project mentions to equipment anchors, gating resolution against cross-asset misattachment. Entities → Equipment UI displays canonical roster, aliases, component keywords, and mention/event linkages.",
     remaining: [
-      "Wait until attachment markdown is in place — prefer drawings and specs over body mentions.",
-      "Resolve mentions against the registry; never create durable assets from bid options or components.",
-      "Drawing-schedule ingest into the registry is spec-only (docs/02). Needs drawings from management before extracted mentions can tag real assets.",
-      "Separate value proposition from the board checklist. Keep this after to-dos, projects, and meeting review — weeks of work, nice-to-have vs must-have.",
+      "Ingest complete mechanical/electrical drawing schedules from management when drawing PDFs are provided (docs/02).",
+      "Attachment markdown equipment harvest once vision backfill completes.",
     ],
   },
 ];
@@ -188,6 +186,21 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
       "Feed stored attachment markdown into the same harvests after vision is mostly done. Include projects.",
       "After new people/orgs land, re-run Stage 2B Propose incrementally.",
       "Equipment Stage 6 should prefer drawings and specs over body mentions.",
+    ],
+  },
+  {
+    id: "corpus-rag",
+    stage: null,
+    title: "Corpus search / RAG",
+    status: "in_progress",
+    summary:
+      "Natural-language search over the full email + attachment archive. Chunk email bodies and Docling/vision markdown into document_chunks, embed with pgvector in Supabase, and surface ranked excerpts with click-through to source email or attachment. Dev qualification first ('where is the reserve fund study?'); later board questions ('what elevator project ran this year?'). OpenSearch deemed overkill — pgvector on existing Postgres is the stack. Distinct from OKF (curated wiki export) and wiki graph (entity profile navigation).",
+    remaining: [
+      "Phase A shipped: schema, gemini-embedding-001 embedder, chunking engine, incremental indexer, search API, and /admin/analysis/archive-search dev UI.",
+      "Run incremental indexer across corpus as attachment vision backfill progresses.",
+      "Phase B: boost with structured registries (projects, equipment, orgs) when entity links exist.",
+      "Phase C: tie into OKF entity wiki and governance ask-AI — not a prerequisite for Phase A.",
+      "Entity-register embeddings for Pass B resolution are a separate index — do not conflate with document_chunks.",
     ],
   },
   {
@@ -329,28 +342,24 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     id: "floor-plan-markup",
     stage: null,
     title: "Floor plan markup & mechanical risers",
-    status: "in_progress",
+    status: "done",
     summary:
-      "Building → Floor plans: upload, crop, per-building pin, compare, and full-screen edit. Architectural and mechanical families; east/west mechanical merge. Edit mode has lines, rectangles, rooms, callouts, riser connections, follow-a-stack-up-the-building, standardize templates, and overlay lines from other floors. Mechanical riser catalog persists type/number assignments.",
+      "Building → Floor plans: upload, crop, per-building pin, compare, and full-screen edit. Architectural and mechanical families; east/west mechanical merge. Riser tagging, standardize templates, rooms, and leak glow QA shipped on production sheets (verified 2026-09-07).",
     remaining: [
-      "Finish tracing riser stacks floor-by-floor (follow overlays, approve/dismiss, mark completed).",
-      "Standardize freehand boxes to template shapes building-wide; verify clip-draw dialog at plan scale.",
-      "Room/unit enclosures and leak glow for gap QA on dense sheets.",
-      "Drawing schedule extract into equipment registry (docs/02) — not started; markup is the manual path for now.",
+      "Drawing schedule extract into equipment registry (docs/02) — deferred; hand markup is the path for now.",
     ],
   },
   {
     id: "digital-twin",
     stage: null,
     title: "3D digital twin",
-    status: "in_progress",
+    status: "done",
     summary:
-      "Building → Asset overview & 3D: real massing from pinned floor plans (slabs, extruded walls, blueprint textures on slab tops). Phase 2–3 ship 3D riser pipe sweeps, system layer filters, opacity sliders, floor slicing, click-to-inspect, quick presets, and unit search with selective wall transparency. The docs/ lightweight twin (Blender GLB → nodes.json / financials.json → cost heatmap) is spec-only.",
+      "Building → Asset overview & 3D: massing, blueprint textures, riser sweeps, layer presets, opacity sliders, floor slice, unit search with wall transparency, and production spot-check all verified (2026-09-07).",
     remaining: [
-      "Verify presets, wall-opacity cavity views, pipe inspection card, and unit highlight on production data.",
-      "Equipment nodes bound to 3D picks (docs/03 nodes.json) — not wired.",
-      "Temporal ledger + heatmap from email parse (docs/04 financials.json) — not wired.",
-      "Drawing schedule auto-extract (docs/02) instead of hand-traced riser markup.",
+      "Equipment nodes bound to 3D picks (docs/03 nodes.json) — deferred.",
+      "Temporal ledger + heatmap from email parse (docs/04 financials.json) — deferred.",
+      "Drawing schedule auto-extract (docs/02) — deferred.",
     ],
   },
   {
@@ -384,27 +393,11 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
  */
 export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
   {
-    id: "seq-floor-plans",
-    kind: "parallel",
-    title: "Trace mechanical risers on floor plans",
-    detail:
-      "Building → Floor plans: crop/pin/compare is live. Keep following stacks floor-by-floor (approve, dismiss, completed). Standardize freehand boxes to catalog templates. Rooms and leak glow help close wall gaps before 3D trusts the geometry.",
-    relatedIds: ["floor-plan-markup", "digital-twin"],
-  },
-  {
-    id: "seq-3d-twin",
-    kind: "parallel",
-    title: "3D twin: verify massing, pipes, and unit highlight",
-    detail:
-      "Asset overview & 3D has real slabs/walls, blueprint textures, riser sweeps, layer presets, opacity sliders, floor slice, and unit search with wall transparency. Spot-check on production markup. nodes.json / financials.json heatmap remains spec-only (docs/).",
-    relatedIds: ["digital-twin", "floor-plan-markup"],
-  },
-  {
     id: "seq-projects",
     kind: "parallel",
     title: "Project extract + mentions + identity merge (ongoing lab)",
     detail:
-      "Mentions tab, AI Duplicates review, and board-report salience are live. Keep bulk extract and merge over the next month. Maglock 2024 and Maglock 2026 stay separate until you merge them. Leave harvest-after-sync alone until a bulk you trust finishes.",
+      "Stage 5 is the active harvest lane. Mentions tab, AI Duplicates review, and board-report salience are live. Keep bulk extract and merge over the next month. Maglock 2024 and Maglock 2026 stay separate until you merge them. Leave harvest-after-sync alone until a bulk you trust finishes.",
     relatedIds: ["projects"],
   },
   {
@@ -472,6 +465,14 @@ export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
     relatedIds: ["attachment-harvest", "contacts", "organizations", "events", "todos", "projects"],
   },
   {
+    id: "seq-corpus-rag",
+    kind: "after",
+    title: "Corpus search / RAG (pgvector)",
+    detail:
+      "Only after vision backfill and Docling text extraction are complete on the attachment corpus. Chunk bodies + attachment markdown into document_chunks, embed with pgvector in Supabase, ship an 'Ask the archive' dev UI. Entity-register embeddings for Pass B stay a separate index.",
+    relatedIds: ["corpus-rag", "vision-backfill", "attachment-harvest"],
+  },
+  {
     id: "seq-todo-workspace",
     kind: "later",
     title: "To-do workspace (Working list only)",
@@ -508,7 +509,7 @@ export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
     kind: "later",
     title: "Email drafts, nodes/financials heatmap, concept auto-promote, Open Knowledge Format",
     detail:
-      "Drafts wait until source-quote quality is trusted and who's-who prompts exist. Cost heatmap rides on nodes.json + financials.json (docs/) after equipment registry quality is solid. OKF is an export + wiki layer after registries, affiliations, and equipment — not the next extraction stage.",
+      "Drafts wait until source-quote quality is trusted and who's-who prompts exist. Cost heatmap rides on nodes.json + financials.json (docs/) after equipment registry quality is solid. OKF is an export + wiki layer after registries, affiliations, and equipment — not the next extraction stage. Corpus RAG (pgvector) is its own card and runs after vision backfill.",
     relatedIds: ["email-drafts", "digital-twin", "concept-promote", "okf"],
   },
 ];

@@ -139,6 +139,16 @@ export function AnalysisLabClient() {
         </p>
         <p className="mt-1 text-sm">
           <Link
+            href="/admin/analysis/archive-search"
+            className="font-medium text-teal-800 underline hover:text-teal-950"
+          >
+            Ask the archive (Corpus RAG)
+          </Link>{" "}
+          — natural-language semantic search across emails and parsed
+          attachment documents with ranked excerpts.
+        </p>
+        <p className="mt-1 text-sm">
+          <Link
             href="/admin/analysis/page-vision"
             className="font-medium text-teal-800 underline hover:text-teal-950"
           >

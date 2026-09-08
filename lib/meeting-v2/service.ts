@@ -51,7 +51,10 @@ import {
   runToolEnabledInvestigation,
 } from "@/lib/meeting-v2/investigation-tools";
 import { extractPdfPagesWithText, buildBasicDocumentSections } from "@/lib/meeting-v2/pdf";
-import { parseVttCues } from "@/lib/parsers/vtt";
+import {
+  mergedCuesToSegmentRows,
+  parseVttToMergedCues,
+} from "@/lib/meeting-v2/transcript";
 
 type LegacyMeetingRow = typeof meetings.$inferSelect;
 type MeetingV2Row = typeof meetingsV2.$inferSelect;
@@ -274,18 +277,6 @@ type AgendaItemContextDocument = {
   chunksById: Record<string, ChunkContext>;
   buildNotes: string[];
 };
-
-function vttTimestampToMs(value: string): number {
-  const match = value.match(/^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/);
-  if (!match) return 0;
-  const [, hh, mm, ss, ms = "0"] = match;
-  return (
-    Number(hh) * 60 * 60 * 1000 +
-    Number(mm) * 60 * 1000 +
-    Number(ss) * 1000 +
-    Number(ms.padEnd(3, "0"))
-  );
-}
 
 function normalizeKey(value: string | null | undefined): string {
   return normalizeWhitespace(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -1254,7 +1245,7 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
   const transcriptBuffer = await readFile(transcriptPath);
   const boardPackageBuffer = await readFile(boardPackagePath);
   const transcriptText = transcriptBuffer.toString("utf8");
-  const transcriptCues = parseVttCues(transcriptText);
+  const mergedTranscriptCues = parseVttToMergedCues(transcriptText);
 
   const transcriptArtifact = await ensureSourceArtifact(
     meetingId,
@@ -1275,20 +1266,15 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
     null,
   );
 
-  if (existingSegments.length < transcriptCues.length) {
-    const segmentRows = transcriptCues.slice(existingSegments.length).map((cue, index) => ({
-      id: randomUUID(),
-      meetingV2Id: meetingId,
-      sourceArtifactId: transcriptArtifact.id,
-      sequence: existingSegments.length + index,
-      startMs: vttTimestampToMs(cue.start),
-      endMs: vttTimestampToMs(cue.end),
-      startTimestamp: cue.start,
-      endTimestamp: cue.end,
-      speakerLabel: cue.speaker || null,
-      text: cue.text,
-      rawCueId: null,
-    })) satisfies Array<typeof meetingsV2TranscriptSegments.$inferInsert>;
+  if (existingSegments.length < mergedTranscriptCues.length) {
+    const segmentRows = mergedCuesToSegmentRows(
+      mergedTranscriptCues.slice(existingSegments.length),
+      {
+        meetingId,
+        sourceArtifactId: transcriptArtifact.id,
+        startSequence: existingSegments.length,
+      },
+    );
     if (segmentRows.length > 0) {
       await db.insert(meetingsV2TranscriptSegments).values(segmentRows);
     }

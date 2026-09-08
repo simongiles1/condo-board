@@ -170,6 +170,7 @@ describe("appendIbmConvertOptions", () => {
     assert.equal(form.get("document_timeout"), "3600");
     assert.equal(form.get("target_type"), IBM_TARGET_TYPE);
     assert.equal(form.get("target_type"), "presigned_url");
+    assert.deepEqual(form.getAll("to_formats"), ["json", "md"]);
     assert.equal(
       form.getAll("page_range").some((value) => String(value).startsWith("[")),
       false,
@@ -222,7 +223,7 @@ describe("extractIbmMarkdown", () => {
 });
 
 describe("selectIbmMarkdownArtifact", () => {
-  it("prefers markdown over json on a PresignedArtifactResult envelope", () => {
+  it("prefers json over markdown on a PresignedArtifactResult envelope", () => {
     const selected = selectIbmMarkdownArtifact({
       result: {
         kind: "PresignedArtifactResult",
@@ -231,12 +232,12 @@ describe("selectIbmMarkdownArtifact", () => {
             status: "success",
             artifacts: [
               {
-                artifact_type: "json",
-                uri: "https://download.example.org/a.json",
-              },
-              {
                 artifact_type: "markdown",
                 uri: "https://download.example.org/a.md",
+              },
+              {
+                artifact_type: "json",
+                uri: "https://download.example.org/a.json",
               },
             ],
           },
@@ -244,8 +245,8 @@ describe("selectIbmMarkdownArtifact", () => {
       },
     });
     assert.deepEqual(selected, {
-      artifactType: "markdown",
-      uri: "https://download.example.org/a.md",
+      artifactType: "json",
+      uri: "https://download.example.org/a.json",
     });
   });
 
@@ -281,6 +282,21 @@ describe("markdownFromIbmArtifactBytes", () => {
         Buffer.from(JSON.stringify({ document: { md_content: "hello" } })),
       ),
       "hello",
+    );
+  });
+
+  it("walks DoclingDocument.texts when JSON has no md_content", () => {
+    assert.equal(
+      markdownFromIbmArtifactBytes(
+        "json",
+        Buffer.from(
+          JSON.stringify({
+            schema_name: "DoclingDocument",
+            texts: [{ text: "Line one" }, { text: "Line two" }],
+          }),
+        ),
+      ),
+      "Line one\n\nLine two",
     );
   });
 });
@@ -377,8 +393,8 @@ describe("isFatalIbmDoclingError", () => {
     };
     assert.equal(shouldRotateOnEmptyIbmResult(data), false);
     assert.deepEqual(listIbmMarkdownArtifacts(data).map((a) => a.artifactType), [
-      "markdown",
       "json",
+      "markdown",
     ]);
   });
 

@@ -27,8 +27,8 @@ export const PIPELINE_STAGE_TOOLTIPS: Record<string, PipelineStageTooltip> = {
       {
         title: "Transcript",
         items: [
-          "Parse the VTT into timestamped speaker segments.",
-          "Group segments into overlapping transcript chunks sized for LLM context (segment count and character limits, not a fixed clock interval).",
+          "Parse the VTT and merge consecutive same-speaker utterances into readable segments.",
+          "Group readable segments into overlapping transcript chunks sized for LLM context (segment count and character limits, not a fixed clock interval).",
           "Store segments and chunks for extraction and evidence lookup.",
         ],
       },

@@ -22,6 +22,7 @@ import {
   PipelineRunConfirmDialog,
   type PipelineConfirmAction,
 } from "@/components/PipelineRunConfirmDialog";
+import { PipelineTransitionsDialog } from "@/components/PipelineTransitionsDialog";
 import { GoldStandardValidationBadge } from "@/components/GoldStandardValidationBadge";
 import { GoldStandardCompareDialog } from "@/components/GoldStandardCompareDialog";
 import { GoldStandardValidationSidePanel } from "@/components/GoldStandardValidationSidePanel";
@@ -408,6 +409,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [usageLoading, setUsageLoading] = useState(false);
   const [pollWindowUntil, setPollWindowUntil] = useState<number | null>(null);
   const [compareDialogOpen, setCompareDialogOpen] = useState(false);
+  const [transitionsDialogOpen, setTransitionsDialogOpen] = useState(false);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [liveValidation, setLiveValidation] =
     useState<GoldStandardValidationResult | null>(null);
@@ -914,7 +916,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         </div>
 
         {hasSuccessfulRun ? (
-          <div className="rounded-b-2xl px-3 py-2 sm:px-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-b-2xl px-3 py-2 sm:px-4">
             <div className="flex flex-wrap gap-1.5 rounded-xl bg-slate-50 p-1">
               {([
                 ["overview", "Overview"],
@@ -932,6 +934,13 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 </button>
               ))}
             </div>
+            <button
+              type="button"
+              onClick={() => setTransitionsDialogOpen(true)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+            >
+              JSON transitions
+            </button>
           </div>
         ) : null}
       </div>
@@ -1013,6 +1022,12 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         meetingTitle={status?.meeting.title ?? null}
         onClose={() => setCompareDialogOpen(false)}
         onSuccess={handleCompareSuccess}
+      />
+      <PipelineTransitionsDialog
+        open={transitionsDialogOpen}
+        meetingId={meetingId}
+        meetingTitle={status?.meeting.title ?? null}
+        onClose={() => setTransitionsDialogOpen(false)}
       />
       <GoldStandardValidationSidePanel
         meeting={

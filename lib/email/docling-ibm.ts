@@ -32,7 +32,8 @@ export const DOCLING_PAGE_BREAK_PLACEHOLDER = "<!-- DOCLING_PAGE_BREAK -->";
 export const IBM_TARGET_TYPE = "presigned_url";
 const ARTIFACT_DOWNLOAD_TIMEOUT_MS = 60_000;
 const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
-const ARTIFACT_TYPE_PREFERENCE = ["markdown", "md", "text", "json"] as const;
+/** Hosted IBM often returns 0-byte markdown S3 objects; JSON carries md_content. */
+const ARTIFACT_TYPE_PREFERENCE = ["json", "markdown", "md", "text"] as const;
 
 const POLL_MS = 2_000;
 const MAX_WAIT_MS = 10 * 60 * 1000;
@@ -395,6 +396,8 @@ export function appendIbmConvertOptions(
   const start = Math.floor(Number(pageStart));
   const end = Math.floor(Number(pageEnd));
   form.append("from_formats", "pdf");
+  // IBM presigned_url flow: request JSON alongside markdown (tutorial uses both).
+  form.append("to_formats", "json");
   form.append("to_formats", "md");
   form.append("do_ocr", "true");
   form.append("force_ocr", "false");
@@ -519,7 +522,7 @@ function artifactRefsFromDocument(value: unknown): IbmArtifactRef[] {
 
 /**
  * Hosted IBM returns a PresignedArtifactResult manifest, not inline md_content.
- * Prefer markdown, then text, then JSON that still carries md_content.
+ * Prefer JSON (carries md_content or DoclingDocument.texts), then markdown files.
  */
 export function selectIbmMarkdownArtifact(
   data: unknown,
@@ -527,7 +530,7 @@ export function selectIbmMarkdownArtifact(
   return listIbmMarkdownArtifacts(data)[0] ?? null;
 }
 
-/** All artifact refs in preference order (markdown → md → text → json). */
+/** All artifact refs in preference order (json → markdown → md → text). */
 export function listIbmMarkdownArtifacts(data: unknown): IbmArtifactRef[] {
   const out: IbmArtifactRef[] = [];
   const seen = new Set<string>();
@@ -548,6 +551,24 @@ export function listIbmMarkdownArtifacts(data: unknown): IbmArtifactRef[] {
   return out;
 }
 
+function markdownFromDoclingDocumentJson(value: unknown): string {
+  const root = asRecord(value);
+  if (!root) return "";
+  if (root.schema_name !== "DoclingDocument") {
+    const nested = root.document ?? root.content;
+    if (nested) return markdownFromDoclingDocumentJson(nested);
+    return "";
+  }
+  const texts = root.texts;
+  if (!Array.isArray(texts) || texts.length === 0) return "";
+  const parts: string[] = [];
+  for (const item of texts) {
+    const text = stringField(asRecord(item), "text");
+    if (text) parts.push(text);
+  }
+  return parts.join("\n\n");
+}
+
 export function markdownFromIbmArtifactBytes(
   artifactType: string,
   bytes: Buffer,
@@ -556,7 +577,10 @@ export function markdownFromIbmArtifactBytes(
   if (!text) return "";
   if (artifactType === "json") {
     try {
-      return extractIbmMarkdown(JSON.parse(text));
+      const parsed = JSON.parse(text);
+      const fromMd = extractIbmMarkdown(parsed);
+      if (fromMd) return fromMd;
+      return markdownFromDoclingDocumentJson(parsed);
     } catch {
       return "";
     }
@@ -707,15 +731,20 @@ async function downloadIbmMarkdownFromResult(
   const artifacts = listIbmMarkdownArtifacts(data);
   const root = asRecord(data);
   const numSucceeded = numberField(root, "num_succeeded", "numSucceeded");
-  const maxAttempts = numSucceeded != null && numSucceeded > 0 ? 6 : 1;
+  const maxRounds = numSucceeded != null && numSucceeded > 0 ? 4 : 1;
 
-  for (const artifact of artifacts) {
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+  if (numSucceeded != null && numSucceeded > 0) {
+    // Presigned S3 artifacts can lag behind num_succeeded.
+    await sleep(1_500);
+  }
+
+  for (let round = 1; round <= maxRounds; round += 1) {
+    for (const artifact of artifacts) {
       const markdown = await downloadIbmArtifactMarkdown(artifact, apiKey);
       if (markdown) return markdown;
-      if (attempt < maxAttempts) {
-        await sleep(600 * attempt);
-      }
+    }
+    if (round < maxRounds) {
+      await sleep(600 * round);
     }
   }
   return "";

@@ -4,6 +4,7 @@ import type {
   meetingsV2DocumentPages,
   meetingsV2TranscriptSegments,
 } from "@/lib/db/schema";
+import { formatReadableCueLine } from "@/lib/parsers/vtt";
 
 type DocumentPageRow = typeof meetingsV2DocumentPages.$inferSelect;
 type TranscriptSegmentRow = typeof meetingsV2TranscriptSegments.$inferSelect;
@@ -55,6 +56,18 @@ function checksumFor(value: string): string {
 
 function formatChunkOrdinal(prefix: "document_chunk" | "transcript_chunk", index: number): string {
   return `${prefix}_${String(index + 1).padStart(3, "0")}`;
+}
+
+function formatTranscriptSegmentLine(
+  segment: TranscriptSegmentRow,
+  isOverlap: boolean,
+): string {
+  const prefix = isOverlap ? `[PREVIOUS TRANSCRIPT CONTEXT] ` : "";
+  return `${prefix}${formatReadableCueLine({
+    start: segment.startTimestamp,
+    speaker: segment.speakerLabel,
+    text: segment.text,
+  })}`;
 }
 
 export function chunkDocumentPages(pages: DocumentPageRow[]): DocumentChunk[] {
@@ -137,22 +150,18 @@ export function chunkTranscriptSegments(segments: TranscriptSegmentRow[]): Trans
   const rawChunks: Array<
     Omit<TranscriptChunk, "aiChunkId" | "metadata">
   > = [];
-  const maxSegmentsPerChunk = 250;
-  const minSegmentsPerChunk = 150;
+  const maxSegmentsPerChunk = 80;
+  const minSegmentsPerChunk = 40;
   const maxChunkChars = 35000;
   let currentSegments: TranscriptSegmentRow[] = [];
   let currentLength = 0;
 
   function pushChunk(slice: TranscriptSegmentRow[]) {
     if (slice.length === 0) return;
-    const overlapBoundary = rawChunks.length > 0 ? 50 : 0;
+    const overlapBoundary = rawChunks.length > 0 ? 15 : 0;
     const text = slice
-      .map((segment, idx) => {
-        const isOverlap = idx < overlapBoundary;
-        const prefix = isOverlap ? `[PREVIOUS TRANSCRIPT CONTEXT] ` : "";
-        return `${prefix}[${segment.startTimestamp}-${segment.endTimestamp}] ${segment.speakerLabel ?? "Unknown"}: ${normalizeWhitespace(segment.text)}`;
-      })
-      .join("\n");
+      .map((segment, idx) => formatTranscriptSegmentLine(segment, idx < overlapBoundary))
+      .join("\n\n");
     const sequenceRange: [number, number] = [
       slice[0].sequence,
       slice[slice.length - 1].sequence,
@@ -170,24 +179,24 @@ export function chunkTranscriptSegments(segments: TranscriptSegmentRow[]): Trans
   }
 
   for (const segment of ordered) {
-    const segmentText = `[${segment.startTimestamp}-${segment.endTimestamp}] ${segment.speakerLabel ?? "Unknown"}: ${normalizeWhitespace(segment.text)}`;
-    const nextLength = currentLength + segmentText.length + (currentSegments.length > 0 ? 1 : 0);
+    const segmentText = formatTranscriptSegmentLine(segment, false);
+    const nextLength = currentLength + segmentText.length + (currentSegments.length > 0 ? 2 : 0);
     const reachedSegmentCap = currentSegments.length >= maxSegmentsPerChunk;
     const reachedLengthCap =
       currentSegments.length >= minSegmentsPerChunk && nextLength > maxChunkChars;
 
     if (currentSegments.length > 0 && (reachedSegmentCap || reachedLengthCap)) {
       pushChunk(currentSegments);
-      const overlapSegments = currentSegments.slice(-50);
+      const overlapSegments = currentSegments.slice(-15);
       currentSegments = [...overlapSegments];
       currentLength = currentSegments.reduce((acc, seg) => {
-        const sText = `[${seg.startTimestamp}-${seg.endTimestamp}] ${seg.speakerLabel ?? "Unknown"}: ${normalizeWhitespace(seg.text)}`;
-        return acc + sText.length + 1;
-      }, 0) - (currentSegments.length > 0 ? 1 : 0);
+        const sText = formatTranscriptSegmentLine(seg, false);
+        return acc + sText.length + 2;
+      }, 0) - (currentSegments.length > 0 ? 2 : 0);
     }
 
     currentSegments.push(segment);
-    currentLength += segmentText.length + (currentSegments.length > 1 ? 1 : 0);
+    currentLength += segmentText.length + (currentSegments.length > 1 ? 2 : 0);
   }
 
   pushChunk(currentSegments);

@@ -18,6 +18,33 @@ import {
   type VttCue,
 } from "@/lib/parsers/vtt";
 
+export function parseVttToMergedCues(transcriptText: string): MergedVttCue[] {
+  return mergeConsecutiveBySpeaker(parseVttCues(transcriptText));
+}
+
+export function mergedCuesToSegmentRows(
+  cues: MergedVttCue[],
+  options: {
+    meetingId: string;
+    sourceArtifactId: string;
+    startSequence: number;
+  },
+): Array<typeof meetingsV2TranscriptSegments.$inferInsert> {
+  return cues.map((cue, index) => ({
+    id: randomUUID(),
+    meetingV2Id: options.meetingId,
+    sourceArtifactId: options.sourceArtifactId,
+    sequence: options.startSequence + index,
+    startMs: vttTimestampToMs(cue.start),
+    endMs: vttTimestampToMs(cue.end),
+    startTimestamp: cue.start,
+    endTimestamp: cue.end,
+    speakerLabel: cue.speaker || null,
+    text: cue.text,
+    rawCueId: null,
+  }));
+}
+
 export type MeetingTranscriptPayload = {
   content: string;
   readable: string;
@@ -128,24 +155,16 @@ export async function seedMeetingV2TranscriptSegments(options: {
     await db.insert(meetingsV2SourceArtifacts).values(transcriptArtifact);
   }
 
-  const transcriptCues = parseVttCues(options.transcriptText);
-  if (transcriptCues.length === 0) {
+  const mergedCues = parseVttToMergedCues(options.transcriptText);
+  if (mergedCues.length === 0) {
     return;
   }
 
-  const segmentRows = transcriptCues.map((cue, index) => ({
-    id: randomUUID(),
-    meetingV2Id: options.meetingId,
+  const segmentRows = mergedCuesToSegmentRows(mergedCues, {
+    meetingId: options.meetingId,
     sourceArtifactId: transcriptArtifact.id,
-    sequence: index,
-    startMs: vttTimestampToMs(cue.start),
-    endMs: vttTimestampToMs(cue.end),
-    startTimestamp: cue.start,
-    endTimestamp: cue.end,
-    speakerLabel: cue.speaker || null,
-    text: cue.text,
-    rawCueId: null,
-  })) satisfies Array<typeof meetingsV2TranscriptSegments.$inferInsert>;
+    startSequence: 0,
+  });
 
   await db.insert(meetingsV2TranscriptSegments).values(segmentRows);
 }

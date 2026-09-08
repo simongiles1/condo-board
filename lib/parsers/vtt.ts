@@ -88,15 +88,20 @@ export function mergeConsecutiveBySpeaker(cues: VttCue[]): MergedVttCue[] {
   return merged;
 }
 
+/** One merged cue as a readable transcript line: `[HH:MM:SS] Speaker: text`. */
+export function formatReadableCueLine(cue: {
+  start: string;
+  speaker?: string | null;
+  text: string;
+}): string {
+  const time = formatVttTimestamp(cue.start);
+  const label = cue.speaker?.trim() ? `${cue.speaker.trim()}: ` : "";
+  return `[${time}] ${label}${collapseWhitespace(cue.text)}`;
+}
+
 /** Format merged cues as human-readable plain text with timestamps. */
 export function formatReadableTranscript(merged: MergedVttCue[]): string {
-  return merged
-    .map((cue) => {
-      const time = formatVttTimestamp(cue.start);
-      const label = cue.speaker ? `${cue.speaker}: ` : "";
-      return `[${time}] ${label}${cue.text}`;
-    })
-    .join("\n\n");
+  return merged.map((cue) => formatReadableCueLine(cue)).join("\n\n");
 }
 
 /** Parse VTT and merge consecutive same-speaker cues. */

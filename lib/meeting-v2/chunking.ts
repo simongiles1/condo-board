@@ -4,6 +4,7 @@ import type {
   meetingsV2DocumentPages,
   meetingsV2TranscriptSegments,
 } from "@/lib/db/schema";
+import { buildSemanticDocumentSections } from "@/lib/meeting-v2/pdf";
 import { formatReadableCueLine } from "@/lib/parsers/vtt";
 
 type DocumentPageRow = typeof meetingsV2DocumentPages.$inferSelect;
@@ -46,7 +47,8 @@ export type TranscriptChunk = {
   };
 };
 
-function normalizeWhitespace(value: string): string {
+function normalizeWhitespace(value: string | null | undefined): string {
+  if (!value) return "";
   return value.replace(/\s+/g, " ").trim();
 }
 
@@ -70,24 +72,49 @@ function formatTranscriptSegmentLine(
   })}`;
 }
 
-export function chunkDocumentPages(pages: DocumentPageRow[]): DocumentChunk[] {
+export function chunkDocumentPages(
+  pages: DocumentPageRow[],
+  explicitSections?: Array<{ title: string; startPage: number; endPage: number }>,
+): DocumentChunk[] {
   const ordered = [...pages].sort((a, b) => a.pageNumber - b.pageNumber);
-  const rawChunks: Array<Omit<DocumentChunk, "aiChunkId" | "metadata"> & { pageNumbers: number[] }> = [];
-  let currentPages: DocumentPageRow[] = [];
-  let currentLength = 0;
+  if (ordered.length === 0) return [];
 
-  for (const page of ordered) {
-    const pageText = `PAGE ${page.pageNumber}\n${normalizeWhitespace(page.extractedText).slice(0, 2800)}`;
-    const nextLength = currentLength + pageText.length;
-    if (currentPages.length >= 5 || nextLength > 17500) {
-      const text = currentPages
-        .map((entry, idx) => {
-          const isOverlap = rawChunks.length > 0 && idx < 1;
-          const prefix = isOverlap ? `[PREVIOUS PAGE CONTEXT] PAGE ${entry.pageNumber}` : `PAGE ${entry.pageNumber}`;
-          return `${prefix}\n${normalizeWhitespace(entry.extractedText).slice(0, 2800)}`;
-        })
+  const sections =
+    explicitSections && explicitSections.length > 0
+      ? explicitSections
+      : buildSemanticDocumentSections(
+          ordered.map((p) => ({
+            pageNumber: p.pageNumber,
+            heading: p.pageHeading,
+            text: p.extractedText,
+          })),
+        );
+
+  const pageByNumber = new Map(ordered.map((p) => [p.pageNumber, p] as const));
+  const rawChunks: Array<Omit<DocumentChunk, "aiChunkId" | "metadata"> & { pageNumbers: number[] }> = [];
+
+  for (const section of sections) {
+    const sectionPages: DocumentPageRow[] = [];
+    for (let pNum = section.startPage; pNum <= section.endPage; pNum++) {
+      const p = pageByNumber.get(pNum);
+      if (p) sectionPages.push(p);
+    }
+    if (sectionPages.length === 0) continue;
+
+    let currentSlice: DocumentPageRow[] = [];
+    let currentLength = 0;
+    let partIndex = 1;
+
+    const flushSlice = (slice: DocumentPageRow[], isMultiPart: boolean) => {
+      if (slice.length === 0) return;
+      const pageNumbers = slice.map((p) => p.pageNumber);
+      const partSuffix = isMultiPart ? ` (Part ${partIndex})` : "";
+      const header = `[SECTION: ${section.title}${partSuffix}] (Pages ${pageNumbers[0]}-${pageNumbers.at(-1)})`;
+      const body = slice
+        .map((entry) => `PAGE ${entry.pageNumber}\n${normalizeWhitespace(entry.extractedText || entry.text).slice(0, 3200)}`)
         .join("\n\n");
-      const pageNumbers = currentPages.map((entry) => entry.pageNumber);
+      const text = `${header}\n\n${body}`;
+
       rawChunks.push({
         chunkKey: `doc:${pageNumbers[0]}-${pageNumbers.at(-1)}:${checksumFor(text)}`,
         chunkKind: "document",
@@ -97,30 +124,35 @@ export function chunkDocumentPages(pages: DocumentPageRow[]): DocumentChunk[] {
         pageNumbers,
         text,
       });
-      const overlapPages = currentPages.slice(-1);
-      currentPages = [...overlapPages];
-      currentLength = currentPages.reduce((acc, entry) => {
-        const entryText = `PAGE ${entry.pageNumber}\n${normalizeWhitespace(entry.extractedText).slice(0, 2800)}`;
-        return acc + entryText.length + 2;
-      }, 0) - (currentPages.length > 0 ? 2 : 0);
+      partIndex++;
+    };
+
+    for (const page of sectionPages) {
+      const pageTextLen = normalizeWhitespace(page.extractedText || page.text).length;
+      if (currentSlice.length > 0 && currentLength + pageTextLen > 18000) {
+        flushSlice(currentSlice, true);
+        currentSlice = [];
+        currentLength = 0;
+      }
+      currentSlice.push(page);
+      currentLength += pageTextLen;
     }
-    currentPages.push(page);
-    currentLength += pageText.length;
+
+    if (currentSlice.length > 0) {
+      flushSlice(currentSlice, partIndex > 1);
+    }
   }
 
-  if (currentPages.length > 0) {
-    const text = currentPages
-      .map((entry, idx) => {
-        const isOverlap = rawChunks.length > 0 && idx < 1;
-        const prefix = isOverlap ? `[PREVIOUS PAGE CONTEXT] PAGE ${entry.pageNumber}` : `PAGE ${entry.pageNumber}`;
-        return `${prefix}\n${normalizeWhitespace(entry.extractedText).slice(0, 2800)}`;
-      })
+  // Fallback if no sections were built
+  if (rawChunks.length === 0 && ordered.length > 0) {
+    const pageNumbers = ordered.map((entry) => entry.pageNumber);
+    const text = ordered
+      .map((entry) => `PAGE ${entry.pageNumber}\n${normalizeWhitespace(entry.extractedText || entry.text).slice(0, 3200)}`)
       .join("\n\n");
-    const pageNumbers = currentPages.map((entry) => entry.pageNumber);
     rawChunks.push({
       chunkKey: `doc:${pageNumbers[0]}-${pageNumbers.at(-1)}:${checksumFor(text)}`,
       chunkKind: "document",
-      sortOrder: rawChunks.length,
+      sortOrder: 0,
       pageStart: pageNumbers[0],
       pageEnd: pageNumbers.at(-1) ?? pageNumbers[0],
       pageNumbers,

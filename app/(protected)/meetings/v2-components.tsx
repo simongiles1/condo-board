@@ -94,12 +94,33 @@ type MeetingV2Status = {
     goldStandardFilePath?: string | null;
     goldStandardValidationJson?: string | null;
     aiUsageJson?: string | null;
+    agendaApproval?: {
+      status: "pending_review" | "approved";
+      approvedAt: string | null;
+      approvedBy?: string | null;
+      itemStatuses?: Record<string, "discussed" | "not_discussed" | "ad_hoc">;
+      excludedItemIds?: string[];
+      discrepancies?: Array<{
+        id: string;
+        transcriptRange: [number, number];
+        timestamp: string;
+        speaker?: string | null;
+        snippet: string;
+        suggestedTitle: string;
+        suggestedSection?: string | null;
+        clarificationQuestion: string;
+        status: "pending" | "accepted" | "dismissed";
+      }>;
+    } | null;
   };
   items: Array<{
     id: string;
     title: string;
     itemNumber: string | null;
     itemType: string;
+    sectionLabel?: string | null;
+    sourceText?: string | null;
+    discussionStatus?: "discussed" | "not_discussed" | "ad_hoc";
     sourceSectionId: string | null;
     sourcePages?: number[];
     discussionSummary: string | null;
@@ -402,6 +423,18 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [draftError, setDraftError] = useState<string | null>(null);
   const [runBusy, setRunBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<V2Tab>("overview");
+  const isAgendaApprovalPending = Boolean(
+    status?.items?.length &&
+      (!status.meeting.agendaApproval?.approvedAt ||
+        status.meeting.computedPipelineState === "extracted"),
+  );
+  const prevPendingRef = useRef(false);
+  useEffect(() => {
+    if (isAgendaApprovalPending && !prevPendingRef.current) {
+      setActiveTab("review");
+      prevPendingRef.current = true;
+    }
+  }, [isAgendaApprovalPending]);
   const [autonomyTemperature, setAutonomyTemperature] = useState(0.8);
   const [documentsDialogOpen, setDocumentsDialogOpen] = useState(false);
   const [usageDialogOpen, setUsageDialogOpen] = useState(false);
@@ -749,8 +782,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     : pipelineHalted && displayState !== "failed"
       ? `Stopped · ${displayProgressState.currentLabel}`
       : displayProgressState.currentLabel;
-  const hasSuccessfulRun = displayState === "validated";
-  const pipelineValidated = hasSuccessfulRun;
+  const hasSuccessfulRun = displayState === "validated" || isAgendaApprovalPending;
+  const pipelineValidated = displayState === "validated";
   const hasMeetingDocuments = Boolean(
     status?.sources.transcript?.available || status?.sources.boardPackage?.available,
   );
@@ -931,6 +964,11 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   type="button"
                 >
                   {label}
+                  {tab === "review" && isAgendaApprovalPending ? (
+                    <span className="ml-1.5 inline-flex items-center rounded-full bg-amber-200/90 px-2 py-0.5 text-xs font-bold text-amber-900">
+                      Action needed
+                    </span>
+                  ) : null}
                 </button>
               ))}
             </div>
@@ -965,6 +1003,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                     needsClarificationCount={needsClarificationCount}
                     status={status}
                     onOpenDocuments={() => setDocumentsDialogOpen(true)}
+                    onGoToReview={() => setActiveTab("review")}
                   />
                 ) : null}
                 {activeTab === "review" ? (
@@ -1438,15 +1477,22 @@ function OverviewPanel({
   flaggedCount,
   readyCount,
   onOpenDocuments,
+  onGoToReview,
 }: {
   status: MeetingV2Status;
   needsClarificationCount: number;
   flaggedCount: number;
   readyCount: number;
   onOpenDocuments: () => void;
+  onGoToReview?: () => void;
 }) {
   const hasDocuments = Boolean(
     status.sources.transcript?.available || status.sources.boardPackage?.available,
+  );
+  const isAgendaApprovalPending = Boolean(
+    status.items.length > 0 &&
+      (!status.meeting.agendaApproval?.approvedAt ||
+        status.meeting.computedPipelineState === "extracted"),
   );
 
   return (
@@ -1456,6 +1502,29 @@ function OverviewPanel({
       description="Pipeline health, source coverage, and review readiness in one place."
       compact
     >
+      {isAgendaApprovalPending ? (
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-900 shadow-sm">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500 animate-pulse" />
+              <p className="font-semibold text-sm">Action Required: Agenda Review & Approval</p>
+            </div>
+            <p className="text-xs text-amber-800 mt-1">
+              Candidate agenda has been synthesized from the board package and recording. Please verify which topics were discussed and resolve any detected transcript discrepancies before investigation.
+            </p>
+          </div>
+          {onGoToReview ? (
+            <button
+              type="button"
+              onClick={onGoToReview}
+              className="shrink-0 rounded-lg bg-amber-700 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-amber-800 transition"
+            >
+              Review Agenda →
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <div className="grid gap-3 sm:grid-cols-2">
           <HealthCallout
@@ -1541,6 +1610,655 @@ function HealthCallout({
   );
 }
 
+function HitlAgendaApprovalWorkspace({
+  meetingId,
+  status,
+  onApproved,
+  onSwitchToValidatedReview,
+}: {
+  meetingId: string;
+  status: MeetingV2Status;
+  onApproved?: () => void;
+  onSwitchToValidatedReview?: () => void;
+}) {
+  const [itemStatuses, setItemStatuses] = useState<Record<string, "discussed" | "not_discussed" | "ad_hoc">>(() => {
+    const initial: Record<string, "discussed" | "not_discussed" | "ad_hoc"> = {};
+    for (const item of status.items) {
+      initial[item.id] =
+        status.meeting.agendaApproval?.itemStatuses?.[item.id] ||
+        item.discussionStatus ||
+        "discussed";
+    }
+    return initial;
+  });
+
+  const [excludedItemIds, setExcludedItemIds] = useState<Set<string>>(() => {
+    return new Set(status.meeting.agendaApproval?.excludedItemIds || []);
+  });
+
+  const [editedTitles, setEditedTitles] = useState<Record<string, string>>({});
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+
+  const initialDiscrepancies = useMemo(() => {
+    return status.meeting.agendaApproval?.discrepancies || [];
+  }, [status.meeting.agendaApproval?.discrepancies]);
+
+  const [discrepancyActions, setDiscrepancyActions] = useState<
+    Record<string, "pending" | "accepted" | "dismissed">
+  >(() => {
+    const initial: Record<string, "pending" | "accepted" | "dismissed"> = {};
+    for (const disc of initialDiscrepancies) {
+      initial[disc.id] = disc.status || "pending";
+    }
+    return initial;
+  });
+
+  const [newItems, setNewItems] = useState<
+    Array<{
+      id: string;
+      title: string;
+      sectionLabel: string;
+      discussionStatus: "discussed" | "ad_hoc";
+    }>
+  >([]);
+
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [newSection, setNewSection] = useState("");
+  const [newStatus, setNewStatus] = useState<"discussed" | "ad_hoc">("discussed");
+
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
+  const [expandedSourceItemId, setExpandedSourceItemId] = useState<string | null>(null);
+
+  const isApproved = Boolean(status.meeting.agendaApproval?.approvedAt);
+
+  const activeItems = status.items.filter((item) => !excludedItemIds.has(item.id));
+  const discussedCount =
+    activeItems.filter((item) => (itemStatuses[item.id] || "discussed") === "discussed").length +
+    newItems.filter((i) => i.discussionStatus === "discussed").length;
+
+  const deferredCount = activeItems.filter(
+    (item) => itemStatuses[item.id] === "not_discussed",
+  ).length;
+
+  const adHocCount =
+    activeItems.filter((item) => itemStatuses[item.id] === "ad_hoc").length +
+    newItems.filter((i) => i.discussionStatus === "ad_hoc").length;
+
+  const excludedCount = excludedItemIds.size;
+
+  const pendingDiscrepancies = initialDiscrepancies.filter(
+    (d) => (discrepancyActions[d.id] || "pending") === "pending",
+  );
+
+  function handleToggleStatus(itemId: string, nextStatus: "discussed" | "not_discussed" | "ad_hoc") {
+    setItemStatuses((prev) => ({ ...prev, [itemId]: nextStatus }));
+  }
+
+  function handleToggleExclude(itemId: string) {
+    setExcludedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+  }
+
+  function handleAcceptDiscrepancy(disc: {
+    id: string;
+    suggestedTitle: string;
+    suggestedSection?: string | null;
+  }) {
+    setDiscrepancyActions((prev) => ({ ...prev, [disc.id]: "accepted" }));
+    setNewItems((prev) => [
+      ...prev,
+      {
+        id: `disc-${disc.id}`,
+        title: disc.suggestedTitle,
+        sectionLabel: disc.suggestedSection || "Ad-Hoc Discussion",
+        discussionStatus: "ad_hoc",
+      },
+    ]);
+  }
+
+  function handleDismissDiscrepancy(discId: string) {
+    setDiscrepancyActions((prev) => ({ ...prev, [discId]: "dismissed" }));
+  }
+
+  function handleAddNewItem() {
+    if (!newTitle.trim()) return;
+    setNewItems((prev) => [
+      ...prev,
+      {
+        id: `custom-${Date.now()}`,
+        title: newTitle.trim(),
+        sectionLabel: newSection.trim() || "Additional Business",
+        discussionStatus: newStatus,
+      },
+    ]);
+    setNewTitle("");
+    setNewSection("");
+    setShowAddForm(false);
+  }
+
+  function handleRemoveNewItem(id: string) {
+    setNewItems((prev) => prev.filter((item) => item.id !== id));
+  }
+
+  async function handleApproveAndProceed() {
+    setSubmitting(true);
+    setSubmitError(null);
+    setSubmitSuccess(null);
+
+    try {
+      const itemUpdates = Object.entries(editedTitles).map(([id, title]) => ({
+        id,
+        title,
+      }));
+
+      const payload = {
+        itemStatuses,
+        excludedItemIds: Array.from(excludedItemIds),
+        itemUpdates,
+        newItems: newItems.map((item) => ({
+          title: item.title,
+          sectionLabel: item.sectionLabel,
+          discussionStatus: item.discussionStatus,
+        })),
+        discrepancyActions: Object.entries(discrepancyActions).map(([id, action]) => ({
+          id,
+          action,
+          title: initialDiscrepancies.find((d) => d.id === id)?.suggestedTitle,
+        })),
+      };
+
+      const res = await fetch(`/api/v2/meetings/${meetingId}/agenda/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      setSubmitSuccess("Agenda approved! Resuming pipeline for investigated items...");
+      onApproved?.();
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Failed to approve agenda");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // Group status.items by sectionLabel
+  const itemsBySection = useMemo(() => {
+    const map = new Map<string, typeof status.items>();
+    for (const item of status.items) {
+      const sec = item.sectionLabel || "General Business";
+      if (!map.has(sec)) {
+        map.set(sec, []);
+      }
+      map.get(sec)!.push(item);
+    }
+    return map;
+  }, [status.items]);
+
+  return (
+    <SectionCard
+      eyebrow="Human-in-the-Loop Agenda Review"
+      title={isApproved ? "Approved Meeting Agenda" : "Review & Approve Candidate Agenda"}
+      description="The AI synthesized this candidate agenda by cross-referencing the Board Package and the recording transcript. Confirm which topics were discussed vs. adjourned or skipped, resolve any detected transcript discrepancies, and approve to proceed with targeted evidence gathering and investigation."
+    >
+      <div className="space-y-6">
+        {/* Discrepancy Alerts */}
+        {pendingDiscrepancies.length > 0 ? (
+          <div className="rounded-2xl border border-amber-300 bg-amber-50/70 p-5 shadow-sm space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-white">
+                    !
+                  </span>
+                  <h3 className="font-semibold text-slate-900 text-sm">
+                    AI Discrepancy Inquiries ({pendingDiscrepancies.length} unaligned discussion{pendingDiscrepancies.length > 1 ? "s" : ""})
+                  </h3>
+                </div>
+                <p className="mt-1 text-xs text-slate-600">
+                  The AI detected substantive discussions in the recording that do not appear to match any agenda item in the board package. Review below:
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {pendingDiscrepancies.map((disc) => (
+                <div
+                  key={disc.id}
+                  className="rounded-xl border border-amber-200 bg-white p-4 text-xs shadow-sm"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                    <div className="space-y-1.5 flex-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
+                          {disc.timestamp}
+                        </span>
+                        {disc.speaker ? (
+                          <span className="font-semibold text-slate-700">{disc.speaker}</span>
+                        ) : null}
+                        <span className="font-semibold text-amber-900">
+                          {disc.suggestedTitle}
+                        </span>
+                      </div>
+                      <p className="text-slate-800 font-medium">{disc.clarificationQuestion}</p>
+                      <p className="italic text-slate-500 border-l-2 border-slate-200 pl-2 mt-1">
+                        &ldquo;{disc.snippet}&rdquo;
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0">
+                      <button
+                        type="button"
+                        onClick={() => handleAcceptDiscrepancy(disc)}
+                        className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition"
+                      >
+                        + Add to Agenda
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDismissDiscrepancy(disc.id)}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {/* User-Added / Accepted Discrepancies */}
+        {newItems.length > 0 ? (
+          <div className="rounded-2xl border border-teal-200 bg-teal-50/50 p-4 space-y-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-teal-800">
+              New Ad-Hoc / Custom Agenda Items ({newItems.length})
+            </h4>
+            <div className="space-y-2">
+              {newItems.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-teal-200 bg-white px-4 py-2.5 text-xs"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                      Ad-Hoc
+                    </span>
+                    <span className="font-semibold text-slate-800">{item.title}</span>
+                    <span className="text-slate-500">({item.sectionLabel})</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveNewItem(item.id)}
+                    className="text-xs text-rose-600 hover:text-rose-800 font-medium"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Agenda items list grouped by section */}
+        <div className="space-y-6">
+          {Array.from(itemsBySection.entries()).map(([sectionName, items]) => (
+            <div key={sectionName} className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+              <div className="border-b border-slate-100 bg-slate-50/80 px-4 py-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                  {sectionName}
+                </h4>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {items.map((item, index) => {
+                  const isExcluded = excludedItemIds.has(item.id);
+                  const currentStatus = itemStatuses[item.id] || "discussed";
+                  const displayTitle = editedTitles[item.id] ?? item.title;
+                  const isEditingThis = editingItemId === item.id;
+                  const isSourceExpanded = expandedSourceItemId === item.id;
+
+                  return (
+                    <div
+                      key={item.id}
+                      className={`p-4 transition ${
+                        isExcluded
+                          ? "bg-slate-50/60 opacity-60"
+                          : currentStatus === "not_discussed"
+                            ? "bg-slate-50/30"
+                            : "hover:bg-slate-50/40"
+                      }`}
+                    >
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                        {/* Title & Metadata */}
+                        <div className="space-y-1.5 flex-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-slate-200 text-[11px] font-semibold text-slate-700">
+                              {item.itemNumber || index + 1}
+                            </span>
+
+                            {isEditingThis ? (
+                              <input
+                                type="text"
+                                value={displayTitle}
+                                onChange={(e) =>
+                                  setEditedTitles((prev) => ({
+                                    ...prev,
+                                    [item.id]: e.target.value,
+                                  }))
+                                }
+                                onBlur={() => setEditingItemId(null)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") setEditingItemId(null);
+                                }}
+                                autoFocus
+                                className="rounded-md border border-teal-500 px-2 py-0.5 text-sm font-semibold text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                              />
+                            ) : (
+                              <span
+                                onDoubleClick={() => setEditingItemId(item.id)}
+                                className={`text-sm font-semibold cursor-pointer ${
+                                  isExcluded
+                                    ? "line-through text-slate-400"
+                                    : "text-slate-900"
+                                }`}
+                                title="Double-click to edit title"
+                              >
+                                {displayTitle}
+                              </span>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => setEditingItemId(isEditingThis ? null : item.id)}
+                              className="text-[11px] text-slate-400 hover:text-slate-600"
+                              title="Edit title"
+                            >
+                              ✏️
+                            </button>
+
+                            {/* Source Pages Chip */}
+                            {item.sourcePages && item.sourcePages.length > 0 ? (
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
+                                📄 p. {item.sourcePages.join(", ")}
+                              </span>
+                            ) : null}
+
+                            {/* Discussion Status Badge */}
+                            {currentStatus === "not_discussed" ? (
+                              <span className="rounded bg-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                                Deferred (Zero LLM Tokens)
+                              </span>
+                            ) : currentStatus === "ad_hoc" ? (
+                              <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                                Ad-Hoc Discussion
+                              </span>
+                            ) : (
+                              <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 border border-emerald-200">
+                                Verified in Audio
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Source Snippet toggle if available */}
+                          {item.sourceText ? (
+                            <div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedSourceItemId(isSourceExpanded ? null : item.id)
+                                }
+                                className="text-[11px] text-slate-500 hover:text-slate-700 underline underline-offset-2"
+                              >
+                                {isSourceExpanded ? "Hide source text" : "Show source text snippet"}
+                              </button>
+                              {isSourceExpanded ? (
+                                <p className="mt-1.5 rounded-lg bg-slate-100 p-2 text-xs text-slate-600 font-mono whitespace-pre-wrap">
+                                  {item.sourceText}
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        {/* Controls: Status Toggles & Exclude */}
+                        <div className="flex flex-wrap items-center gap-3 shrink-0">
+                          <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStatus(item.id, "discussed")}
+                              disabled={isExcluded}
+                              className={`rounded-md px-2.5 py-1 transition ${
+                                currentStatus === "discussed" && !isExcluded
+                                  ? "bg-emerald-600 text-white shadow-sm font-semibold"
+                                  : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
+                              }`}
+                              title="Verified in audio transcript"
+                            >
+                              🟢 Discussed
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStatus(item.id, "not_discussed")}
+                              disabled={isExcluded}
+                              className={`rounded-md px-2.5 py-1 transition ${
+                                currentStatus === "not_discussed" && !isExcluded
+                                  ? "bg-slate-700 text-white shadow-sm font-semibold"
+                                  : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
+                              }`}
+                              title="Adjourned / not reached in this recording (skips LLM investigation)"
+                            >
+                              ⏸️ Not Discussed
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStatus(item.id, "ad_hoc")}
+                              disabled={isExcluded}
+                              className={`rounded-md px-2.5 py-1 transition ${
+                                currentStatus === "ad_hoc" && !isExcluded
+                                  ? "bg-amber-600 text-white shadow-sm font-semibold"
+                                  : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
+                              }`}
+                              title="Informal / ad-hoc discussion not in formal agenda"
+                            >
+                              ⚡ Ad-Hoc
+                            </button>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleToggleExclude(item.id)}
+                            className={`rounded-lg px-2.5 py-1 text-xs font-medium border transition ${
+                              isExcluded
+                                ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                                : "border-transparent text-rose-600 hover:bg-rose-50"
+                            }`}
+                          >
+                            {isExcluded ? "↩️ Restore" : "Exclude"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Add custom item */}
+        <div>
+          {showAddForm ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                Add Custom Agenda Item
+              </h4>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Item Title
+                  </label>
+                  <input
+                    type="text"
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    placeholder="e.g. Roof Membrane Inspection Update"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Section Name (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={newSection}
+                    onChange={(e) => setNewSection(e.target.value)}
+                    placeholder="e.g. Property Management Report - Projects"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center justify-between pt-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-600 font-medium">Type:</span>
+                  <button
+                    type="button"
+                    onClick={() => setNewStatus("discussed")}
+                    className={`rounded px-2.5 py-1 text-xs font-medium transition ${
+                      newStatus === "discussed"
+                        ? "bg-emerald-600 text-white"
+                        : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    Discussed
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewStatus("ad_hoc")}
+                    className={`rounded px-2.5 py-1 text-xs font-medium transition ${
+                      newStatus === "ad_hoc"
+                        ? "bg-amber-600 text-white"
+                        : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    Ad-Hoc
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddForm(false)}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddNewItem}
+                    disabled={!newTitle.trim()}
+                    className="rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition disabled:opacity-40"
+                  >
+                    Add to Agenda
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowAddForm(true)}
+              className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 hover:border-slate-400 transition flex items-center gap-1.5"
+            >
+              <span>+</span>
+              <span>Add Custom Agenda Item</span>
+            </button>
+          )}
+        </div>
+
+        {/* Feedback messages */}
+        {submitError ? (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+            {submitError}
+          </div>
+        ) : null}
+        {submitSuccess ? (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+            {submitSuccess}
+          </div>
+        ) : null}
+
+        {/* Sticky Action Bar */}
+        <div className="sticky bottom-4 z-10 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-xl backdrop-blur-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="rounded-full bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-800 border border-emerald-200">
+              {discussedCount} Confirmed Discussed
+            </span>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-700 border border-slate-200">
+              {deferredCount} Deferred (Zero Tokens)
+            </span>
+            {adHocCount > 0 ? (
+              <span className="rounded-full bg-amber-50 px-2.5 py-1 font-semibold text-amber-800 border border-amber-200">
+                {adHocCount} Ad-Hoc
+              </span>
+            ) : null}
+            {excludedCount > 0 ? (
+              <span className="rounded-full bg-rose-50 px-2.5 py-1 font-semibold text-rose-800 border border-rose-200">
+                {excludedCount} Excluded
+              </span>
+            ) : null}
+          </div>
+
+          <div className="flex items-center gap-3">
+            {onSwitchToValidatedReview ? (
+              <button
+                type="button"
+                onClick={onSwitchToValidatedReview}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+              >
+                View Validated Review
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={handleApproveAndProceed}
+              disabled={submitting || discussedCount === 0}
+              className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-emerald-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {submitting ? (
+                <>
+                  <svg className="h-4 w-4 animate-spin text-white" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                  <span>Approving & Resuming Pipeline...</span>
+                </>
+              ) : (
+                <span>{isApproved ? "Update Agenda Approval →" : "Approve Agenda & Proceed →"}</span>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
 function AgendaReviewPanel({
   meetingId,
   status,
@@ -1592,7 +2310,36 @@ function AgendaReviewPanel({
     }
   }
 
+  const isPendingApproval = Boolean(
+    status.items.length > 0 &&
+      (!status.meeting.agendaApproval?.approvedAt ||
+        status.meeting.computedPipelineState === "extracted"),
+  );
+
+  const [showApprovalWorkspace, setShowApprovalWorkspace] = useState(isPendingApproval);
+
+  useEffect(() => {
+    if (isPendingApproval) {
+      setShowApprovalWorkspace(true);
+    }
+  }, [isPendingApproval]);
+
   const canReviewItems = status.meeting.computedPipelineState === "validated";
+
+  if (showApprovalWorkspace || (!canReviewItems && status.items.length > 0)) {
+    return (
+      <HitlAgendaApprovalWorkspace
+        meetingId={meetingId}
+        status={status}
+        onApproved={() => {
+          onReEvaluateSubmitted?.();
+        }}
+        onSwitchToValidatedReview={
+          canReviewItems ? () => setShowApprovalWorkspace(false) : undefined
+        }
+      />
+    );
+  }
 
   const sortedItems = [...status.items].sort((a, b) => {
     const aQuestions = a.openQuestions.length;
@@ -1633,6 +2380,19 @@ function AgendaReviewPanel({
       title="Review agenda items and resolve open questions"
       description="This is the primary working area for V2. Review one item at a time, answer clarifications when needed, and re-run only the affected item."
     >
+      <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-100 pb-3">
+        <p className="text-xs text-slate-500">
+          Showing {sortedItems.length} validated items. Click on an item to inspect flags, evidence, or answer clarifications.
+        </p>
+        <button
+          type="button"
+          onClick={() => setShowApprovalWorkspace(true)}
+          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition self-start sm:self-auto"
+        >
+          ⚙️ Manage Agenda Classification & Discrepancies
+        </button>
+      </div>
+
       <div className="space-y-4">
         {sortedItems.map((item) => {
           const isOpen = openItemId === item.id;

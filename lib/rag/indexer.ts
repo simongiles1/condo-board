@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import {
@@ -84,93 +84,64 @@ export type CorpusIndexStatus = {
 
 /**
  * Returns overall index statistics across emails, attachments, and vision pages.
+ * Uses one SQL round-trip to avoid exhausting the Supabase session pooler during
+ * continuous indexing + 1s status polling.
  */
 export async function getCorpusIndexStatus(): Promise<CorpusIndexStatus> {
   const db = getDb();
 
-  const parsedAttachmentFilter = and(
-    eq(attachmentDocuments.parseStatus, "parsed"),
-    isNotNull(attachmentDocuments.markdownPath),
-  );
-  const doneVisionPageFilter = and(
-    eq(attachmentDocumentPages.visionStatus, "done"),
-    isNotNull(attachmentDocumentPages.artifactPath),
-  );
+  const result = await db.execute(sql`
+    SELECT
+      (SELECT count(*)::int FROM emails) AS total_emails,
+      (SELECT count(*)::int FROM emails e WHERE EXISTS (
+        SELECT 1 FROM document_chunks dc
+        WHERE dc.email_id = e.id AND dc.source_kind = 'email_body'
+      )) AS indexed_emails,
+      (SELECT count(*)::int FROM attachment_documents
+        WHERE parse_status = 'parsed' AND markdown_path IS NOT NULL) AS total_parsed_attachments,
+      (SELECT count(*)::int FROM attachment_documents ad
+        WHERE ad.parse_status = 'parsed' AND ad.markdown_path IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM document_chunks dc
+            WHERE dc.content_hash = ad.content_hash
+              AND dc.source_kind = 'attachment_markdown'
+          )) AS indexed_attachments,
+      (SELECT count(*)::int FROM attachment_document_pages
+        WHERE vision_status = 'done' AND artifact_path IS NOT NULL) AS total_done_vision_pages,
+      (SELECT count(*)::int FROM attachment_document_pages adp
+        WHERE adp.vision_status = 'done' AND adp.artifact_path IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM document_chunks dc
+            WHERE dc.content_hash = adp.content_hash
+              AND dc.page_no = adp.page_no
+              AND dc.source_kind = 'attachment_vision_page'
+          )) AS indexed_vision_pages,
+      coalesce(
+        (SELECT n_live_tup::int FROM pg_stat_user_tables WHERE relname = 'document_chunks'),
+        0
+      ) AS total_chunks
+  `);
 
-  // Count indexed sources via EXISTS on smaller source tables — avoids
-  // count(distinct …) full scans on document_chunks (116k+ rows timeout).
-  const [
-    [emailStats],
-    [indexedEmailStats],
-    [attStats],
-    [indexedAttStats],
-    [visionStats],
-    [indexedVisionStats],
-    [chunkStats],
-  ] = await Promise.all([
-    db.select({ total: sql<number>`count(*)::int` }).from(emails),
-    db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(emails)
-      .where(
-        sql`exists (
-          select 1 from document_chunks dc
-          where dc.email_id = ${emails.id}
-            and dc.source_kind = 'email_body'
-        )`,
-      ),
-    db
-      .select({ total: sql<number>`count(*)::int` })
-      .from(attachmentDocuments)
-      .where(parsedAttachmentFilter),
-    db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(attachmentDocuments)
-      .where(
-        and(
-          parsedAttachmentFilter,
-          sql`exists (
-            select 1 from document_chunks dc
-            where dc.content_hash = ${attachmentDocuments.contentHash}
-              and dc.source_kind = 'attachment_markdown'
-          )`,
-        ),
-      ),
-    db
-      .select({ total: sql<number>`count(*)::int` })
-      .from(attachmentDocumentPages)
-      .where(doneVisionPageFilter),
-    db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(attachmentDocumentPages)
-      .where(
-        and(
-          doneVisionPageFilter,
-          sql`exists (
-            select 1 from document_chunks dc
-            where dc.content_hash = ${attachmentDocumentPages.contentHash}
-              and dc.page_no = ${attachmentDocumentPages.pageNo}
-              and dc.source_kind = 'attachment_vision_page'
-          )`,
-        ),
-      ),
-    db
-      .select({
-        total: sql<number>`count(*)::int`,
-        lastIndexedAt: sql<string | null>`max(${documentChunks.indexedAt})`,
-      })
-      .from(documentChunks),
-  ]);
+  const rows = (result.rows ?? result) as Array<{
+    total_emails: number;
+    indexed_emails: number;
+    total_parsed_attachments: number;
+    indexed_attachments: number;
+    total_done_vision_pages: number;
+    indexed_vision_pages: number;
+    total_chunks: number;
+  }>;
+  const row = rows[0];
 
   return {
-    totalEmails: emailStats?.total ?? 0,
-    indexedEmails: indexedEmailStats?.count ?? 0,
-    totalParsedAttachments: attStats?.total ?? 0,
-    indexedAttachments: indexedAttStats?.count ?? 0,
-    totalDoneVisionPages: visionStats?.total ?? 0,
-    indexedVisionPages: indexedVisionStats?.count ?? 0,
-    totalChunks: chunkStats?.total ?? 0,
-    lastIndexedAt: chunkStats?.lastIndexedAt ?? null,
+    totalEmails: row?.total_emails ?? 0,
+    indexedEmails: row?.indexed_emails ?? 0,
+    totalParsedAttachments: row?.total_parsed_attachments ?? 0,
+    indexedAttachments: row?.indexed_attachments ?? 0,
+    totalDoneVisionPages: row?.total_done_vision_pages ?? 0,
+    indexedVisionPages: row?.indexed_vision_pages ?? 0,
+    totalChunks: row?.total_chunks ?? 0,
+    lastIndexedAt: null,
   };
 }
 
@@ -370,14 +341,13 @@ export async function runIncrementalIndexSlice(
         bodyTextUnique: emails.bodyTextUnique,
       })
       .from(emails)
-      .leftJoin(
-        documentChunks,
-        and(
-          eq(documentChunks.emailId, emails.id),
-          eq(documentChunks.sourceKind, "email_body"),
-        ),
+      .where(
+        sql`not exists (
+          select 1 from document_chunks dc
+          where dc.email_id = ${emails.id}
+            and dc.source_kind = 'email_body'
+        )`,
       )
-      .where(isNull(documentChunks.id))
       .limit(batchSize);
 
     const emailPrepared: PreparedChunkItem[] = [];
@@ -415,18 +385,15 @@ export async function runIncrementalIndexSlice(
         mimeType: attachmentDocuments.mimeType,
       })
       .from(attachmentDocuments)
-      .leftJoin(
-        documentChunks,
-        and(
-          eq(documentChunks.contentHash, attachmentDocuments.contentHash),
-          eq(documentChunks.sourceKind, "attachment_markdown"),
-        ),
-      )
       .where(
         and(
           eq(attachmentDocuments.parseStatus, "parsed"),
           isNotNull(attachmentDocuments.markdownPath),
-          isNull(documentChunks.id),
+          sql`not exists (
+            select 1 from document_chunks dc
+            where dc.content_hash = ${attachmentDocuments.contentHash}
+              and dc.source_kind = 'attachment_markdown'
+          )`,
         ),
       )
       .limit(batchSize);
@@ -492,19 +459,16 @@ export async function runIncrementalIndexSlice(
         artifactPath: attachmentDocumentPages.artifactPath,
       })
       .from(attachmentDocumentPages)
-      .leftJoin(
-        documentChunks,
-        and(
-          eq(documentChunks.contentHash, attachmentDocumentPages.contentHash),
-          eq(documentChunks.pageNo, attachmentDocumentPages.pageNo),
-          eq(documentChunks.sourceKind, "attachment_vision_page"),
-        ),
-      )
       .where(
         and(
           eq(attachmentDocumentPages.visionStatus, "done"),
           isNotNull(attachmentDocumentPages.artifactPath),
-          isNull(documentChunks.id),
+          sql`not exists (
+            select 1 from document_chunks dc
+            where dc.content_hash = ${attachmentDocumentPages.contentHash}
+              and dc.page_no = ${attachmentDocumentPages.pageNo}
+              and dc.source_kind = 'attachment_vision_page'
+          )`,
         ),
       )
       .limit(batchSize);

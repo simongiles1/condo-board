@@ -6,7 +6,22 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { formatDateTime } from "@/lib/format/datetime";
 import { formatCostUsd, formatTokenCount } from "@/lib/gemini/usage";
 import type { CorpusEmbeddingCostSummary } from "@/lib/rag/cost";
+import type { EmbedCostRollingSnapshot } from "@/lib/rag/embed-cost-live";
 import type { CorpusIndexStatus, IndexSliceResult } from "@/lib/rag/indexer";
+import {
+  corpusIndexModeLabel,
+  corpusRemainingForMode,
+  corpusRemainingTotal,
+  estimateCorpusEmbedCostRate,
+  estimateCorpusIndexRate,
+  formatCorpusIndexDuration,
+  formatCorpusIndexEta,
+  formatCorpusIndexRate,
+  formatEmbedCostEta,
+  formatEmbedCostPerMinute,
+  getCorpusIndexTimingSnapshot,
+  type CorpusIndexStint,
+} from "@/lib/rag/index-timing";
 import type { CorpusSearchResult, CorpusSearchUsage } from "@/lib/rag/search";
 
 const EXAMPLE_QUERIES = [
@@ -22,6 +37,7 @@ export function ArchiveSearchClient() {
   // Index Status State
   const [indexStatus, setIndexStatus] = useState<CorpusIndexStatus | null>(null);
   const [indexCosts, setIndexCosts] = useState<CorpusEmbeddingCostSummary | null>(null);
+  const [liveEmbedCost, setLiveEmbedCost] = useState<EmbedCostRollingSnapshot | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [indexerRunning, setIndexerRunning] = useState(false);
   const [continuousIndexing, setContinuousIndexing] = useState(false);
@@ -31,6 +47,8 @@ export function ArchiveSearchClient() {
   const [indexerError, setIndexerError] = useState<string | null>(null);
   const [sessionIndexCostUsd, setSessionIndexCostUsd] = useState(0);
   const [sessionSearchCostUsd, setSessionSearchCostUsd] = useState(0);
+  const [indexStint, setIndexStint] = useState<CorpusIndexStint | null>(null);
+  const [timingTick, setTimingTick] = useState(0);
 
   // Search State
   const [query, setQuery] = useState("");
@@ -56,6 +74,9 @@ export function ArchiveSearchClient() {
       if (res.ok && data.costs) {
         setIndexCosts(data.costs);
       }
+      if (res.ok && data.liveEmbedCost) {
+        setLiveEmbedCost(data.liveEmbedCost);
+      }
     } catch {
       // Non-fatal
     } finally {
@@ -66,6 +87,41 @@ export function ArchiveSearchClient() {
   useEffect(() => {
     void loadStatus();
   }, [loadStatus]);
+
+  useEffect(() => {
+    if (!indexerRunning) return;
+    const timer = window.setInterval(() => {
+      setTimingTick((value) => value + 1);
+      void loadStatus();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [indexerRunning, loadStatus]);
+
+  const beginIndexStint = useCallback(
+    (mode: typeof indexerMode) => {
+      setIndexStint({
+        startedAtMs: Date.now(),
+        docsProcessed: 0,
+        costUsd: 0,
+        inputTokens: 0,
+        mode,
+      });
+    },
+    [],
+  );
+
+  const recordIndexSlice = useCallback((processed: number, costUsd: number, inputTokens: number) => {
+    setIndexStint((prev) =>
+      prev
+        ? {
+            ...prev,
+            docsProcessed: prev.docsProcessed + processed,
+            costUsd: prev.costUsd + costUsd,
+            inputTokens: prev.inputTokens + inputTokens,
+          }
+        : null,
+    );
+  }, []);
 
   // Indexer execution
   const runIndexerSlice = useCallback(
@@ -86,6 +142,7 @@ export function ArchiveSearchClient() {
           result?: IndexSliceResult;
           status?: CorpusIndexStatus;
           costs?: CorpusEmbeddingCostSummary;
+          liveEmbedCost?: EmbedCostRollingSnapshot;
           error?: string;
         };
 
@@ -99,6 +156,9 @@ export function ArchiveSearchClient() {
         if (data.costs) {
           setIndexCosts(data.costs);
         }
+        if (data.liveEmbedCost) {
+          setLiveEmbedCost(data.liveEmbedCost);
+        }
 
         const r = data.result;
         if (r) {
@@ -107,9 +167,12 @@ export function ArchiveSearchClient() {
           }
           const processed =
             r.emailsProcessed + r.attachmentsProcessed + r.visionPagesProcessed;
+          recordIndexSlice(processed, r.costUsd, r.inputTokens);
           const costLabel = formatCostUsd(r.costUsd);
           const tokenLabel = formatTokenCount(r.inputTokens);
-          const msg = `Slice finished: ${processed} docs indexed (${r.chunksCreated} chunks, ${r.embeddingsComputed} embedded, ${r.embeddingsReused} reused) · ${tokenLabel} tokens · ${costLabel}. Remaining: ${r.remainingEmails} emails, ${r.remainingAttachments} attachments.`;
+          const sourceLabel =
+            r.tokenSource === "api" ? "billed tokens" : "estimated tokens";
+          const msg = `Slice finished: ${processed} docs indexed (${r.chunksCreated} chunks, ${r.embeddingsComputed} embedded, ${r.embeddingsReused} reused) · ${tokenLabel} ${sourceLabel} · ${costLabel}. Remaining: ${r.remainingEmails} emails, ${r.remainingAttachments} attachments.`;
           setIndexerMessage(msg);
 
           const hasMore =
@@ -129,10 +192,11 @@ export function ArchiveSearchClient() {
         }
       }
     },
-    [indexerBatchSize, indexerMode],
+    [indexerBatchSize, indexerMode, recordIndexSlice],
   );
 
   const handleRunIndexerClick = async () => {
+    beginIndexStint(indexerMode);
     await runIndexerSlice();
   };
 
@@ -140,6 +204,7 @@ export function ArchiveSearchClient() {
     setContinuousIndexing(enable);
     continuousRef.current = enable;
     if (enable && !indexerRunning) {
+      beginIndexStint(indexerMode);
       setIndexerRunning(true);
       while (continuousRef.current) {
         const hasMore = await runIndexerSlice(true);
@@ -249,6 +314,35 @@ export function ArchiveSearchClient() {
       </span>
     );
   };
+
+  const timingSnapshot = (() => {
+    if (!indexStint || !indexStatus) return null;
+    void timingTick;
+    const snap = getCorpusIndexTimingSnapshot(indexStint, indexerRunning);
+    const remainingInMode = corpusRemainingForMode(indexStatus, indexStint.mode);
+    const remainingCorpus = corpusRemainingTotal(indexStatus);
+    const rate = estimateCorpusIndexRate({
+      stintMs: snap.stintMs,
+      stintDocs: snap.stintDocs,
+      remainingInMode,
+      remainingCorpus,
+    });
+    const costRate = estimateCorpusEmbedCostRate({
+      stintMs: snap.stintMs,
+      stintCostUsd: indexStint.costUsd,
+      docRate: rate,
+      liveRolling: liveEmbedCost,
+    });
+    return { ...snap, rate, costRate, remainingInMode, remainingCorpus };
+  })();
+
+  const liveIndexedCostUsd =
+    indexCosts &&
+    liveEmbedCost?.charsPerToken &&
+    liveEmbedCost.charsPerToken > 0
+      ? indexCosts.indexedCostUsd *
+        (4 / liveEmbedCost.charsPerToken)
+      : null;
 
   return (
     <div className="flex h-full flex-col overflow-y-auto p-4 sm:p-6">
@@ -411,17 +505,122 @@ export function ArchiveSearchClient() {
           </div>
         )}
 
+        {timingSnapshot ? (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            <p className="font-semibold">
+              {indexerRunning
+                ? continuousIndexing
+                  ? "Continuous indexing…"
+                  : "Indexing slice…"
+                : "Indexing stint complete"}
+            </p>
+            <p className="mt-1 text-xs text-amber-900/90">
+              Mode: {corpusIndexModeLabel(indexStint!.mode)} · batch{" "}
+              {indexerBatchSize}
+              {timingSnapshot.stintDocs > 0
+                ? ` · ${timingSnapshot.stintDocs.toLocaleString()} doc${timingSnapshot.stintDocs === 1 ? "" : "s"} this stint`
+                : ""}
+              {indexStint!.costUsd > 0
+                ? ` · ${formatCostUsd(indexStint!.costUsd)} stint cost (${formatTokenCount(indexStint!.inputTokens)} billed)`
+                : ""}
+              {liveEmbedCost && liveEmbedCost.sampleCount > 0
+                ? ` · ${formatEmbedCostPerMinute(liveEmbedCost.costPerMinute)} burn (60s avg)`
+                : ""}
+            </p>
+            <div className="mt-3 grid gap-1 border-t border-amber-200/80 pt-3 text-xs text-amber-900/90 sm:grid-cols-2">
+              <p className="tabular-nums">
+                <span className="font-medium text-amber-950">Active time</span>
+                {" · "}
+                {formatCorpusIndexDuration(timingSnapshot.activeMs)}
+              </p>
+              <p className="tabular-nums">
+                <span className="font-medium text-amber-950">This stint</span>
+                {" · "}
+                {timingSnapshot.stintDocs > 0
+                  ? `${formatCorpusIndexDuration(timingSnapshot.stintMs)} · ${timingSnapshot.stintDocs.toLocaleString()} doc${timingSnapshot.stintDocs === 1 ? "" : "s"}`
+                  : "—"}
+              </p>
+              <p className="tabular-nums">
+                <span className="font-medium text-amber-950">Rate</span>
+                {" · "}
+                {formatCorpusIndexRate(timingSnapshot.rate.docsPerMinute)}
+                {timingSnapshot.rate.secondsPerDoc > 0
+                  ? ` (${timingSnapshot.rate.secondsPerDoc.toFixed(1)}s/doc)`
+                  : ""}
+              </p>
+              <p className="tabular-nums">
+                <span className="font-medium text-amber-950">
+                  ETA ({corpusIndexModeLabel(indexStint!.mode)})
+                </span>
+                {" · "}
+                {timingSnapshot.stintDocs > 0
+                  ? formatCorpusIndexEta(timingSnapshot.rate.modeEtaMs)
+                  : "—"}
+                {timingSnapshot.remainingInMode > 0 &&
+                timingSnapshot.stintDocs > 0
+                  ? ` · ${timingSnapshot.remainingInMode.toLocaleString()} left`
+                  : ""}
+              </p>
+              {timingSnapshot.stintDocs > 0 ? (
+                <p className="tabular-nums sm:col-span-2">
+                  <span className="font-medium text-amber-950">Corpus ETA</span>
+                  {" · "}
+                  {formatCorpusIndexEta(timingSnapshot.rate.corpusEtaMs)}
+                  {" at this stint rate · "}
+                  {timingSnapshot.remainingCorpus.toLocaleString()} sources
+                  remaining overall
+                </p>
+              ) : null}
+              {timingSnapshot.costRate.costPerMinute > 0 ? (
+                <>
+                  <p className="tabular-nums">
+                    <span className="font-medium text-amber-950">
+                      Est. cost ({corpusIndexModeLabel(indexStint!.mode)})
+                    </span>
+                    {" · "}
+                    {formatEmbedCostEta(timingSnapshot.costRate.modeCostEtaUsd)}
+                    {timingSnapshot.remainingInMode > 0
+                      ? ` · ${timingSnapshot.remainingInMode.toLocaleString()} left`
+                      : ""}
+                  </p>
+                  <p className="tabular-nums">
+                    <span className="font-medium text-amber-950">
+                      Corpus est. cost
+                    </span>
+                    {" · "}
+                    {formatEmbedCostEta(timingSnapshot.costRate.corpusCostEtaUsd)}
+                    {liveEmbedCost?.charsPerToken
+                      ? ` · ~${liveEmbedCost.charsPerToken.toFixed(1)} chars/token (60s)`
+                      : ""}
+                  </p>
+                </>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
         {/* Embedding cost summary */}
         {indexCosts ? (
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-lg border border-teal-100 bg-teal-50/60 p-3">
               <div className="text-xs text-teal-800">Indexed Embedding Cost</div>
               <div className="mt-1 text-lg font-bold tabular-nums text-teal-950">
-                {formatCostUsd(indexCosts.indexedCostUsd)}
+                {liveIndexedCostUsd != null
+                  ? formatCostUsd(liveIndexedCostUsd)
+                  : formatCostUsd(indexCosts.indexedCostUsd)}
               </div>
               <div className="mt-1 text-xs text-teal-800">
-                {formatTokenCount(indexCosts.indexedInputTokens)} input tokens ·{" "}
-                {indexCosts.modelName}
+                {liveIndexedCostUsd != null ? (
+                  <>
+                    Live est. from API token rate · char heuristic{" "}
+                    {formatCostUsd(indexCosts.indexedCostUsd)}
+                  </>
+                ) : (
+                  <>
+                    {formatTokenCount(indexCosts.indexedInputTokens)} est. tokens
+                    (chars÷4) · {indexCosts.modelName}
+                  </>
+                )}
               </div>
             </div>
 

@@ -35,9 +35,12 @@ import {
   recordMeetingV2ExtractionRun,
   clearMeetingV2ValidationUsage,
   recordMeetingV2ValidationUsage,
+  type AgendaApprovalSettings,
+  type AgendaItemDiscussionStatus,
   type MeetingV2Alert,
   type MeetingV2ExtractionQuality,
   type MeetingV2Settings,
+  type TranscriptDiscrepancy,
 } from "@/lib/meeting-v2/extraction-diagnostics";
 import {
   buildMeetingV2DisplayProgress,
@@ -108,12 +111,17 @@ export type MeetingV2Detail = {
     goldStandardFilePath?: string | null;
     goldStandardValidationJson?: string | null;
     aiUsageJson?: string | null;
+    agendaApproval?: AgendaApprovalSettings | null;
+    pipelineActivelyRunning?: boolean;
   };
   items: Array<{
     id: string;
     title: string;
     itemNumber: string | null;
     itemType: string;
+    sectionLabel?: string | null;
+    sourceText?: string | null;
+    discussionStatus?: AgendaItemDiscussionStatus;
     sourceSectionId: string | null;
     sourcePages: number[];
     discussionSummary: string | null;
@@ -661,17 +669,20 @@ export async function getMeetingV2CountsBulk(
   return resultMap;
 }
 
-export function deriveMeetingV2ComputedStatus(counts: {
-  sourceArtifacts: number;
-  transcriptSegments: number;
-  documentPages: number;
-  documentSections: number;
-  documentChunks: number;
-  agendaItems: number;
-  evidenceContexts: number;
-  investigations: number;
-  validations: number;
-}): {
+export function deriveMeetingV2ComputedStatus(
+  counts: {
+    sourceArtifacts: number;
+    transcriptSegments: number;
+    documentPages: number;
+    documentSections: number;
+    documentChunks: number;
+    agendaItems: number;
+    evidenceContexts: number;
+    investigations: number;
+    validations: number;
+  },
+  settings?: MeetingV2Settings | null,
+): {
   pipelineState: StatusState;
   currentStep: string;
   progressPercent: number;
@@ -695,6 +706,17 @@ export function deriveMeetingV2ComputedStatus(counts: {
       progressPercent: 30,
       isConsistent: false,
       note: "Agenda items have not been extracted yet.",
+    };
+  }
+
+  const isAgendaApproved = Boolean(settings?.agendaApproval?.approvedAt);
+  if (!isAgendaApproved) {
+    return {
+      pipelineState: "extracted",
+      currentStep: "Awaiting agenda review & approval",
+      progressPercent: 40,
+      isConsistent: true,
+      note: "Agenda items extracted. Awaiting human review & approval before gathering evidence.",
     };
   }
 
@@ -1332,31 +1354,24 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
         .from(meetingsV2TranscriptSegments)
         .where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId));
 
-  if (existingSections.length < pages.length) {
-    const existingSectionKeys = new Set(
-      existingSections.map((section) => `${section.startPage}:${section.endPage}:${section.title}`),
-    );
+  if (existingSections.length === 0) {
     const missingSectionRows = buildBasicDocumentSections(
       pages.map((page) => ({
         pageNumber: page.pageNumber,
         heading: page.pageHeading,
+        text: page.extractedText,
       })),
-    )
-      .filter(
-        (section) =>
-          !existingSectionKeys.has(`${section.startPage}:${section.endPage}:${section.title}`),
-      )
-      .map((section) => ({
-        id: randomUUID(),
-        meetingV2Id: meetingId,
-        sourceArtifactId: boardPackageArtifact.id,
-        title: section.title,
-        startPage: section.startPage,
-        endPage: section.endPage,
-        summary: null,
-        sortOrder: section.sortOrder,
-        createdAt: nowIso(),
-      })) satisfies Array<typeof meetingsV2DocumentSections.$inferInsert>;
+    ).map((section) => ({
+      id: randomUUID(),
+      meetingV2Id: meetingId,
+      sourceArtifactId: boardPackageArtifact.id,
+      title: section.title,
+      startPage: section.startPage,
+      endPage: section.endPage,
+      summary: null,
+      sortOrder: section.sortOrder,
+      createdAt: nowIso(),
+    })) satisfies Array<typeof meetingsV2DocumentSections.$inferInsert>;
     if (missingSectionRows.length > 0) {
       await db.insert(meetingsV2DocumentSections).values(missingSectionRows);
     }
@@ -1641,7 +1656,7 @@ function inferOutcome(text: string, answerText: string | null): string {
 function inferConfidence(
   evidenceCount: number,
   answerText: string | null,
-  openQuestions: string[],
+  openQuestions: unknown[],
 ): string {
   if (answerText) return "high";
   if (evidenceCount >= 4 && openQuestions.length === 0) return "high";
@@ -2685,40 +2700,71 @@ export async function investigateAgendaItems(
       transcriptEvidenceCount: evidenceForItem.filter((entry) => entry.sourceType === "transcript_segment").length,
       ...(reEvaluate ? { reEvaluate: true } : {}),
     });
-    try {
-      const aiResult = await runToolEnabledInvestigation({
-        systemInstruction: AGENDA_ITEM_INVESTIGATION_PROMPT,
-        userText: promptInput,
-        runtime,
-        maxOutputTokens: 4096,
-      });
-      normalized = normalizeInvestigationDocument(safeJsonObjectParse(aiResult.text));
-      modelName = aiResult.modelName;
-      usageJson = JSON.stringify({
-        evidenceCount: evidenceForItem.length,
-        transcriptEvidenceCount: evidenceForItem.filter((entry) => entry.sourceType === "transcript_segment").length,
-        toolCalls: aiResult.toolCalls,
-        usage: aiResult.usage,
-        requestTrace: aiResult.requestTrace,
-        ...(reEvaluate ? { reEvaluate: true } : {}),
-      });
-    } catch {
-      const transcriptEvidenceCount = evidenceForItem.filter(
-        (entry) => entry.sourceType === "transcript_segment",
-      ).length;
-      const openQuestions = buildOpenQuestions(item.title, transcriptEvidenceCount, answerText);
+
+    const meetingSettings = (meetingRec?.settings as MeetingV2Settings) || {};
+    const itemStatus =
+      meetingSettings.agendaApproval?.itemStatuses?.[item.id] ??
+      (item.sourceText?.includes("Discussion status: discussed")
+        ? "discussed"
+        : item.sourceText?.includes("Discussion status: ad_hoc")
+          ? "ad_hoc"
+          : item.sourceText?.includes("Discussion status: not_discussed")
+            ? "not_discussed"
+            : null);
+
+    if (itemStatus === "not_discussed") {
       normalized = {
-        discussion_summary: normalizeWhitespace(
-          `${item.sourceText ?? context?.assembledContextText ?? item.title}\n${answerText ?? ""}`,
-        ).slice(0, 900),
-        outcome: inferOutcome(context?.assembledContextText ?? item.sourceText ?? "", answerText).toUpperCase() as AiInvestigationDocument["outcome"],
-        confidence: inferConfidence(evidenceForItem.length, answerText, openQuestions).toUpperCase() as AiInvestigationDocument["confidence"],
+        discussion_summary:
+          "This item was listed on the agenda but was not discussed during this meeting session (adjourned or deferred).",
+        outcome: "DEFERRED",
+        confidence: "HIGH",
         visibility: inferVisibility(item.title) === "in_camera" ? "RESTRICTED" : "PUBLIC",
         decisions: [],
         motion: null,
         actions: [],
-        open_questions: openQuestions,
+        open_questions: [],
       };
+      modelName = "rule_engine_deferred";
+      usageJson = JSON.stringify({
+        skippedLlm: true,
+        reason: "Item confirmed not discussed during HITL agenda approval",
+      });
+    } else {
+      try {
+        const aiResult = await runToolEnabledInvestigation({
+          systemInstruction: AGENDA_ITEM_INVESTIGATION_PROMPT,
+          userText: promptInput,
+          runtime,
+          maxOutputTokens: 4096,
+        });
+        normalized = normalizeInvestigationDocument(safeJsonObjectParse(aiResult.text));
+        modelName = aiResult.modelName;
+        usageJson = JSON.stringify({
+          evidenceCount: evidenceForItem.length,
+          transcriptEvidenceCount: evidenceForItem.filter((entry) => entry.sourceType === "transcript_segment").length,
+          toolCalls: aiResult.toolCalls,
+          usage: aiResult.usage,
+          requestTrace: aiResult.requestTrace,
+          ...(reEvaluate ? { reEvaluate: true } : {}),
+        });
+      } catch {
+        const transcriptEvidenceCount = evidenceForItem.filter(
+          (entry) => entry.sourceType === "transcript_segment",
+        ).length;
+        const openQuestions = buildOpenQuestions(item.title, transcriptEvidenceCount, answerText);
+        normalized = {
+          discussion_summary: normalizeWhitespace(
+            `${item.sourceText ?? context?.assembledContextText ?? item.title}\n${answerText ?? ""}`,
+          ).slice(0, 900),
+          outcome: inferOutcome(context?.assembledContextText ?? item.sourceText ?? "", answerText).toUpperCase() as AiInvestigationDocument["outcome"],
+          confidence: inferConfidence(evidenceForItem.length, answerText, openQuestions).toUpperCase() as AiInvestigationDocument["confidence"],
+          visibility: inferVisibility(item.title) === "in_camera" ? "RESTRICTED" : "PUBLIC",
+          decisions: [],
+          motion: null,
+          actions: [],
+          open_questions: openQuestions,
+        };
+      }
     }
 
     
@@ -2870,55 +2916,67 @@ export async function validateAgendaItemInvestigations(
       contextDocument,
     });
 
-    try {
-      const investigationUsage = safeJsonParse<Record<string, unknown>>(investigation.usageJson, {});
-      const toolCalls =
-        Array.isArray(investigationUsage.toolCalls) &&
-        investigationUsage.toolCalls.every((entry) => entry && typeof entry === "object")
-          ? (investigationUsage.toolCalls as Array<Record<string, unknown>>)
-          : [];
-      const requestTrace =
-        investigationUsage.requestTrace && typeof investigationUsage.requestTrace === "object"
-          ? (investigationUsage.requestTrace as Record<string, unknown>)
-          : null;
-
-      const aiValidation = await runAiValidationReview({
-        agendaItem,
-        investigation,
-        contextDocument,
-        assembledContextText: context?.assembledContextText ?? null,
-        transcriptEvidenceCount: deterministic.transcriptEvidenceCount,
-        documentEvidenceCount: deterministic.documentEvidenceCount,
-        investigationTrace: {
-          toolCalls,
-          requestTrace,
-        },
-      });
-      addAiValidationRows({
-        rows: itemRows,
-        meetingId,
-        agendaItemId: agendaItem.id,
-        review: aiValidation.parsed,
-      });
-      await recordMeetingV2ValidationUsage(
-        meetingId,
-        aiValidation.usage,
-        aiValidation.modelName,
-        { source: options?.usageSource ?? "pipeline" },
-      );
-    } catch (error) {
+    if (investigation.outcome === "DEFERRED" || investigation.outcome === "deferred") {
       pushValidationRow(itemRows, {
         meetingId,
         agendaItemId: agendaItem.id,
-        validationType: "ai_review",
-        severity: "error",
-        code: "ai_validation_failed",
-        message: "AI validation could not be completed for this agenda item.",
-        details: {
-          title: agendaItem.title,
-          error: error instanceof Error ? error.message : String(error),
-        },
+        validationType: "deterministic",
+        severity: "info",
+        code: "item_not_discussed",
+        message: "Item was listed on the agenda but confirmed not discussed during this meeting session.",
+        details: { title: agendaItem.title },
       });
+    } else {
+      try {
+        const investigationUsage = safeJsonParse<Record<string, unknown>>(investigation.usageJson, {});
+        const toolCalls =
+          Array.isArray(investigationUsage.toolCalls) &&
+          investigationUsage.toolCalls.every((entry) => entry && typeof entry === "object")
+            ? (investigationUsage.toolCalls as Array<Record<string, unknown>>)
+            : [];
+        const requestTrace =
+          investigationUsage.requestTrace && typeof investigationUsage.requestTrace === "object"
+            ? (investigationUsage.requestTrace as Record<string, unknown>)
+            : null;
+
+        const aiValidation = await runAiValidationReview({
+          agendaItem,
+          investigation,
+          contextDocument,
+          assembledContextText: context?.assembledContextText ?? null,
+          transcriptEvidenceCount: deterministic.transcriptEvidenceCount,
+          documentEvidenceCount: deterministic.documentEvidenceCount,
+          investigationTrace: {
+            toolCalls,
+            requestTrace,
+          },
+        });
+        addAiValidationRows({
+          rows: itemRows,
+          meetingId,
+          agendaItemId: agendaItem.id,
+          review: aiValidation.parsed,
+        });
+        await recordMeetingV2ValidationUsage(
+          meetingId,
+          aiValidation.usage,
+          aiValidation.modelName,
+          { source: options?.usageSource ?? "pipeline" },
+        );
+      } catch (error) {
+        pushValidationRow(itemRows, {
+          meetingId,
+          agendaItemId: agendaItem.id,
+          validationType: "ai_review",
+          severity: "error",
+          code: "ai_validation_failed",
+          message: "AI validation could not be completed for this agenda item.",
+          details: {
+            title: agendaItem.title,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
     }
 
     if (itemRows.length > 0) {
@@ -3041,6 +3099,8 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         title: meetingsV2AgendaItems.title,
         itemNumber: meetingsV2AgendaItems.itemNumber,
         itemType: meetingsV2AgendaItems.itemType,
+        sectionLabel: meetingsV2AgendaItems.sectionLabel,
+        sourceText: meetingsV2AgendaItems.sourceText,
         sourceSectionId: meetingsV2AgendaItems.sourceSectionId,
         sourcePagesJson: meetingsV2AgendaItems.sourcePagesJson,
       })
@@ -3142,7 +3202,9 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         updatedAt: drafts[0].updatedAt,
       }
     : null;
-  const computed = deriveMeetingV2ComputedStatus(counts);
+  const selectedSettings =
+    (selectedMeeting.settings as MeetingV2Settings) || {};
+  const computed = deriveMeetingV2ComputedStatus(counts, selectedSettings);
   const pipelineNotStarted = isMeetingV2PipelineNotStarted(selectedMeeting.pipelineState);
   const extractionQuality = await assessMeetingV2Extraction(meetingId, {
     meeting: selectedMeeting,
@@ -3192,8 +3254,6 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
     (artifact) => artifact.type === "board_package",
   );
   const legacy = legacyMeeting[0];
-  const selectedSettings =
-    (selectedMeeting.settings as MeetingV2Settings) || {};
   const goldStandardFilePath =
     selectedSettings.goldStandardFilePath ?? legacy?.goldStandardFilePath ?? null;
   const goldStandardValidationJson =
@@ -3240,6 +3300,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       goldStandardFilePath,
       goldStandardValidationJson,
       aiUsageJson,
+      agendaApproval: selectedSettings.agendaApproval ?? null,
     },
     items: agendaItems.map((item) => {
       const investigation = investigations.find((entry) => entry.agendaItemId === item.id);
@@ -3268,11 +3329,22 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
           };
         });
       const sourcePages = safeJsonParse<number[]>(item.sourcePagesJson, []);
+      const discussionStatus =
+        selectedSettings.agendaApproval?.itemStatuses?.[item.id] ??
+        (item.sourceText?.includes("Discussion status: discussed")
+          ? ("discussed" as const)
+          : item.sourceText?.includes("Discussion status: ad_hoc")
+            ? ("ad_hoc" as const)
+            : ("not_discussed" as const));
+
       return {
         id: item.id,
         title: item.title,
         itemNumber: item.itemNumber,
         itemType: item.itemType,
+        sectionLabel: item.sectionLabel ?? null,
+        sourceText: item.sourceText ?? null,
+        discussionStatus,
         sourceSectionId: item.sourceSectionId,
         sourcePages,
         discussionSummary: investigation?.discussionSummary ?? null,
@@ -3349,8 +3421,14 @@ export async function rerunAgendaItem(meetingId: string, agendaItemId: string): 
 }
 
 export async function finalizeMeetingV2PipelineStatus(meetingId: string): Promise<void> {
+  const db = getDb();
+  const [meeting] = await db
+    .select({ settings: meetingsV2.settings })
+    .from(meetingsV2)
+    .where(eq(meetingsV2.id, meetingId));
+  const settings = (meeting?.settings as MeetingV2Settings) || {};
   const counts = await getMeetingV2Counts(meetingId);
-  const computed = deriveMeetingV2ComputedStatus(counts);
+  const computed = deriveMeetingV2ComputedStatus(counts, settings);
   const extractionQuality = await assessMeetingV2Extraction(meetingId);
   if (extractionQuality.likelyIncomplete) {
     await updateMeetingV2Status(

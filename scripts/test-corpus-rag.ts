@@ -149,6 +149,142 @@ describe("Corpus RAG - Embedding cost helpers", () => {
   });
 });
 
+describe("Corpus RAG - Index stint timing", () => {
+  it("derives rate and ETA from the current stint only", async () => {
+    const {
+      corpusRemainingForMode,
+      estimateCorpusIndexRate,
+      formatCorpusIndexEta,
+      formatCorpusIndexRate,
+    } = await import("../lib/rag/index-timing");
+
+    const status = {
+      totalEmails: 100,
+      indexedEmails: 40,
+      totalParsedAttachments: 50,
+      indexedAttachments: 10,
+      totalDoneVisionPages: 20,
+      indexedVisionPages: 5,
+      totalChunks: 0,
+      lastIndexedAt: null,
+    };
+
+    assert.equal(corpusRemainingForMode(status, "all"), 115);
+    assert.equal(corpusRemainingForMode(status, "emails"), 60);
+
+    const rate = estimateCorpusIndexRate({
+      stintMs: 60_000,
+      stintDocs: 12,
+      remainingInMode: 60,
+      remainingCorpus: 115,
+    });
+
+    assert.equal(rate.docsPerMinute, 12);
+    assert.equal(rate.secondsPerDoc, 5);
+    assert.equal(rate.modeEtaMs, 300_000);
+    assert.equal(rate.corpusEtaMs, 575_000);
+    assert.equal(formatCorpusIndexRate(rate.docsPerMinute), "12.0 docs/min");
+    assert.equal(formatCorpusIndexEta(rate.corpusEtaMs), "~9m 35s");
+  });
+
+  it("shows a dash until the stint has a sample", async () => {
+    const { estimateCorpusIndexRate, formatCorpusIndexEta } = await import(
+      "../lib/rag/index-timing"
+    );
+
+    const rate = estimateCorpusIndexRate({
+      stintMs: 500,
+      stintDocs: 0,
+      remainingInMode: 100,
+      remainingCorpus: 100,
+    });
+
+    assert.equal(rate.modeEtaMs, null);
+    assert.equal(formatCorpusIndexEta(null), "—");
+  });
+
+  it("pairs doc ETA with a smoothed embed burn rate", async () => {
+    const { estimateCorpusEmbedCostRate, estimateCorpusIndexRate } =
+      await import("../lib/rag/index-timing");
+
+    const docRate = estimateCorpusIndexRate({
+      stintMs: 60_000,
+      stintDocs: 12,
+      remainingInMode: 60,
+      remainingCorpus: 115,
+    });
+
+    const costRate = estimateCorpusEmbedCostRate({
+      stintMs: 60_000,
+      stintCostUsd: 0.06,
+      docRate,
+      liveRolling: {
+        windowMs: 60_000,
+        sampleCount: 4,
+        apiSampleCount: 4,
+        inputTokens: 400_000,
+        charCount: 800_000,
+        costUsd: 0.06,
+        tokensPerMinute: 400_000,
+        costPerMinute: 0.06,
+        charsPerToken: 2,
+        tokenSource: "api",
+      },
+    });
+
+    assert.equal(costRate.costPerMinute, 0.06);
+    assert.equal(costRate.modeCostEtaUsd, 0.3);
+    assert.ok(
+      costRate.corpusCostEtaUsd != null && costRate.corpusCostEtaUsd > 0.05,
+    );
+  });
+});
+
+describe("Corpus RAG - Live embed cost rolling window", () => {
+  it("tracks billed tokens per API call over a 60s window", async () => {
+    const {
+      EMBED_COST_ROLLING_WINDOW_MS,
+      getEmbedCostRollingSnapshot,
+      recordEmbedApiUsage,
+      resetEmbedCostLiveSamples,
+    } = await import("../lib/rag/embed-cost-live");
+    const { buildEmbeddingUsage } = await import("../lib/rag/cost");
+
+    resetEmbedCostLiveSamples();
+
+    const now = Date.now();
+    recordEmbedApiUsage(
+      ["a".repeat(800), "b".repeat(400)],
+      buildEmbeddingUsage(300, "api"),
+      now - 30_000,
+    );
+    recordEmbedApiUsage(
+      ["c".repeat(1200)],
+      buildEmbeddingUsage(500, "api"),
+      now - 5_000,
+    );
+
+    const snap = getEmbedCostRollingSnapshot(now);
+    assert.equal(snap.sampleCount, 2);
+    assert.equal(snap.apiSampleCount, 2);
+    assert.equal(snap.inputTokens, 800);
+    assert.ok(Math.abs(snap.costUsd - 0.00012) < 1e-9);
+    assert.ok(snap.charsPerToken != null && snap.charsPerToken > 1.5);
+    assert.equal(snap.tokenSource, "api");
+    assert.equal(snap.windowMs, EMBED_COST_ROLLING_WINDOW_MS);
+
+    recordEmbedApiUsage(
+      ["stale"],
+      buildEmbeddingUsage(100, "api"),
+      now - EMBED_COST_ROLLING_WINDOW_MS - 1,
+    );
+    const pruned = getEmbedCostRollingSnapshot(now);
+    assert.equal(pruned.sampleCount, 2);
+
+    resetEmbedCostLiveSamples();
+  });
+});
+
 describe("Corpus RAG - Cosine Similarity & Excerpt Extraction", () => {
   it("computes cosine similarity accurately", () => {
     // Identical

@@ -7,7 +7,18 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { analyzeExtractionQuality } from "../lib/meeting-v2/extraction-diagnostics";
-import { inferHeadingFromMarkdown, isEmailAttachmentPage } from "../lib/meeting-v2/pdf";
+import {
+  inferHeadingFromMarkdown,
+  isEmailAttachmentPage,
+  buildSemanticDocumentSections,
+} from "../lib/meeting-v2/pdf";
+import { chunkDocumentPages } from "../lib/meeting-v2/chunking";
+import { parseVttToMergedCues, mergedCuesToSegmentRows } from "../lib/meeting-v2/transcript";
+import {
+  normalizeTopic,
+  normalizeDiscrepancies,
+  normalizeWorkflowState,
+} from "../lib/meeting-v2/agenda-ai";
 
 describe("analyzeExtractionQuality", () => {
   it("does not false-positive halt on DeepSeek items with sourceSectionId", () => {
@@ -123,5 +134,180 @@ We received the tender analysis report and related email from Ryan Ratcliff.
 Recommendation is to proceed with contractor B.`;
 
     assert.equal(isEmailAttachmentPage(reportText), false);
+  });
+});
+
+describe("Docling Semantic Section Chunking", () => {
+  it("groups pages cleanly into semantic sections instead of arbitrary rolling windows", () => {
+    const pages = [
+      { pageNumber: 1, text: "# Board Meeting Package\nTSCC 2517 - July 2026", extractedText: "# Board Meeting Package\nTSCC 2517 - July 2026" },
+      { pageNumber: 2, text: "# AGENDA\n1. Meeting with Ryan Ratcliff\nA. Booster Pump\nB. Riser Expansion\n2. Approval of Minutes\n3. Financial Statements\n4. Property Management Report", extractedText: "# AGENDA\n1. Meeting with Ryan Ratcliff\nA. Booster Pump\nB. Riser Expansion\n2. Approval of Minutes\n3. Financial Statements\n4. Property Management Report" },
+      { pageNumber: 3, text: "# 1. Meeting with Eng. Ryan Ratcliff from TCG to discuss projects\nDiscussion on booster pump specifications and tender requirements.", extractedText: "# 1. Meeting with Eng. Ryan Ratcliff from TCG to discuss projects\nDiscussion on booster pump specifications and tender requirements." },
+      { pageNumber: 4, text: "Further engineering calculations and drawings for booster pump system.", extractedText: "Further engineering calculations and drawings for booster pump system." },
+      { pageNumber: 5, text: "# 2. Review and Approval of Minutes of June 30, 2026\nMinutes reviewed.", extractedText: "# 2. Review and Approval of Minutes of June 30, 2026\nMinutes reviewed." },
+      { pageNumber: 6, text: "# 4. Property Management Report:\nManagement activity summary for July 2026.", extractedText: "# 4. Property Management Report:\nManagement activity summary for July 2026." },
+    ];
+
+    const sections = buildSemanticDocumentSections(pages);
+    assert.equal(sections.length, 5);
+    assert.equal(sections[0].title, "Management Report Cover");
+    assert.equal(sections[1].title, "AGENDA");
+    assert.equal(sections[2].title, "1. Meeting with Eng. Ryan Ratcliff from TCG to discuss projects");
+    assert.equal(sections[2].startPage, 3);
+    assert.equal(sections[2].endPage, 4);
+    assert.equal(sections[3].title, "2. Review and Approval of Minutes of June 30, 2026");
+    assert.equal(sections[4].title, "4. Property Management Report:");
+
+    const chunks = chunkDocumentPages(
+      pages.map((p, idx) => ({ id: `page-${p.pageNumber}`, pageNumber: p.pageNumber, text: p.text, sortOrder: idx })),
+      sections,
+    );
+    assert.equal(chunks.length, 5);
+    const ryanSectionChunk = chunks.find((c) =>
+      c.text.includes("[SECTION: 1. Meeting with Eng. Ryan Ratcliff"),
+    );
+    assert.ok(ryanSectionChunk);
+    assert.deepEqual(ryanSectionChunk?.pageNumbers, [3, 4]);
+  });
+});
+
+describe("Readable Transcript Ingestion (Speaker-Turn Paragraphing)", () => {
+  it("merges consecutive same-speaker cues into unified conversational segments", () => {
+    const rawVtt = `WEBVTT
+
+00:00:01.000 --> 00:00:04.000
+<v Ryan Ratcliff>Good evening everyone.</v>
+
+00:00:04.100 --> 00:00:07.500
+<v Ryan Ratcliff>I want to walk you through the booster pump proposal.</v>
+
+00:00:07.600 --> 00:00:10.000
+<v Ryan Ratcliff>The current pumps have reached end of life.</v>
+
+00:00:10.500 --> 00:00:13.000
+<v Shawna Greenspan>Thanks Ryan, what is the warranty period?</v>
+
+00:00:13.200 --> 00:00:16.000
+<v Ryan Ratcliff>Standard manufacturer warranty is 5 years.</v>`;
+
+    const merged = parseVttToMergedCues(rawVtt);
+    assert.equal(merged.length, 3);
+    assert.equal(merged[0].speaker, "Ryan Ratcliff");
+    assert.equal(merged[0].text, "Good evening everyone. I want to walk you through the booster pump proposal. The current pumps have reached end of life.");
+    assert.equal(merged[0].start, "00:00:01.000");
+    assert.equal(merged[0].end, "00:00:10.000");
+
+    assert.equal(merged[1].speaker, "Shawna Greenspan");
+    assert.equal(merged[1].text, "Thanks Ryan, what is the warranty period?");
+
+    assert.equal(merged[2].speaker, "Ryan Ratcliff");
+    assert.equal(merged[2].text, "Standard manufacturer warranty is 5 years.");
+
+    const rows = mergedCuesToSegmentRows(merged, {
+      meetingId: "meeting-123",
+      sourceArtifactId: "artifact-vtt",
+      startSequence: 0,
+    });
+    assert.equal(rows.length, 3);
+    assert.equal(rows[0].text, merged[0].text);
+    assert.equal(rows[0].speakerLabel, "Ryan Ratcliff");
+  });
+});
+
+describe("Dual-Source Agenda Extraction & Synthesis", () => {
+  it("normalizes topics with discussionStatus, consolidation reason, and ranges", () => {
+    const rawTopic = {
+      title: "Booster Pump",
+      sectionLabel: "1. Meeting with Eng. Ryan Ratcliff (TCG)",
+      itemType: "discussion_approval",
+      sourcePages: [2, 3, 4],
+      discussionStatus: "discussed" as const,
+      discussionTimestampRange: "00:00:01 - 00:45:00",
+      consolidationReason: "Unified Ryan Ratcliff presentation with Management Report duplicate item 4.B.1",
+    };
+
+    const normalized = normalizeTopic(rawTopic);
+    assert.ok(normalized);
+    assert.equal(normalized.title, "Booster Pump");
+    assert.equal(normalized.discussionStatus, "discussed");
+    assert.equal(normalized.discussionTimestampRange, "00:00:01 - 00:45:00");
+    assert.equal(normalized.consolidationReason, "Unified Ryan Ratcliff presentation with Management Report duplicate item 4.B.1");
+  });
+
+  it("extracts and normalizes discrepancies for unaligned transcript discussions", () => {
+    const rawDiscrepancies = [
+      {
+        transcriptRange: [15, 22],
+        timestamp: "00:24:18",
+        speaker: "Shawna Greenspan",
+        snippet: "We need to discuss emergency repairs to the garage exhaust fan.",
+        suggestedTitle: "Garage Exhaust Fan Emergency Repair",
+        suggestedSection: "Property Management Report",
+        clarificationQuestion: "The board discussed garage exhaust fan emergency repairs which was not on the agenda. Include as ad-hoc agenda item?",
+      },
+    ];
+
+    const normalized = normalizeDiscrepancies(rawDiscrepancies);
+    assert.equal(normalized.length, 1);
+    assert.equal(normalized[0].suggestedTitle, "Garage Exhaust Fan Emergency Repair");
+    assert.equal(normalized[0].timestamp, "00:24:18");
+    assert.deepEqual(normalized[0].transcriptRange, [15, 22]);
+    assert.ok(normalized[0].clarificationQuestion.includes("garage exhaust fan"));
+  });
+
+  it("normalizes complete workflow state including documentTopics and discrepancies", () => {
+    const rawState = {
+      documentTopics: [
+        {
+          title: "Booster Pump Replacement",
+          sectionLabel: "1. Meeting with Eng. Ryan Ratcliff",
+          sourcePages: [2, 3, 4],
+          discussionStatus: "discussed",
+        },
+        {
+          title: "Generator Fuel Delivery Upgrade",
+          sectionLabel: "1. Meeting with Eng. Ryan Ratcliff",
+          sourcePages: [2, 5],
+          discussionStatus: "not_discussed",
+        },
+      ],
+      extraTopics: [
+        {
+          title: "Garage Door Sensor Replacement",
+          sectionLabel: "Ad-hoc Discussion",
+          itemType: "ad_hoc_discussion",
+          discussionStatus: "ad_hoc",
+        },
+      ],
+      discrepancies: [
+        {
+          transcriptRange: [30, 35],
+          timestamp: "01:12:00",
+          snippet: "Tenant complaints regarding hallway HVAC noise.",
+          suggestedTitle: "Hallway HVAC Noise Complaints",
+          clarificationQuestion: "Should hallway HVAC noise complaints be added as an agenda item?",
+        },
+      ],
+    };
+
+    const result = normalizeWorkflowState(rawState, {
+      documentTopics: [],
+      extraTopics: [],
+      rawNotes: [],
+      uncertainties: [],
+      discrepancies: [],
+    });
+
+    assert.equal(result.documentTopics.length, 2);
+    assert.equal(result.documentTopics[0].title, "Booster Pump Replacement");
+    assert.equal(result.documentTopics[0].discussionStatus, "discussed");
+    assert.equal(result.documentTopics[1].title, "Generator Fuel Delivery Upgrade");
+    assert.equal(result.documentTopics[1].discussionStatus, "not_discussed");
+
+    assert.equal(result.extraTopics.length, 1);
+    assert.equal(result.extraTopics[0].discussionStatus, "ad_hoc");
+
+    assert.equal(result.discrepancies?.length, 1);
+    assert.equal(result.discrepancies?.[0].suggestedTitle, "Hallway HVAC Noise Complaints");
   });
 });

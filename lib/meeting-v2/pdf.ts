@@ -230,18 +230,137 @@ export async function extractPdfPagesWithText(
   };
 }
 
-export function buildBasicDocumentSections(
-  pages: Array<{ pageNumber: number; heading: string | null }>,
+const SUBORDINATE_HEADER_RE =
+  /^(?:Tender Summary|Pricing and Timeline|Pricing|Timeline|Recommendation|Management Recommendation|Applied subsequently|Note|Background|Scope of Work|Deliverables|Option \d|Cost Breakdown|Summary of Bids|Bid Comparison|Analysis)/i;
+
+const MAJOR_SECTION_RE =
+  /^(?:Call to Order|Ratification of Agenda|Agenda|Table of Contents|Meeting with|Review and Approval|Financial Statements|Financial Matters|Property Management Report|Adjournment|Next Meeting)/i;
+
+function extractMajorSectionHeading(
+  text: string | null | undefined,
+  fallbackHeading: string | null,
+  pageNumber: number,
+): string | null {
+  const raw = text || "";
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  if (isEmailAttachmentPage(raw)) {
+    const subMatch = raw.match(/Subject\s*:\s*([^\r\n]+)/i);
+    return subMatch
+      ? `Email: ${subMatch[1].trim().slice(0, 80)}`
+      : `Email Attachment (Page ${pageNumber})`;
+  }
+
+  for (const line of lines.slice(0, 8)) {
+    const cleanLine = line.replace(/^#{1,4}\s+/, "").trim();
+    if (!cleanLine || cleanLine.startsWith("<!--") || cleanLine.length < 3) continue;
+
+    if (SUBORDINATE_HEADER_RE.test(cleanLine)) continue;
+
+    // Check for major numbered project / item: "1. Booster Pump...", "2. Heat Exchanger..."
+    const numMatch = cleanLine.match(/^(\d+\.\s+[A-Za-z].+)$/);
+    if (numMatch && cleanLine.length < 120) {
+      return numMatch[1];
+    }
+
+    // Check for major lettered section: "A. Ratification...", "B. Review and approval...", "C. Items completed"
+    const letMatch = cleanLine.match(/^([A-E]\.\s+[A-Za-z].+)$/);
+    if (letMatch && cleanLine.length < 120) {
+      return letMatch[1];
+    }
+
+    // Check for named major sections
+    if (MAJOR_SECTION_RE.test(cleanLine) && cleanLine.length < 120) {
+      return cleanLine;
+    }
+  }
+
+  if (fallbackHeading && fallbackHeading.length > 3 && fallbackHeading.length < 100) {
+    if (!SUBORDINATE_HEADER_RE.test(fallbackHeading)) {
+      return fallbackHeading;
+    }
+  }
+
+  return null;
+}
+
+export function buildSemanticDocumentSections(
+  pages: Array<{ pageNumber: number; heading: string | null; text?: string }>,
 ): Array<{
   title: string;
   startPage: number;
   endPage: number;
   sortOrder: number;
 }> {
-  return pages.map((page, index) => ({
-    title: page.heading ?? `Page ${page.pageNumber}`,
-    startPage: page.pageNumber,
-    endPage: page.pageNumber,
-    sortOrder: index,
-  }));
+  if (pages.length === 0) return [];
+  const ordered = [...pages].sort((a, b) => a.pageNumber - b.pageNumber);
+  const sections: Array<{
+    title: string;
+    startPage: number;
+    endPage: number;
+    sortOrder: number;
+  }> = [];
+  let currentSection: {
+    title: string;
+    startPage: number;
+    endPage: number;
+    sortOrder: number;
+  } | null = null;
+
+  for (const p of ordered) {
+    const detectedHeading = extractMajorSectionHeading(p.text, p.heading, p.pageNumber);
+
+    if (p.pageNumber === 1) {
+      currentSection = {
+        title: detectedHeading || "Management Report Cover",
+        startPage: 1,
+        endPage: 1,
+        sortOrder: 0,
+      };
+      sections.push(currentSection);
+      continue;
+    }
+
+    if (p.pageNumber === 2 && !detectedHeading?.toLowerCase().includes("management")) {
+      currentSection = {
+        title: detectedHeading || "Meeting Agenda & Outline",
+        startPage: 2,
+        endPage: 2,
+        sortOrder: sections.length,
+      };
+      sections.push(currentSection);
+      continue;
+    }
+
+    const isNewSection = Boolean(detectedHeading);
+    const exceedsMaxPages = currentSection && p.pageNumber - currentSection.startPage >= 6;
+
+    if (isNewSection || exceedsMaxPages || !currentSection) {
+      const sectionTitle: string =
+        detectedHeading ||
+        (currentSection ? `${currentSection.title} (Cont.)` : `Section Page ${p.pageNumber}`);
+      currentSection = {
+        title: sectionTitle,
+        startPage: p.pageNumber,
+        endPage: p.pageNumber,
+        sortOrder: sections.length,
+      };
+      sections.push(currentSection);
+    } else {
+      currentSection.endPage = p.pageNumber;
+    }
+  }
+
+  return sections;
+}
+
+export function buildBasicDocumentSections(
+  pages: Array<{ pageNumber: number; heading: string | null; text?: string }>,
+): Array<{
+  title: string;
+  startPage: number;
+  endPage: number;
+  sortOrder: number;
+}> {
+  return buildSemanticDocumentSections(pages);
 }

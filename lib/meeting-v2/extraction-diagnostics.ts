@@ -26,6 +26,29 @@ export type MeetingV2StageTokenUsage = {
   segments?: MeetingV2ValidationUsageSegment[];
 };
 
+export type AgendaItemDiscussionStatus = "discussed" | "not_discussed" | "ad_hoc";
+
+export type TranscriptDiscrepancy = {
+  id: string;
+  transcriptRange: [number, number];
+  timestamp: string;
+  speaker?: string | null;
+  snippet: string;
+  suggestedTitle: string;
+  suggestedSection?: string | null;
+  clarificationQuestion: string;
+  status: "pending" | "accepted" | "dismissed";
+};
+
+export type AgendaApprovalSettings = {
+  status: "pending_review" | "approved";
+  approvedAt: string | null;
+  approvedBy?: string | null;
+  itemStatuses?: Record<string, AgendaItemDiscussionStatus>;
+  excludedItemIds?: string[];
+  discrepancies?: TranscriptDiscrepancy[];
+};
+
 export type MeetingV2Settings = {
   autonomyTemperature?: number;
   extractionRun?: MeetingV2ExtractionRun;
@@ -37,6 +60,8 @@ export type MeetingV2Settings = {
   goldStandardValidationJson?: string | null;
   /** Per-run LLM usage from gold-standard compare (appended each comparison). */
   goldStandardValidationRuns?: GoldStandardValidationUsageRun[];
+  /** Human-in-the-loop agenda review approval and transcript alignment. */
+  agendaApproval?: AgendaApprovalSettings;
 };
 
 export type MeetingV2ExtractionRun = {

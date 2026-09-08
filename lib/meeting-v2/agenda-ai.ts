@@ -12,6 +12,11 @@ import {
   meetingsV2DocumentSections,
   meetingsV2SourceArtifacts,
 } from "@/lib/db/schema";
+import type {
+  AgendaItemDiscussionStatus,
+  MeetingV2Settings,
+  TranscriptDiscrepancy,
+} from "@/lib/meeting-v2/extraction-diagnostics";
 
 type WorkflowTopic = {
   title: string;
@@ -21,6 +26,9 @@ type WorkflowTopic = {
   sourcePages: number[];
   sourceChunkIds: string[];
   sourceTranscriptRanges: Array<[number, number]>;
+  discussionStatus?: "discussed" | "not_discussed" | "ad_hoc";
+  discussionTimestampRange?: string | null;
+  consolidationReason?: string | null;
   sourceText: string | null;
   aliases: string[];
   notes: string[];
@@ -32,10 +40,22 @@ type WorkflowTopic = {
   humanReviewReason: string | null;
 };
 
+type WorkflowDiscrepancy = {
+  id: string;
+  transcriptRange: [number, number];
+  timestamp: string;
+  speaker?: string | null;
+  snippet: string;
+  suggestedTitle: string;
+  suggestedSection?: string | null;
+  clarificationQuestion: string;
+};
+
 type WorkflowState = {
   documentTopics: WorkflowTopic[];
   extraTopics: WorkflowTopic[];
   uncertainties: string[];
+  discrepancies?: WorkflowDiscrepancy[];
 };
 
 type WorkflowChanges = {
@@ -101,6 +121,8 @@ Otherwise return strict JSON with this shape:
       "sourcePages": [1],
       "sourceChunkIds": ["document_chunk_001"],
       "sourceTranscriptRanges": [],
+      "discussionStatus": "discussed | not_discussed | ad_hoc",
+      "consolidationReason": "string | null",
       "sourceText": "string | null",
       "aliases": ["string"],
       "notes": ["string"],
@@ -120,6 +142,7 @@ Otherwise return strict JSON with this shape:
 }
 
 Package chunk rules:
+- CRITICAL DEDUPLICATION: If an item or project appears in multiple places in the board package (e.g. mentioned in the opening guest presentation outline like '1.A Booster Pump' AND described in the Property Management Report project list like '4.B Booster Pump Replacement' or supporting quotes), DO NOT create two separate topics. Unify them into a single comprehensive topic! In sourcePages, include ALL relevant pages across the package (e.g. [2, 4, 5]). In consolidationReason, briefly state: 'Unified opening presentation mention with Property Management Report project'.
 - Favor numbered or clearly separated business items.
 - If a package section contains numbered sub-items like 1., 2., 3. under one heading, create separate topics for those numbered items.
 - If a discussion section contains lettered sub-items like a., b., c., create separate topics for those lettered items.
@@ -165,25 +188,40 @@ Package chunk rules:
 - Prefer one informational completed-items topic when the package explicitly says completed work is a real report, even if the details live in another document.
 - Prefer no topic for meeting administration lines and future scheduling.`;
 
-const TRANSCRIPT_TASK = `TASK: TRANSCRIPT CHUNK ENRICHMENT
+const TRANSCRIPT_TASK = `TASK: TRANSCRIPT CHUNK ENRICHMENT & DISCUSSION ALIGNMENT
 
 You will receive:
-- the current topic state
+- the current topic state (documentTopics and extraTopics)
 - one transcript chunk
 
 Use the transcript chunk to:
-- link discussion to existing documentTopics
+- link discussion to existing documentTopics:
+  - set discussionStatus to "discussed" if conversation is found
+  - attach sequence numbers to sourceTranscriptRanges
+  - attach human-readable start/end time to discussionTimestampRange (e.g. "00:15:58 - 01:42:10")
 - add aliases or notes when the transcript uses shorthand
-- add extraTopics only for real discussion matters not clearly present in documentTopics
+- add extraTopics ONLY for genuinely new board business matters discussed in the transcript but not on the agenda (itemType "ad_hoc_discussion" or "extra_topic", discussionStatus "ad_hoc")
+- detect unaligned discussion discrepancies:
+  - if there is substantial discussion in this chunk that does not map to any recognized agenda item, add an entry to "discrepancies":
+    {
+      "id": "disc-unique-id",
+      "transcriptRange": [startSeq, endSeq],
+      "timestamp": "HH:MM:SS",
+      "speaker": "Speaker Name",
+      "snippet": "Short quote of what was discussed",
+      "suggestedTitle": "Title of the unexpected topic",
+      "clarificationQuestion": "It looks like [topic] was discussed at [timestamp], but does not appear on the official agenda. Should this be included as an agenda item?"
+    }
 
 If this chunk does not require any change, return:
 {
   "status": "no_change"
 }
 
-Otherwise return strict JSON with the same shape as before.
+Otherwise return strict JSON with the same shape as before, including "discrepancies": [...] when applicable.
 
 Transcript rules:
+- Discussion Status: Any topic with verified audio discussion in this or previous chunks should have discussionStatus "discussed". If an agenda topic was not reached (e.g. meeting adjourned early or skipped), it remains "not_discussed".
 - Do not remove solid package-backed topics just because they are not mentioned in this chunk.
 - Prefer updating notes and aliases on existing topics.
 - Lines marked as [PREVIOUS TRANSCRIPT CONTEXT] are provided strictly so you can read conversations that connect to the current lines. Do not extract brand new extra topics from the previous transcript context if they do not spill over into the new lines.
@@ -390,7 +428,7 @@ ${text}`,
   }
 }
 
-function normalizeTopic(raw: Partial<WorkflowTopic>): WorkflowTopic | null {
+export function normalizeTopic(raw: Partial<WorkflowTopic>): WorkflowTopic | null {
   const title = normalizeWhitespace(raw.title ?? "");
   if (!title) return null;
   return {
@@ -461,6 +499,20 @@ function normalizeTopic(raw: Partial<WorkflowTopic>): WorkflowTopic | null {
     humanReviewReason:
       typeof raw.humanReviewReason === "string"
         ? truncateText(normalizeWhitespace(raw.humanReviewReason), 220)
+        : null,
+    discussionStatus:
+      raw.discussionStatus === "discussed" ||
+      raw.discussionStatus === "not_discussed" ||
+      raw.discussionStatus === "ad_hoc"
+        ? raw.discussionStatus
+        : undefined,
+    discussionTimestampRange:
+      typeof raw.discussionTimestampRange === "string"
+        ? truncateText(normalizeWhitespace(raw.discussionTimestampRange), 60)
+        : null,
+    consolidationReason:
+      typeof raw.consolidationReason === "string"
+        ? truncateText(normalizeWhitespace(raw.consolidationReason), 220)
         : null,
   };
 }
@@ -711,8 +763,41 @@ function normalizeChanges(raw: unknown): WorkflowChanges | undefined {
   return summary.length > 0 ? { summary } : undefined;
 }
 
-function normalizeWorkflowState(value: unknown, fallback: WorkflowState): WorkflowResponse {
-  const record = (value && typeof value === "object" ? value : {}) as Partial<WorkflowResponse>;
+export function normalizeDiscrepancies(raw: unknown): WorkflowDiscrepancy[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .flatMap((item, idx) => {
+      if (!item || typeof item !== "object") return [];
+      const rec = item as Record<string, unknown>;
+      const snippet = typeof rec.snippet === "string" ? normalizeWhitespace(rec.snippet) : "";
+      const suggestedTitle =
+        typeof rec.suggestedTitle === "string" ? normalizeWhitespace(rec.suggestedTitle) : "";
+      if (!snippet && !suggestedTitle) return [];
+      const range =
+        Array.isArray(rec.transcriptRange) && rec.transcriptRange.length === 2
+          ? ([Number(rec.transcriptRange[0]), Number(rec.transcriptRange[1])] as [number, number])
+          : ([0, 0] as [number, number]);
+      return [
+        {
+          id: typeof rec.id === "string" ? rec.id : `disc-${idx + 1}-${randomUUID().slice(0, 8)}`,
+          transcriptRange: range,
+          timestamp: typeof rec.timestamp === "string" ? rec.timestamp : "Unknown time",
+          speaker: typeof rec.speaker === "string" ? rec.speaker : null,
+          snippet: truncateText(snippet, 300),
+          suggestedTitle: truncateText(suggestedTitle || "Ad-hoc Discussion", 100),
+          suggestedSection: typeof rec.suggestedSection === "string" ? rec.suggestedSection : null,
+          clarificationQuestion:
+            typeof rec.clarificationQuestion === "string"
+              ? rec.clarificationQuestion
+              : `It looks like ${suggestedTitle || "this topic"} was discussed at ${rec.timestamp || "this time"}, but does not appear on the official agenda. Should this be included as an agenda item?`,
+        },
+      ];
+    })
+    .slice(0, 10);
+}
+
+export function normalizeWorkflowState(value: unknown, fallback: WorkflowState): WorkflowResponse {
+  const record = (value && typeof value === "object" ? value : {}) as Partial<WorkflowResponse & { discrepancies?: unknown }>;
   const documentTopics = dedupeTopics(
     (Array.isArray(record.documentTopics) ? record.documentTopics : [])
       .map((topic) => normalizeTopic(topic as Partial<WorkflowTopic>))
@@ -731,6 +816,10 @@ function normalizeWorkflowState(value: unknown, fallback: WorkflowState): Workfl
         .flatMap((entry) => (typeof entry === "string" ? [normalizeWhitespace(entry)] : []))
         .filter(Boolean),
     ).slice(0, 20),
+    discrepancies: [
+      ...(fallback.discrepancies || []),
+      ...normalizeDiscrepancies(record.discrepancies),
+    ],
     changes: normalizeChanges(record.changes),
   };
 }
@@ -819,6 +908,9 @@ function buildStateText(state: WorkflowState, options?: { compact?: boolean }): 
         sourcePages: topic.sourcePages.slice(0, 8),
         sourceChunkIds: topic.sourceChunkIds.slice(0, 6),
         sourceTranscriptRanges: topic.sourceTranscriptRanges.slice(0, 4),
+        discussionStatus: topic.discussionStatus,
+        discussionTimestampRange: topic.discussionTimestampRange,
+        consolidationReason: topic.consolidationReason,
         sourceText: topic.sourceText,
         aliases: topic.aliases.slice(0, 3),
         notes: topic.notes.slice(0, 3),
@@ -831,11 +923,15 @@ function buildStateText(state: WorkflowState, options?: { compact?: boolean }): 
         sourcePages: topic.sourcePages.slice(0, 8),
         sourceChunkIds: topic.sourceChunkIds.slice(0, 6),
         sourceTranscriptRanges: topic.sourceTranscriptRanges.slice(0, 4),
+        discussionStatus: topic.discussionStatus,
+        discussionTimestampRange: topic.discussionTimestampRange,
+        consolidationReason: topic.consolidationReason,
         sourceText: topic.sourceText,
         aliases: topic.aliases.slice(0, 3),
         notes: topic.notes.slice(0, 3),
       })),
       uncertainties: state.uncertainties.slice(0, 8),
+      discrepancies: state.discrepancies?.slice(0, 8),
     },
     null,
     2,
@@ -1105,6 +1201,7 @@ export async function extractAgendaItemsWithAi(
         documentTopics: nextState.documentTopics,
         extraTopics: nextState.extraTopics,
         uncertainties: nextState.uncertainties,
+        discrepancies: nextState.discrepancies,
       };
     }
     await db.insert(meetingsV2AgendaChunkSnapshots).values({
@@ -1138,7 +1235,17 @@ export async function extractAgendaItemsWithAi(
       firstPage !== null
         ? sections.find((section) => section.startPage <= firstPage && section.endPage >= firstPage) ?? null
         : null;
+
+    const statusLabel =
+      topic.discussionStatus ??
+      (topic.sourceTranscriptRanges && topic.sourceTranscriptRanges.length > 0
+        ? "discussed"
+        : "not_discussed");
+
     const enrichedSourceText = [
+      `Discussion status: ${statusLabel}`,
+      topic.discussionTimestampRange ? `Discussion timing: ${topic.discussionTimestampRange}` : null,
+      topic.consolidationReason ? `Consolidation: ${topic.consolidationReason}` : null,
       topic.sourceText,
       topic.sourceChunkIds.length > 0 ? `Chunk IDs: ${topic.sourceChunkIds.join(", ")}` : null,
       topic.sourceTranscriptRanges.length > 0
@@ -1175,6 +1282,40 @@ export async function extractAgendaItemsWithAi(
   if (rows.length > 0) {
     await db.insert(meetingsV2AgendaItems).values(rows);
   }
+
+  // Persist initial agenda approval state & transcript discrepancies to meetingsV2.settings
+  const currentMeeting = await db.query.meetingsV2.findFirst({
+    where: eq(meetingsV2.id, meetingId),
+  });
+  const currentSettings = ((currentMeeting?.settings as MeetingV2Settings) || {});
+  const initialItemStatuses: Record<string, AgendaItemDiscussionStatus> = {};
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const topic = finalTopics[i];
+    initialItemStatuses[row.id] =
+      topic?.discussionStatus ??
+      (topic && topic.sourceTranscriptRanges.length > 0 ? "discussed" : "not_discussed");
+  }
+
+  const discrepancies: TranscriptDiscrepancy[] = (state.discrepancies || []).map((d) => ({
+    ...d,
+    status: "pending" as const,
+  }));
+
+  await db
+    .update(meetingsV2)
+    .set({
+      settings: {
+        ...currentSettings,
+        agendaApproval: {
+          status: "pending_review",
+          approvedAt: null,
+          itemStatuses: initialItemStatuses,
+          discrepancies,
+        },
+      },
+    })
+    .where(eq(meetingsV2.id, meetingId));
 
   return {
     meetingId,

@@ -13,6 +13,7 @@ import {
   corpusEmbedConcurrencyFromEnv,
   createSemaphore,
 } from "@/lib/rag/concurrency";
+import { recordEmbedApiUsage } from "@/lib/rag/embed-cost-live";
 
 export const EMBEDDING_MODEL = "gemini-embedding-001";
 export const EMBEDDING_DIMENSION = 768;
@@ -106,9 +107,11 @@ export async function embedQuery(query: string): Promise<EmbedQueryResult> {
         content: { role: "user", parts: [{ text: trimmed }] },
         outputDimensionality: EMBEDDING_DIMENSION,
       });
+      const usage = usageFromMetadata(res.usageMetadata, [trimmed]);
+      recordEmbedApiUsage([trimmed], usage);
       return {
         vector: res.embedding.values,
-        usage: usageFromMetadata(res.usageMetadata, [trimmed]),
+        usage,
       };
     } catch (err) {
       attempt++;
@@ -182,12 +185,12 @@ async function embedTextBatch(
   while (attempt < MAX_RETRIES) {
     try {
       const res = await model.batchEmbedContents({ requests });
+      const batchTexts = batch.map((text) => text || " ");
+      const usage = usageFromMetadata(res.usageMetadata, batchTexts);
+      recordEmbedApiUsage(batchTexts, usage);
       return {
         vectors: res.embeddings.map((emb) => emb.values),
-        usage: usageFromMetadata(
-          res.usageMetadata,
-          batch.map((text) => text || " "),
-        ),
+        usage,
       };
     } catch (err) {
       attempt++;

@@ -8,6 +8,7 @@ import {
   getModelPricing,
 } from "@/lib/gemini/usage";
 import { EMBEDDING_MODEL } from "@/lib/rag/embed";
+import type { CorpusIndexStatus } from "@/lib/rag/indexer";
 import { getCorpusIndexStatus } from "@/lib/rag/indexer";
 
 /** Heuristic when Gemini does not return usage metadata on an embed call. */
@@ -86,9 +87,11 @@ export function summarizeEmbeddingUsage(
  * Aggregate indexed corpus cost from stored chunk text lengths.
  * Uses the same chars/token heuristic as embed fallbacks.
  */
-export async function getCorpusEmbeddingCostSummary(): Promise<CorpusEmbeddingCostSummary> {
+export async function getCorpusEmbeddingCostSummary(
+  status?: CorpusIndexStatus,
+): Promise<CorpusEmbeddingCostSummary> {
   const db = getDb();
-  const status = await getCorpusIndexStatus();
+  const resolvedStatus = status ?? await getCorpusIndexStatus();
   const pricing = getModelPricing(EMBEDDING_MODEL);
 
   const [indexed] = await db
@@ -122,29 +125,29 @@ export async function getCorpusEmbeddingCostSummary(): Promise<CorpusEmbeddingCo
   const avgChunksPerEmail = averageChunksPerSource(
     avgBySource,
     "email_body",
-    status.indexedEmails,
+    resolvedStatus.indexedEmails,
   );
   const avgChunksPerAttachment = averageChunksPerSource(
     avgBySource,
     "attachment_markdown",
-    status.indexedAttachments,
+    resolvedStatus.indexedAttachments,
   );
   const avgChunksPerVisionPage = averageChunksPerSource(
     avgBySource,
     "attachment_vision_page",
-    status.indexedVisionPages,
+    resolvedStatus.indexedVisionPages,
   );
   const avgTokensPerChunk =
     indexedChunks > 0 ? indexedInputTokens / indexedChunks : 250;
 
-  const remainingEmails = Math.max(0, status.totalEmails - status.indexedEmails);
+  const remainingEmails = Math.max(0, resolvedStatus.totalEmails - resolvedStatus.indexedEmails);
   const remainingAttachments = Math.max(
     0,
-    status.totalParsedAttachments - status.indexedAttachments,
+    resolvedStatus.totalParsedAttachments - resolvedStatus.indexedAttachments,
   );
   const remainingVisionPages = Math.max(
     0,
-    status.totalDoneVisionPages - status.indexedVisionPages,
+    resolvedStatus.totalDoneVisionPages - resolvedStatus.indexedVisionPages,
   );
 
   const estimatedRemainingChunks = Math.round(

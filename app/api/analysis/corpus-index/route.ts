@@ -8,14 +8,16 @@ import {
   type IndexSliceOptions,
 } from "@/lib/rag/indexer";
 import { getCorpusEmbeddingCostSummary } from "@/lib/rag/cost";
+import { getEmbedCostRollingSnapshot } from "@/lib/rag/embed-cost-live";
 
 export async function GET() {
   try {
-    const [status, costs] = await Promise.all([
-      getCorpusIndexStatus(),
-      getCorpusEmbeddingCostSummary(),
+    const status = await getCorpusIndexStatus();
+    const [costs, liveEmbedCost] = await Promise.all([
+      getCorpusEmbeddingCostSummary(status),
+      Promise.resolve(getEmbedCostRollingSnapshot()),
     ]);
-    return NextResponse.json({ status, costs });
+    return NextResponse.json({ status, costs, liveEmbedCost });
   } catch (err) {
     console.error("[corpus-index] GET status error:", err);
     return NextResponse.json(
@@ -40,15 +42,20 @@ export async function POST(request: Request) {
     };
 
     const result = await runIncrementalIndexSlice(options);
-    const [status, costs] = await Promise.all([
-      getCorpusIndexStatus(),
-      getCorpusEmbeddingCostSummary(),
+    const status = await getCorpusIndexStatus();
+    if (result.chunksCreated > 0) {
+      status.lastIndexedAt = new Date().toISOString();
+    }
+    const [costs, liveEmbedCost] = await Promise.all([
+      getCorpusEmbeddingCostSummary(status),
+      Promise.resolve(getEmbedCostRollingSnapshot()),
     ]);
 
     return NextResponse.json({
       result,
       status,
       costs,
+      liveEmbedCost,
     });
   } catch (err) {
     console.error("[corpus-index] POST run error:", err);

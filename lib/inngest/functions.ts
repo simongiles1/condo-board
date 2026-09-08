@@ -1,7 +1,12 @@
+import { eq } from "drizzle-orm";
+
+import { getDb } from "@/lib/db";
+import { meetingsV2 } from "@/lib/db/schema";
 import { inngest } from "./client";
 import {
   classifyDeepSeekError,
   clearMeetingV2ValidationUsage,
+  type MeetingV2Settings,
 } from "@/lib/meeting-v2/extraction-diagnostics";
 import {
   assessMeetingV2Extraction,
@@ -30,10 +35,16 @@ export const runMeetingV2Pipeline = inngest.createFunction(
     const { meetingId } = event.data;
     try {
       const pipelineSnapshot = await step.run("load-meeting-v2-stage-state", async () => {
+        const db = getDb();
+        const [meeting] = await db
+          .select({ settings: meetingsV2.settings })
+          .from(meetingsV2)
+          .where(eq(meetingsV2.id, meetingId));
+        const settings = (meeting?.settings as MeetingV2Settings) || {};
         const counts = await getMeetingV2Counts(meetingId);
-        const computed = deriveMeetingV2ComputedStatus(counts);
+        const computed = deriveMeetingV2ComputedStatus(counts, settings);
         const extractionQuality = await assessMeetingV2Extraction(meetingId);
-        return { counts, computed, extractionQuality };
+        return { counts, computed, extractionQuality, settings };
       });
       const ingestComplete =
         pipelineSnapshot.counts.sourceArtifacts > 0 &&
@@ -97,6 +108,34 @@ export const runMeetingV2Pipeline = inngest.createFunction(
       });
       if (extractionQuality.likelyIncomplete) {
         return { success: false, meetingId, haltedAt: "extract", reason: extractionQuality.note };
+      }
+
+      const isAgendaApproved = await step.run("check-agenda-approval-state", async () => {
+        const db = getDb();
+        const [meeting] = await db
+          .select({ settings: meetingsV2.settings })
+          .from(meetingsV2)
+          .where(eq(meetingsV2.id, meetingId));
+        const settings = (meeting?.settings as MeetingV2Settings) || {};
+        return Boolean(settings.agendaApproval?.approvedAt);
+      });
+
+      if (!isAgendaApproved) {
+        await step.run("await-agenda-approval", async () => {
+          await updateMeetingV2Status(
+            meetingId,
+            "extracted",
+            "Awaiting agenda review & approval",
+            40,
+            null,
+          );
+        });
+        return {
+          success: true,
+          meetingId,
+          haltedAt: "agenda_review",
+          reason: "Agenda extracted. Awaiting human-in-the-loop review and approval before proceeding.",
+        };
       }
 
       if (evidenceComplete && investigationsComplete && validationsComplete) {

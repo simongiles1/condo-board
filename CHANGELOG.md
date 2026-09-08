@@ -34,6 +34,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   page. Per-page extraction also copies pages individually so one bad ref does
   not block batch extraction.
 
+- **IBM Docling backfill reliability** — IBM conversion now submits at most five
+  pages per job, bills trial pages only after a usable split (avoiding
+  double-count on page-break mismatch fan-out), limits mismatch retries through
+  the job semaphore, and runs one document at a time on IBM so fan-out does not
+  stampede four large PDFs in parallel.
+
 - **Project alias evidence mention highlighting** — Opening the evidence side panel
   for an alias (e.g. `TNR garage door replacement`) now highlights the actual work
   mention in both the collapsed list preview and the expanded message body. Action

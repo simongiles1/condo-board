@@ -37,6 +37,7 @@ import {
 import type { DoclingProvider } from "@/lib/email/docling-provider";
 
 const SIDECAR_PAGE_CHUNK = 5;
+const IBM_PAGE_CHUNK = 5;
 const VISION_MAX_PAGES_PER_DOC = 2000;
 const HEARTBEAT_MS = 15_000;
 const activeWorkers = new Map<string, Promise<void>>();
@@ -153,7 +154,7 @@ async function processOneDoc(options: {
 
       const pageGroups =
         provider === "ibm"
-          ? [uncached]
+          ? chunkPages(uncached, IBM_PAGE_CHUNK)
           : chunkPages(uncached, SIDECAR_PAGE_CHUNK);
       let pages = 0;
       let costUsd = 0;
@@ -161,13 +162,27 @@ async function processOneDoc(options: {
         if (!(await isRunStillActive(runId))) {
           throw new Error("Run cancelled.");
         }
-        const result = await convertDoclingPages({
-          contentHash,
-          pages: group,
-          provider,
-        });
-        pages += result.pages.length;
-        costUsd += result.costUsd;
+        try {
+          const result = await convertDoclingPages({
+            contentHash,
+            pages: group,
+            provider,
+          });
+          pages += result.pages.filter((page) => !page.cached).length;
+          costUsd += result.costUsd;
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          console.error("[extraction-backfill-worker] Docling convert failed", {
+            runId,
+            contentHash: shortHash(contentHash),
+            docIndex,
+            pages: group.length,
+            provider,
+            error: message,
+          });
+          throw error;
+        }
       }
       return { pages, costUsd };
     };
@@ -369,9 +384,11 @@ async function executeDoclingBackfillRun(runId: string): Promise<void> {
 
   const remaining = Math.max(0, planned.length - startIndex);
   const poolSize = Math.min(
-    provider === "ibm" || (needsVision && !needsDocling)
-      ? ibmJobConcurrencyFromEnv()
-      : 1,
+    provider === "ibm"
+      ? 1
+      : needsVision && !needsDocling
+        ? ibmJobConcurrencyFromEnv()
+        : 1,
     Math.max(1, remaining),
   );
 

@@ -40,6 +40,8 @@ const SUBMIT_TIMEOUT_MS = 120_000;
 const DEFAULT_IBM_JOB_CONCURRENCY = 4;
 const MAX_IBM_JOB_CONCURRENCY = 8;
 const MAX_IBM_CREDENTIAL_SLOTS = 8;
+/** Max pages per IBM submit — larger ranges often omit page-break placeholders. */
+export const IBM_PAGE_RANGE_CHUNK = 5;
 
 export function ibmJobConcurrencyFromEnv(): number {
   const raw = process.env.DOCLING_IBM_CONCURRENCY?.trim();
@@ -73,6 +75,39 @@ function createSemaphore(limit: number) {
 }
 
 const ibmJobSlot = createSemaphore(ibmJobConcurrencyFromEnv());
+
+function chunkCollapsedPageRanges(
+  ranges: Array<[number, number]>,
+  maxPages: number,
+): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const [start, end] of ranges) {
+    for (let page = start; page <= end; page += maxPages) {
+      out.push([page, Math.min(end, page + maxPages - 1)]);
+    }
+  }
+  return out;
+}
+
+async function mapPoolResults<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function run(): Promise<void> {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await worker(items[index]!);
+    }
+  }
+  const pool = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(Array.from({ length: pool }, () => run()));
+  return results;
+}
 
 type IbmTask = {
   task_id?: string;
@@ -886,30 +921,35 @@ async function convertPageRange(options: {
   );
 
   const slots = await import("@/lib/email/ibm-docling-slots");
-  await slots.recordIbmSlotUsage(slot, pageNos.length);
 
   const split = splitMarkdownByPageBreak(markdown, pageNos);
-  if (split) return split;
+  if (split) {
+    await slots.recordIbmSlotUsage(slot, pageNos.length);
+    return split;
+  }
 
   if (pageNos.length === 1) {
+    await slots.recordIbmSlotUsage(slot, 1);
     return [{ pageNo: pageNos[0]!, markdown: markdown.trim() }];
   }
 
-  // IBM ignored md_page_break_placeholder — fan out one-page jobs through
-  // the same concurrency cap instead of waiting on them serially.
+  // IBM ignored md_page_break_placeholder — retry one page at a time. Do not
+  // bill the failed batch in our ledger (IBM may still count it); billing the
+  // batch and every single-page retry was double-counting trial pages.
   console.warn("[ibm-docling] page-break placeholder mismatch; converting pages individually", {
     pageStart: options.pageStart,
     pageEnd: options.pageEnd,
   });
-  const singles = await Promise.all(
-    pageNos.map((pageNo) =>
+  const singles = await mapPoolResults(
+    pageNos,
+    ibmJobConcurrencyFromEnv(),
+    (pageNo) =>
       convertPageRange({
         pdfBytes: options.pdfBytes,
         filename: options.filename,
         pageStart: pageNo,
         pageEnd: pageNo,
       }),
-    ),
   );
   return singles.flat();
 }
@@ -939,15 +979,20 @@ export async function convertPagesWithIbmDocling(options: {
   const pdfBytes = await readFile(options.pdfPath);
   const filename = options.filename ?? "document.pdf";
   const started = Date.now();
-  const rangeResults = await Promise.all(
-    collapsePageRanges(uniquePages).map(([start, end]) =>
+  const ranges = chunkCollapsedPageRanges(
+    collapsePageRanges(uniquePages),
+    IBM_PAGE_RANGE_CHUNK,
+  );
+  const rangeResults = await mapPoolResults(
+    ranges,
+    ibmJobConcurrencyFromEnv(),
+    ([start, end]) =>
       convertPageRange({
         pdfBytes,
         filename,
         pageStart: start,
         pageEnd: end,
       }),
-    ),
   );
   const pages = rangeResults.flat();
 

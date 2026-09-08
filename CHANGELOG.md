@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 minutes draft tab refresh** — Generating a minutes draft no longer briefly reverts to the empty state when a background status poll returns stale data. The structured editor now repopulates when lazy-loaded draft JSON arrives, without requiring a tab switch.
+
 - **Meetings V2 redundant AI discrepancy inquiries** — "Add to agenda" discrepancy prompts are now suppressed when the same topic already appears on the synthesized candidate agenda (for example under 4.E ad-hoc items). Status-check inquiries (such as guest presentations that did not occur) are unchanged. The transcript enrichment prompt also instructs the model not to emit duplicate discrepancy entries for matters already captured in `extraTopics`.
 
 - **Meetings V2 nested transcript timing** — Agenda review parent items now span the union of their descendants' discussion times (item 4 covers 4.A/4.B and their leaves). Stored extraction applies the same rule.
@@ -19,6 +21,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Chunk preview Rules of Hooks crash** — Opening a referenced document chunk (for example `document_chunk_006`) no longer crashes `ChunkPreviewModal` after the first render.
 
 ### Changed
+
+- **Meetings V2 post-approval agenda review layout** — After agenda approval, the Agenda Review tab now uses the same hierarchical outline layout as the pre-approval candidate agenda (official order: 1, 2, 3, 4.A.1, 4.D.a). Items are no longer sorted by open-question or flag count. Deferred and excluded items are hidden; discussed/ad-hoc items keep outcome, confidence, question, and flag badges without the discussed/not-discussed control strip.
 
 - **Build-out progress modal mobile layout** — On small screens the Gantt chart now uses the full modal height with narrower columns and horizontal scroll. The details sidebar is hidden; tapping any timeline row or phase bar opens a bottom sheet with the item summary and remaining work.
 

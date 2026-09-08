@@ -188,6 +188,22 @@ type MeetingV2Status = {
   }>;
 };
 
+type MeetingV2LatestDraft = MeetingV2Status["latestDraft"];
+
+/** Status polls return draft metadata only (json: null). Keep richer local draft data. */
+function mergeLatestDraft(
+  current: MeetingV2LatestDraft | null | undefined,
+  next: MeetingV2LatestDraft | null | undefined,
+): MeetingV2LatestDraft | null {
+  if (!current) return next ?? null;
+  if (!next) return current;
+  if (current.id !== next.id) return next;
+  if (current.json && !next.json) return current;
+  if (!current.json && next.json) return next;
+  if (current.json && next.json) return current;
+  return next;
+}
+
 type V2Tab = "overview" | "review" | "draft" | "pipeline";
 
 const EXPECTED_SEMANTIC_AGENDA_SHAPE: Array<{ title: string; why: string }> = [
@@ -568,15 +584,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         if (seq !== statusRequestSeq.current) return;
         if (active) {
           setStatus((current) => {
-            const currentDraft = current?.latestDraft;
-            const nextDraft = payload.latestDraft;
-            if (currentDraft && nextDraft && currentDraft.id === nextDraft.id && currentDraft.json !== null) {
-              return {
-                ...payload,
-                latestDraft: currentDraft,
-              };
-            }
-            return payload;
+            const mergedDraft = mergeLatestDraft(current?.latestDraft, payload.latestDraft);
+            if (mergedDraft === payload.latestDraft) return payload;
+            return { ...payload, latestDraft: mergedDraft };
           });
           setLoading(false);
         }
@@ -750,6 +760,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         return;
       }
       if (payload.draft) {
+        // Ignore in-flight status polls that may still return pre-draft state.
+        statusAbortRef.current?.abort();
+        statusRequestSeq.current += 1;
         setStatus((current) =>
           current ? { ...current, latestDraft: payload.draft ?? null } : current,
         );
@@ -2019,6 +2032,20 @@ function buildAgendaOutline(items: MeetingV2Status["items"]): AgendaOutlineNode[
   return tree;
 }
 
+function filterItemsForValidatedReview(
+  items: AgendaReviewItem[],
+  agendaApproval?: MeetingV2Status["meeting"]["agendaApproval"],
+): AgendaReviewItem[] {
+  const excluded = new Set(agendaApproval?.excludedItemIds ?? []);
+  const itemStatuses = agendaApproval?.itemStatuses ?? {};
+
+  return items.filter((item) => {
+    if (excluded.has(item.id)) return false;
+    const status = itemStatuses[item.id] ?? item.discussionStatus ?? "discussed";
+    return status !== "not_discussed";
+  });
+}
+
 function findAgendaItemForDiscrepancy(
   items: MeetingV2Status["items"],
   suggestedTitle: string,
@@ -2353,6 +2380,244 @@ function AgendaReviewListItem({
               ) : null}
             </div>
           </div>
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function ValidatedAgendaReviewListItem({
+  item,
+  displayNumber,
+  listMarker = "decimal",
+  subItems = [],
+  discussionTiming = null,
+  isOpen,
+  answers,
+  dirtyItems,
+  busyItemId,
+  onToggleOpen,
+  onAnswerChange,
+  onSubmit,
+  onOpenDetailPanel,
+  onSelectChunkId,
+  onSelectTimeRange,
+}: {
+  item: AgendaReviewItem;
+  displayNumber: string;
+  listMarker?: AgendaListMarker;
+  subItems?: Array<{ label: string; title: string }>;
+  discussionTiming?: string | null;
+  isOpen: boolean;
+  answers: Record<string, string>;
+  dirtyItems: Record<string, boolean>;
+  busyItemId: string | null;
+  onToggleOpen: () => void;
+  onAnswerChange: (itemId: string, value: string) => void;
+  onSubmit: (itemId: string) => void;
+  onOpenDetailPanel: (item: AgendaReviewItem, initialTab: "flags" | "questions" | "evidence") => void;
+  onSelectChunkId: (chunkId: string) => void;
+  onSelectTimeRange: (timeRange: string) => void;
+}) {
+  const flagCount = item.validation.filter(
+    (validation) => validation.severity === "error" || validation.severity === "warning",
+  ).length;
+  const openQuestionCount = item.openQuestions.length;
+  const hasErrorFlags = item.validation.some((validation) => validation.severity === "error");
+  const parsedSnippet = parseSourceSnippet(item.sourceText || "", item.title);
+  if (discussionTiming) parsedSnippet.timing = discussionTiming;
+
+  return (
+    <li
+      className={`border-b border-slate-100 last:border-b-0 ${
+        openQuestionCount > 0
+          ? "bg-amber-50/30"
+          : flagCount > 0
+            ? hasErrorFlags
+              ? "bg-rose-50/20"
+              : "bg-amber-50/20"
+            : "hover:bg-slate-50/40"
+      }`}
+    >
+      <div className="flex gap-3 px-4 py-3">
+        <div
+          className={`shrink-0 pt-0.5 text-sm font-semibold tabular-nums text-slate-700 ${
+            listMarker === "decimal" ? "w-8" : "w-6"
+          }`}
+        >
+          {`${displayNumber}.`}
+        </div>
+
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={onToggleOpen}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onToggleOpen();
+                  }
+                }}
+                className="flex w-full flex-wrap items-center gap-2 text-left cursor-pointer"
+              >
+                <span className="text-sm font-semibold text-slate-900">{item.title}</span>
+
+                {item.sourcePages && item.sourcePages.length > 0 ? (
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
+                    📄 p. {item.sourcePages.join(", ")}
+                  </span>
+                ) : null}
+
+                {discussionTiming ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelectTimeRange(discussionTiming);
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-teal-800 transition hover:bg-teal-100"
+                    title="Click to view discussion in transcript"
+                  >
+                    <span>🎧</span> {discussionTiming}
+                  </button>
+                ) : null}
+
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${outcomeTone(item.outcome)}`}
+                >
+                  {startCase(item.outcome ?? "pending")}
+                </span>
+
+                <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                  {item.confidence ? startCase(item.confidence) : "Unknown"}
+                </span>
+
+                {openQuestionCount > 0 ? (
+                  <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-950">
+                    {openQuestionCount} {openQuestionCount === 1 ? "Question" : "Questions"}
+                  </span>
+                ) : null}
+
+                {flagCount > 0 ? (
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                      hasErrorFlags
+                        ? "border-rose-300 bg-rose-100 text-rose-950"
+                        : "border-amber-300 bg-amber-50 text-amber-950"
+                    }`}
+                  >
+                    {flagCount} {flagCount === 1 ? "Flag" : "Flags"}
+                  </span>
+                ) : null}
+              </div>
+
+              {item.discussionSummary ? (
+                <p className="text-xs leading-5 text-slate-600">{item.discussionSummary}</p>
+              ) : null}
+
+              {subItems.length > 0 ? (
+                <ol className="ml-1 list-[lower-alpha] space-y-1 pl-5 text-sm text-slate-700 marker:font-semibold marker:text-slate-500">
+                  {subItems.map((subItem) => (
+                    <li key={`${item.id}-${subItem.label}`}>{subItem.title}</li>
+                  ))}
+                </ol>
+              ) : null}
+            </div>
+
+            <div className="flex shrink-0 flex-col items-end gap-2">
+              {item.sourceText ? (
+                <SourceSnippetPopover
+                  parsedSnippet={parsedSnippet}
+                  onSelectChunkId={onSelectChunkId}
+                  onSelectTimeRange={onSelectTimeRange}
+                />
+              ) : null}
+            </div>
+          </div>
+
+          {isOpen ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenDetailPanel(
+                      item,
+                      flagCount > 0 ? "flags" : openQuestionCount > 0 ? "questions" : "evidence",
+                    )
+                  }
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-900"
+                >
+                  <span>Flags, questions & evidence</span>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                    {flagCount + openQuestionCount + (item.evidence?.length ?? 0)}
+                  </span>
+                </button>
+              </div>
+
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
+                <div className="space-y-3">
+                  <label
+                    htmlFor={`clarification-${item.id}`}
+                    className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500"
+                  >
+                    Clarification
+                  </label>
+                  <textarea
+                    id={`clarification-${item.id}`}
+                    className="min-h-28 w-full rounded-xl border border-slate-300 bg-slate-50 p-3 text-sm shadow-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    onChange={(event) => onAnswerChange(item.id, event.target.value)}
+                    placeholder="Add a precise clarification for this agenda item if needed..."
+                    value={answers[item.id] ?? ""}
+                  />
+                  <div className="flex items-center gap-3">
+                    <button
+                      className="inline-flex items-center rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={busyItemId === item.id}
+                      onClick={() => onSubmit(item.id)}
+                      type="button"
+                    >
+                      {busyItemId === item.id ? "Submitting..." : "Submit & Re-evaluate"}
+                    </button>
+                    {dirtyItems[item.id] ? (
+                      <span className="text-xs text-slate-500">Unsaved clarification</span>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <h4 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Review Snapshot
+                  </h4>
+                  <dl className="mt-3 space-y-2 text-xs">
+                    <div className="flex items-center justify-between gap-4">
+                      <dt className="text-slate-500">Item type</dt>
+                      <dd className="font-medium text-slate-900">{startCase(item.itemType)}</dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <dt className="text-slate-500">Outcome</dt>
+                      <dd className="font-medium text-slate-900">{startCase(item.outcome ?? "pending")}</dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <dt className="text-slate-500">Confidence</dt>
+                      <dd className="font-medium text-slate-900">{startCase(item.confidence ?? "unknown")}</dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <dt className="text-slate-500">Validation flags</dt>
+                      <dd className="font-medium text-slate-900">{item.validation.length}</dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <dt className="text-slate-500">Open questions</dt>
+                      <dd className="font-medium text-slate-900">{item.openQuestions.length}</dd>
+                    </div>
+                  </dl>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     </li>
@@ -3033,21 +3298,30 @@ function AgendaReviewPanel({
   const [detailPanelInitialTab, setDetailPanelInitialTab] = useState<
     "flags" | "questions" | "evidence"
   >("flags");
+  const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
+  const [selectedTimeRange, setSelectedTimeRange] = useState<string | null>(null);
+
+  const reviewItems = useMemo(
+    () => filterItemsForValidatedReview(status.items, status.meeting.agendaApproval),
+    [status.items, status.meeting.agendaApproval],
+  );
+
+  const validatedOutline = useMemo(
+    () => buildAgendaOutline(reviewItems),
+    [reviewItems],
+  );
 
   useEffect(() => {
     setAnswers((current) => {
       const nextAnswers = { ...current };
-      for (const item of status.items) {
+      for (const item of reviewItems) {
         if (!dirtyItems[item.id]) {
           nextAnswers[item.id] = item.userAnswers?.text ?? "";
         }
       }
       return nextAnswers;
     });
-    if (!openItemId && status.items.length > 0) {
-      setOpenItemId(status.items[0].id);
-    }
-  }, [dirtyItems, openItemId, status]);
+  }, [dirtyItems, reviewItems]);
 
   async function handleSubmit(itemId: string) {
     setBusyItemId(itemId);
@@ -3065,6 +3339,74 @@ function AgendaReviewPanel({
     } finally {
       setBusyItemId(null);
     }
+  }
+
+  function handleAnswerChange(itemId: string, value: string) {
+    setDirtyItems((current) => ({
+      ...current,
+      [itemId]: true,
+    }));
+    setAnswers((current) => ({
+      ...current,
+      [itemId]: value,
+    }));
+  }
+
+  function handleOpenDetailPanel(
+    item: AgendaReviewItem,
+    initialTab: "flags" | "questions" | "evidence",
+  ) {
+    setDetailPanelInitialTab(initialTab);
+    setDetailPanelItem({
+      id: item.id,
+      title: item.title,
+      itemNumber: item.itemNumber,
+      openQuestions: item.openQuestions,
+      validation: item.validation,
+      evidence: item.evidence,
+    });
+  }
+
+  function renderValidatedOutlineNodes(
+    nodes: AgendaOutlineNode[],
+    depth = 0,
+  ): ReactNode {
+    return nodes.map((node) => {
+      const hasChildren = node.children.length > 0;
+
+      return (
+        <div key={node.item.id}>
+          <ValidatedAgendaReviewListItem
+            item={node.item}
+            displayNumber={node.displayNumber}
+            listMarker={node.listMarker}
+            subItems={node.subItems}
+            discussionTiming={node.discussionTiming ?? null}
+            isOpen={openItemId === node.item.id}
+            answers={answers}
+            dirtyItems={dirtyItems}
+            busyItemId={busyItemId}
+            onToggleOpen={() =>
+              setOpenItemId((current) => (current === node.item.id ? null : node.item.id))
+            }
+            onAnswerChange={handleAnswerChange}
+            onSubmit={(itemId) => void handleSubmit(itemId)}
+            onOpenDetailPanel={handleOpenDetailPanel}
+            onSelectChunkId={setSelectedChunkId}
+            onSelectTimeRange={setSelectedTimeRange}
+          />
+          {hasChildren ? (
+            <ol
+              className={`list-none border-l border-slate-200 pl-5 sm:pl-6 ${
+                depth === 0 ? "border-t border-slate-100 bg-slate-50/40" : "bg-white/70"
+              }`}
+            >
+              {renderValidatedOutlineNodes(node.children, depth + 1)}
+            </ol>
+          ) : null}
+        </div>
+      );
+    });
   }
 
   const isPendingApproval = Boolean(
@@ -3098,25 +3440,6 @@ function AgendaReviewPanel({
     );
   }
 
-  const sortedItems = [...status.items].sort((a, b) => {
-    const aQuestions = a.openQuestions.length;
-    const bQuestions = b.openQuestions.length;
-    if (aQuestions !== bQuestions) return bQuestions - aQuestions;
-
-    const aFlags = a.validation.filter(
-      (validation) => validation.severity === "error" || validation.severity === "warning",
-    ).length;
-    const bFlags = b.validation.filter(
-      (validation) => validation.severity === "error" || validation.severity === "warning",
-    ).length;
-    if (aFlags !== bFlags) return bFlags - aFlags;
-
-    const aNum = a.itemNumber ? Number.parseFloat(a.itemNumber) : Number.NaN;
-    const bNum = b.itemNumber ? Number.parseFloat(b.itemNumber) : Number.NaN;
-    if (!Number.isNaN(aNum) && !Number.isNaN(bNum) && aNum !== bNum) return aNum - bNum;
-    return a.title.localeCompare(b.title);
-  });
-
   if (!canReviewItems) {
     return (
       <SectionCard
@@ -3131,205 +3454,84 @@ function AgendaReviewPanel({
     );
   }
 
+  const openQuestionTotal = reviewItems.reduce((sum, item) => sum + item.openQuestions.length, 0);
+  const flagTotal = reviewItems.reduce(
+    (sum, item) =>
+      sum +
+      item.validation.filter(
+        (validation) => validation.severity === "error" || validation.severity === "warning",
+      ).length,
+    0,
+  );
+
   return (
     <SectionCard
       eyebrow="Agenda Review"
       title="Review agenda items and resolve open questions"
-      description="This is the primary working area for V2. Review one item at a time, answer clarifications when needed, and re-run only the affected item."
+      description="Work through items in official agenda order. Expand an item to answer clarifications, inspect flags and evidence, or re-run investigation for that topic only."
     >
-      <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-100 pb-3">
-        <p className="text-xs text-slate-500">
-          Showing {sortedItems.length} validated items. Click on an item to inspect flags, evidence, or answer clarifications.
-        </p>
+      <div className="mb-4 flex flex-col gap-3 border-b border-slate-100 pb-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-slate-500">
+            {reviewItems.length} items in agenda order
+          </span>
+          {openQuestionTotal > 0 ? (
+            <span className="rounded-full border border-amber-300 bg-amber-100 px-2.5 py-1 font-semibold text-amber-950">
+              {openQuestionTotal} open {openQuestionTotal === 1 ? "question" : "questions"}
+            </span>
+          ) : null}
+          {flagTotal > 0 ? (
+            <span className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-950">
+              {flagTotal} {flagTotal === 1 ? "flag" : "flags"}
+            </span>
+          ) : null}
+        </div>
         <button
           type="button"
           onClick={() => setShowApprovalWorkspace(true)}
-          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition self-start sm:self-auto"
+          className="self-start rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 sm:self-auto"
         >
           ⚙️ Manage Agenda Classification & Discrepancies
         </button>
       </div>
 
-      <div className="space-y-4">
-        {sortedItems.map((item) => {
-          const isOpen = openItemId === item.id;
-          const flagCount = item.validation.filter(
-            (validation) => validation.severity === "error" || validation.severity === "warning",
-          ).length;
-          const openQuestionCount = item.openQuestions.length;
-          const hasErrorFlags = item.validation.some((validation) => validation.severity === "error");
-          return (
-            <div
-              key={item.id}
-              className={`overflow-hidden rounded-[1.6rem] border bg-slate-50 ${
-                openQuestionCount > 0
-                  ? "border-amber-300 ring-1 ring-amber-100"
-                  : flagCount > 0
-                    ? hasErrorFlags
-                      ? "border-rose-300 ring-1 ring-rose-100"
-                      : "border-amber-200"
-                    : "border-slate-200"
-              }`}
-            >
-              <button
-                className="flex w-full flex-col gap-2 px-5 py-5 text-left transition hover:bg-slate-100/70"
-                onClick={() => setOpenItemId((current) => (current === item.id ? null : item.id))}
-                type="button"
-              >
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-semibold text-slate-950">
-                      {item.itemNumber ? `${item.itemNumber}. ` : ""}
-                      {item.title}
-                    </span>
-                    <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${outcomeTone(item.outcome)}`}>
-                      {startCase(item.outcome ?? "pending")}
-                    </span>
-                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-600">
-                      {item.confidence ? startCase(item.confidence) : "Unknown Confidence"}
-                    </span>
-                    {openQuestionCount > 0 ? (
-                      <span className="rounded-full border border-amber-300 bg-amber-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-950">
-                        {openQuestionCount} Open {openQuestionCount === 1 ? "Question" : "Questions"}
-                      </span>
-                    ) : null}
-                    {flagCount > 0 ? (
-                      <span
-                        className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
-                          hasErrorFlags
-                            ? "border-rose-300 bg-rose-100 text-rose-950"
-                            : "border-amber-300 bg-amber-50 text-amber-950"
-                        }`}
-                      >
-                        {flagCount} {flagCount === 1 ? "Flag" : "Flags"}
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="max-w-3xl text-sm leading-6 text-slate-600">
-                    {item.discussionSummary ?? "No investigation summary yet."}
-                  </p>
-                </div>
-              </button>
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 bg-slate-50/80 px-4 py-3">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+            Meeting Agenda Review
+          </h4>
+          <p className="mt-1 text-[11px] text-slate-500">
+            Official agenda order is preserved (1, 2, 3, 4.A.1, 4.D.a). Click an item to expand clarifications and evidence.
+          </p>
+        </div>
 
-              {isOpen ? (
-                <div className="border-t border-slate-200 bg-white px-5 py-5">
-                  <div className="mb-4 flex flex-wrap items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDetailPanelInitialTab(
-                          flagCount > 0
-                            ? "flags"
-                            : openQuestionCount > 0
-                              ? "questions"
-                              : "evidence",
-                        );
-                        setDetailPanelItem({
-                          id: item.id,
-                          title: item.title,
-                          itemNumber: item.itemNumber,
-                          openQuestions: item.openQuestions,
-                          validation: item.validation,
-                          evidence: item.evidence,
-                        });
-                      }}
-                      className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-900"
-                    >
-                      <span>Flags, questions & evidence</span>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                        {flagCount + openQuestionCount + (item.evidence?.length ?? 0)}
-                      </span>
-                    </button>
-                  </div>
-
-                  <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
-                    <div className="space-y-4">
-                      <div className="space-y-3">
-                        <label
-                          htmlFor={`clarification-${item.id}`}
-                          className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500"
-                        >
-                          Clarification
-                        </label>
-                        <textarea
-                          id={`clarification-${item.id}`}
-                          className="min-h-32 w-full rounded-2xl border border-slate-300 bg-slate-50 p-4 text-sm shadow-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                          onChange={(event) => {
-                            setDirtyItems((current) => ({
-                              ...current,
-                              [item.id]: true,
-                            }));
-                            setAnswers((current) => ({
-                              ...current,
-                              [item.id]: event.target.value,
-                            }));
-                          }}
-                          placeholder="Add a precise clarification for this agenda item if needed..."
-                          value={answers[item.id] ?? ""}
-                        />
-                        <div className="flex items-center gap-3">
-                          <button
-                            className="inline-flex items-center rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={busyItemId === item.id}
-                            onClick={() => void handleSubmit(item.id)}
-                            type="button"
-                          >
-                            {busyItemId === item.id ? "Submitting..." : "Submit & Re-evaluate"}
-                          </button>
-                          {dirtyItems[item.id] ? (
-                            <span className="text-sm text-slate-500">Unsaved clarification</span>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 px-4 py-4">
-                      <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">
-                        Review Snapshot
-                      </h4>
-                      <dl className="mt-4 space-y-3 text-sm">
-                        <div className="flex items-center justify-between gap-4">
-                          <dt className="text-slate-500">Item type</dt>
-                          <dd className="font-medium text-slate-900">{startCase(item.itemType)}</dd>
-                        </div>
-                        <div className="flex items-center justify-between gap-4">
-                          <dt className="text-slate-500">Outcome</dt>
-                          <dd className="font-medium text-slate-900">{startCase(item.outcome ?? "pending")}</dd>
-                        </div>
-                        <div className="flex items-center justify-between gap-4">
-                          <dt className="text-slate-500">Confidence</dt>
-                          <dd className="font-medium text-slate-900">{startCase(item.confidence ?? "unknown")}</dd>
-                        </div>
-                        <div className="flex items-center justify-between gap-4">
-                          <dt className="text-slate-500">Validation flags</dt>
-                          <dd className="font-medium text-slate-900">{item.validation.length}</dd>
-                        </div>
-                        <div className="flex items-center justify-between gap-4">
-                          <dt className="text-slate-500">Open questions</dt>
-                          <dd className="font-medium text-slate-900">{item.openQuestions.length}</dd>
-                        </div>
-                        {item.sourcePages && item.sourcePages.length > 0 ? (
-                          <div className="flex items-center justify-between gap-4">
-                            <dt className="text-slate-500">Source pages</dt>
-                            <dd className="font-medium text-slate-900">
-                              Pages {item.sourcePages.join(", ")}
-                            </dd>
-                          </div>
-                        ) : null}
-                      </dl>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
+        {reviewItems.length > 0 ? (
+          <ol className="list-none">{renderValidatedOutlineNodes(validatedOutline)}</ol>
+        ) : (
+          <div className="px-6 py-10 text-sm text-slate-600">
+            No reviewed agenda items yet. Deferred and excluded items are hidden from this view.
+          </div>
+        )}
       </div>
 
       <AgendaItemDetailSidePanel
         item={detailPanelItem}
         initialTab={detailPanelInitialTab}
         onClose={() => setDetailPanelItem(null)}
+      />
+
+      <ChunkPreviewModal
+        open={Boolean(selectedChunkId)}
+        meetingId={meetingId}
+        chunkId={selectedChunkId}
+        onClose={() => setSelectedChunkId(null)}
+      />
+
+      <TranscriptRangeModal
+        open={Boolean(selectedTimeRange)}
+        meetingId={meetingId}
+        timeRange={selectedTimeRange}
+        onClose={() => setSelectedTimeRange(null)}
       />
     </SectionCard>
   );
@@ -3667,16 +3869,19 @@ function DraftPreviewBody({
   }
 
   useEffect(() => {
-    if (draft?.json) {
-      try {
-        const parsed = JSON.parse(draft.json);
-        const actualDoc = parsed.minutesV2?.data || parsed.data || parsed;
-        setDoc(actualDoc);
-      } catch (e) {
-        console.error("Failed to parse draft JSON", e);
-      }
+    if (!draft?.json) {
+      setDoc(null);
+      return;
     }
-  }, [draft?.id]); // only re-run when a NEW draft is generated
+    try {
+      const parsed = JSON.parse(draft.json);
+      const actualDoc = parsed.minutesV2?.data || parsed.data || parsed;
+      setDoc(actualDoc);
+    } catch (e) {
+      console.error("Failed to parse draft JSON", e);
+      setDoc(null);
+    }
+  }, [draft?.id, draft?.json]);
 
   function handleDocChange(updated: MinutesDocumentV2) {
     setDoc(updated);

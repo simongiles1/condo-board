@@ -43,6 +43,7 @@ import { ChunkPreviewModal } from "@/components/ChunkPreviewModal";
 import { TranscriptRangeModal } from "@/components/TranscriptRangeModal";
 import {
   buildAgendaOutlineTree,
+  decorateAgendaOutlineTree,
   inferPropertyManagementReportNumber,
   planAdHocPlacement,
   type AgendaListMarker,
@@ -61,6 +62,10 @@ import type {
   MeetingV2Alert,
   MeetingV2ExtractionQuality,
 } from "@/lib/meeting-v2/extraction-diagnostics";
+import {
+  filterRedundantAddToAgendaDiscrepancies,
+  resolveTranscriptDiscrepancyKind,
+} from "@/lib/meeting-v2/transcript-discrepancies";
 
 type MeetingCard = MeetingV2DashboardCard;
 
@@ -1889,12 +1894,7 @@ function getDiscrepancyKind(disc: {
   id?: string;
   clarificationQuestion?: string;
 }): "add_to_agenda" | "status_inquiry" {
-  if (disc.kind === "status_inquiry") return "status_inquiry";
-  if (disc.id?.startsWith("inquiry-")) return "status_inquiry";
-  if (/marked Not Discussed/i.test(disc.clarificationQuestion ?? "")) {
-    return "status_inquiry";
-  }
-  return "add_to_agenda";
+  return resolveTranscriptDiscrepancyKind(disc);
 }
 
 function extractAgendaSubItemsFromSource(
@@ -2011,7 +2011,12 @@ function mergeAdHocItemsIntoReview(
 }
 
 function buildAgendaOutline(items: MeetingV2Status["items"]): AgendaOutlineNode[] {
-  return attachSourceSubItems(buildAgendaOutlineTree(items));
+  const tree = attachSourceSubItems(buildAgendaOutlineTree(items));
+  decorateAgendaOutlineTree(tree, {
+    items,
+    getTiming: (item) => parseSourceSnippet(item.sourceText || "", item.title || "").timing,
+  });
+  return tree;
 }
 
 function findAgendaItemForDiscrepancy(
@@ -2141,6 +2146,8 @@ function AgendaReviewListItem({
   displayNumber,
   listMarker = "decimal",
   subItems = [],
+  discussionTiming = null,
+  showStatusControls = true,
   itemStatuses,
   excludedItemIds,
   editedTitles,
@@ -2156,6 +2163,8 @@ function AgendaReviewListItem({
   displayNumber: string;
   listMarker?: AgendaListMarker;
   subItems?: Array<{ label: string; title: string }>;
+  discussionTiming?: string | null;
+  showStatusControls?: boolean;
   itemStatuses: Record<string, "discussed" | "not_discussed" | "ad_hoc">;
   excludedItemIds: Set<string>;
   editedTitles: Record<string, string>;
@@ -2172,6 +2181,7 @@ function AgendaReviewListItem({
   const displayTitle = editedTitles[item.id] ?? item.title;
   const isEditingThis = editingItemId === item.id;
   const parsedSnippet = parseSourceSnippet(item.sourceText || "", displayTitle);
+  if (discussionTiming) parsedSnippet.timing = discussionTiming;
   const isRyanRatcliffGuestItem = displayTitle.toLowerCase().includes("ryan ratcliff");
 
   return (
@@ -2274,61 +2284,65 @@ function AgendaReviewListItem({
             </div>
 
             <div className="flex shrink-0 flex-col items-end gap-2">
-              <div className="flex flex-wrap items-center justify-end gap-3">
-                <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium">
-                <button
-                  type="button"
-                  onClick={() => onToggleStatus(item.id, "discussed")}
-                  disabled={isExcluded}
-                  className={`rounded-md px-2.5 py-1 transition ${
-                    currentStatus === "discussed" && !isExcluded
-                      ? "bg-emerald-600 font-semibold text-white shadow-sm"
-                      : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
-                  }`}
-                  title="Verified in audio transcript"
-                >
-                  🟢 Discussed
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onToggleStatus(item.id, "not_discussed")}
-                  disabled={isExcluded}
-                  className={`rounded-md px-2.5 py-1 transition ${
-                    currentStatus === "not_discussed" && !isExcluded
-                      ? "bg-slate-700 font-semibold text-white shadow-sm"
-                      : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
-                  }`}
-                  title="Adjourned / not reached in this recording (skips LLM investigation)"
-                >
-                  ⏸️ Not Discussed
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onToggleStatus(item.id, "ad_hoc")}
-                  disabled={isExcluded}
-                  className={`rounded-md px-2.5 py-1 transition ${
-                    currentStatus === "ad_hoc" && !isExcluded
-                      ? "bg-amber-600 font-semibold text-white shadow-sm"
-                      : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
-                  }`}
-                  title="Informal / ad-hoc discussion not in formal agenda"
-                >
-                  ⚡ Ad-Hoc
-                </button>
-              </div>
+              {showStatusControls ? (
+                <>
+                  <div className="flex flex-wrap items-center justify-end gap-3">
+                    <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium">
+                      <button
+                        type="button"
+                        onClick={() => onToggleStatus(item.id, "discussed")}
+                        disabled={isExcluded}
+                        className={`rounded-md px-2.5 py-1 transition ${
+                          currentStatus === "discussed" && !isExcluded
+                            ? "bg-emerald-600 font-semibold text-white shadow-sm"
+                            : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
+                        }`}
+                        title="Verified in audio transcript"
+                      >
+                        🟢 Discussed
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onToggleStatus(item.id, "not_discussed")}
+                        disabled={isExcluded}
+                        className={`rounded-md px-2.5 py-1 transition ${
+                          currentStatus === "not_discussed" && !isExcluded
+                            ? "bg-slate-700 font-semibold text-white shadow-sm"
+                            : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
+                        }`}
+                        title="Adjourned / not reached in this recording (skips LLM investigation)"
+                      >
+                        ⏸️ Not Discussed
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onToggleStatus(item.id, "ad_hoc")}
+                        disabled={isExcluded}
+                        className={`rounded-md px-2.5 py-1 transition ${
+                          currentStatus === "ad_hoc" && !isExcluded
+                            ? "bg-amber-600 font-semibold text-white shadow-sm"
+                            : "text-slate-600 hover:text-slate-900 disabled:opacity-40"
+                        }`}
+                        title="Informal / ad-hoc discussion not in formal agenda"
+                      >
+                        ⚡ Ad-Hoc
+                      </button>
+                    </div>
 
-              <button
-                type="button"
-                onClick={() => onToggleExclude(item.id)}
-                className={`rounded-lg px-2.5 py-1 text-xs font-medium border transition ${
-                  isExcluded
-                    ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                    : "border-transparent text-rose-600 hover:bg-rose-50"
-                }`}
-              >
-                {isExcluded ? "↩️ Restore" : "Exclude"}
-              </button>
-              </div>
+                    <button
+                      type="button"
+                      onClick={() => onToggleExclude(item.id)}
+                      className={`rounded-lg px-2.5 py-1 text-xs font-medium border transition ${
+                        isExcluded
+                          ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                          : "border-transparent text-rose-600 hover:bg-rose-50"
+                      }`}
+                    >
+                      {isExcluded ? "↩️ Restore" : "Exclude"}
+                    </button>
+                  </div>
+                </>
+              ) : null}
 
               {item.sourceText ? (
                 <SourceSnippetPopover
@@ -2432,7 +2446,20 @@ function HitlAgendaApprovalWorkspace({
 
   const excludedCount = excludedItemIds.size;
 
-  const pendingDiscrepancies = initialDiscrepancies.filter(
+  const agendaTitlesForDedup = useMemo(
+    () => [
+      ...status.items.map((item) => editedTitles[item.id] ?? item.title),
+      ...newItems.map((item) => item.title),
+    ],
+    [status.items, editedTitles, newItems],
+  );
+
+  const visibleDiscrepancies = useMemo(
+    () => filterRedundantAddToAgendaDiscrepancies(initialDiscrepancies, agendaTitlesForDedup),
+    [initialDiscrepancies, agendaTitlesForDedup],
+  );
+
+  const pendingDiscrepancies = visibleDiscrepancies.filter(
     (d) => (discrepancyActions[d.id] || "pending") === "pending",
   );
 
@@ -2589,39 +2616,57 @@ function HitlAgendaApprovalWorkspace({
     [status.items, newItems],
   );
 
-  function renderOutlineNodes(nodes: AgendaOutlineNode[], depth = 0): ReactNode {
-    return nodes.map((node) => (
-      <div key={node.item.id}>
-        <AgendaReviewListItem
-          item={node.item}
-          displayNumber={node.displayNumber}
-          listMarker={node.listMarker}
-          subItems={node.subItems}
-          itemStatuses={itemStatuses}
-          excludedItemIds={excludedItemIds}
-          editedTitles={editedTitles}
-          editingItemId={editingItemId}
-          onToggleStatus={handleToggleStatus}
-          onToggleExclude={handleToggleExclude}
-          onEditTitle={(itemId, title) =>
-            setEditedTitles((prev) => ({ ...prev, [itemId]: title }))
-          }
-          onSetEditingItemId={setEditingItemId}
-          onSelectChunkId={setSelectedChunkId}
-          onSelectTimeRange={setSelectedTimeRange}
-        />
-        {node.children.length > 0 ? (
-          <ol
-            className={`list-none ${
-              depth === 0 ? "border-t border-slate-100 bg-slate-50/40" : "bg-white/70"
-            }`}
-            style={depth > 0 ? { paddingLeft: 16 } : undefined}
-          >
-            {renderOutlineNodes(node.children, depth + 1)}
-          </ol>
-        ) : null}
-      </div>
-    ));
+  function renderOutlineNodes(
+    nodes: AgendaOutlineNode[],
+    depth = 0,
+    parentSectionNotDiscussed = false,
+  ): ReactNode {
+    return nodes.map((node) => {
+      const currentStatus =
+        itemStatuses[node.item.id] || node.item.discussionStatus || "discussed";
+      const hasChildren = node.children.length > 0;
+      const sectionNotDiscussed = currentStatus === "not_discussed";
+      const showStatusControls = parentSectionNotDiscussed
+        ? false
+        : hasChildren
+          ? sectionNotDiscussed
+          : true;
+      const childParentNotDiscussed = parentSectionNotDiscussed || sectionNotDiscussed;
+
+      return (
+        <div key={node.item.id}>
+          <AgendaReviewListItem
+            item={node.item}
+            displayNumber={node.displayNumber}
+            listMarker={node.listMarker}
+            subItems={node.subItems}
+            discussionTiming={node.discussionTiming ?? null}
+            showStatusControls={showStatusControls}
+            itemStatuses={itemStatuses}
+            excludedItemIds={excludedItemIds}
+            editedTitles={editedTitles}
+            editingItemId={editingItemId}
+            onToggleStatus={handleToggleStatus}
+            onToggleExclude={handleToggleExclude}
+            onEditTitle={(itemId, title) =>
+              setEditedTitles((prev) => ({ ...prev, [itemId]: title }))
+            }
+            onSetEditingItemId={setEditingItemId}
+            onSelectChunkId={setSelectedChunkId}
+            onSelectTimeRange={setSelectedTimeRange}
+          />
+          {hasChildren ? (
+            <ol
+              className={`list-none border-l border-slate-200 pl-5 sm:pl-6 ${
+                depth === 0 ? "border-t border-slate-100 bg-slate-50/40" : "bg-white/70"
+              }`}
+            >
+              {renderOutlineNodes(node.children, depth + 1, childParentNotDiscussed)}
+            </ol>
+          ) : null}
+        </div>
+      );
+    });
   }
 
   return (

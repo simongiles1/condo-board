@@ -22,6 +22,18 @@ export function parseVttToMergedCues(transcriptText: string): MergedVttCue[] {
   return mergeConsecutiveBySpeaker(parseVttCues(transcriptText));
 }
 
+export function dedupeTranscriptSegmentsBySequence<
+  T extends { sequence: number },
+>(segments: T[]): T[] {
+  const bySequence = new Map<number, T>();
+  for (const segment of segments) {
+    if (!bySequence.has(segment.sequence)) {
+      bySequence.set(segment.sequence, segment);
+    }
+  }
+  return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence);
+}
+
 export function mergedCuesToSegmentRows(
   cues: MergedVttCue[],
   options: {
@@ -166,7 +178,15 @@ export async function seedMeetingV2TranscriptSegments(options: {
     startSequence: 0,
   });
 
-  await db.insert(meetingsV2TranscriptSegments).values(segmentRows);
+  await db
+    .insert(meetingsV2TranscriptSegments)
+    .values(segmentRows)
+    .onConflictDoNothing({
+      target: [
+        meetingsV2TranscriptSegments.meetingV2Id,
+        meetingsV2TranscriptSegments.sequence,
+      ],
+    });
 }
 
 export async function loadMeetingTranscript(

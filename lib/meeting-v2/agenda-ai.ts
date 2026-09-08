@@ -17,11 +17,13 @@ import type {
   MeetingV2Settings,
   TranscriptDiscrepancy,
 } from "@/lib/meeting-v2/extraction-diagnostics";
+import { filterRedundantAddToAgendaDiscrepancies } from "@/lib/meeting-v2/transcript-discrepancies";
 import {
   extractBoardPackageAgendaJson,
   flattenBoardPackageAgenda,
 } from "@/lib/meeting-v2/board-package-agenda";
 import {
+  applyAgendaHierarchyCorrections,
   compareAgendaItemCodes,
   inferPropertyManagementReportNumber,
   planAdHocPlacement,
@@ -96,6 +98,7 @@ Important rules:
 - Do not create one topic per attachment page.
 - Use the package as the source of truth for official agenda topics.
 - Maintain topics in the official meeting outline order using hierarchical itemNumber codes (1, 1.A, 4.A, 4.A.1, 4.D.a, 4.E.a). Never rewrite those codes into a sequential 1, 2, 3 list.
+- Numbered project lines under a subsection (4.A.1, 4.B.5) use the number printed on that heading. Top-level items 5 (next Board Meeting) and 6 (Adjournment) are different slots — do not skip 4.B.5 because those top-level codes exist.
 - When the package shows one umbrella heading with numbered or lettered sub-items, keep the parent heading AND create one topic per real sub-item.
 - Guest-presentation outline bullets (1.A, 1.B) stay under item 1. Later Property Management Report project items (4.B.1) stay under the management report even when they concern the same project. Do not unify them into one topic.
 - When guest presenters lead substantial opening discussion before regular board business, keep those as distinct presentation topics instead of folding them into later management report items.
@@ -155,6 +158,7 @@ Otherwise return strict JSON with this shape:
 
 Package chunk rules:
 - Preserve existing itemNumber outline codes. Do not renumber topics sequentially.
+- A heading "5. Update on Shared Facilities..." under section 4.B is itemNumber "4.B.5". Do not emit "4.B.6" to avoid colliding with top-level agenda item 5.
 - Guest-presentation outline bullets (1.A Booster Pump) and Property Management Report project items (4.B.1 Booster Pump Replacement) are different outline slots. Keep both. Do not unify them into one topic.
 - Favor numbered or clearly separated business items.
 - If a package section contains numbered sub-items like 1., 2., 3. under one heading, create separate topics for those numbered items.
@@ -212,6 +216,7 @@ Use the transcript chunk to:
   - set discussionStatus to "discussed" if conversation is found
   - attach sequence numbers to sourceTranscriptRanges
   - attach human-readable start/end time to discussionTimestampRange (e.g. "00:15:58 - 01:42:10")
+  - parent ranges must cover their children: item 4 spans all of 4.A/4.B/..., 4.B spans 4.B.1/4.B.2/..., and a child range stays inside that parent span (a later pickup of the same matter may extend both)
 - add aliases or notes when the transcript uses shorthand
 - add extraTopics ONLY for genuinely new board business matters discussed in the transcript but not on the agenda (itemType "ad_hoc_discussion" or "extra_topic", discussionStatus "ad_hoc"). Those extraTopics will be nested under a synthesized Property Management Report section 4.E.
 - detect unaligned discussion discrepancies:
@@ -225,6 +230,7 @@ Use the transcript chunk to:
       "suggestedTitle": "Title of the unexpected topic",
       "clarificationQuestion": "It looks like [topic] was discussed at [timestamp], but does not appear on the official agenda. Should this be included as an agenda item?"
     }
+  - do NOT add discrepancies for matters already captured in extraTopics or documentTopics in the current state. Discrepancies are for unconfirmed alignment gaps only — if you add a matter to extraTopics in this response, do not also add a discrepancy for the same matter.
 
 If this chunk does not require any change, return:
 {
@@ -1391,7 +1397,13 @@ export async function extractAgendaItemsWithAi(
   }
 
   const placed = applyAdHocOutlinePlacement(state);
-  const finalTopics = sortTopics([...placed.documentTopics, ...placed.extraTopics]);
+  const finalTopics = applyAgendaHierarchyCorrections(
+    sortTopics([...placed.documentTopics, ...placed.extraTopics]).map((topic, index) => ({
+      ...topic,
+      id: `topic-${index}`,
+      itemNumber: topic.itemNumber || String(index + 1),
+    })),
+  );
 
   await db.delete(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));
 
@@ -1467,11 +1479,12 @@ export async function extractAgendaItemsWithAi(
           (topic && topic.sourceTranscriptRanges.length > 0 ? "discussed" : "not_discussed");
   }
 
-  const discrepancies: TranscriptDiscrepancy[] = dedupeDiscrepancies(state.discrepancies || []).map(
-    (d) => ({
+  const discrepancies: TranscriptDiscrepancy[] = filterRedundantAddToAgendaDiscrepancies(
+    dedupeDiscrepancies(state.discrepancies || []).map((d) => ({
       ...d,
       status: "pending" as const,
-    }),
+    })),
+    finalTopics.map((topic) => topic.title),
   );
 
   // Surface explicit inquiry for guest presentation when guest did not attend

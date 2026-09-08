@@ -4,6 +4,7 @@ import {
   integer,
   boolean,
   jsonb,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import type { MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
@@ -91,7 +92,12 @@ export const meetingsV2TranscriptSegments = pgTable(
     speakerLabel: text("speaker_label"),
     text: text("text").notNull(),
     rawCueId: text("raw_cue_id"),
-  }
+  },
+  (table) => ({
+    meetingSequenceUnique: uniqueIndex(
+      "meetings_v2_transcript_segments_meeting_sequence_unique",
+    ).on(table.meetingV2Id, table.sequence),
+  }),
 );
 
 export const meetingsV2DocumentPages = pgTable(

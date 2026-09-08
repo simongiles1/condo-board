@@ -8,6 +8,11 @@ import { describe, it } from "node:test";
 
 import { analyzeExtractionQuality } from "../lib/meeting-v2/extraction-diagnostics";
 import {
+  agendaTitlesMatch,
+  filterRedundantAddToAgendaDiscrepancies,
+  resolveTranscriptDiscrepancyKind,
+} from "../lib/meeting-v2/transcript-discrepancies";
+import {
   inferHeadingFromMarkdown,
   isEmailAttachmentPage,
   buildSemanticDocumentSections,
@@ -24,8 +29,10 @@ import {
   normalizeBoardPackageAgendaSkeleton,
 } from "../lib/meeting-v2/board-package-agenda";
 import {
+  applyAgendaHierarchyCorrections,
   buildAgendaOutlineTree,
   compareAgendaItemCodes,
+  decorateAgendaOutlineTree,
   planAdHocPlacement,
 } from "../lib/meeting-v2/agenda-outline";
 
@@ -345,6 +352,52 @@ describe("Dual-Source Agenda Extraction & Synthesis", () => {
   });
 });
 
+describe("transcript discrepancy deduplication", () => {
+  it("matches agenda titles with punctuation and casing differences", () => {
+    assert.equal(
+      agendaTitlesMatch(
+        "Carpet Cleaning Oversight and Scheduling",
+        "carpet cleaning oversight and scheduling",
+      ),
+      true,
+    );
+    assert.equal(
+      agendaTitlesMatch(
+        "Fire Alarm Activation from Studio 2 - System Malfunction Inquiry",
+        "Fire Alarm Activation from Studio 2",
+      ),
+      true,
+    );
+  });
+
+  it("drops add_to_agenda discrepancies already on the candidate agenda", () => {
+    const filtered = filterRedundantAddToAgendaDiscrepancies(
+      [
+        {
+          id: "disc-carpet",
+          suggestedTitle: "Carpet Cleaning Oversight and Scheduling",
+          clarificationQuestion: "Should carpet cleaning be added?",
+        },
+        {
+          id: "inquiry-ryan",
+          kind: "status_inquiry" as const,
+          suggestedTitle: "Meeting with Eng. Ryan Ratcliff from TCG",
+          clarificationQuestion: "Should this be marked Not Discussed?",
+        },
+      ],
+      [
+        "Ad-hoc items",
+        "Carpet Cleaning Oversight and Scheduling",
+        "Lint Trap Miscommunication with TES",
+      ],
+    );
+
+    assert.equal(filtered.length, 1);
+    assert.equal(filtered[0].id, "inquiry-ryan");
+    assert.equal(resolveTranscriptDiscrepancyKind(filtered[0]), "status_inquiry");
+  });
+});
+
 describe("Hierarchical board-package agenda outline", () => {
   it("inserts Property Management Report before Date/Adjournment when the TOC skipped it", () => {
     const normalized = normalizeBoardPackageAgendaSkeleton({
@@ -487,6 +540,74 @@ describe("Hierarchical board-package agenda outline", () => {
     assert.equal(placement.sectionMissing, true);
     assert.deepEqual(placement.nextItemCodes, ["4.E.a", "4.E.b"]);
     assert.ok(compareAgendaItemCodes("4.E.a", "5") < 0);
+  });
+
+  it("expands parent transcript ranges to cover descendants", () => {
+    const corrected = applyAgendaHierarchyCorrections([
+      {
+        id: "4",
+        itemNumber: "4",
+        title: "Property Management Report",
+        discussionTimestampRange: "00:13:37 - 00:18:29",
+      },
+      {
+        id: "4b",
+        itemNumber: "4.B",
+        title: "Review and approval of projects",
+        discussionTimestampRange: "00:15:58 - 00:18:29",
+      },
+      {
+        id: "4b1",
+        itemNumber: "4.B.1",
+        title: "Booster Pump Replacement",
+        discussionTimestampRange: "00:15:58 - 01:17:28",
+      },
+      {
+        id: "4b2",
+        itemNumber: "4.B.2",
+        title: "Heat Exchanger Plate Pack Replacement",
+        discussionTimestampRange: "00:16:45 - 00:31:35",
+      },
+    ]);
+
+    assert.equal(
+      corrected.find((item) => item.id === "4")?.discussionTimestampRange,
+      "00:13:37 - 01:17:28",
+    );
+    assert.equal(
+      corrected.find((item) => item.id === "4b")?.discussionTimestampRange,
+      "00:15:58 - 01:17:28",
+    );
+    assert.equal(
+      corrected.find((item) => item.id === "4b1")?.discussionTimestampRange,
+      "00:15:58 - 01:17:28",
+    );
+  });
+
+  it("fills a 4.B numbering gap when top-level 5 is next-meeting admin", () => {
+    const items = [
+      { id: "4", itemNumber: "4", title: "Property Management Report" },
+      { id: "4b", itemNumber: "4.B", title: "Review and approval of projects" },
+      { id: "4b4", itemNumber: "4.B.4", title: "Heating Pump P-10A Seal Replacement" },
+      {
+        id: "4b6",
+        itemNumber: "4.B.6",
+        title: "Update on Shared Facilities Reserve Fund Study",
+      },
+      { id: "5", itemNumber: "5", title: "Date and time of the next Board Meeting" },
+      { id: "6", itemNumber: "6", title: "Adjournment" },
+    ];
+    const tree = decorateAgendaOutlineTree(buildAgendaOutlineTree(items), {
+      items,
+      getTiming: () => null,
+    });
+    const sectionB = tree
+      .find((node) => node.item.id === "4")
+      ?.children.find((child) => child.item.id === "4b");
+    assert.deepEqual(
+      sectionB?.children.map((child) => child.displayNumber),
+      ["4", "5"],
+    );
   });
 });
 

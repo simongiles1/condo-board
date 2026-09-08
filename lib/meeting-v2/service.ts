@@ -55,6 +55,7 @@ import {
 } from "@/lib/meeting-v2/investigation-tools";
 import { extractPdfPagesWithText, buildBasicDocumentSections } from "@/lib/meeting-v2/pdf";
 import {
+  dedupeTranscriptSegmentsBySequence,
   mergedCuesToSegmentRows,
   parseVttToMergedCues,
 } from "@/lib/meeting-v2/transcript";
@@ -1288,17 +1289,24 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
     null,
   );
 
-  if (existingSegments.length < mergedTranscriptCues.length) {
-    const segmentRows = mergedCuesToSegmentRows(
-      mergedTranscriptCues.slice(existingSegments.length),
-      {
-        meetingId,
-        sourceArtifactId: transcriptArtifact.id,
-        startSequence: existingSegments.length,
-      },
-    );
+  const distinctExistingSegments = dedupeTranscriptSegmentsBySequence(existingSegments);
+
+  if (distinctExistingSegments.length < mergedTranscriptCues.length) {
+    const segmentRows = mergedCuesToSegmentRows(mergedTranscriptCues, {
+      meetingId,
+      sourceArtifactId: transcriptArtifact.id,
+      startSequence: 0,
+    });
     if (segmentRows.length > 0) {
-      await db.insert(meetingsV2TranscriptSegments).values(segmentRows);
+      await db
+        .insert(meetingsV2TranscriptSegments)
+        .values(segmentRows)
+        .onConflictDoNothing({
+          target: [
+            meetingsV2TranscriptSegments.meetingV2Id,
+            meetingsV2TranscriptSegments.sequence,
+          ],
+        });
     }
   }
 
@@ -1344,15 +1352,13 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
         .select()
         .from(meetingsV2DocumentPages)
         .where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId));
-  const segments = existingSegments.length > 0
-    ? await db
-        .select()
-        .from(meetingsV2TranscriptSegments)
-        .where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId))
-    : await db
-        .select()
-        .from(meetingsV2TranscriptSegments)
-        .where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId));
+  const segments = dedupeTranscriptSegmentsBySequence(
+    await db
+      .select()
+      .from(meetingsV2TranscriptSegments)
+      .where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId))
+      .orderBy(asc(meetingsV2TranscriptSegments.sequence)),
+  );
 
   if (existingSections.length === 0) {
     const missingSectionRows = buildBasicDocumentSections(

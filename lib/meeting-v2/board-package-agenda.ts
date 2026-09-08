@@ -222,6 +222,7 @@ Extract all distinct business items, projects, or discussion points presented on
 Rules:
 1. Keep the hierarchy aligned:
    - If Section "B. Review and approval of projects" (code 4.B) is active, all numbered project items (e.g. 1, 2, 3, 4, 5, 6, 7) belong under "4.B" (e.g. "4.B.5", "4.B.6", "4.B.7"), NOT 4.D.
+   - Copy the printed project number into itemCode. "5. Update on Shared Facilities..." is "4.B.5". Do not skip 5 or 6 because the agenda outline also has top-level items 5 and 6.
    - Section 4.D ("The items for discussion") begins only when the text explicitly introduces "D. Items for Discussion:".
    - Never assign package items to 4.E. That slot is reserved for transcript-only ad-hoc matters.
 2. Distinct numbered or titled items on the page (e.g. "1. Steam Room Heat Pump...", "2. Main Lobby / Elevator Lobby...") are SEPARATE items ("isContinuationOfPrevious": false).

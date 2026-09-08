@@ -4,11 +4,10 @@ import { mkdir, rm, writeFile } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { meetings, meetingsV2 } from "@/lib/db/schema";
-import { seedMeetingV2TranscriptSegments } from "@/lib/meeting-v2/transcript";
 
 function assertFile(value: unknown): value is File {
   return typeof value === "object" && value !== null && "arrayBuffer" in value;
@@ -114,20 +113,6 @@ export async function POST(req: Request) {
       lastError: null,
       createdAt,
       updatedAt: createdAt,
-    });
-
-    after(async () => {
-      try {
-        await seedMeetingV2TranscriptSegments({
-          meetingId,
-          transcriptText: vttBuffer.toString("utf8"),
-          storagePath: path.relative(process.cwd(), vttAbsolute).replace(/\\/g, "/"),
-          originalFilename: transcriptFile.name,
-        });
-        console.info("[meetings:v2:upload] transcript seeded", { meetingId });
-      } catch (error) {
-        console.error("[meetings:v2:upload] transcript seed failed", { meetingId, error });
-      }
     });
 
     console.info("[meetings:v2:upload] rows created", { meetingId });

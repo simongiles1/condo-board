@@ -3,6 +3,15 @@ import { count, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2AgendaChunkSnapshots } from "@/lib/db/schema";
 import type { GoldStandardValidationUsageRun } from "@/lib/gemini/usage";
+import type { TranscriptDiscrepancyKind } from "@/lib/meeting-v2/transcript-discrepancies";
+
+export type { TranscriptDiscrepancyKind } from "@/lib/meeting-v2/transcript-discrepancies";
+export {
+  agendaTitlesMatch,
+  filterRedundantAddToAgendaDiscrepancies,
+  normalizeAgendaTitleForMatch,
+  resolveTranscriptDiscrepancyKind,
+} from "@/lib/meeting-v2/transcript-discrepancies";
 
 export type MeetingV2ValidationUsageSource = "pipeline" | "re_evaluate";
 
@@ -27,8 +36,6 @@ export type MeetingV2StageTokenUsage = {
 };
 
 export type AgendaItemDiscussionStatus = "discussed" | "not_discussed" | "ad_hoc";
-
-export type TranscriptDiscrepancyKind = "add_to_agenda" | "status_inquiry";
 
 export type TranscriptDiscrepancy = {
   id: string;

@@ -8,6 +8,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 redundant AI discrepancy inquiries** — "Add to agenda" discrepancy prompts are now suppressed when the same topic already appears on the synthesized candidate agenda (for example under 4.E ad-hoc items). Status-check inquiries (such as guest presentations that did not occur) are unchanged. The transcript enrichment prompt also instructs the model not to emit duplicate discrepancy entries for matters already captured in `extraTopics`.
+
+- **Meetings V2 nested transcript timing** — Agenda review parent items now span the union of their descendants' discussion times (item 4 covers 4.A/4.B and their leaves). Stored extraction applies the same rule.
+
+- **Meetings V2 4.B numbering vs top-level 5/6** — Project headings numbered 5. in the package no longer display as 6 because top-level item 5 is "next Board Meeting". The printed project number is kept.
+
 - **Meetings V2 agenda outline order** — Candidate agendas now keep the official package hierarchy (1 / 1.A / 4.A.1 / 4.D.l) instead of flattening everything into a sequential 1–30 list. Date and adjournment stay last. Transcript-only matters nest under a synthesized **4.E Ad-hoc items** section even though E is not printed on the package agenda. Guest-presentation outline bullets stay under item 1 and are not merged into later Property Management Report projects.
 
 - **Chunk preview Rules of Hooks crash** — Opening a referenced document chunk (for example `document_chunk_006`) no longer crashes `ChunkPreviewModal` after the first render.

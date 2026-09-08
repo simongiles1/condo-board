@@ -37,8 +37,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **IBM Docling backfill reliability** — IBM conversion now submits at most five
   pages per job, bills trial pages only after a usable split (avoiding
   double-count on page-break mismatch fan-out), limits mismatch retries through
-  the job semaphore, and runs one document at a time on IBM so fan-out does not
-  stampede four large PDFs in parallel.
+  the job semaphore, runs one document at a time on IBM, and persists Docling
+  page/cost counters after each chunk so the live panel moves before a whole
+  document finishes.
 
 - **Project alias evidence mention highlighting** — Opening the evidence side panel
   for an alias (e.g. `TNR garage door replacement`) now highlights the actual work

@@ -1380,8 +1380,12 @@ export function DoclingBackfillButton() {
                       ) : stalledWaiting ? (
                         <p className="mt-2 rounded-lg border border-amber-300 bg-amber-100/80 px-3 py-2 text-xs text-amber-950">
                           No document finished for{" "}
-                          {formatDoclingBackfillDuration(stallMs)} — waiting on
-                          IBM watsonx or Gemini.
+                          {formatDoclingBackfillDuration(stallMs)} —{" "}
+                          {live.mode === "docling_only"
+                            ? "IBM watsonx is processing (5 pages per job; counters update after each chunk)."
+                            : live.mode === "vision_only"
+                              ? "waiting on Gemini vision."
+                              : "waiting on IBM watsonx or Gemini."}
                         </p>
                       ) : null}
                       <p className="mt-2 text-sm">

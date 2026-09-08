@@ -85,6 +85,8 @@ type DocOutcome = {
   visionCostUsd: number;
   lastError?: string;
   visionErrors: ExtractionBackfillPageError[];
+  /** Docling page/cost counters were persisted after each IBM chunk. */
+  doclingStreamed?: boolean;
 };
 
 async function processOneDoc(options: {
@@ -95,6 +97,7 @@ async function processOneDoc(options: {
   provider: DoclingProvider;
   needsDocling: boolean;
   needsVision: boolean;
+  onDoclingChunk?: (chunk: { pages: number; costUsd: number }) => Promise<void>;
 }): Promise<DocOutcome> {
   const {
     runId,
@@ -104,6 +107,7 @@ async function processOneDoc(options: {
     provider,
     needsDocling,
     needsVision,
+    onDoclingChunk,
   } = options;
   const label = `Pool ×${poolSize} · ${shortHash(contentHash)}`;
   const base: DocOutcome = {
@@ -168,8 +172,20 @@ async function processOneDoc(options: {
             pages: group,
             provider,
           });
-          pages += result.pages.filter((page) => !page.cached).length;
+          const chunkPages = result.pages.filter((page) => !page.cached).length;
+          pages += chunkPages;
           costUsd += result.costUsd;
+          if (onDoclingChunk && chunkPages > 0) {
+            await onDoclingChunk({ pages: chunkPages, costUsd: result.costUsd });
+          }
+          console.info("[extraction-backfill-worker] Docling chunk done", {
+            runId,
+            contentHash: shortHash(contentHash),
+            docIndex,
+            chunkPages,
+            docPagesTotal: pages,
+            provider,
+          });
         } catch (error) {
           const message =
             error instanceof Error ? error.message : String(error);
@@ -280,6 +296,7 @@ async function processOneDoc(options: {
         visionHaltKind: quota ? "gemini_spend_cap" : undefined,
         doclingPages: doclingResult.value.pages,
         doclingCostUsd: doclingResult.value.costUsd,
+        doclingStreamed: Boolean(onDoclingChunk && doclingResult.value.pages > 0),
         lastError: quota
           ? geminiBillingHaltMessage("gemini_spend_cap")
           : `${shortHash(contentHash)}: ${message}`,
@@ -304,6 +321,7 @@ async function processOneDoc(options: {
       visionPages: vision.pages,
       doclingCostUsd: docling.costUsd,
       visionCostUsd: vision.costUsd,
+      doclingStreamed: Boolean(onDoclingChunk && docling.pages > 0),
       lastError: vision.billingHalt
         ? geminiBillingHaltMessage(vision.billingHalt.kind)
         : visionErrorSummary ?? undefined,
@@ -485,14 +503,29 @@ async function executeDoclingBackfillRun(runId: string): Promise<void> {
         provider,
         needsDocling,
         needsVision: needsVision && !skipVision,
+        onDoclingChunk: needsDocling
+          ? async (chunk) => {
+              await withCommitLock(async () => {
+                completedDoclingPages += chunk.pages;
+                doclingCostUsd += chunk.costUsd;
+                await persistCounters({
+                  currentDocIndex: index + 1,
+                  currentContentHash: contentHash,
+                  currentLabel: `Pool ×${poolSize} · ${shortHash(contentHash)}`,
+                });
+              });
+            }
+          : undefined,
       });
 
       if (outcome.cancelled) return;
 
       await withCommitLock(async () => {
-        completedDoclingPages += outcome.doclingPages;
+        if (!outcome.doclingStreamed) {
+          completedDoclingPages += outcome.doclingPages;
+          doclingCostUsd += outcome.doclingCostUsd;
+        }
         completedVisionPages += outcome.visionPages;
-        doclingCostUsd += outcome.doclingCostUsd;
         visionCostUsd += outcome.visionCostUsd;
         if (outcome.failed) failedDocs += 1;
         collectedVisionErrors.push(...outcome.visionErrors);

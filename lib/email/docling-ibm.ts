@@ -752,55 +752,66 @@ export async function checkIbmDoclingHealth(): Promise<IbmDoclingHealth> {
 
   const slots = await import("@/lib/email/ibm-docling-slots");
   await slots.syncIbmDoclingSlotsFromEnv();
-  const live = (await slots.pickLiveIbmCredential()) ?? creds[0]!;
-  const url = live.url;
-  const apiKey = live.apiKey;
 
   const paths = ["/health", "/v1/health", "/docs", "/openapi.json"];
+  let lastUrl: string | null = null;
   let lastDetail = "No health endpoint responded.";
-  for (const path of paths) {
-    try {
-      const response = await fetch(`${url}${path}`, {
-        method: "GET",
-        headers: authHeaders(apiKey),
-        signal: AbortSignal.timeout(8_000),
-      });
-      if (response.status === 401 || response.status === 403) {
-        return {
-          ok: false,
-          configured: true,
-          url,
-          keyCount: creds.length,
-          activeSlot: live.slot,
-          detail: `IBM rejected API key ${live.slot} (${response.status}).`,
-        };
-      }
-      if (response.ok || response.status === 404) {
-        if (response.ok || path !== "/health") {
-          return {
-            ok: true,
-            configured: true,
-            url,
-            keyCount: creds.length,
-            activeSlot: live.slot,
-          };
+  const tried = new Set<number>();
+
+  while (tried.size < creds.length) {
+    const live = await slots.pickLiveIbmCredential();
+    if (!live || tried.has(live.slot)) break;
+    tried.add(live.slot);
+
+    lastUrl = live.url;
+    let authRejected = false;
+
+    for (const path of paths) {
+      try {
+        const response = await fetch(`${live.url}${path}`, {
+          method: "GET",
+          headers: authHeaders(live.apiKey),
+          signal: AbortSignal.timeout(8_000),
+        });
+        if (response.status === 401 || response.status === 403) {
+          lastDetail = `IBM rejected API key ${live.slot} (${response.status}).`;
+          authRejected = true;
+          break;
         }
-        lastDetail = `Health check returned ${response.status} at ${path}.`;
-        continue;
+        if (response.ok || response.status === 404) {
+          if (response.ok || path !== "/health") {
+            return {
+              ok: true,
+              configured: true,
+              url: live.url,
+              keyCount: creds.length,
+              activeSlot: live.slot,
+            };
+          }
+          lastDetail = `Health check returned ${response.status} at ${path}.`;
+          continue;
+        }
+        lastDetail = `IBM returned ${response.status} at ${path}.`;
+      } catch (error) {
+        lastDetail =
+          error instanceof Error ? error.message : "IBM Docling unreachable.";
       }
-      lastDetail = `IBM returned ${response.status} at ${path}.`;
-    } catch (error) {
-      lastDetail =
-        error instanceof Error ? error.message : "IBM Docling unreachable.";
+    }
+
+    if (authRejected) {
+      await slots.withIbmSlotLock(() =>
+        slots.markIbmSlotExhausted(live.slot, "auth"),
+      );
+      continue;
     }
   }
 
   return {
     ok: false,
     configured: true,
-    url,
+    url: lastUrl,
     keyCount: creds.length,
-    activeSlot: live.slot,
+    activeSlot: null,
     detail: lastDetail,
   };
 }

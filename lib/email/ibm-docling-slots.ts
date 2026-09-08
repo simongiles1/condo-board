@@ -80,12 +80,30 @@ export async function syncIbmDoclingSlotsFromEnv(): Promise<void> {
     if (keyChanged) memoryExhausted.delete(cred.slot);
 
     const exhaustedAt = keyChanged ? null : row?.exhaustedAt ?? null;
-    if (exhaustedAt) memoryExhausted.add(cred.slot);
+    const trialPages = row?.trialPages ?? IBM_DOCLING_TRIAL_PAGES;
+    const billedPages = row?.billedPages ?? 0;
+    const trialSpent =
+      !keyChanged && billedPages >= trialPages && trialPages > 0;
+
+    if (exhaustedAt || trialSpent) memoryExhausted.add(cred.slot);
+
+    if (trialSpent && row && !exhaustedAt) {
+      await db
+        .update(ibmDoclingAccounts)
+        .set({
+          isActive: false,
+          exhaustedAt: now,
+          exhaustedReason: "quota",
+          updatedAt: now,
+        })
+        .where(eq(ibmDoclingAccounts.id, row.id));
+    }
 
     const isActive =
       firstLive != null &&
       cred.slot === firstLive &&
       !exhaustedAt &&
+      !trialSpent &&
       !memoryExhausted.has(cred.slot);
 
     if (!row) {

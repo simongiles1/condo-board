@@ -86,6 +86,114 @@ function computeTooltipPosition(
   };
 }
 
+function AiUsageCostInfoTooltip() {
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const hover = useHoverPopover({ scanGroup: "ai-usage-cost-info" });
+  const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
+    position: "fixed",
+    visibility: "hidden",
+    zIndex: 60,
+  });
+
+  useLayoutEffect(() => {
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
+
+    const triggerRect = rootRef.current.getBoundingClientRect();
+    const popoverRect = popoverRef.current.getBoundingClientRect();
+    setPopoverStyle({
+      ...computeTooltipPosition(triggerRect, popoverRect.width, popoverRect.height),
+      visibility: "visible",
+    });
+  }, [hover.open]);
+
+  return (
+    <>
+      <span
+        ref={rootRef}
+        className="inline-flex shrink-0"
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onFocus={hover.onTriggerFocus}
+        onBlur={hover.onTriggerBlur}
+      >
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+          aria-label="How usage costs are calculated"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          <InfoCircleIcon />
+        </button>
+      </span>
+
+      {hover.open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={popoverRef}
+              role="tooltip"
+              style={popoverStyle}
+              className="w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              {...hover.popoverProps}
+            >
+              <p className="text-sm font-semibold text-slate-900">How costs are calculated</p>
+              <div className="mt-3 space-y-3 text-sm leading-snug text-slate-700">
+                <div>
+                  <p className="font-medium text-slate-900">DeepSeek V4 Flash (non-thinking)</p>
+                  <ul className="mt-1 list-inside list-disc space-y-0.5 text-slate-600">
+                    <li>
+                      Off-peak input: $0.22/M cache miss, $0.007/M cache hit; output $0.66/M
+                    </li>
+                    <li>Peak rates are double those amounts</li>
+                  </ul>
+                </div>
+                <div>
+                  <p className="font-medium text-slate-900">Off-peak optimized total</p>
+                  <p className="mt-1 text-slate-600">
+                    The totals row shows an off-peak optimized estimate with cached vs uncached
+                    input broken out separately.
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium text-slate-900">Peak hours</p>
+                  <p className="mt-1 text-slate-600">
+                    01:00–04:00 and 06:00–10:00 UTC, Monday–Friday. Each API call is priced at
+                    the tier active when it ran; stages that cross an hour boundary may show
+                    &quot;Peak + off-peak&quot;.
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium text-slate-900">Coverage &amp; accuracy</p>
+                  <ul className="mt-1 list-inside list-disc space-y-0.5 text-slate-600">
+                    <li>
+                      Validate-stage usage is included from runs after this update; older meetings
+                      may under-report that stage
+                    </li>
+                    <li>Gold-standard compare runs appear after the seven workflow stages</li>
+                    <li>
+                      Your provider dashboard may differ slightly when billing includes retries or
+                      calls not yet written to the database
+                    </li>
+                    <li>
+                      Ingest Docling page counts appear when markdown extraction was stored; dollar
+                      cost for Docling is on the WatsonX tab
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
 function DeepSeekPromptCacheInfoTooltip() {
   const rootRef = useRef<HTMLSpanElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -416,37 +524,40 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
               ? "Workflow stages plus gold-standard compare runs — token costs for automated stages, manual steps marked N/A."
               : "IBM watsonx Docling trial keys loaded from .env.local and their spend."}
           </p>
-          <div
-            className="mt-4 inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1"
-            role="tablist"
-            aria-label="AI usage views"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === "usage"}
-              onClick={() => setActiveTab("usage")}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                activeTab === "usage"
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <div
+              className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1"
+              role="tablist"
+              aria-label="AI usage views"
             >
-              Usage
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === "watsonx"}
-              onClick={() => setActiveTab("watsonx")}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                activeTab === "watsonx"
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              WatsonX
-            </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "usage"}
+                onClick={() => setActiveTab("usage")}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  activeTab === "usage"
+                    ? "bg-white text-slate-900 shadow-sm"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                Usage
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "watsonx"}
+                onClick={() => setActiveTab("watsonx")}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  activeTab === "watsonx"
+                    ? "bg-white text-slate-900 shadow-sm"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                WatsonX
+              </button>
+            </div>
+            {activeTab === "usage" ? <AiUsageCostInfoTooltip /> : null}
           </div>
         </div>
 
@@ -504,7 +615,7 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto bg-white">
+              <div className="min-h-[14rem] flex-1 overflow-y-auto overflow-x-auto bg-white">
                 {resolvedStages.map((stage) => (
                   <UsageStageRow
                     key={stage.id}
@@ -514,103 +625,72 @@ export function AiUsageDialog({ open, usage, stages, loading = false, onClose }:
                 ))}
               </div>
 
-              <div
-                className={`${USAGE_TABLE_GRID} shrink-0 border-t border-slate-200 bg-slate-50 text-sm`}
-              >
-                <div className="px-4 py-3 text-left font-semibold text-slate-900">
-                  Total
-                </div>
-                <div className="px-4 py-3 text-right align-top">
-                  <div className="space-y-1">
+              <div className="shrink-0 border-t border-slate-200 bg-slate-50 text-sm">
+                <div className={USAGE_TABLE_GRID}>
+                  <div className="px-4 py-3 text-left font-semibold text-slate-900">
+                    Total
+                  </div>
+                  <div className="px-4 py-3 text-right align-top">
                     <div className="font-mono font-semibold text-slate-900">
                       {formatTokenCount(totals.inputTokens)}
                     </div>
                     <div className="font-mono text-xs font-semibold text-slate-600">
                       {formatCostUsd(totals.inputCostUsd)}
                     </div>
-                    {offPeakOptimization ? (
-                      <div className="mt-2 space-y-1 border-t border-slate-200 pt-2 text-[11px] leading-snug text-slate-500">
-                        <div>
-                          Cached in{" "}
-                          <span className="font-mono text-slate-700">
-                            {formatTokenCount(offPeakOptimization.cacheHitTokens)}
-                          </span>
-                          <span className="font-mono text-slate-600">
-                            {" "}
-                            → {formatCostUsd(offPeakOptimization.offPeakInputCacheHitCostUsd)}
-                          </span>
-                        </div>
-                        <div>
-                          Uncached in{" "}
-                          <span className="font-mono text-slate-700">
-                            {formatTokenCount(offPeakOptimization.cacheMissTokens)}
-                          </span>
-                          <span className="font-mono text-slate-600">
-                            {" "}
-                            → {formatCostUsd(offPeakOptimization.offPeakInputCacheMissCostUsd)}
-                          </span>
-                        </div>
-                      </div>
-                    ) : null}
                   </div>
-                </div>
-                <div className="px-4 py-3 text-right align-top">
-                  <div className="space-y-1">
+                  <div className="px-4 py-3 text-right align-top">
                     <div className="font-mono font-semibold text-slate-900">
                       {formatTokenCount(totals.outputTokens)}
                     </div>
                     <div className="font-mono text-xs font-semibold text-slate-600">
                       {formatCostUsd(totals.outputCostUsd)}
                     </div>
-                    {offPeakOptimization ? (
-                      <div className="mt-2 border-t border-slate-200 pt-2 text-[11px] text-slate-500">
-                        <span className="font-mono text-slate-600">
-                          Off-peak out → {formatCostUsd(offPeakOptimization.offPeakOutputCostUsd)}
-                        </span>
-                      </div>
-                    ) : null}
                   </div>
-                </div>
-                <div className="px-4 py-3 text-right align-top font-mono font-semibold text-slate-900">
-                  {formatTokenCount(totals.totalTokens)}
-                </div>
-                <div className="px-4 py-3 text-right align-top">
-                  <div className="font-mono font-semibold text-teal-800">
+                  <div className="px-4 py-3 text-right align-top font-mono font-semibold text-slate-900">
+                    {formatTokenCount(totals.totalTokens)}
+                  </div>
+                  <div className="px-4 py-3 text-right align-top font-mono font-semibold text-teal-800">
                     {formatCostUsd(totals.costUsd)}
                   </div>
-                  {offPeakOptimization ? (
-                    <div className="mt-2 space-y-1 border-t border-slate-200 pt-2">
-                      <div className="flex items-center justify-end gap-1.5 text-[11px] font-medium text-slate-600">
-                        <span>Off-peak optimized</span>
-                        <DeepSeekPromptCacheInfoTooltip />
-                      </div>
-                      <div className="font-mono text-xs font-semibold text-emerald-700">
-                        {formatCostUsd(offPeakOptimization.offPeakTotalCostUsd)}
-                      </div>
-                    </div>
-                  ) : null}
                 </div>
+                {offPeakOptimization ? (
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-slate-200 px-4 py-2.5 text-[11px] text-slate-500">
+                    <span>
+                      Cached in{" "}
+                      <span className="font-mono text-slate-700">
+                        {formatTokenCount(offPeakOptimization.cacheHitTokens)}
+                      </span>
+                      <span className="font-mono text-slate-600">
+                        {" "}
+                        → {formatCostUsd(offPeakOptimization.offPeakInputCacheHitCostUsd)}
+                      </span>
+                    </span>
+                    <span>
+                      Uncached in{" "}
+                      <span className="font-mono text-slate-700">
+                        {formatTokenCount(offPeakOptimization.cacheMissTokens)}
+                      </span>
+                      <span className="font-mono text-slate-600">
+                        {" "}
+                        → {formatCostUsd(offPeakOptimization.offPeakInputCacheMissCostUsd)}
+                      </span>
+                    </span>
+                    <span className="font-mono text-slate-600">
+                      Off-peak out → {formatCostUsd(offPeakOptimization.offPeakOutputCostUsd)}
+                    </span>
+                    <span className="ml-auto inline-flex items-center gap-1.5 font-medium text-slate-600">
+                      <span>Off-peak optimized</span>
+                      <DeepSeekPromptCacheInfoTooltip />
+                      <span className="font-mono font-semibold text-emerald-700">
+                        {formatCostUsd(offPeakOptimization.offPeakTotalCostUsd)}
+                      </span>
+                    </span>
+                  </div>
+                ) : null}
               </div>
             </div>
           )}
 
-          {resolvedStages.length > 0 ? (
-            <p className="mt-4 shrink-0 text-xs text-slate-500">
-              Costs are recalculated from token counts stored for this meeting using
-              published DeepSeek V4 Flash rates (non-thinking mode): off-peak input
-              $0.22/M cache miss and $0.007/M cache hit, output $0.66/M; peak rates
-              are double those amounts. The totals row also shows an off-peak optimized
-              estimate with cached vs uncached input broken out. Peak hours are 01:00–04:00
-              and 06:00–10:00 UTC Monday–Friday. Each API call is priced at the tier active
-              when it ran; stages that cross an hour boundary may show &quot;Peak + off-peak&quot;.
-              Validate-stage usage is included from runs after this update; older
-              meetings may under-report that stage. Gold-standard compare runs appear
-              after the seven workflow stages. Your provider dashboard may still
-              differ slightly when billing includes retries or calls not yet written
-              to the database. Ingest Docling page counts appear when markdown
-              extraction was stored; dollar cost for Docling is on the WatsonX tab.
-            </p>
-          ) : null}
             </>
           ) : watsonxLoading ? (
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">

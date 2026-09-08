@@ -14,6 +14,10 @@ import {
   chunkVisionPage,
   type CorpusChunk,
 } from "@/lib/rag/chunk";
+import {
+  corpusIndexDocConcurrencyFromEnv,
+  mapWithConcurrency,
+} from "@/lib/rag/concurrency";
 import { embedTexts, EMBEDDING_MODEL } from "@/lib/rag/embed";
 import {
   estimateEmbeddingCostUsd,
@@ -22,6 +26,27 @@ import {
 import { sanitizePageVisionMarkdown } from "@/lib/email/page-vision-shared";
 import { resolveAttachmentStoragePath } from "@/lib/email/attachment-markdown-shared";
 import { readExtractArtifactText } from "@/lib/storage/extract-artifacts";
+
+const DB_UPSERT_BATCH = 100;
+
+type PreparedChunkItem = {
+  id: string;
+  sourceKind: "email_body" | "attachment_markdown" | "attachment_vision_page";
+  emailId: string | null;
+  contentHash: string | null;
+  pageNo: number | null;
+  chunk: CorpusChunk;
+  metadata: Record<string, unknown>;
+};
+
+type AttachmentMetaRow = {
+  contentHash: string;
+  attachmentId: string | null;
+  emailId: string | null;
+  filename: string | null;
+  subject: string | null;
+  receivedAt: string | null;
+};
 
 export type IndexSliceOptions = {
   /** Maximum number of source items (emails / attachments / vision pages) to index in this run. */
@@ -63,83 +88,79 @@ export type CorpusIndexStatus = {
 export async function getCorpusIndexStatus(): Promise<CorpusIndexStatus> {
   const db = getDb();
 
-  // 1. Emails
-  const [emailStats] = await db
-    .select({
-      total: sql<number>`count(*)::int`,
-    })
-    .from(emails);
+  const parsedAttachmentFilter = and(
+    eq(attachmentDocuments.parseStatus, "parsed"),
+    isNotNull(attachmentDocuments.markdownPath),
+  );
+  const doneVisionPageFilter = and(
+    eq(attachmentDocumentPages.visionStatus, "done"),
+    isNotNull(attachmentDocumentPages.artifactPath),
+  );
 
-  const [indexedEmailStats] = await db
-    .select({
-      count: sql<number>`count(distinct ${documentChunks.emailId})::int`,
-    })
-    .from(documentChunks)
-    .where(
-      and(
-        eq(documentChunks.sourceKind, "email_body"),
-        isNotNull(documentChunks.emailId),
+  // Count indexed sources via EXISTS on smaller source tables — avoids
+  // count(distinct …) full scans on document_chunks (116k+ rows timeout).
+  const [
+    [emailStats],
+    [indexedEmailStats],
+    [attStats],
+    [indexedAttStats],
+    [visionStats],
+    [indexedVisionStats],
+    [chunkStats],
+  ] = await Promise.all([
+    db.select({ total: sql<number>`count(*)::int` }).from(emails),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(emails)
+      .where(
+        sql`exists (
+          select 1 from document_chunks dc
+          where dc.email_id = ${emails.id}
+            and dc.source_kind = 'email_body'
+        )`,
       ),
-    );
-
-  // 2. Parsed Attachments
-  const [attStats] = await db
-    .select({
-      total: sql<number>`count(*)::int`,
-    })
-    .from(attachmentDocuments)
-    .where(
-      and(
-        eq(attachmentDocuments.parseStatus, "parsed"),
-        isNotNull(attachmentDocuments.markdownPath),
+    db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(attachmentDocuments)
+      .where(parsedAttachmentFilter),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(attachmentDocuments)
+      .where(
+        and(
+          parsedAttachmentFilter,
+          sql`exists (
+            select 1 from document_chunks dc
+            where dc.content_hash = ${attachmentDocuments.contentHash}
+              and dc.source_kind = 'attachment_markdown'
+          )`,
+        ),
       ),
-    );
-
-  const [indexedAttStats] = await db
-    .select({
-      count: sql<number>`count(distinct ${documentChunks.contentHash})::int`,
-    })
-    .from(documentChunks)
-    .where(
-      and(
-        eq(documentChunks.sourceKind, "attachment_markdown"),
-        isNotNull(documentChunks.contentHash),
+    db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(attachmentDocumentPages)
+      .where(doneVisionPageFilter),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(attachmentDocumentPages)
+      .where(
+        and(
+          doneVisionPageFilter,
+          sql`exists (
+            select 1 from document_chunks dc
+            where dc.content_hash = ${attachmentDocumentPages.contentHash}
+              and dc.page_no = ${attachmentDocumentPages.pageNo}
+              and dc.source_kind = 'attachment_vision_page'
+          )`,
+        ),
       ),
-    );
-
-  // 3. Vision Pages
-  const [visionStats] = await db
-    .select({
-      total: sql<number>`count(*)::int`,
-    })
-    .from(attachmentDocumentPages)
-    .where(
-      and(
-        eq(attachmentDocumentPages.visionStatus, "done"),
-        isNotNull(attachmentDocumentPages.artifactPath),
-      ),
-    );
-
-  const [indexedVisionStats] = await db
-    .select({
-      count: sql<number>`count(distinct (${documentChunks.contentHash} || ':' || ${documentChunks.pageNo}))::int`,
-    })
-    .from(documentChunks)
-    .where(
-      and(
-        eq(documentChunks.sourceKind, "attachment_vision_page"),
-        isNotNull(documentChunks.contentHash),
-        isNotNull(documentChunks.pageNo),
-      ),
-    );
-
-  // 4. Total Chunks & Last Indexed
-  const [chunkStats] = await db
-    .select({
-      total: sql<number>`count(*)::int`,
-      lastIndexedAt: sql<string | null>`max(${documentChunks.indexedAt})`,
-    })
-    .from(documentChunks);
+    db
+      .select({
+        total: sql<number>`count(*)::int`,
+        lastIndexedAt: sql<string | null>`max(${documentChunks.indexedAt})`,
+      })
+      .from(documentChunks),
+  ]);
 
   return {
     totalEmails: emailStats?.total ?? 0,
@@ -151,6 +172,87 @@ export async function getCorpusIndexStatus(): Promise<CorpusIndexStatus> {
     totalChunks: chunkStats?.total ?? 0,
     lastIndexedAt: chunkStats?.lastIndexedAt ?? null,
   };
+}
+
+async function loadAttachmentMetaByHash(
+  contentHashes: string[],
+): Promise<Map<string, AttachmentMetaRow>> {
+  if (contentHashes.length === 0) return new Map();
+
+  const db = getDb();
+  const rows = await db
+    .select({
+      contentHash: emailAttachments.contentHash,
+      attachmentId: emailAttachments.id,
+      emailId: emailAttachments.emailId,
+      filename: emailAttachments.filename,
+      subject: emails.subject,
+      receivedAt: emails.receivedAt,
+    })
+    .from(emailAttachments)
+    .leftJoin(emails, eq(emails.id, emailAttachments.emailId))
+    .where(inArray(emailAttachments.contentHash, contentHashes));
+
+  const map = new Map<string, AttachmentMetaRow>();
+  for (const row of rows) {
+    if (!row.contentHash || map.has(row.contentHash)) continue;
+    map.set(row.contentHash, {
+      contentHash: row.contentHash,
+      attachmentId: row.attachmentId ?? null,
+      emailId: row.emailId ?? null,
+      filename: row.filename ?? null,
+      subject: row.subject ?? null,
+      receivedAt: row.receivedAt ?? null,
+    });
+  }
+  return map;
+}
+
+async function upsertPreparedChunkRows(
+  rows: Array<{
+    id: string;
+    sourceKind: PreparedChunkItem["sourceKind"];
+    emailId: string | null;
+    contentHash: string | null;
+    pageNo: number | null;
+    chunkIndex: number;
+    chunkText: string;
+    charStart: number | null;
+    charEnd: number | null;
+    metadataJson: string;
+    contentHashDedup: string;
+    embedding: number[] | null;
+    embedModel: string;
+    indexedAt: string;
+  }>,
+): Promise<number> {
+  if (rows.length === 0) return 0;
+
+  const db = getDb();
+  let written = 0;
+
+  for (let i = 0; i < rows.length; i += DB_UPSERT_BATCH) {
+    const batch = rows.slice(i, i + DB_UPSERT_BATCH);
+    await db
+      .insert(documentChunks)
+      .values(batch)
+      .onConflictDoUpdate({
+        target: documentChunks.id,
+        set: {
+          chunkText: sql`excluded.chunk_text`,
+          charStart: sql`excluded.char_start`,
+          charEnd: sql`excluded.char_end`,
+          metadataJson: sql`excluded.metadata_json`,
+          contentHashDedup: sql`excluded.content_hash_dedup`,
+          embedding: sql`excluded.embedding`,
+          embedModel: sql`excluded.embed_model`,
+          indexedAt: sql`excluded.indexed_at`,
+        },
+      });
+    written += batch.length;
+  }
+
+  return written;
 }
 
 /**
@@ -181,22 +283,11 @@ export async function runIncrementalIndexSlice(
   };
 
   const nowIso = new Date().toISOString();
+  const docConcurrency = corpusIndexDocConcurrencyFromEnv();
 
-  // Helper to persist chunks with deduplication
-  async function persistPreparedChunks(
-    items: Array<{
-      id: string;
-      sourceKind: "email_body" | "attachment_markdown" | "attachment_vision_page";
-      emailId: string | null;
-      contentHash: string | null;
-      pageNo: number | null;
-      chunk: CorpusChunk;
-      metadata: Record<string, unknown>;
-    }>,
-  ) {
+  async function persistPreparedChunks(items: PreparedChunkItem[]) {
     if (items.length === 0) return;
 
-    // Check which contentHashDedup already have embeddings in document_chunks
     const dedupHashes = Array.from(
       new Set(items.map((it) => it.chunk.contentHashDedup)),
     );
@@ -221,7 +312,6 @@ export async function runIncrementalIndexSlice(
       }
     }
 
-    // Identify which chunks require a fresh embedding call
     const chunksNeedingEmbed: Array<{ index: number; text: string }> = [];
     for (let i = 0; i < items.length; i++) {
       const hash = items[i].chunk.contentHashDedup;
@@ -231,13 +321,15 @@ export async function runIncrementalIndexSlice(
     }
 
     if (chunksNeedingEmbed.length > 0) {
-      const textsToEmbed = chunksNeedingEmbed.map((c) => c.text);
-      const embedded = await embedTexts(textsToEmbed);
+      const embedded = await embedTexts(
+        chunksNeedingEmbed.map((entry) => entry.text),
+      );
       for (let j = 0; j < chunksNeedingEmbed.length; j++) {
         const itemIdx = chunksNeedingEmbed[j].index;
-        const hash = items[itemIdx].chunk.contentHashDedup;
-        const vec = embedded.vectors[j];
-        knownEmbeddingMap.set(hash, vec);
+        knownEmbeddingMap.set(
+          items[itemIdx].chunk.contentHashDedup,
+          embedded.vectors[j],
+        );
       }
       result.embeddingsComputed += embedded.vectors.length;
       accumulateEmbeddingUsage(result, embedded.usage);
@@ -245,47 +337,28 @@ export async function runIncrementalIndexSlice(
 
     result.embeddingsReused += items.length - chunksNeedingEmbed.length;
 
-    // Insert or update chunks in document_chunks
-    for (const item of items) {
-      const vec = knownEmbeddingMap.get(item.chunk.contentHashDedup) ?? null;
-      await db
-        .insert(documentChunks)
-        .values({
-          id: item.id,
-          sourceKind: item.sourceKind,
-          emailId: item.emailId,
-          contentHash: item.contentHash,
-          pageNo: item.pageNo,
-          chunkIndex: item.chunk.chunkIndex,
-          chunkText: item.chunk.chunkText,
-          charStart: item.chunk.charStart,
-          charEnd: item.chunk.charEnd,
-          metadataJson: JSON.stringify(item.metadata),
-          contentHashDedup: item.chunk.contentHashDedup,
-          embedding: vec,
-          embedModel: EMBEDDING_MODEL,
-          indexedAt: nowIso,
-        })
-        .onConflictDoUpdate({
-          target: documentChunks.id,
-          set: {
-            chunkText: item.chunk.chunkText,
-            charStart: item.chunk.charStart,
-            charEnd: item.chunk.charEnd,
-            metadataJson: JSON.stringify(item.metadata),
-            contentHashDedup: item.chunk.contentHashDedup,
-            embedding: vec,
-            embedModel: EMBEDDING_MODEL,
-            indexedAt: nowIso,
-          },
-        });
-      result.chunksCreated++;
-    }
+    const rows = items.map((item) => ({
+      id: item.id,
+      sourceKind: item.sourceKind,
+      emailId: item.emailId,
+      contentHash: item.contentHash,
+      pageNo: item.pageNo,
+      chunkIndex: item.chunk.chunkIndex,
+      chunkText: item.chunk.chunkText,
+      charStart: item.chunk.charStart,
+      charEnd: item.chunk.charEnd,
+      metadataJson: JSON.stringify(item.metadata),
+      contentHashDedup: item.chunk.contentHashDedup,
+      embedding: knownEmbeddingMap.get(item.chunk.contentHashDedup) ?? null,
+      embedModel: EMBEDDING_MODEL,
+      indexedAt: nowIso,
+    }));
+
+    result.chunksCreated += await upsertPreparedChunkRows(rows);
   }
 
   // 1. Process Emails
   if (mode === "all" || mode === "emails") {
-    // Find unindexed emails
     const unindexedEmails = await db
       .select({
         id: emails.id,
@@ -307,26 +380,30 @@ export async function runIncrementalIndexSlice(
       .where(isNull(documentChunks.id))
       .limit(batchSize);
 
-    for (const email of unindexedEmails) {
+    const emailPrepared: PreparedChunkItem[] = [];
+    await mapWithConcurrency(unindexedEmails, docConcurrency, async (email) => {
       try {
         const { chunks, metadata } = chunkEmailBody(email);
-        const prepared = chunks.map((c) => ({
-          id: `email_body:${email.id}:${c.chunkIndex}`,
-          sourceKind: "email_body" as const,
-          emailId: email.id,
-          contentHash: null,
-          pageNo: null,
-          chunk: c,
-          metadata,
-        }));
-        await persistPreparedChunks(prepared);
+        if (chunks.length === 0) return;
+        emailPrepared.push(
+          ...chunks.map((c) => ({
+            id: `email_body:${email.id}:${c.chunkIndex}`,
+            sourceKind: "email_body" as const,
+            emailId: email.id,
+            contentHash: null,
+            pageNo: null,
+            chunk: c,
+            metadata,
+          })),
+        );
         result.emailsProcessed++;
       } catch (err) {
         result.errors.push(
           `Email ${email.id}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-    }
+    });
+    await persistPreparedChunks(emailPrepared);
   }
 
   // 2. Process Attachment Markdown
@@ -354,58 +431,56 @@ export async function runIncrementalIndexSlice(
       )
       .limit(batchSize);
 
-    for (const att of unindexedAttachments) {
-      try {
-        if (!att.markdownPath) continue;
-        const candidatePath = resolveAttachmentStoragePath(att.markdownPath);
-        const markdown = await readExtractArtifactText(candidatePath);
-        if (!markdown?.trim()) continue;
+    const attachmentMetaByHash = await loadAttachmentMetaByHash(
+      unindexedAttachments.map((att) => att.contentHash),
+    );
+    const attachmentPrepared: PreparedChunkItem[] = [];
 
-        // Fetch primary email metadata for this attachment
-        const [metaRow] = await db
-          .select({
-            attachmentId: emailAttachments.id,
-            emailId: emailAttachments.emailId,
-            filename: emailAttachments.filename,
-            subject: emails.subject,
-            receivedAt: emails.receivedAt,
-          })
-          .from(emailAttachments)
-          .leftJoin(emails, eq(emails.id, emailAttachments.emailId))
-          .where(eq(emailAttachments.contentHash, att.contentHash))
-          .limit(1);
+    await mapWithConcurrency(
+      unindexedAttachments,
+      docConcurrency,
+      async (att) => {
+        try {
+          if (!att.markdownPath) return;
+          const candidatePath = resolveAttachmentStoragePath(att.markdownPath);
+          const markdown = await readExtractArtifactText(candidatePath);
+          if (!markdown?.trim()) return;
 
-        const { chunks, metadata } = chunkAttachmentMarkdown(
-          {
-            contentHash: att.contentHash,
-            attachmentId: metaRow?.attachmentId ?? null,
-            filename: metaRow?.filename ?? "attachment",
-            mimeType: att.mimeType,
-            emailId: metaRow?.emailId ?? null,
-            subject: metaRow?.subject ?? null,
-            receivedAt: metaRow?.receivedAt ?? null,
-          },
-          markdown,
-        );
+          const metaRow = attachmentMetaByHash.get(att.contentHash);
+          const { chunks, metadata } = chunkAttachmentMarkdown(
+            {
+              contentHash: att.contentHash,
+              attachmentId: metaRow?.attachmentId ?? null,
+              filename: metaRow?.filename ?? "attachment",
+              mimeType: att.mimeType,
+              emailId: metaRow?.emailId ?? null,
+              subject: metaRow?.subject ?? null,
+              receivedAt: metaRow?.receivedAt ?? null,
+            },
+            markdown,
+          );
+          if (chunks.length === 0) return;
 
-        const prepared = chunks.map((c) => ({
-          id: `att_md:${att.contentHash}:${c.chunkIndex}`,
-          sourceKind: "attachment_markdown" as const,
-          emailId: metaRow?.emailId ?? null,
-          contentHash: att.contentHash,
-          pageNo: null,
-          chunk: c,
-          metadata,
-        }));
-
-        await persistPreparedChunks(prepared);
-        result.attachmentsProcessed++;
-      } catch (err) {
-        result.errors.push(
-          `Attachment ${att.contentHash}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
+          attachmentPrepared.push(
+            ...chunks.map((c) => ({
+              id: `att_md:${att.contentHash}:${c.chunkIndex}`,
+              sourceKind: "attachment_markdown" as const,
+              emailId: metaRow?.emailId ?? null,
+              contentHash: att.contentHash,
+              pageNo: null,
+              chunk: c,
+              metadata,
+            })),
+          );
+          result.attachmentsProcessed++;
+        } catch (err) {
+          result.errors.push(
+            `Attachment ${att.contentHash}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    );
+    await persistPreparedChunks(attachmentPrepared);
   }
 
   // 3. Process Vision Pages
@@ -434,61 +509,59 @@ export async function runIncrementalIndexSlice(
       )
       .limit(batchSize);
 
-    for (const page of unindexedVisionPages) {
-      try {
-        if (!page.artifactPath) continue;
-        const candidatePath = resolveAttachmentStoragePath(page.artifactPath);
-        const rawText = await readExtractArtifactText(candidatePath);
-        if (!rawText?.trim()) continue;
+    const visionMetaByHash = await loadAttachmentMetaByHash(
+      Array.from(new Set(unindexedVisionPages.map((page) => page.contentHash))),
+    );
+    const visionPrepared: PreparedChunkItem[] = [];
 
-        const sanitized = sanitizePageVisionMarkdown(rawText).trim();
-        if (!sanitized) continue;
+    await mapWithConcurrency(
+      unindexedVisionPages,
+      docConcurrency,
+      async (page) => {
+        try {
+          if (!page.artifactPath) return;
+          const candidatePath = resolveAttachmentStoragePath(page.artifactPath);
+          const rawText = await readExtractArtifactText(candidatePath);
+          if (!rawText?.trim()) return;
 
-        // Fetch attachment and email metadata
-        const [metaRow] = await db
-          .select({
-            attachmentId: emailAttachments.id,
-            emailId: emailAttachments.emailId,
-            filename: emailAttachments.filename,
-            subject: emails.subject,
-            receivedAt: emails.receivedAt,
-          })
-          .from(emailAttachments)
-          .leftJoin(emails, eq(emails.id, emailAttachments.emailId))
-          .where(eq(emailAttachments.contentHash, page.contentHash))
-          .limit(1);
+          const sanitized = sanitizePageVisionMarkdown(rawText).trim();
+          if (!sanitized) return;
 
-        const { chunks, metadata } = chunkVisionPage(
-          {
-            contentHash: page.contentHash,
-            pageNo: page.pageNo,
-            attachmentId: metaRow?.attachmentId ?? null,
-            filename: metaRow?.filename ?? "attachment",
-            emailId: metaRow?.emailId ?? null,
-            subject: metaRow?.subject ?? null,
-            receivedAt: metaRow?.receivedAt ?? null,
-          },
-          sanitized,
-        );
+          const metaRow = visionMetaByHash.get(page.contentHash);
+          const { chunks, metadata } = chunkVisionPage(
+            {
+              contentHash: page.contentHash,
+              pageNo: page.pageNo,
+              attachmentId: metaRow?.attachmentId ?? null,
+              filename: metaRow?.filename ?? "attachment",
+              emailId: metaRow?.emailId ?? null,
+              subject: metaRow?.subject ?? null,
+              receivedAt: metaRow?.receivedAt ?? null,
+            },
+            sanitized,
+          );
+          if (chunks.length === 0) return;
 
-        const prepared = chunks.map((c) => ({
-          id: `att_vision:${page.contentHash}:${page.pageNo}:${c.chunkIndex}`,
-          sourceKind: "attachment_vision_page" as const,
-          emailId: metaRow?.emailId ?? null,
-          contentHash: page.contentHash,
-          pageNo: page.pageNo,
-          chunk: c,
-          metadata,
-        }));
-
-        await persistPreparedChunks(prepared);
-        result.visionPagesProcessed++;
-      } catch (err) {
-        result.errors.push(
-          `Vision ${page.contentHash} p${page.pageNo}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
+          visionPrepared.push(
+            ...chunks.map((c) => ({
+              id: `att_vision:${page.contentHash}:${page.pageNo}:${c.chunkIndex}`,
+              sourceKind: "attachment_vision_page" as const,
+              emailId: metaRow?.emailId ?? null,
+              contentHash: page.contentHash,
+              pageNo: page.pageNo,
+              chunk: c,
+              metadata,
+            })),
+          );
+          result.visionPagesProcessed++;
+        } catch (err) {
+          result.errors.push(
+            `Vision ${page.contentHash} p${page.pageNo}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    );
+    await persistPreparedChunks(visionPrepared);
   }
 
   // Calculate remaining counts

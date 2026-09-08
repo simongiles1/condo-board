@@ -512,6 +512,13 @@
       "when": 1789600000000,
       "tag": "0072_document_chunks_pgvector",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1789700000000,
+      "tag": "0073_document_chunks_source_indexes",
+      "breakpoints": true
     }
   ]
 }

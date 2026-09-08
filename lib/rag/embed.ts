@@ -9,6 +9,10 @@ import {
   estimateEmbeddingTokensFromTexts,
   type EmbeddingUsage,
 } from "@/lib/rag/cost";
+import {
+  corpusEmbedConcurrencyFromEnv,
+  createSemaphore,
+} from "@/lib/rag/concurrency";
 
 export const EMBEDDING_MODEL = "gemini-embedding-001";
 export const EMBEDDING_DIMENSION = 768;
@@ -121,6 +125,7 @@ export async function embedQuery(query: string): Promise<EmbedQueryResult> {
 /**
  * Generate embeddings for a list of texts in batches.
  * Preserves the exact array order and length.
+ * Runs up to CORPUS_EMBED_CONCURRENCY batch API calls in parallel (default 2).
  */
 export async function embedTexts(texts: string[]): Promise<EmbedTextsResult> {
   if (texts.length === 0) {
@@ -131,54 +136,26 @@ export async function embedTexts(texts: string[]): Promise<EmbedTextsResult> {
   }
 
   const model = getEmbeddingModel();
+  const batches: string[][] = [];
+  for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
+    batches.push(texts.slice(i, i + EMBEDDING_BATCH_SIZE));
+  }
+
+  const embedSlot = createSemaphore(corpusEmbedConcurrencyFromEnv());
+  const batchResults = await Promise.all(
+    batches.map((batch, batchIndex) =>
+      embedSlot.run(() => embedTextBatch(model, batch, batchIndex * EMBEDDING_BATCH_SIZE)),
+    ),
+  );
+
   const results: number[][] = [];
   let inputTokens = 0;
   let tokenSource: EmbeddingUsage["tokenSource"] = "api";
-
-  for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
-    const batch = texts.slice(i, i + EMBEDDING_BATCH_SIZE);
-    const requests = batch.map((text) => {
-      const safeText = (text || " ").trim().slice(0, MAX_CHUNK_CHARS) || " ";
-      return {
-        content: { role: "user", parts: [{ text: safeText }] },
-        outputDimensionality: EMBEDDING_DIMENSION,
-      };
-    });
-
-    let attempt = 0;
-    let batchSucceeded = false;
-
-    while (attempt < MAX_RETRIES) {
-      try {
-        const res = await model.batchEmbedContents({ requests });
-        for (const emb of res.embeddings) {
-          results.push(emb.values);
-        }
-
-        const batchUsage = usageFromMetadata(
-          res.usageMetadata,
-          batch.map((text) => text || " "),
-        );
-        inputTokens += batchUsage.inputTokens;
-        if (batchUsage.tokenSource === "estimate") {
-          tokenSource = "estimate";
-        }
-
-        batchSucceeded = true;
-        break;
-      } catch (err) {
-        attempt++;
-        if (attempt >= MAX_RETRIES || !isRetryableError(err)) {
-          throw err;
-        }
-        await delay(Math.pow(2, attempt) * 1000);
-      }
-    }
-
-    if (!batchSucceeded) {
-      throw new Error(
-        `Failed to embed batch starting at index ${i} after ${MAX_RETRIES} attempts`,
-      );
+  for (const batchResult of batchResults) {
+    results.push(...batchResult.vectors);
+    inputTokens += batchResult.usage.inputTokens;
+    if (batchResult.usage.tokenSource === "estimate") {
+      tokenSource = "estimate";
     }
   }
 
@@ -186,6 +163,44 @@ export async function embedTexts(texts: string[]): Promise<EmbedTextsResult> {
     vectors: results,
     usage: buildEmbeddingUsage(inputTokens, tokenSource),
   };
+}
+
+async function embedTextBatch(
+  model: ReturnType<typeof getEmbeddingModel>,
+  batch: string[],
+  batchStartIndex: number,
+): Promise<{ vectors: number[][]; usage: EmbeddingUsage }> {
+  const requests = batch.map((text) => {
+    const safeText = (text || " ").trim().slice(0, MAX_CHUNK_CHARS) || " ";
+    return {
+      content: { role: "user", parts: [{ text: safeText }] },
+      outputDimensionality: EMBEDDING_DIMENSION,
+    };
+  });
+
+  let attempt = 0;
+  while (attempt < MAX_RETRIES) {
+    try {
+      const res = await model.batchEmbedContents({ requests });
+      return {
+        vectors: res.embeddings.map((emb) => emb.values),
+        usage: usageFromMetadata(
+          res.usageMetadata,
+          batch.map((text) => text || " "),
+        ),
+      };
+    } catch (err) {
+      attempt++;
+      if (attempt >= MAX_RETRIES || !isRetryableError(err)) {
+        throw err;
+      }
+      await delay(Math.pow(2, attempt) * 1000);
+    }
+  }
+
+  throw new Error(
+    `Failed to embed batch starting at index ${batchStartIndex} after ${MAX_RETRIES} attempts`,
+  );
 }
 
 /**

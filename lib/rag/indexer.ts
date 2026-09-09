@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import {
@@ -12,6 +12,7 @@ import {
   chunkAttachmentMarkdown,
   chunkEmailBody,
   chunkVisionPage,
+  makeTombstoneChunk,
   type CorpusChunk,
 } from "@/lib/rag/chunk";
 import {
@@ -28,6 +29,24 @@ import { resolveAttachmentStoragePath } from "@/lib/email/attachment-markdown-sh
 import { readExtractArtifactText } from "@/lib/storage/extract-artifacts";
 
 const DB_UPSERT_BATCH = 100;
+
+const emailHasIndexableBodySql = sql`coalesce(
+  nullif(trim(${emails.bodyTextUnique}), ''),
+  nullif(trim(${emails.bodyText}), '')
+) is not null`;
+
+function emailTombstoneText(email: {
+  subject: string;
+  fromAddress: string;
+  receivedAt: string;
+}): string {
+  const parts = [
+    email.subject ? `Subject: ${email.subject}` : null,
+    email.fromAddress ? `From: ${email.fromAddress}` : null,
+    email.receivedAt ? `Date: ${email.receivedAt}` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join("\n") : "(empty email body)";
+}
 
 type PreparedChunkItem = {
   id: string;
@@ -358,24 +377,44 @@ export async function runIncrementalIndexSlice(
             and dc.source_kind = 'email_body'
         )`,
       )
+      .orderBy(
+        sql`case when ${emailHasIndexableBodySql} then 0 else 1 end`,
+        asc(emails.receivedAt),
+        asc(emails.id),
+      )
       .limit(batchSize);
 
     const emailPrepared: PreparedChunkItem[] = [];
     await mapWithConcurrency(unindexedEmails, docConcurrency, async (email) => {
       try {
         const { chunks, metadata } = chunkEmailBody(email);
-        if (chunks.length === 0) return;
-        emailPrepared.push(
-          ...chunks.map((c) => ({
-            id: `email_body:${email.id}:${c.chunkIndex}`,
-            sourceKind: "email_body" as const,
-            emailId: email.id,
-            contentHash: null,
-            pageNo: null,
-            chunk: c,
-            metadata,
-          })),
-        );
+        const items =
+          chunks.length > 0
+            ? chunks.map((c) => ({
+                id: `email_body:${email.id}:${c.chunkIndex}`,
+                sourceKind: "email_body" as const,
+                emailId: email.id,
+                contentHash: null,
+                pageNo: null,
+                chunk: c,
+                metadata,
+              }))
+            : [
+                {
+                  id: `email_body:${email.id}:0`,
+                  sourceKind: "email_body" as const,
+                  emailId: email.id,
+                  contentHash: null,
+                  pageNo: null,
+                  chunk: makeTombstoneChunk(emailTombstoneText(email)),
+                  metadata: {
+                    ...metadata,
+                    indexSkipped: true,
+                    skipReason: "empty_body",
+                  },
+                },
+              ];
+        emailPrepared.push(...items);
         result.emailsProcessed++;
       } catch (err) {
         result.errors.push(
@@ -406,6 +445,7 @@ export async function runIncrementalIndexSlice(
           )`,
         ),
       )
+      .orderBy(asc(attachmentDocuments.contentHash))
       .limit(batchSize);
 
     const attachmentMetaByHash = await loadAttachmentMetaByHash(
@@ -421,34 +461,71 @@ export async function runIncrementalIndexSlice(
           if (!att.markdownPath) return;
           const candidatePath = resolveAttachmentStoragePath(att.markdownPath);
           const markdown = await readExtractArtifactText(candidatePath);
-          if (!markdown?.trim()) return;
-
           const metaRow = attachmentMetaByHash.get(att.contentHash);
-          const { chunks, metadata } = chunkAttachmentMarkdown(
-            {
-              contentHash: att.contentHash,
-              attachmentId: metaRow?.attachmentId ?? null,
-              filename: metaRow?.filename ?? "attachment",
-              mimeType: att.mimeType,
-              emailId: metaRow?.emailId ?? null,
-              subject: metaRow?.subject ?? null,
-              receivedAt: metaRow?.receivedAt ?? null,
-            },
-            markdown,
-          );
-          if (chunks.length === 0) return;
+          const attachmentMeta = {
+            contentHash: att.contentHash,
+            attachmentId: metaRow?.attachmentId ?? null,
+            filename: metaRow?.filename ?? "attachment",
+            mimeType: att.mimeType,
+            emailId: metaRow?.emailId ?? null,
+            subject: metaRow?.subject ?? null,
+            receivedAt: metaRow?.receivedAt ?? null,
+          };
 
-          attachmentPrepared.push(
-            ...chunks.map((c) => ({
-              id: `att_md:${att.contentHash}:${c.chunkIndex}`,
-              sourceKind: "attachment_markdown" as const,
+          if (!markdown?.trim()) {
+            const tombstoneText = `Attachment: ${attachmentMeta.filename}`;
+            attachmentPrepared.push({
+              id: `att_md:${att.contentHash}:0`,
+              sourceKind: "attachment_markdown",
               emailId: metaRow?.emailId ?? null,
               contentHash: att.contentHash,
               pageNo: null,
-              chunk: c,
-              metadata,
-            })),
+              chunk: makeTombstoneChunk(tombstoneText),
+              metadata: {
+                sourceKind: "attachment_markdown",
+                ...attachmentMeta,
+                indexSkipped: true,
+                skipReason: "empty_markdown",
+              },
+            });
+            result.attachmentsProcessed++;
+            return;
+          }
+
+          const { chunks, metadata } = chunkAttachmentMarkdown(
+            attachmentMeta,
+            markdown,
           );
+          const items =
+            chunks.length > 0
+              ? chunks.map((c) => ({
+                  id: `att_md:${att.contentHash}:${c.chunkIndex}`,
+                  sourceKind: "attachment_markdown" as const,
+                  emailId: metaRow?.emailId ?? null,
+                  contentHash: att.contentHash,
+                  pageNo: null,
+                  chunk: c,
+                  metadata,
+                }))
+              : [
+                  {
+                    id: `att_md:${att.contentHash}:0`,
+                    sourceKind: "attachment_markdown" as const,
+                    emailId: metaRow?.emailId ?? null,
+                    contentHash: att.contentHash,
+                    pageNo: null,
+                    chunk: makeTombstoneChunk(
+                      `Attachment: ${attachmentMeta.filename}`,
+                    ),
+                    metadata: {
+                      ...metadata,
+                      indexSkipped: true,
+                      skipReason: "empty_markdown",
+                    },
+                  },
+                ];
+
+          attachmentPrepared.push(...items);
           result.attachmentsProcessed++;
         } catch (err) {
           result.errors.push(
@@ -481,6 +558,10 @@ export async function runIncrementalIndexSlice(
           )`,
         ),
       )
+      .orderBy(
+        asc(attachmentDocumentPages.contentHash),
+        asc(attachmentDocumentPages.pageNo),
+      )
       .limit(batchSize);
 
     const visionMetaByHash = await loadAttachmentMetaByHash(
@@ -496,37 +577,72 @@ export async function runIncrementalIndexSlice(
           if (!page.artifactPath) return;
           const candidatePath = resolveAttachmentStoragePath(page.artifactPath);
           const rawText = await readExtractArtifactText(candidatePath);
-          if (!rawText?.trim()) return;
-
-          const sanitized = sanitizePageVisionMarkdown(rawText).trim();
-          if (!sanitized) return;
-
           const metaRow = visionMetaByHash.get(page.contentHash);
-          const { chunks, metadata } = chunkVisionPage(
-            {
-              contentHash: page.contentHash,
-              pageNo: page.pageNo,
-              attachmentId: metaRow?.attachmentId ?? null,
-              filename: metaRow?.filename ?? "attachment",
-              emailId: metaRow?.emailId ?? null,
-              subject: metaRow?.subject ?? null,
-              receivedAt: metaRow?.receivedAt ?? null,
-            },
-            sanitized,
-          );
-          if (chunks.length === 0) return;
+          const pageMeta = {
+            contentHash: page.contentHash,
+            pageNo: page.pageNo,
+            attachmentId: metaRow?.attachmentId ?? null,
+            filename: metaRow?.filename ?? "attachment",
+            emailId: metaRow?.emailId ?? null,
+            subject: metaRow?.subject ?? null,
+            receivedAt: metaRow?.receivedAt ?? null,
+          };
 
-          visionPrepared.push(
-            ...chunks.map((c) => ({
-              id: `att_vision:${page.contentHash}:${page.pageNo}:${c.chunkIndex}`,
-              sourceKind: "attachment_vision_page" as const,
+          const sanitized = rawText?.trim()
+            ? sanitizePageVisionMarkdown(rawText).trim()
+            : "";
+          if (!sanitized) {
+            visionPrepared.push({
+              id: `att_vision:${page.contentHash}:${page.pageNo}:0`,
+              sourceKind: "attachment_vision_page",
               emailId: metaRow?.emailId ?? null,
               contentHash: page.contentHash,
               pageNo: page.pageNo,
-              chunk: c,
-              metadata,
-            })),
-          );
+              chunk: makeTombstoneChunk(
+                `Vision page ${page.pageNo}: ${pageMeta.filename}`,
+              ),
+              metadata: {
+                sourceKind: "attachment_vision_page",
+                ...pageMeta,
+                indexSkipped: true,
+                skipReason: "empty_vision_page",
+              },
+            });
+            result.visionPagesProcessed++;
+            return;
+          }
+
+          const { chunks, metadata } = chunkVisionPage(pageMeta, sanitized);
+          const items =
+            chunks.length > 0
+              ? chunks.map((c) => ({
+                  id: `att_vision:${page.contentHash}:${page.pageNo}:${c.chunkIndex}`,
+                  sourceKind: "attachment_vision_page" as const,
+                  emailId: metaRow?.emailId ?? null,
+                  contentHash: page.contentHash,
+                  pageNo: page.pageNo,
+                  chunk: c,
+                  metadata,
+                }))
+              : [
+                  {
+                    id: `att_vision:${page.contentHash}:${page.pageNo}:0`,
+                    sourceKind: "attachment_vision_page" as const,
+                    emailId: metaRow?.emailId ?? null,
+                    contentHash: page.contentHash,
+                    pageNo: page.pageNo,
+                    chunk: makeTombstoneChunk(
+                      `Vision page ${page.pageNo}: ${pageMeta.filename}`,
+                    ),
+                    metadata: {
+                      ...metadata,
+                      indexSkipped: true,
+                      skipReason: "empty_vision_page",
+                    },
+                  },
+                ];
+
+          visionPrepared.push(...items);
           result.visionPagesProcessed++;
         } catch (err) {
           result.errors.push(

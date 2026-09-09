@@ -66,6 +66,13 @@ export const PIPELINE_STAGE_TOOLTIPS: Record<string, PipelineStageTooltip> = {
         ],
       },
       {
+        title: "Phase 4 — Hole assignment",
+        items: [
+          "If a ranged leaf is followed by a later ranged leaf with unmatched package leaves in between, walk that hole in looping two-minute windows.",
+          "Extend wrap-up of the current item; when speakers name an unmatched leaf (different unit, project, or heading), open that leaf. Overlap is allowed when wrap-up continues after the next matter is named.",
+        ],
+      },
+      {
         title: "Output",
         items: [
           "When both passes finish, persist the topic JSON and materialize agenda-item rows in the database.",

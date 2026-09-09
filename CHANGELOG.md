@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Meetings V2 transcript hole assignment** — After span-edge review, unmatched package leaves in a transcript hole (for example 4.D.h / 4.D.i / 4.D.j between 4.D.g and 4.D.k) are assigned in looping two-minute windows. Wrap-up of the current item can overlap the next named unit. Extract also lists upcoming undiscussed package leaves on the floor pointer so the chunk walk does not skip them.
+
 - **Meetings V2 looping span-edge review** — After transcript extraction, each leaf item's discussion span is grown in looping two-minute windows (up to 12 loops, 24 minutes) so a six-minute interior hole can be filled instead of a single one-window peek. A backward 60-second look and a trim-start pass reclaim wrap-up that was given to the next item.
 
 - **Meetings V2 section chunk diagnostic** — In Meeting Documents, clicking a transcript **Sections** heading opens a second popup listing the document and transcript chunks linked to that agenda item (named chunk ids, overlapping discussion times, and matching package pages). Click a row to open the existing chunk preview.

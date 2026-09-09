@@ -253,13 +253,34 @@ export function ArchiveSearchClient() {
             ),
           }
         : null;
+      let stalledSlices = 0;
       while (continuousRef.current) {
+        const prior = priorRemainingRef.current;
         const hasMore = await runIndexerSlice({
           continuous: true,
-          priorRemaining: priorRemainingRef.current ?? undefined,
+          priorRemaining: prior ?? undefined,
         });
         if (!hasMore || !continuousRef.current) {
           break;
+        }
+        const next = priorRemainingRef.current;
+        const processed =
+          prior && next
+            ? prior.emails +
+              prior.attachments +
+              prior.visionPages -
+              (next.emails + next.attachments + next.visionPages)
+            : 0;
+        if (processed <= 0) {
+          stalledSlices += 1;
+          if (stalledSlices >= 5) {
+            setIndexerError(
+              "Continuous indexing stopped after repeated slices made no progress.",
+            );
+            break;
+          }
+        } else {
+          stalledSlices = 0;
         }
         await new Promise((resolve) => setTimeout(resolve, 800));
       }

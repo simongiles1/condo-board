@@ -37,6 +37,7 @@ import {
   reviewTranscriptTopicSpans,
   transcriptSegmentsToReviewCues,
 } from "@/lib/meeting-v2/span-edge-review";
+import { assignUnmatchedLeavesInHoles } from "@/lib/meeting-v2/gap-leaf-assignment";
 
 type WorkflowTopic = {
   title: string;
@@ -230,10 +231,12 @@ Each cue is exactly one of:
 
 Open vs lifecycle:
 - "Can we move on?" / "Yeah, I'm fine" / "Go ahead" belong to the floor item (operation 3).
-- The next outline item opens only when speakers introduce that matter by substance (operation 1), for example "we have a sealed replacement for pump 10A".
+- The next outline item opens only when speakers introduce that matter by substance (operation 1), for example a different unit number, "we have a sealed replacement for pump 10A", or "joint meeting for the shared facilities".
+- A different unit / asset than the floor item is operation 1 even during wrap-up of the floor item. Keep the previous span open until assent on that item finishes; overlap is allowed.
 - Clerk or minute-taker questions about the item just ratified stay on that item (operation 2 or 3) even after someone asked to move on.
+- Do not skip later lettered package leaves in the same section (4.D.h after 4.D.g) when speakers name them. Prefer OPEN of the matching unmatched package leaf over no_change.
 
-Overlap (unchanged): a cue may attach to more than one topic when the talk genuinely bridges both matters. Mute recovery and wrap-up of one item are not overlap with the next item.
+Overlap: a cue may attach to more than one topic when the talk genuinely bridges both matters (wrap-up of 4.D.g while naming unit 2005 for 4.D.h). Mute recovery without naming the next matter is not overlap.
 
 Use the transcript chunk to:
 - link discussion to existing documentTopics:
@@ -1182,6 +1185,7 @@ export type TranscriptFloorPointer = {
   title: string;
   lastSequenceEnd: number;
   discussionTimestampRange: string | null;
+  upcomingLeaves: Array<{ itemNumber: string | null; title: string }>;
 };
 
 function lastTranscriptSequenceEnd(topic: Pick<WorkflowTopic, "sourceTranscriptRanges">): number | null {
@@ -1197,6 +1201,32 @@ function isOutlineLeafTopic(topic: WorkflowTopic, all: WorkflowTopic[]): boolean
   if (!code) return true;
   const normalized = code.toLowerCase();
   return !all.some((other) => parentAgendaItemCode(other.itemNumber)?.toLowerCase() === normalized);
+}
+
+function topicHasDiscussionTiming(topic: WorkflowTopic): boolean {
+  return parseDiscussionTimestampRanges(topic.discussionTimestampRange).length > 0;
+}
+
+export function listUpcomingUndiscussedLeaves(
+  state: {
+    documentTopics: WorkflowTopic[];
+    extraTopics: WorkflowTopic[];
+  },
+  currentItemNumber: string | null,
+): Array<{ itemNumber: string | null; title: string }> {
+  const all = [...state.documentTopics, ...state.extraTopics];
+  return all
+    .filter((topic) => isOutlineLeafTopic(topic, all))
+    .filter((topic) => !topicHasDiscussionTiming(topic))
+    .filter((topic) => {
+      if (!currentItemNumber) return true;
+      return compareAgendaItemCodes(currentItemNumber, topic.itemNumber) < 0;
+    })
+    .slice(0, 8)
+    .map((topic) => ({
+      itemNumber: topic.itemNumber?.trim() || null,
+      title: topic.title,
+    }));
 }
 
 export function inferTranscriptFloorPointer(state: {
@@ -1221,11 +1251,13 @@ export function inferTranscriptFloorPointer(state: {
     return rightDepth - leftDepth;
   });
   const winner = pool[0];
+  const itemNumber = winner.itemNumber?.trim() || null;
   return {
-    itemNumber: winner.itemNumber?.trim() || null,
+    itemNumber,
     title: winner.title,
     lastSequenceEnd: lastTranscriptSequenceEnd(winner) ?? 0,
     discussionTimestampRange: winner.discussionTimestampRange ?? null,
+    upcomingLeaves: listUpcomingUndiscussedLeaves(state, itemNumber),
   };
 }
 
@@ -1239,10 +1271,21 @@ No agenda item is on the floor yet. The first substantive matter in this chunk i
   const timing = pointer.discussionTimestampRange
     ? `Discussion timing so far: ${pointer.discussionTimestampRange}`
     : "Discussion timing so far: unknown";
+  const upcoming =
+    pointer.upcomingLeaves.length > 0
+      ? `Upcoming package leaves not yet given a transcript range:
+${pointer.upcomingLeaves
+  .map((leaf) => `- ${leaf.itemNumber ?? "?"} — ${leaf.title}`)
+  .join("\n")}
+If speakers name one of these, OPEN that item (operation 1). A different unit number than the floor item is OPEN even while wrap-up of the floor continues (overlap is allowed). Do not skip them.`
+      : "No later package leaves are waiting for a transcript range.";
+
   return `FLOOR POINTER (item on the table at the start of this chunk)
 - ${code} — ${pointer.title}
 - Last attached transcript segment: ${pointer.lastSequenceEnd}
 - ${timing}
+
+${upcoming}
 
 Walk cues in order. Operations: (1) OPEN a new span / move the floor, (2) ENRICH the floor item, (3) CHANGE LIFECYCLE of the floor item. Assent does not open the next outline item.`;
 }
@@ -1585,13 +1628,26 @@ export async function extractAgendaItemsWithAi(
         });
       },
     });
+    const gapped = await assignUnmatchedLeavesInHoles({
+      topics: reviewed,
+      cues: transcriptSegmentsToReviewCues(transcriptSegments),
+      onProgress: async (label) => {
+        await options?.onProgress?.({
+          current: totalChunks,
+          total: totalChunks + 1,
+          label,
+        });
+      },
+    });
     finalTopics = finalTopics.map((topic, index) => ({
       ...topic,
       discussionTimestampRange:
-        reviewed[index]?.discussionTimestampRange ?? topic.discussionTimestampRange,
+        gapped[index]?.discussionTimestampRange ?? topic.discussionTimestampRange,
       sourceTranscriptRanges:
-        reviewed[index]?.sourceTranscriptRanges ?? topic.sourceTranscriptRanges,
+        gapped[index]?.sourceTranscriptRanges ?? topic.sourceTranscriptRanges,
+      discussionStatus: gapped[index]?.discussionStatus ?? topic.discussionStatus,
     }));
+    finalTopics = applyAgendaHierarchyCorrections(finalTopics);
   }
 
   await db.delete(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));

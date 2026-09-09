@@ -951,6 +951,7 @@ describe("inferTranscriptFloorPointer", () => {
     });
     assert.equal(pointer?.itemNumber, "4.B.3");
     assert.equal(pointer?.lastSequenceEnd, 180);
+    assert.equal(pointer?.upcomingLeaves[0]?.itemNumber, "4.B.4");
   });
 
   it("returns null when nothing has transcript ranges yet", () => {

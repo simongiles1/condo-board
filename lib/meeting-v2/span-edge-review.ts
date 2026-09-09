@@ -1,5 +1,6 @@
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
 import {
+  compareAgendaItemCodes,
   formatClockFromSeconds,
   formatDiscussionTimestampRanges,
   mergeClosedIntervals,
@@ -40,6 +41,7 @@ export type SpanEdgeJudge = (input: {
   windowEndSeconds: number;
   cues: SpanReviewCue[];
   nextForeignTitle: string | null;
+  unmatchedLaterLeaves: Array<{ itemNumber?: string; title: string }>;
 }) => Promise<{ action: "extend" | "stop" | "move_start"; atSeconds: number | null }>;
 
 export function cuesInWindow(
@@ -71,7 +73,7 @@ export function isOutlineLeafTopic(topic: SpanReviewTopic, all: SpanReviewTopic[
   return !all.some((other) => parentAgendaItemCode(other.itemNumber)?.toLowerCase() === normalized);
 }
 
-function clockSpans(topic: SpanReviewTopic): TimestampRange[] {
+export function topicClockSpans(topic: SpanReviewTopic): TimestampRange[] {
   return parseDiscussionTimestampRanges(topic.discussionTimestampRange);
 }
 
@@ -80,9 +82,10 @@ function allLeafSpans(
 ): Array<{ key: string; title: string; startSeconds: number; endSeconds: number }> {
   const leaves = topics.filter((topic) => isOutlineLeafTopic(topic, topics));
   return leaves.flatMap((topic) =>
-    clockSpans(topic).map((span) => ({
+    topicClockSpans(topic).map((span) => ({
       key: topicKey(topic),
       title: topic.title,
+      itemNumber: topic.itemNumber,
       startSeconds: span.startSeconds,
       endSeconds: span.endSeconds,
     })),
@@ -98,7 +101,34 @@ export function nextForeignSpanStartSeconds(
   const later = allLeafSpans(topics)
     .filter((span) => span.key !== key && span.startSeconds > afterSeconds)
     .sort((left, right) => left.startSeconds - right.startSeconds);
-  return later[0] ?? null;
+  const next = later[0];
+  if (!next) return null;
+  return {
+    startSeconds: next.startSeconds,
+    title: next.title,
+    itemNumber: next.itemNumber,
+  };
+}
+
+export function listUnmatchedLaterLeaves(
+  topic: SpanReviewTopic,
+  afterSeconds: number,
+  topics: SpanReviewTopic[],
+): SpanReviewTopic[] {
+  const foreign = nextForeignSpanStartSeconds(topic, afterSeconds, topics);
+  return topics.filter((candidate) => {
+    if (!isOutlineLeafTopic(candidate, topics)) return false;
+    if (topicKey(candidate) === topicKey(topic)) return false;
+    if (topicClockSpans(candidate).length > 0) return false;
+    if (compareAgendaItemCodes(topic.itemNumber, candidate.itemNumber) >= 0) return false;
+    if (
+      foreign?.itemNumber &&
+      compareAgendaItemCodes(candidate.itemNumber, foreign.itemNumber) >= 0
+    ) {
+      return false;
+    }
+    return true;
+  });
 }
 
 function attachSequencesForClockRange(
@@ -116,7 +146,7 @@ function attachSequencesForClockRange(
   return mergeClosedIntervals([...topic.sourceTranscriptRanges, [min, max]]);
 }
 
-function applyClockAndSequences(
+export function applyTopicClockSpans(
   topic: SpanReviewTopic,
   spans: TimestampRange[],
   cues: SpanReviewCue[],
@@ -212,11 +242,18 @@ export async function defaultSpanEdgeJudge(input: {
   windowEndSeconds: number;
   cues: SpanReviewCue[];
   nextForeignTitle: string | null;
+  unmatchedLaterLeaves: Array<{ itemNumber?: string; title: string }>;
 }): Promise<{ action: "extend" | "stop" | "move_start"; atSeconds: number | null }> {
   const code = input.topic.itemNumber ? `${input.topic.itemNumber} — ` : "";
   const foreign = input.nextForeignTitle
     ? `The next extracted item nearby is "${input.nextForeignTitle}". Do not start that item on assent or wrap-up of the current item.`
     : "No later extracted item is in this window.";
+  const unmatched =
+    input.unmatchedLaterLeaves.length > 0
+      ? `Package leaves with no transcript range yet, later in the outline: ${input.unmatchedLaterLeaves
+          .map((leaf) => `${leaf.itemNumber ?? "?"} — ${leaf.title}`)
+          .join("; ")}. If this window names one of them (different unit, project, or heading), return stop so they can be assigned. Extend only wrap-up of the CURRENT item.`
+      : "No unmatched later package leaves sit between this item and the next ranged leaf.";
   const userText =
     input.direction === "forward"
       ? `CURRENT ITEM: ${code}${input.topic.title}
@@ -225,11 +262,13 @@ These cues start after the current span end (${formatClockFromSeconds(input.wind
 
 ${foreign}
 
-If they still belong to the current item (enrich or lifecycle), return:
+${unmatched}
+
+If they still belong to the current item (enrich or lifecycle wrap-up), return:
 {"action":"extend","endTimestamp":"HH:MM:SS"}
 using the last cue that still belongs to this item.
 
-If a different matter is named (OPEN), return:
+If a different matter is named (OPEN), including an unmatched later package leaf, return:
 {"action":"stop"}
 
 CUES:
@@ -293,6 +332,11 @@ async function growOneSpan(options: {
     );
     const windowCues = cuesInWindow(options.cues, span.endSeconds, windowEnd);
     if (windowCues.length === 0) break;
+    const unmatched = listUnmatchedLaterLeaves(
+      options.topic,
+      span.endSeconds,
+      options.topics,
+    );
     const decision = await options.judge({
       topic: options.topic,
       direction: "forward",
@@ -300,6 +344,10 @@ async function growOneSpan(options: {
       windowEndSeconds: windowEnd,
       cues: windowCues,
       nextForeignTitle: foreign?.title ?? null,
+      unmatchedLaterLeaves: unmatched.map((leaf) => ({
+        itemNumber: leaf.itemNumber,
+        title: leaf.title,
+      })),
     });
     const lastCue = windowCues[windowCues.length - 1];
     const grown = growSpanForwardOnce({
@@ -325,7 +373,7 @@ async function nudgeSpanStart(options: {
   judge: SpanEdgeJudge;
 }): Promise<TimestampRange> {
   const floor = Math.max(0, options.span.startSeconds - SPAN_EDGE_BACK_WINDOW_SECONDS);
-  const previousSame = clockSpans(options.topic)
+  const previousSame = topicClockSpans(options.topic)
     .filter((span) => span.endSeconds < options.span.startSeconds)
     .sort((left, right) => right.endSeconds - left.endSeconds)[0];
   const from = Math.max(floor, previousSame ? previousSame.endSeconds : floor);
@@ -339,6 +387,7 @@ async function nudgeSpanStart(options: {
     windowEndSeconds: options.span.startSeconds,
     cues: windowCues,
     nextForeignTitle: foreign?.title ?? null,
+    unmatchedLaterLeaves: [],
   });
   if (decision.action !== "move_start") {
     return options.span;
@@ -369,6 +418,7 @@ async function trimSpanStart(options: {
     windowEndSeconds: windowEnd,
     cues: windowCues,
     nextForeignTitle: foreign?.title ?? null,
+    unmatchedLaterLeaves: [],
   });
   if (decision.action !== "move_start" || decision.atSeconds === null) return options.span;
   const at = decision.atSeconds;
@@ -387,17 +437,17 @@ export async function reviewTranscriptTopicSpans(options: {
   const leaves = () =>
     topics
       .map((topic, index) => ({ topic, index }))
-      .filter(({ topic }) => isOutlineLeafTopic(topic, topics) && clockSpans(topic).length > 0)
+      .filter(({ topic }) => isOutlineLeafTopic(topic, topics) && topicClockSpans(topic).length > 0)
       .sort((left, right) => {
-        const leftStart = clockSpans(left.topic)[0]?.startSeconds ?? 0;
-        const rightStart = clockSpans(right.topic)[0]?.startSeconds ?? 0;
+        const leftStart = topicClockSpans(left.topic)[0]?.startSeconds ?? 0;
+        const rightStart = topicClockSpans(right.topic)[0]?.startSeconds ?? 0;
         return leftStart - rightStart;
       });
 
   for (let round = 0; round < SPAN_EDGE_MAX_ROUNDS; round += 1) {
     await options.onProgress?.(`Reviewing transcript span edges (round ${round + 1})`);
     for (const { topic, index } of leaves()) {
-      const spans = clockSpans(topic);
+      const spans = topicClockSpans(topic);
       const grown: TimestampRange[] = [];
       for (const span of spans) {
         grown.push(
@@ -410,11 +460,11 @@ export async function reviewTranscriptTopicSpans(options: {
           }),
         );
       }
-      topics[index] = applyClockAndSequences(topic, grown, options.cues);
+      topics[index] = applyTopicClockSpans(topic, grown, options.cues);
     }
 
     for (const { topic, index } of [...leaves()].reverse()) {
-      const spans = clockSpans(topic);
+      const spans = topicClockSpans(topic);
       const adjusted: TimestampRange[] = [];
       for (const span of spans) {
         const trimmed = await trimSpanStart({
@@ -434,7 +484,7 @@ export async function reviewTranscriptTopicSpans(options: {
           }),
         );
       }
-      topics[index] = applyClockAndSequences(topic, adjusted, options.cues);
+      topics[index] = applyTopicClockSpans(topic, adjusted, options.cues);
     }
   }
 

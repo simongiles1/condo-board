@@ -22,6 +22,18 @@ export function hashChunkText(text: string): string {
   return crypto.createHash("sha256").update(text.trim()).digest("hex");
 }
 
+/** Minimal searchable chunk for sources with no indexable body text. */
+export function makeTombstoneChunk(text: string, chunkIndex = 0): CorpusChunk {
+  const normalized = text.trim() || "(empty source)";
+  return {
+    chunkIndex,
+    chunkText: normalized,
+    charStart: 0,
+    charEnd: normalized.length,
+    contentHashDedup: hashChunkText(normalized),
+  };
+}
+
 /**
  * Split text into semantic chunks respecting paragraph and sentence boundaries.
  */

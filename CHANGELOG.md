@@ -52,6 +52,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Meetings V2 transcript topic lifecycle** — Transcript extraction walks each chunk cue-by-cue with a carried **floor pointer** (the leaf item currently on the table). A cue either opens a topic, enriches the floor item, or changes that item's lifecycle. Assent and wrap-up stay on the current item until speakers name the next matter.
+
 - **PDF template access** — The user menu and Meetings V2 More menu open the new PDF template dialog directly. General Settings no longer includes a PDF margins tab.
 
 - **Meetings V2 post-approval agenda review layout** — After agenda approval, the Agenda Review tab now uses the same hierarchical outline layout as the pre-approval candidate agenda (official order: 1, 2, 3, 4.A.1, 4.D.a). Items are no longer sorted by open-question or flag count. Deferred leaves and excluded items are hidden; deferred heading rows stay when they still have discussed children. Discussed/ad-hoc **leaf** items keep outcome, confidence, question, and flag badges. The discussed/not-discussed control strip appears on leaves only. A header toggle switches between item review and agenda approval views during the post-approval phase only. Gold-standard compare findings now surface per agenda item as **In AI only** / **In gold only** badges with hover detail tooltips; clicking a badge opens the existing compare side panel on the matching tab.

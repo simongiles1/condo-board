@@ -20,6 +20,7 @@ import {
 import { chunkDocumentPages } from "../lib/meeting-v2/chunking";
 import { parseVttToMergedCues, mergedCuesToSegmentRows } from "../lib/meeting-v2/transcript";
 import {
+  inferTranscriptFloorPointer,
   normalizeTopic,
   normalizeDiscrepancies,
   normalizeWorkflowState,
@@ -918,6 +919,51 @@ describe("transcript section overlay", () => {
         { codes: ["3", "2"], cues: [2] },
         { codes: ["3"], cues: [3, 4] },
       ],
+    );
+  });
+});
+
+describe("inferTranscriptFloorPointer", () => {
+  it("prefers the latest leaf span over a parent union range", () => {
+    const leak = normalizeTopic({
+      title: "PH Mechanical Room Make-Up Air Unit Leak Repair",
+      itemNumber: "4.B.3",
+      discussionStatus: "discussed",
+      sourceTranscriptRanges: [[100, 180]],
+      discussionTimestampRange: "00:32:00 - 00:38:16",
+    });
+    const pump = normalizeTopic({
+      title: "Heating Pump P-10A Seal Replacement",
+      itemNumber: "4.B.4",
+      discussionStatus: "not_discussed",
+      sourceTranscriptRanges: [],
+    });
+    const parent = normalizeTopic({
+      title: "Review and approval of the project",
+      itemNumber: "4.B",
+      discussionStatus: "discussed",
+      sourceTranscriptRanges: [[40, 180]],
+    });
+    assert.ok(leak && pump && parent);
+    const pointer = inferTranscriptFloorPointer({
+      documentTopics: [parent, leak, pump],
+      extraTopics: [],
+    });
+    assert.equal(pointer?.itemNumber, "4.B.3");
+    assert.equal(pointer?.lastSequenceEnd, 180);
+  });
+
+  it("returns null when nothing has transcript ranges yet", () => {
+    const topic = normalizeTopic({
+      title: "Call to order",
+      itemNumber: "1",
+      discussionStatus: "not_discussed",
+      sourceTranscriptRanges: [],
+    });
+    assert.ok(topic);
+    assert.equal(
+      inferTranscriptFloorPointer({ documentTopics: [topic], extraTopics: [] }),
+      null,
     );
   });
 });

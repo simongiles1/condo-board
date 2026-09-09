@@ -28,6 +28,7 @@ import {
   formatDiscussionTimestampRanges,
   inferPropertyManagementReportNumber,
   mergeClosedIntervals,
+  parentAgendaItemCode,
   parseDiscussionTimestampRanges,
   planAdHocPlacement,
 } from "@/lib/meeting-v2/agenda-outline";
@@ -212,7 +213,22 @@ const TRANSCRIPT_TASK = `TASK: TRANSCRIPT CHUNK ENRICHMENT & DISCUSSION ALIGNMEN
 
 You will receive:
 - the current topic state (documentTopics and extraTopics)
+- the FLOOR POINTER: which leaf agenda item is on the table at the start of this chunk
 - one transcript chunk
+
+Walk the chunk CUE BY CUE in clock / sequence order. Do not scan later titles in the chunk and jump the floor forward. Carry the floor item from the previous cue (use the FLOOR POINTER for the first cue of the chunk).
+
+Each cue is exactly one of:
+1. OPEN a topic — first substantive introduction of a matter that is not the current floor item (named project, asset, quote, page, contractor, or a later revisit of an earlier item). This starts a new sourceTranscriptRanges span and moves the floor. A revisit of an existing topic is still operation 1: a new span on that topic, not a new agenda row.
+2. ENRICH an existing topic — facts, amounts, history, or aliases about the floor item (or a topic this cue genuinely also concerns). Extend the current span. Do not change which item is on the floor.
+3. CHANGE LIFECYCLE of the floor item — procedural movement of the SAME item: "any other questions", seeking assent, "yeah I'm fine", "can we move to the next item", unmute / waiting on a director, "go ahead / you move forward", minute-taker tags such as "is this reserve fund?". Assent RATIFIES the floor item. It does NOT open the next outline number. Keep attaching these cues to the floor item's current span until operation 1 fires.
+
+Open vs lifecycle:
+- "Can we move on?" / "Yeah, I'm fine" / "Go ahead" belong to the floor item (operation 3).
+- The next outline item opens only when speakers introduce that matter by substance (operation 1), for example "we have a sealed replacement for pump 10A".
+- Clerk or minute-taker questions about the item just ratified stay on that item (operation 2 or 3) even after someone asked to move on.
+
+Overlap (unchanged): a cue may attach to more than one topic when the talk genuinely bridges both matters. Mute recovery and wrap-up of one item are not overlap with the next item.
 
 Use the transcript chunk to:
 - link discussion to existing documentTopics:
@@ -221,8 +237,6 @@ Use the transcript chunk to:
   - attach human-readable start/end time to discussionTimestampRange (e.g. "00:15:58 - 01:42:10")
   - if the same matter is revisited later, APPEND another clock span separated by "; " (e.g. "00:15:58 - 00:22:10; 01:08:00 - 01:12:40"). Do not collapse revisits into one span that covers unrelated talk in between.
   - parent ranges must cover their children as the merged list of those spans: item 4 includes all of 4.A/4.B/..., 4.B includes 4.B.1/4.B.2/..., and a child range stays inside that parent coverage (a later pickup of the same matter may extend both)
-- keep a topic open across brief tangents. Assume the current matter continues until speakers clearly shift to a different agenda item for several consecutive lines. Do not close an item because of a short aside.
-- a span may attach to more than one topic when the talk genuinely bridges both. Prefer keeping the prior topic open rather than switching on a single cue.
 - when this chunk continues a topic already marked discussed, extend or append its sourceTranscriptRanges and discussionTimestampRange. Never replace earlier ranges with only this chunk.
 - add aliases or notes when the transcript uses shorthand
 - add extraTopics ONLY for genuinely new board business matters discussed in the transcript but not on the agenda (itemType "ad_hoc_discussion" or "extra_topic", discussionStatus "ad_hoc"). Those extraTopics will be nested under a synthesized Property Management Report section 4.E.
@@ -260,7 +274,7 @@ Transcript rules:
 - Do not merge a transcript matter into an existing topic unless they are clearly the same business issue. Shared words, contractor names, or building-area overlap alone are not enough.
 - If the transcript gives a more specific unit number, room name, incident, or records issue than the package topic list, preserve that specific matter instead of flattening it into a broader nearby topic.
 - If one transcript chunk contains multiple separate business matters, preserve them as separate topics. Do not keep only the last matter mentioned.
-- If a transcript chunk moves from one issue to another with a clear, sustained transition, evaluate each issue separately before deciding no_change. A one-line aside is not a transition.
+- If the chunk moves from one issue to another, switch the floor only on operation 1 (a named next matter), then evaluate each issue separately before deciding no_change. Assent, unmute, or "next item" language is operation 3 on the current floor item, not a transition.
 - If a transcript mentions a specific unit, leak, chargeback, legal follow-up, records request, or reimbursement question and the board gives direction or weighs next steps, preserve that matter even if it is discussed briefly before another topic.
 - If the transcript introduces a clearly separate business matter that was not in the package, add it to extraTopics with a concise title and explain the uncertainty if needed.
 - If a transcript mention is vague, preserve uncertainty in notes or uncertainties.
@@ -1158,6 +1172,76 @@ If this package chunk is one of the support-page references for a topic above, e
     : ""}${options.chunkText}`;
 }
 
+export type TranscriptFloorPointer = {
+  itemNumber: string | null;
+  title: string;
+  lastSequenceEnd: number;
+  discussionTimestampRange: string | null;
+};
+
+function lastTranscriptSequenceEnd(topic: Pick<WorkflowTopic, "sourceTranscriptRanges">): number | null {
+  if (!topic.sourceTranscriptRanges.length) return null;
+  return topic.sourceTranscriptRanges.reduce(
+    (max, range) => Math.max(max, range[0], range[1]),
+    Number.NEGATIVE_INFINITY,
+  );
+}
+
+function isOutlineLeafTopic(topic: WorkflowTopic, all: WorkflowTopic[]): boolean {
+  const code = topic.itemNumber?.trim();
+  if (!code) return true;
+  const normalized = code.toLowerCase();
+  return !all.some((other) => parentAgendaItemCode(other.itemNumber)?.toLowerCase() === normalized);
+}
+
+export function inferTranscriptFloorPointer(state: {
+  documentTopics: WorkflowTopic[];
+  extraTopics: WorkflowTopic[];
+}): TranscriptFloorPointer | null {
+  const all = [...state.documentTopics, ...state.extraTopics];
+  const withRanges = all.filter((topic) => {
+    if (topic.discussionStatus === "not_discussed") return false;
+    return lastTranscriptSequenceEnd(topic) !== null;
+  });
+  if (withRanges.length === 0) return null;
+
+  const leaves = withRanges.filter((topic) => isOutlineLeafTopic(topic, all));
+  const pool = leaves.length > 0 ? leaves : withRanges;
+  pool.sort((left, right) => {
+    const leftEnd = lastTranscriptSequenceEnd(left) ?? -1;
+    const rightEnd = lastTranscriptSequenceEnd(right) ?? -1;
+    if (leftEnd !== rightEnd) return rightEnd - leftEnd;
+    const leftDepth = (left.itemNumber || "").split(".").length;
+    const rightDepth = (right.itemNumber || "").split(".").length;
+    return rightDepth - leftDepth;
+  });
+  const winner = pool[0];
+  return {
+    itemNumber: winner.itemNumber?.trim() || null,
+    title: winner.title,
+    lastSequenceEnd: lastTranscriptSequenceEnd(winner) ?? 0,
+    discussionTimestampRange: winner.discussionTimestampRange ?? null,
+  };
+}
+
+function formatTranscriptFloorPointer(pointer: TranscriptFloorPointer | null): string {
+  if (!pointer) {
+    return `FLOOR POINTER
+No agenda item is on the floor yet. The first substantive matter in this chunk is operation 1 (OPEN).`;
+  }
+
+  const code = pointer.itemNumber ? pointer.itemNumber : "(no itemNumber)";
+  const timing = pointer.discussionTimestampRange
+    ? `Discussion timing so far: ${pointer.discussionTimestampRange}`
+    : "Discussion timing so far: unknown";
+  return `FLOOR POINTER (item on the table at the start of this chunk)
+- ${code} — ${pointer.title}
+- Last attached transcript segment: ${pointer.lastSequenceEnd}
+- ${timing}
+
+Walk cues in order. Operations: (1) OPEN a new span / move the floor, (2) ENRICH the floor item, (3) CHANGE LIFECYCLE of the floor item. Assent does not open the next outline item.`;
+}
+
 function buildTranscriptUserText(options: {
   meetingId: string;
   state: WorkflowState;
@@ -1171,6 +1255,8 @@ function buildTranscriptUserText(options: {
 
 CURRENT STATE
 ${buildStateText(options.state, { compact: true })}
+
+${formatTranscriptFloorPointer(inferTranscriptFloorPointer(options.state))}
 
 TRANSCRIPT CHUNK ${options.chunkIndex + 1} OF ${options.chunkTotal}
 Chunk ID: ${options.chunkId}

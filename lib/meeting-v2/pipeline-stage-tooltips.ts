@@ -51,9 +51,10 @@ export const PIPELINE_STAGE_TOOLTIPS: Record<string, PipelineStageTooltip> = {
       {
         title: "Phase 2 — Transcript extraction",
         items: [
-          "Repeat the same sliding-window pattern on transcript chunks.",
-          "Link transcript chunk ids and time ranges to package topics where they match.",
-          "Add extraTopics for discussion that appears in the transcript but not in the board package.",
+          "Repeat the same chunk walk on transcript chunks, carrying a floor pointer (the leaf item on the table at the start of the chunk).",
+          "Walk cues in clock order. Each cue either opens a topic (or a new span of an existing one), enriches the floor item, or changes that item's lifecycle (assent, unmute, clerk wrap-up).",
+          "Assent ratifies the floor item; it does not start the next outline number. The next item opens only when speakers name that matter.",
+          "Link transcript chunk ids and time ranges to package topics. Add extraTopics for discussion that is not on the board package.",
         ],
       },
       {

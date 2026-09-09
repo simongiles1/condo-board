@@ -728,6 +728,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     pipelineState,
     pipelineHalted,
     awaitingBackgroundWork,
+    currentStep: status?.meeting.currentStep,
   });
 
   useEffect(() => {

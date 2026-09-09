@@ -18,6 +18,17 @@ export const MEETING_V2_IDLE_PIPELINE_STATES = new Set([
   "failed",
 ]);
 
+/** Stored pipeline step while the meeting waits on human agenda review. */
+export const MEETING_V2_AWAITING_AGENDA_REVIEW_STEP =
+  "Awaiting agenda review & approval";
+
+export function isMeetingV2AwaitingHumanStep(
+  currentStep: string | null | undefined,
+): boolean {
+  const step = currentStep?.trim() ?? "";
+  return step === MEETING_V2_AWAITING_AGENDA_REVIEW_STEP;
+}
+
 /** No progress heartbeat for this long → treat the run as stalled (Resume required). */
 export const MEETING_V2_PIPELINE_STALE_MS = 5 * 60 * 1000;
 
@@ -25,8 +36,12 @@ export function isMeetingV2PipelineActivelyRunning(options: {
   pipelineState: string;
   lastError?: string | null;
   updatedAt?: string | null;
+  currentStep?: string | null;
 }): boolean {
-  const { pipelineState, lastError, updatedAt } = options;
+  const { pipelineState, lastError, updatedAt, currentStep } = options;
+  if (isMeetingV2AwaitingHumanStep(currentStep)) {
+    return false;
+  }
   if (
     pipelineState === "failed" ||
     pipelineState === "created" ||
@@ -125,6 +140,15 @@ export function buildMeetingV2DisplayProgress(options: {
     };
   }
 
+  if (isMeetingV2AwaitingHumanStep(storedCurrentStep)) {
+    return {
+      progressPercent:
+        typeof storedProgressPercent === "number" ? storedProgressPercent : 40,
+      currentStep: storedCurrentStep!.trim(),
+      currentLabel: "Agenda review",
+    };
+  }
+
   if (pipelineActivelyRunning) {
     const progressPercent =
       typeof storedProgressPercent === "number" && storedProgressPercent > 0
@@ -159,15 +183,18 @@ export function shouldPollMeetingV2Status(options: {
   pipelineState: string;
   pipelineHalted?: boolean;
   awaitingBackgroundWork?: boolean;
+  currentStep?: string | null;
 }): boolean {
   const {
     pipelineState,
     pipelineHalted = false,
     awaitingBackgroundWork = false,
+    currentStep,
   } = options;
 
   if (awaitingBackgroundWork) return true;
   if (pipelineHalted) return false;
+  if (isMeetingV2AwaitingHumanStep(currentStep)) return false;
   if (MEETING_V2_IDLE_PIPELINE_STATES.has(pipelineState)) return false;
   return MEETING_V2_ACTIVE_PIPELINE_STATES.has(pipelineState);
 }

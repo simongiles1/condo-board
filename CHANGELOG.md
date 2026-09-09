@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Meetings V2 section overlay pinhole cues** — A leftover cue between two boxes of the **same** agenda item is painted as that item (the extractor skipped a line, not a real stop/start). A leftover cue in the 1–2 second fence between **two different** items is painted as overlap. Reload Meeting Documents to see it; no pipeline rerun. True revisits stay split when another labeled topic sits in the gap.
+
 - **Meetings V2 multi-span transcript sections** — Agenda items can keep several disjoint discussion time ranges (for example `00:01:00 - 00:02:00; 00:10:00 - 00:11:00`) instead of one start and end. The readable transcript **Sections** overlay paints each span as its own box, so a later revisit of the same topic shows up again after a gap. When one cue falls in two leaf items, the box shows an **Overlap** chip plus both headings. Extractor state now union-merges earlier transcript ranges in code so a later chunk cannot wipe them, and evidence gathering also pulls keyword-matched transcript anchors into the item context bundle.
 
 - **Meetings V2 transcript section overlay** — In Meeting Documents, the readable transcript can show extracted leaf agenda headings (for example `4.A.2 — title`) as colored section boxes. Labels stick to the top of the scroller and are pushed out by the next heading. A **Sections** toggle turns the overlay off. Cues outside any leaf discussion range stay unboxed. Parent headings are omitted so nested items do not wrap overlapping boxes.
@@ -19,6 +21,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V2 editable attendance** — The Draft Preview tab now surfaces auto-detected attendees (present, by invitation, guests, regrets) with titles and roles inferred from the board package and transcript. A dedicated attendance panel appears above the editor and PDF preview, with the same drag-and-drop attendee editor used in V1 minutes. Edits persist correctly without stripping draft assembly metadata.
 
 ### Fixed
+
+- **Meetings V2 agenda-review progress timing** — While the pipeline waits on human agenda review, the header no longer shows a running extract badge or “Calculating…” rate/ETA rows. Those estimates apply only to automated pipeline work.
 
 - **Meetings V2 item review headings** — Nested heading rows (item 4, 4.A, 4.B, 4.D) no longer show investigation analysis. Discussion summaries, outcome chips, flags, and re-evaluate controls appear only on leaf items. Deferred ancestors of discussed children stay in the outline so numbering remains 4.D → a / c instead of a floating a / c list.
 

@@ -11,6 +11,7 @@ import {
   buildMeetingV2WorkflowProgress,
   getMeetingV2CurrentStepPosition,
   isMeetingV2PipelineActivelyRunning,
+  MEETING_V2_AWAITING_AGENDA_REVIEW_STEP,
   shouldPollMeetingV2Status,
 } from "../lib/meeting-v2/workflow-progress";
 
@@ -36,6 +37,47 @@ describe("shouldPollMeetingV2Status", () => {
       shouldPollMeetingV2Status({ pipelineState: "validated" }),
       false,
     );
+  });
+
+  it("does not poll or show as running while awaiting human agenda review", () => {
+    assert.equal(
+      shouldPollMeetingV2Status({
+        pipelineState: "extracted",
+        currentStep: MEETING_V2_AWAITING_AGENDA_REVIEW_STEP,
+      }),
+      false,
+    );
+    assert.equal(
+      isMeetingV2PipelineActivelyRunning({
+        pipelineState: "extracted",
+        lastError: null,
+        currentStep: MEETING_V2_AWAITING_AGENDA_REVIEW_STEP,
+      }),
+      false,
+    );
+  });
+
+  it("keeps stored agenda-review progress while waiting on the reviewer", () => {
+    const display = buildMeetingV2DisplayProgress({
+      pipelineNotStarted: false,
+      pipelineActivelyRunning: false,
+      pipelineState: "extracted",
+      storedProgressPercent: 40,
+      storedCurrentStep: MEETING_V2_AWAITING_AGENDA_REVIEW_STEP,
+      workflowProgress: {
+        steps: [],
+        completedCount: 2,
+        totalCount: 7,
+        progressPercent: 28,
+        currentLabel: "Evidence",
+        currentStep: "0/30 agenda items have assembled evidence context.",
+        isFullyComplete: false,
+      },
+    });
+
+    assert.equal(display.progressPercent, 40);
+    assert.equal(display.currentStep, MEETING_V2_AWAITING_AGENDA_REVIEW_STEP);
+    assert.equal(display.currentLabel, "Agenda review");
   });
 
   it("does not poll when created, failed, or halted mid-run", () => {

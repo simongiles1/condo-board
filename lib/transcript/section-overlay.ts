@@ -82,19 +82,30 @@ function sortCoveringSections(sections: TranscriptSectionOverlay[]): TranscriptS
   });
 }
 
-export function pickSectionsForTime(
-  timeSeconds: number,
-  sections: TranscriptSectionOverlay[],
-): TranscriptSectionOverlay[] {
-  const covering = sections.filter(
-    (section) => timeSeconds >= section.startSeconds && timeSeconds <= section.endSeconds,
-  );
-  if (covering.length === 0) return [];
+function uniqueSectionsById(sections: TranscriptSectionOverlay[]): TranscriptSectionOverlay[] {
   const uniqueById = new Map<string, TranscriptSectionOverlay>();
-  for (const section of sortCoveringSections(covering)) {
+  for (const section of sortCoveringSections(sections)) {
     if (!uniqueById.has(section.id)) uniqueById.set(section.id, section);
   }
   return [...uniqueById.values()];
+}
+
+function cueOverlapsSection(
+  startSeconds: number,
+  endSeconds: number,
+  section: TranscriptSectionOverlay,
+): boolean {
+  return startSeconds <= section.endSeconds && endSeconds >= section.startSeconds;
+}
+
+export function pickSectionsForTime(
+  timeSeconds: number,
+  sections: TranscriptSectionOverlay[],
+  endSeconds: number = timeSeconds,
+): TranscriptSectionOverlay[] {
+  const covering = sections.filter((section) => cueOverlapsSection(timeSeconds, endSeconds, section));
+  if (covering.length === 0) return [];
+  return uniqueSectionsById(covering);
 }
 
 export function pickSectionForTime(
@@ -111,8 +122,52 @@ function sectionSetKey(sections: TranscriptSectionOverlay[]): string {
     .join("|");
 }
 
+function nearestAssignedGroup(
+  groups: CueSectionGroup[],
+  fromIndex: number,
+  direction: -1 | 1,
+): CueSectionGroup | null {
+  for (let index = fromIndex + direction; index >= 0 && index < groups.length; index += direction) {
+    if (groups[index].sections.length > 0) return groups[index];
+  }
+  return null;
+}
+
+function absorbUnassignedCueGroups(groups: CueSectionGroup[]): CueSectionGroup[] {
+  if (groups.length === 0) return groups;
+  return groups.map((group, index) => {
+    if (group.sections.length > 0) return group;
+    const previous = nearestAssignedGroup(groups, index, -1);
+    const next = nearestAssignedGroup(groups, index, 1);
+    if (!previous || !next) return group;
+    if (sectionSetKey(previous.sections) === sectionSetKey(next.sections)) {
+      return { ...group, sections: previous.sections };
+    }
+    const previousEnd = Math.max(...previous.sections.map((section) => section.endSeconds));
+    const nextStart = Math.min(...next.sections.map((section) => section.startSeconds));
+    // Whole-second stored ranges often leave a 1s uncovered fence at a handoff.
+    if (nextStart - previousEnd <= 2) {
+      return { ...group, sections: uniqueSectionsById([...previous.sections, ...next.sections]) };
+    }
+    return group;
+  });
+}
+
+function mergeAdjacentCueGroups(groups: CueSectionGroup[]): CueSectionGroup[] {
+  const merged: CueSectionGroup[] = [];
+  for (const group of groups) {
+    const last = merged[merged.length - 1];
+    if (last && sectionSetKey(last.sections) === sectionSetKey(group.sections)) {
+      last.cueIndexes.push(...group.cueIndexes);
+    } else {
+      merged.push({ sections: group.sections, cueIndexes: [...group.cueIndexes] });
+    }
+  }
+  return merged;
+}
+
 export function groupCuesByTranscriptSections(
-  cues: Array<{ start: string }>,
+  cues: Array<{ start: string; end?: string }>,
   sections: TranscriptSectionOverlay[],
 ): CueSectionGroup[] {
   if (cues.length === 0) return [];
@@ -122,8 +177,10 @@ export function groupCuesByTranscriptSections(
 
   const groups: CueSectionGroup[] = [];
   for (let index = 0; index < cues.length; index += 1) {
-    const timeSeconds = parseVttTimestampMs(cues[index].start) / 1000;
-    const covering = pickSectionsForTime(timeSeconds, sections);
+    const startSeconds = parseVttTimestampMs(cues[index].start) / 1000;
+    const endSeconds =
+      cues[index].end !== undefined ? parseVttTimestampMs(cues[index].end) / 1000 : startSeconds;
+    const covering = pickSectionsForTime(startSeconds, sections, Math.max(startSeconds, endSeconds));
     const last = groups[groups.length - 1];
     if (last && sectionSetKey(last.sections) === sectionSetKey(covering)) {
       last.cueIndexes.push(index);
@@ -131,5 +188,5 @@ export function groupCuesByTranscriptSections(
       groups.push({ sections: covering, cueIndexes: [index] });
     }
   }
-  return groups;
+  return mergeAdjacentCueGroups(absorbUnassignedCueGroups(groups));
 }

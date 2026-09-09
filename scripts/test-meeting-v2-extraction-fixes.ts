@@ -844,5 +844,81 @@ describe("transcript section overlay", () => {
       ],
     );
   });
+
+  it("keeps a same-topic box together when one cue sits in a hole between its spans", () => {
+    const overlays = buildTranscriptSectionOverlays(
+      [
+        {
+          id: "fin",
+          itemNumber: "3",
+          title: "Financial statements",
+          sourceText: "Discussion timing: 00:10:53 - 00:11:00; 00:11:06 - 00:11:23",
+        },
+      ],
+      (item) => discussionTimingFromSourceText(item.sourceText),
+    );
+
+    const groups = groupCuesByTranscriptSections(
+      [
+        { start: "00:10:54.000" },
+        { start: "00:11:00.000" },
+        { start: "00:11:04.000" },
+        { start: "00:11:06.000" },
+        { start: "00:11:21.000" },
+      ],
+      overlays,
+    );
+
+    assert.deepEqual(
+      groups.map((group) => ({
+        codes: group.sections.map((section) => section.code),
+        cues: group.cueIndexes,
+      })),
+      [{ codes: ["3"], cues: [0, 1, 2, 3, 4] }],
+    );
+  });
+
+  it("marks a one-second handoff cue as overlap instead of leaving it unboxed", () => {
+    const overlays = buildTranscriptSectionOverlays(
+      [
+        {
+          id: "minutes",
+          itemNumber: "2",
+          title: "Approval of minutes",
+          sourceText: "Discussion timing: 00:08:00 - 00:08:20",
+        },
+        {
+          id: "fin",
+          itemNumber: "3",
+          title: "Financial statements",
+          sourceText: "Discussion timing: 00:08:22 - 00:08:40",
+        },
+      ],
+      (item) => discussionTimingFromSourceText(item.sourceText),
+    );
+
+    const groups = groupCuesByTranscriptSections(
+      [
+        { start: "00:08:18.000" },
+        { start: "00:08:20.000" },
+        { start: "00:08:21.000" },
+        { start: "00:08:22.000" },
+        { start: "00:08:29.000" },
+      ],
+      overlays,
+    );
+
+    assert.deepEqual(
+      groups.map((group) => ({
+        codes: group.sections.map((section) => section.code),
+        cues: group.cueIndexes,
+      })),
+      [
+        { codes: ["2"], cues: [0, 1] },
+        { codes: ["3", "2"], cues: [2] },
+        { codes: ["3"], cues: [3, 4] },
+      ],
+    );
+  });
 });
 

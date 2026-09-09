@@ -853,6 +853,7 @@ export async function loadMeetingsV2DashboardCards(
       pipelineState: meeting.pipelineState,
       lastError: meeting.lastError,
       updatedAt: meeting.updatedAt,
+      currentStep: meeting.currentStep,
     });
     const stages = buildMeetingV2Stages({
       counts,
@@ -3266,6 +3267,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       pipelineState: selectedMeeting.pipelineState,
       lastError: selectedMeeting.lastError,
       updatedAt: selectedMeeting.updatedAt,
+      currentStep: selectedMeeting.currentStep,
     }),
     updatedAt: selectedMeeting.updatedAt,
   });
@@ -3317,6 +3319,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         pipelineState: selectedMeeting.pipelineState,
         lastError: selectedMeeting.lastError,
         updatedAt: selectedMeeting.updatedAt,
+        currentStep: selectedMeeting.currentStep,
       }),
       goldStandardFilePath,
       goldStandardValidationJson,

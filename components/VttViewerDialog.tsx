@@ -14,8 +14,20 @@ import {
   findTextMatches,
   scrollChildIntoContainer,
 } from "@/lib/transcript/search";
+import {
+  buildTranscriptSectionOverlays,
+  discussionTimingFromSourceText,
+  type TranscriptSectionOverlay,
+} from "@/lib/transcript/section-overlay";
 
 type Tab = "readable" | "raw";
+
+type AgendaOverlayItem = {
+  id: string;
+  title: string;
+  itemNumber: string | null;
+  sourceText?: string | null;
+};
 
 type Props = {
   open: boolean;
@@ -23,6 +35,8 @@ type Props = {
   onClose: () => void;
   /** When true, renders only the viewer body (no modal shell). */
   embedded?: boolean;
+  /** Extracted agenda items used to overlay section headings on the readable transcript. */
+  agendaItems?: AgendaOverlayItem[];
 } & (
   | { meetingId: string; vttContent?: never; localFileName?: never }
   | { meetingId?: never; vttContent: string; localFileName?: string }
@@ -36,6 +50,7 @@ export function VttViewerDialog({
   fileLabel,
   onClose,
   embedded = false,
+  agendaItems,
 }: Props) {
   const [rawContent, setRawContent] = useState<string | null>(null);
   const [readableContent, setReadableContent] = useState<string | null>(null);
@@ -47,6 +62,7 @@ export function VttViewerDialog({
   const [copied, setCopied] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+  const [showSectionOverlay, setShowSectionOverlay] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -144,6 +160,15 @@ export function VttViewerDialog({
   }, [searchQuery, activeTab]);
 
   const isReadableTab = activeTab === "readable";
+
+  const sectionOverlays = useMemo<TranscriptSectionOverlay[]>(
+    () =>
+      buildTranscriptSectionOverlays(agendaItems ?? [], (item) =>
+        discussionTimingFromSourceText(item.sourceText),
+      ),
+    [agendaItems],
+  );
+  const canShowSections = isReadableTab && sectionOverlays.length > 0;
 
   const cueMatches = useMemo(
     () => (cues ? findCueMatches(cues, searchQuery) : []),
@@ -252,6 +277,7 @@ export function VttViewerDialog({
 
       {!loading && !error && (
         <div className={`${embedded ? "mt-3" : "mt-4"} flex flex-wrap items-center justify-between gap-3`}>
+              <div className="flex flex-wrap items-center gap-2">
               <div
                 className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1"
                 role="tablist"
@@ -283,6 +309,22 @@ export function VttViewerDialog({
                 >
                   Raw VTT
                 </button>
+              </div>
+              {canShowSections ? (
+                <button
+                  type="button"
+                  aria-pressed={showSectionOverlay}
+                  onClick={() => setShowSectionOverlay((value) => !value)}
+                  title="Show extracted agenda section headings on the readable transcript"
+                  className={`rounded-lg border px-3 py-1.5 text-sm font-medium shadow-sm transition-colors ${
+                    showSectionOverlay
+                      ? "border-teal-300 bg-teal-50 text-teal-800"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900"
+                  }`}
+                >
+                  Sections
+                </button>
+              ) : null}
               </div>
               <button
                 type="button"
@@ -367,8 +409,9 @@ export function VttViewerDialog({
   const bodyBlock = (
     <div
       ref={scrollContainerRef}
-      className={`min-h-0 flex-1 overflow-y-auto ${embedded ? "max-h-[min(60vh,560px)] px-4 py-3" : "px-6 py-5"}`}
+      className={`min-h-0 flex-1 overflow-y-auto ${embedded ? "max-h-[min(60vh,560px)]" : ""}`}
     >
+      <div className={embedded ? "px-4 py-3" : "px-6 py-5"}>
           {loading ? (
             <p className="text-sm text-slate-600">Loading transcript…</p>
           ) : error ? (
@@ -381,6 +424,8 @@ export function VttViewerDialog({
               searchQuery={searchQuery}
               matches={cueMatches}
               currentMatchIndex={currentMatchIndex}
+              sectionOverlays={sectionOverlays}
+              showSectionOverlay={showSectionOverlay && canShowSections}
             />
           ) : isReadableTab ? (
             <p className="text-sm text-slate-600">No transcript cues found.</p>
@@ -397,7 +442,8 @@ export function VttViewerDialog({
               )}
             </pre>
           )}
-        </div>
+      </div>
+    </div>
   );
 
   if (embedded) {

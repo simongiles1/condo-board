@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ReadableTranscriptView } from "@/components/ReadableTranscriptView";
 import type { MergedVttCue } from "@/lib/parsers/vtt";
-import { parseVttTimeRangeMs } from "@/lib/parsers/vtt";
+import { parseVttTimeRangesMs } from "@/lib/parsers/vtt";
 
 export function TranscriptRangeModal({
   open,
@@ -22,7 +22,7 @@ export function TranscriptRangeModal({
   const [cues, setCues] = useState<MergedVttCue[]>([]);
   const firstHighlightRef = useRef<HTMLElement>(null);
 
-  const highlightRangeMs = timeRange ? parseVttTimeRangeMs(timeRange) : undefined;
+  const highlightRangesMs = timeRange ? parseVttTimeRangesMs(timeRange) : undefined;
 
   useEffect(() => {
     if (!open) {
@@ -119,7 +119,7 @@ export function TranscriptRangeModal({
           ) : (
             <ReadableTranscriptView
               cues={cues}
-              highlightRangeMs={highlightRangeMs}
+              highlightRangesMs={highlightRangesMs}
               firstHighlightRef={firstHighlightRef}
             />
           )}

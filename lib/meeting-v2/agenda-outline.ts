@@ -238,29 +238,69 @@ export function formatClockFromSeconds(totalSeconds: number): string {
   return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
 }
 
+const CLOCK_SPAN_RE =
+  /(\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)\s*[-–]\s*(\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)/g;
+
+export function mergeClosedIntervals(ranges: Array<[number, number]>): Array<[number, number]> {
+  const ordered = ranges
+    .map(([start, end]) => [Math.min(start, end), Math.max(start, end)] as [number, number])
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  const merged: Array<[number, number]> = [];
+  for (const range of ordered) {
+    const last = merged[merged.length - 1];
+    if (last && range[0] <= last[1] + 1) {
+      last[1] = Math.max(last[1], range[1]);
+    } else {
+      merged.push([range[0], range[1]]);
+    }
+  }
+  return merged;
+}
+
+export function parseDiscussionTimestampRanges(value: string | null | undefined): TimestampRange[] {
+  if (!value) return [];
+  CLOCK_SPAN_RE.lastIndex = 0;
+  const spans: TimestampRange[] = [];
+  for (const match of value.matchAll(CLOCK_SPAN_RE)) {
+    const startSeconds = parseClockToSeconds(match[1]);
+    const endSeconds = parseClockToSeconds(match[2]);
+    if (startSeconds === null || endSeconds === null) continue;
+    spans.push({
+      startSeconds: Math.min(startSeconds, endSeconds),
+      endSeconds: Math.max(startSeconds, endSeconds),
+    });
+  }
+  return mergeTimestampRanges(spans);
+}
+
 export function parseDiscussionTimestampRange(value: string | null | undefined): TimestampRange | null {
-  if (!value) return null;
-  const clocks = [...value.matchAll(/(\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)/g)].map((match) => match[1]);
-  if (clocks.length < 2) return null;
-  const startSeconds = parseClockToSeconds(clocks[0]);
-  const endSeconds = parseClockToSeconds(clocks[clocks.length - 1]);
-  if (startSeconds === null || endSeconds === null) return null;
-  return {
-    startSeconds: Math.min(startSeconds, endSeconds),
-    endSeconds: Math.max(startSeconds, endSeconds),
-  };
+  return unionTimestampRanges(parseDiscussionTimestampRanges(value));
 }
 
 export function formatDiscussionTimestampRange(range: TimestampRange): string {
   return `${formatClockFromSeconds(range.startSeconds)} - ${formatClockFromSeconds(range.endSeconds)}`;
 }
 
+export function formatDiscussionTimestampRanges(ranges: TimestampRange[]): string | null {
+  const merged = mergeTimestampRanges(ranges);
+  if (merged.length === 0) return null;
+  return merged.map(formatDiscussionTimestampRange).join("; ");
+}
+
+export function mergeTimestampRanges(ranges: Array<TimestampRange | null | undefined>): TimestampRange[] {
+  return mergeClosedIntervals(
+    ranges
+      .filter((range): range is TimestampRange => Boolean(range))
+      .map((range) => [range.startSeconds, range.endSeconds]),
+  ).map(([startSeconds, endSeconds]) => ({ startSeconds, endSeconds }));
+}
+
 export function unionTimestampRanges(ranges: Array<TimestampRange | null | undefined>): TimestampRange | null {
-  const present = ranges.filter((range): range is TimestampRange => Boolean(range));
-  if (present.length === 0) return null;
+  const merged = mergeTimestampRanges(ranges);
+  if (merged.length === 0) return null;
   return {
-    startSeconds: Math.min(...present.map((range) => range.startSeconds)),
-    endSeconds: Math.max(...present.map((range) => range.endSeconds)),
+    startSeconds: merged[0].startSeconds,
+    endSeconds: merged[merged.length - 1].endSeconds,
   };
 }
 
@@ -321,12 +361,12 @@ export function applyHierarchicalDiscussionTiming<T extends AgendaOutlineSourceI
   nodes: Array<AgendaOutlineNode<T>>,
   getTiming: (item: T) => string | null | undefined,
 ): void {
-  const walk = (node: AgendaOutlineNode<T>): TimestampRange | null => {
-    const childRanges = node.children.map((child) => walk(child));
-    const ownRange = parseDiscussionTimestampRange(getTiming(node.item) ?? null);
-    const union = unionTimestampRanges([ownRange, ...childRanges]);
-    node.discussionTiming = union ? formatDiscussionTimestampRange(union) : null;
-    return union;
+  const walk = (node: AgendaOutlineNode<T>): TimestampRange[] => {
+    const childRanges = node.children.flatMap((child) => walk(child));
+    const ownRanges = parseDiscussionTimestampRanges(getTiming(node.item) ?? null);
+    const merged = mergeTimestampRanges([...ownRanges, ...childRanges]);
+    node.discussionTiming = formatDiscussionTimestampRanges(merged);
+    return merged;
   };
   for (const node of nodes) walk(node);
 }
@@ -375,6 +415,29 @@ export function applyAgendaHierarchyCorrections<
     itemNumber: numberById.get(item.id) ?? item.itemNumber,
     discussionTimestampRange: timingById.get(item.id) ?? item.discussionTimestampRange,
   }));
+}
+
+/**
+ * Keep content items that pass `shouldKeepContent`, plus any ancestor needed so
+ * nested codes still hang off their official parent (4.D stays when 4.D.a is kept).
+ */
+export function filterAgendaItemsPreservingAncestors<T extends AgendaOutlineSourceItem>(
+  items: T[],
+  shouldKeepContent: (item: T) => boolean,
+): T[] {
+  const tree = buildAgendaOutlineTree(items);
+  const keepIds = new Set<string>();
+
+  const walk = (node: AgendaOutlineNode<T>): boolean => {
+    const descendantKept = node.children.map(walk).some(Boolean);
+    const keep = shouldKeepContent(node.item) || descendantKept;
+    if (keep) keepIds.add(node.item.id);
+    return keep;
+  };
+
+  for (const node of tree) walk(node);
+
+  return items.filter((item) => keepIds.has(item.id));
 }
 
 export function buildAgendaOutlineTree<T extends AgendaOutlineSourceItem>(

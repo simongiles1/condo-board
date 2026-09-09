@@ -8,6 +8,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Meetings V2 multi-span transcript sections** — Agenda items can keep several disjoint discussion time ranges (for example `00:01:00 - 00:02:00; 00:10:00 - 00:11:00`) instead of one start and end. The readable transcript **Sections** overlay paints each span as its own box, so a later revisit of the same topic shows up again after a gap. When one cue falls in two leaf items, the box shows an **Overlap** chip plus both headings. Extractor state now union-merges earlier transcript ranges in code so a later chunk cannot wipe them, and evidence gathering also pulls keyword-matched transcript anchors into the item context bundle.
+
+- **Meetings V2 transcript section overlay** — In Meeting Documents, the readable transcript can show extracted leaf agenda headings (for example `4.A.2 — title`) as colored section boxes. Labels stick to the top of the scroller and are pushed out by the next heading. A **Sections** toggle turns the overlay off. Cues outside any leaf discussion range stay unboxed. Parent headings are omitted so nested items do not wrap overlapping boxes.
+
 - **Corporation-wide PDF template settings** — PDF margin and horizontal-rule layout is now stored in the database (`pdf_template_settings`) instead of per-browser `localStorage`. Every user and export path reads the same template. On first load after upgrade, customized values from `localStorage` are migrated automatically when the database row is still at defaults.
 
 - **PDF template editor** — PDF margin and header layout editing now lives in a dedicated full-width dialog instead of the general Settings modal. The editor shows a single large page preview with toggles for page 1 vs pages 2+ and for evaluated values vs variable tokens. Headers render in a consistent header band above the body content region on both page types.
@@ -15,6 +19,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V2 editable attendance** — The Draft Preview tab now surfaces auto-detected attendees (present, by invitation, guests, regrets) with titles and roles inferred from the board package and transcript. A dedicated attendance panel appears above the editor and PDF preview, with the same drag-and-drop attendee editor used in V1 minutes. Edits persist correctly without stripping draft assembly metadata.
 
 ### Fixed
+
+- **Meetings V2 item review headings** — Nested heading rows (item 4, 4.A, 4.B, 4.D) no longer show investigation analysis. Discussion summaries, outcome chips, flags, and re-evaluate controls appear only on leaf items. Deferred ancestors of discussed children stay in the outline so numbering remains 4.D → a / c instead of a floating a / c list.
+
+- **Meetings V2 discussion-status strip** — The Discussed / Not Discussed / Ad-Hoc control strip is shown only on leaf agenda items. Parent rows with children no longer get the strip (or a Deferred badge), even when the parent was previously marked not discussed.
 
 - **Meetings V2 agenda approval action bar** — After initial approval, **Update Agenda Approval** is now disabled until the reviewer changes item statuses, exclusions, titles, discrepancies, or ad-hoc items. Both initial approval and updates now open a confirmation dialog with DeepSeek peak/off-peak pricing context before resuming the pipeline.
 
@@ -30,7 +38,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V2 redundant AI discrepancy inquiries** — "Add to agenda" discrepancy prompts are now suppressed when the same topic already appears on the synthesized candidate agenda (for example under 4.E ad-hoc items). Status-check inquiries (such as guest presentations that did not occur) are unchanged. The transcript enrichment prompt also instructs the model not to emit duplicate discrepancy entries for matters already captured in `extraTopics`.
 
-- **Meetings V2 nested transcript timing** — Agenda review parent items now span the union of their descendants' discussion times (item 4 covers 4.A/4.B and their leaves). Stored extraction applies the same rule.
+- **Meetings V2 nested transcript timing** — Agenda review parent items now span the merged discussion intervals of their descendants (item 4 covers 4.A/4.B and their leaves). Overlapping child spans still collapse to one range; disjoint revisits stay as separate spans instead of filling the gap. Stored extraction applies the same rule.
 
 - **Meetings V2 4.B numbering vs top-level 5/6** — Project headings numbered 5. in the package no longer display as 6 because top-level item 5 is "next Board Meeting". The printed project number is kept.
 
@@ -42,7 +50,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **PDF template access** — The user menu and Meetings V2 More menu open the new PDF template dialog directly. General Settings no longer includes a PDF margins tab.
 
-- **Meetings V2 post-approval agenda review layout** — After agenda approval, the Agenda Review tab now uses the same hierarchical outline layout as the pre-approval candidate agenda (official order: 1, 2, 3, 4.A.1, 4.D.a). Items are no longer sorted by open-question or flag count. Deferred and excluded items are hidden; discussed/ad-hoc items keep outcome, confidence, question, and flag badges without the discussed/not-discussed control strip. A header toggle switches between item review and agenda approval views during the post-approval phase only. Gold-standard compare findings now surface per agenda item as **In AI only** / **In gold only** badges with hover detail tooltips; clicking a badge opens the existing compare side panel on the matching tab.
+- **Meetings V2 post-approval agenda review layout** — After agenda approval, the Agenda Review tab now uses the same hierarchical outline layout as the pre-approval candidate agenda (official order: 1, 2, 3, 4.A.1, 4.D.a). Items are no longer sorted by open-question or flag count. Deferred leaves and excluded items are hidden; deferred heading rows stay when they still have discussed children. Discussed/ad-hoc **leaf** items keep outcome, confidence, question, and flag badges. The discussed/not-discussed control strip appears on leaves only. A header toggle switches between item review and agenda approval views during the post-approval phase only. Gold-standard compare findings now surface per agenda item as **In AI only** / **In gold only** badges with hover detail tooltips; clicking a badge opens the existing compare side panel on the matching tab.
 
 - **Build-out progress modal mobile layout** — On small screens the Gantt chart now uses the full modal height with narrower columns and horizontal scroll. The details sidebar is hidden; tapping any timeline row or phase bar opens a bottom sheet with the item summary and remaining work.
 

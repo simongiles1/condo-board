@@ -49,6 +49,7 @@ import {
 } from "@/lib/meeting-v2/workflow-progress";
 import { buildMeetingV2DraftArtifact, buildMeetingFrame } from "@/lib/meeting-v2/draft-builder";
 import { chunkDocumentPages, chunkTranscriptSegments } from "@/lib/meeting-v2/chunking";
+import { mergeClosedIntervals } from "@/lib/meeting-v2/agenda-outline";
 import {
   loadInvestigationToolRuntime,
   runToolEnabledInvestigation,
@@ -2497,10 +2498,10 @@ export async function retrieveAgendaItemEvidence(
       entry.segment.sequence,
       entry.segment.sequence,
     ] as [number, number]);
-    const sourceTranscriptRanges =
-      extractedTopic?.sourceTranscriptRanges.length
-        ? extractedTopic.sourceTranscriptRanges
-        : fallbackTranscriptRanges;
+    const sourceTranscriptRanges = mergeClosedIntervals([
+      ...(extractedTopic?.sourceTranscriptRanges ?? []),
+      ...fallbackTranscriptRanges,
+    ]);
     const directAnchorChunkIds = (extractedTopic?.sourceChunkIds ?? []).filter((chunkId) =>
       chunkContextById.has(chunkId),
     );
@@ -2534,6 +2535,12 @@ export async function retrieveAgendaItemEvidence(
     }
     if (sourceTranscriptRanges.length > 0) {
       buildNotes.push("Expanded transcript anchors from source transcript ranges.");
+    }
+    if (
+      fallbackTranscriptRanges.length > 0 &&
+      (extractedTopic?.sourceTranscriptRanges.length ?? 0) > 0
+    ) {
+      buildNotes.push("Added keyword-matched transcript segments to extractor ranges.");
     }
     if (anchorChunkIds.length === 0) {
       buildNotes.push("No anchor chunks could be resolved for this agenda item.");

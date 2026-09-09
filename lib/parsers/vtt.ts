@@ -171,11 +171,24 @@ export function parseVttTimestampMs(timestamp: string): number {
   return (hours * 3600 + minutes * 60 + seconds) * 1000;
 }
 
-/** Parse a display time range like `00:08:21 - 00:13:37` into millisecond bounds. */
+const DISPLAY_CLOCK_SPAN_RE =
+  /(\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)\s*[-–]\s*(\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)/g;
+
+/** Parse one or more display spans like `00:08:21 - 00:13:37; 00:40:00 - 00:41:10`. */
+export function parseVttTimeRangesMs(timeRange: string): Array<[number, number]> {
+  DISPLAY_CLOCK_SPAN_RE.lastIndex = 0;
+  const ranges: Array<[number, number]> = [];
+  for (const match of timeRange.matchAll(DISPLAY_CLOCK_SPAN_RE)) {
+    ranges.push([parseVttTimestampMs(match[1]), parseVttTimestampMs(match[2])]);
+  }
+  return ranges.length > 0 ? ranges : [[0, Infinity]];
+}
+
+/** Bounding union of display time span(s) like `00:08:21 - 00:13:37`. */
 export function parseVttTimeRangeMs(timeRange: string): [number, number] {
-  const match = timeRange.match(
-    /(\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)\s*[-–]\s*(\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)/,
-  );
-  if (!match) return [0, Infinity];
-  return [parseVttTimestampMs(match[1]), parseVttTimestampMs(match[2])];
+  const ranges = parseVttTimeRangesMs(timeRange);
+  return [
+    Math.min(...ranges.map((range) => range[0])),
+    Math.max(...ranges.map((range) => range[1])),
+  ];
 }

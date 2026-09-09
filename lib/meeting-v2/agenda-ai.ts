@@ -25,7 +25,10 @@ import {
 import {
   applyAgendaHierarchyCorrections,
   compareAgendaItemCodes,
+  formatDiscussionTimestampRanges,
   inferPropertyManagementReportNumber,
+  mergeClosedIntervals,
+  parseDiscussionTimestampRanges,
   planAdHocPlacement,
 } from "@/lib/meeting-v2/agenda-outline";
 
@@ -216,7 +219,11 @@ Use the transcript chunk to:
   - set discussionStatus to "discussed" if conversation is found
   - attach sequence numbers to sourceTranscriptRanges
   - attach human-readable start/end time to discussionTimestampRange (e.g. "00:15:58 - 01:42:10")
-  - parent ranges must cover their children: item 4 spans all of 4.A/4.B/..., 4.B spans 4.B.1/4.B.2/..., and a child range stays inside that parent span (a later pickup of the same matter may extend both)
+  - if the same matter is revisited later, APPEND another clock span separated by "; " (e.g. "00:15:58 - 00:22:10; 01:08:00 - 01:12:40"). Do not collapse revisits into one span that covers unrelated talk in between.
+  - parent ranges must cover their children as the merged list of those spans: item 4 includes all of 4.A/4.B/..., 4.B includes 4.B.1/4.B.2/..., and a child range stays inside that parent coverage (a later pickup of the same matter may extend both)
+- keep a topic open across brief tangents. Assume the current matter continues until speakers clearly shift to a different agenda item for several consecutive lines. Do not close an item because of a short aside.
+- a span may attach to more than one topic when the talk genuinely bridges both. Prefer keeping the prior topic open rather than switching on a single cue.
+- when this chunk continues a topic already marked discussed, extend or append its sourceTranscriptRanges and discussionTimestampRange. Never replace earlier ranges with only this chunk.
 - add aliases or notes when the transcript uses shorthand
 - add extraTopics ONLY for genuinely new board business matters discussed in the transcript but not on the agenda (itemType "ad_hoc_discussion" or "extra_topic", discussionStatus "ad_hoc"). Those extraTopics will be nested under a synthesized Property Management Report section 4.E.
 - detect unaligned discussion discrepancies:
@@ -253,7 +260,7 @@ Transcript rules:
 - Do not merge a transcript matter into an existing topic unless they are clearly the same business issue. Shared words, contractor names, or building-area overlap alone are not enough.
 - If the transcript gives a more specific unit number, room name, incident, or records issue than the package topic list, preserve that specific matter instead of flattening it into a broader nearby topic.
 - If one transcript chunk contains multiple separate business matters, preserve them as separate topics. Do not keep only the last matter mentioned.
-- If a transcript chunk moves from one issue to another with a clear transition, evaluate each issue separately before deciding no_change.
+- If a transcript chunk moves from one issue to another with a clear, sustained transition, evaluate each issue separately before deciding no_change. A one-line aside is not a transition.
 - If a transcript mentions a specific unit, leak, chargeback, legal follow-up, records request, or reimbursement question and the board gives direction or weighs next steps, preserve that matter even if it is discussed briefly before another topic.
 - If the transcript introduces a clearly separate business matter that was not in the package, add it to extraTopics with a concise title and explain the uncertainty if needed.
 - If a transcript mention is vague, preserve uncertainty in notes or uncertainties.
@@ -532,7 +539,7 @@ export function normalizeTopic(raw: Partial<WorkflowTopic>): WorkflowTopic | nul
         : undefined,
     discussionTimestampRange:
       typeof raw.discussionTimestampRange === "string"
-        ? truncateText(normalizeWhitespace(raw.discussionTimestampRange), 60)
+        ? truncateText(normalizeWhitespace(raw.discussionTimestampRange), 400)
         : null,
     consolidationReason:
       typeof raw.consolidationReason === "string"
@@ -745,14 +752,17 @@ function dedupeTopics(topics: WorkflowTopic[]): WorkflowTopic[] {
       title: topic.title.length > existing.title.length ? topic.title : existing.title,
       sourcePages: unique([...existing.sourcePages, ...topic.sourcePages]).sort((a, b) => a - b),
       sourceChunkIds: unique([...existing.sourceChunkIds, ...topic.sourceChunkIds]).slice(0, 24),
-      sourceTranscriptRanges: unique(
-        [...existing.sourceTranscriptRanges, ...topic.sourceTranscriptRanges].map(
-          (range) => `${range[0]}:${range[1]}`,
-        ),
-      ).map((range) => {
-        const [start, end] = range.split(":").map((value) => Number.parseInt(value, 10));
-        return [start, end] as [number, number];
-      }),
+      sourceTranscriptRanges: mergeClosedIntervals([
+        ...existing.sourceTranscriptRanges,
+        ...topic.sourceTranscriptRanges,
+      ]),
+      discussionTimestampRange: mergeDiscussionTimestampRange(
+        existing.discussionTimestampRange,
+        topic.discussionTimestampRange,
+      ),
+      discussionStatus: existing.discussionStatus === "discussed" || topic.discussionStatus === "discussed"
+        ? "discussed"
+        : topic.discussionStatus ?? existing.discussionStatus,
       aliases: unique([...existing.aliases, ...topic.aliases]).slice(0, 8),
       notes: unique([...existing.notes, ...topic.notes]).slice(0, 10),
       openQuestions: unique([...existing.openQuestions, ...topic.openQuestions]).slice(0, 6),
@@ -843,12 +853,18 @@ export function normalizeWorkflowState(value: unknown, fallback: WorkflowState):
       .filter((topic): topic is WorkflowTopic => Boolean(topic)),
   );
   return {
-    documentTopics: preserveItemNumbers(
-      documentTopics.length > 0 ? documentTopics : fallback.documentTopics,
+    documentTopics: preserveTranscriptProvenance(
+      preserveItemNumbers(
+        documentTopics.length > 0 ? documentTopics : fallback.documentTopics,
+        fallback.documentTopics,
+      ),
       fallback.documentTopics,
     ),
-    extraTopics: preserveItemNumbers(
-      extraTopics.length > 0 || record.extraTopics ? extraTopics : fallback.extraTopics,
+    extraTopics: preserveTranscriptProvenance(
+      preserveItemNumbers(
+        extraTopics.length > 0 || record.extraTopics ? extraTopics : fallback.extraTopics,
+        fallback.extraTopics,
+      ),
       fallback.extraTopics,
     ),
     uncertainties: unique(
@@ -864,6 +880,25 @@ export function normalizeWorkflowState(value: unknown, fallback: WorkflowState):
   };
 }
 
+function mergeDiscussionTimestampRange(
+  left?: string | null,
+  right?: string | null,
+): string | null {
+  return formatDiscussionTimestampRanges([
+    ...parseDiscussionTimestampRanges(left),
+    ...parseDiscussionTimestampRanges(right),
+  ]);
+}
+
+function findPriorTopic(topic: WorkflowTopic, previous: WorkflowTopic[]): WorkflowTopic | undefined {
+  if (topic.itemNumber) {
+    const code = topic.itemNumber.trim().toLowerCase();
+    const byNumber = previous.find((entry) => (entry.itemNumber || "").trim().toLowerCase() === code);
+    if (byNumber) return byNumber;
+  }
+  return previous.find((entry) => normalize(entry.title) === normalize(topic.title));
+}
+
 function preserveItemNumbers(next: WorkflowTopic[], previous: WorkflowTopic[]): WorkflowTopic[] {
   if (previous.length === 0) return next;
   const byTitle = new Map(previous.map((topic) => [normalize(topic.title), topic]));
@@ -871,6 +906,30 @@ function preserveItemNumbers(next: WorkflowTopic[], previous: WorkflowTopic[]): 
     if (topic.itemNumber) return topic;
     const prior = byTitle.get(normalize(topic.title));
     return prior?.itemNumber ? { ...topic, itemNumber: prior.itemNumber } : topic;
+  });
+}
+
+function preserveTranscriptProvenance(next: WorkflowTopic[], previous: WorkflowTopic[]): WorkflowTopic[] {
+  if (previous.length === 0) return next;
+  return next.map((topic) => {
+    const prior = findPriorTopic(topic, previous);
+    if (!prior) return topic;
+    return {
+      ...topic,
+      sourceChunkIds: unique([...prior.sourceChunkIds, ...topic.sourceChunkIds]).slice(0, 24),
+      sourceTranscriptRanges: mergeClosedIntervals([
+        ...prior.sourceTranscriptRanges,
+        ...topic.sourceTranscriptRanges,
+      ]),
+      discussionTimestampRange: mergeDiscussionTimestampRange(
+        prior.discussionTimestampRange,
+        topic.discussionTimestampRange,
+      ),
+      discussionStatus:
+        prior.discussionStatus === "discussed" || topic.discussionStatus === "discussed"
+          ? "discussed"
+          : topic.discussionStatus ?? prior.discussionStatus,
+    };
   });
 }
 
@@ -1020,7 +1079,7 @@ function buildStateText(state: WorkflowState, options?: { compact?: boolean }): 
         visibility: topic.visibility,
         sourcePages: topic.sourcePages.slice(0, 8),
         sourceChunkIds: topic.sourceChunkIds.slice(0, 6),
-        sourceTranscriptRanges: topic.sourceTranscriptRanges.slice(0, 4),
+        sourceTranscriptRanges: topic.sourceTranscriptRanges,
         discussionStatus: topic.discussionStatus,
         discussionTimestampRange: topic.discussionTimestampRange,
         consolidationReason: topic.consolidationReason,
@@ -1035,7 +1094,7 @@ function buildStateText(state: WorkflowState, options?: { compact?: boolean }): 
         visibility: topic.visibility,
         sourcePages: topic.sourcePages.slice(0, 8),
         sourceChunkIds: topic.sourceChunkIds.slice(0, 6),
-        sourceTranscriptRanges: topic.sourceTranscriptRanges.slice(0, 4),
+        sourceTranscriptRanges: topic.sourceTranscriptRanges,
         discussionStatus: topic.discussionStatus,
         discussionTimestampRange: topic.discussionTimestampRange,
         consolidationReason: topic.consolidationReason,

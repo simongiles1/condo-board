@@ -33,8 +33,15 @@ import {
   buildAgendaOutlineTree,
   compareAgendaItemCodes,
   decorateAgendaOutlineTree,
+  filterAgendaItemsPreservingAncestors,
+  parseDiscussionTimestampRanges,
   planAdHocPlacement,
 } from "../lib/meeting-v2/agenda-outline";
+import {
+  buildTranscriptSectionOverlays,
+  discussionTimingFromSourceText,
+  groupCuesByTranscriptSections,
+} from "../lib/transcript/section-overlay";
 
 describe("analyzeExtractionQuality", () => {
   it("does not false-positive halt on DeepSeek items with sourceSectionId", () => {
@@ -327,6 +334,47 @@ describe("Dual-Source Agenda Extraction & Synthesis", () => {
     assert.equal(result.discrepancies?.[0].suggestedTitle, "Hallway HVAC Noise Complaints");
   });
 
+  it("union-merges transcript ranges from prior extractor state", () => {
+    const prior = normalizeTopic({
+      title: "Gym etiquette",
+      sectionLabel: "Items for discussion",
+      itemNumber: "4.D.j",
+      sourceTranscriptRanges: [[10, 40]],
+      discussionTimestampRange: "00:00:30 - 00:01:10",
+      discussionStatus: "discussed",
+    });
+    assert.ok(prior);
+
+    const result = normalizeWorkflowState(
+      {
+        documentTopics: [
+          {
+            title: "Gym etiquette",
+            sectionLabel: "Items for discussion",
+            itemNumber: "4.D.j",
+            sourceTranscriptRanges: [[80, 120]],
+            discussionTimestampRange: "00:02:00 - 00:03:00",
+            discussionStatus: "discussed",
+          },
+        ],
+      },
+      {
+        documentTopics: [prior],
+        extraTopics: [],
+        uncertainties: [],
+      },
+    );
+
+    assert.deepEqual(result.documentTopics[0].sourceTranscriptRanges, [
+      [10, 40],
+      [80, 120],
+    ]);
+    assert.equal(
+      result.documentTopics[0].discussionTimestampRange,
+      "00:00:30 - 00:01:10; 00:02:00 - 00:03:00",
+    );
+  });
+
   it("deduplicates discrepancies when the model echoes existing ids", () => {
     const existing = {
       id: "disc-034-1",
@@ -584,6 +632,42 @@ describe("Hierarchical board-package agenda outline", () => {
     );
   });
 
+  it("keeps disjoint discussion spans instead of filling the gap", () => {
+    const corrected = applyAgendaHierarchyCorrections([
+      {
+        id: "4",
+        itemNumber: "4",
+        title: "Property Management Report",
+        discussionTimestampRange: null,
+      },
+      {
+        id: "4dj",
+        itemNumber: "4.D.j",
+        title: "Gym etiquette",
+        discussionTimestampRange: "00:01:00 - 00:02:00; 00:10:00 - 00:11:00",
+      },
+    ]);
+
+    assert.equal(
+      corrected.find((item) => item.id === "4dj")?.discussionTimestampRange,
+      "00:01:00 - 00:02:00; 00:10:00 - 00:11:00",
+    );
+    assert.equal(
+      corrected.find((item) => item.id === "4")?.discussionTimestampRange,
+      "00:01:00 - 00:02:00; 00:10:00 - 00:11:00",
+    );
+    assert.deepEqual(
+      parseDiscussionTimestampRanges("00:01:00 - 00:02:00; 00:10:00 - 00:11:00").map((range) => [
+        range.startSeconds,
+        range.endSeconds,
+      ]),
+      [
+        [60, 120],
+        [600, 660],
+      ],
+    );
+  });
+
   it("fills a 4.B numbering gap when top-level 5 is next-meeting admin", () => {
     const items = [
       { id: "4", itemNumber: "4", title: "Property Management Report" },
@@ -607,6 +691,157 @@ describe("Hierarchical board-package agenda outline", () => {
     assert.deepEqual(
       sectionB?.children.map((child) => child.displayNumber),
       ["4", "5"],
+    );
+  });
+});
+
+describe("filterAgendaItemsPreservingAncestors", () => {
+  it("keeps a not-discussed parent when a discussed descendant remains", () => {
+    const items = [
+      { id: "4", itemNumber: "4", title: "Property Management Report" },
+      { id: "4d", itemNumber: "4.D", title: "The items for discussion" },
+      { id: "4da", itemNumber: "4.D.a", title: "2026 Annual General Meeting" },
+      { id: "4db", itemNumber: "4.D.b", title: "Skipped correspondence" },
+      { id: "4dc", itemNumber: "4.D.c", title: "Reserve Fund Investments" },
+    ];
+    const notDiscussed = new Set(["4d", "4db"]);
+    const kept = filterAgendaItemsPreservingAncestors(
+      items,
+      (item) => !notDiscussed.has(item.id),
+    );
+    assert.deepEqual(
+      kept.map((item) => item.itemNumber),
+      ["4", "4.D", "4.D.a", "4.D.c"],
+    );
+
+    const tree = buildAgendaOutlineTree(kept);
+    const sectionD = tree
+      .find((node) => node.item.id === "4")
+      ?.children.find((child) => child.item.id === "4d");
+    assert.equal(sectionD?.displayNumber, "D");
+    assert.deepEqual(
+      sectionD?.children.map((child) => child.displayNumber),
+      ["a", "c"],
+    );
+  });
+});
+
+describe("transcript section overlay", () => {
+  it("reads discussion timing from source text", () => {
+    assert.equal(
+      discussionTimingFromSourceText("Discussion timing: 00:02:16 - 00:02:22\nChunk IDs: a"),
+      "00:02:16 - 00:02:22",
+    );
+  });
+
+  it("overlays leaf items only and splits cues at adjacent ranges", () => {
+    const overlays = buildTranscriptSectionOverlays(
+      [
+        {
+          id: "4a",
+          itemNumber: "4.A",
+          title: "Business arising",
+          sourceText: "Discussion timing: 00:02:00 - 00:03:02",
+        },
+        {
+          id: "4a2",
+          itemNumber: "4.A.2",
+          title: "First topic",
+          sourceText: "Discussion timing: 00:02:16 - 00:02:22",
+        },
+        {
+          id: "4a3",
+          itemNumber: "4.A.3",
+          title: "Second topic",
+          sourceText: "Discussion timing: 00:02:22 - 00:03:02",
+        },
+      ],
+      (item) => discussionTimingFromSourceText(item.sourceText),
+    );
+
+    assert.deepEqual(
+      overlays.map((overlay) => overlay.code),
+      ["4.A.2", "4.A.3"],
+    );
+
+    const groups = groupCuesByTranscriptSections(
+      [
+        { start: "00:02:10.000" },
+        { start: "00:02:16.000" },
+        { start: "00:02:20.000" },
+        { start: "00:02:22.000" },
+        { start: "00:02:50.000" },
+        { start: "00:03:10.000" },
+      ],
+      overlays,
+    );
+
+    assert.deepEqual(
+      groups.map((group) => ({
+        codes: group.sections.map((section) => section.code),
+        cues: group.cueIndexes,
+      })),
+      [
+        { codes: [], cues: [0] },
+        { codes: ["4.A.2"], cues: [1, 2] },
+        { codes: ["4.A.3", "4.A.2"], cues: [3] },
+        { codes: ["4.A.3"], cues: [4] },
+        { codes: [], cues: [5] },
+      ],
+    );
+  });
+
+  it("paints disjoint revisits as separate boxes and overlapping cues as both topics", () => {
+    const overlays = buildTranscriptSectionOverlays(
+      [
+        {
+          id: "gym",
+          itemNumber: "4.D.j",
+          title: "Gym etiquette",
+          sourceText: "Discussion timing: 00:01:00 - 00:02:00; 00:10:00 - 00:11:00",
+        },
+        {
+          id: "pump",
+          itemNumber: "4.B.1",
+          title: "Booster pump",
+          sourceText: "Discussion timing: 00:01:50 - 00:02:10",
+        },
+      ],
+      (item) => discussionTimingFromSourceText(item.sourceText),
+    );
+
+    assert.deepEqual(
+      overlays.map((overlay) => [overlay.code, overlay.startSeconds, overlay.endSeconds]),
+      [
+        ["4.D.j", 60, 120],
+        ["4.B.1", 110, 130],
+        ["4.D.j", 600, 660],
+      ],
+    );
+
+    const groups = groupCuesByTranscriptSections(
+      [
+        { start: "00:01:10.000" },
+        { start: "00:01:55.000" },
+        { start: "00:02:05.000" },
+        { start: "00:03:00.000" },
+        { start: "00:10:30.000" },
+      ],
+      overlays,
+    );
+
+    assert.deepEqual(
+      groups.map((group) => ({
+        codes: group.sections.map((section) => section.code),
+        cues: group.cueIndexes,
+      })),
+      [
+        { codes: ["4.D.j"], cues: [0] },
+        { codes: ["4.B.1", "4.D.j"], cues: [1] },
+        { codes: ["4.B.1"], cues: [2] },
+        { codes: [], cues: [3] },
+        { codes: ["4.D.j"], cues: [4] },
+      ],
     );
   });
 });

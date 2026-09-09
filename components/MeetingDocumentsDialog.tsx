@@ -7,6 +7,13 @@ import { VttViewerDialog } from "@/components/VttViewerDialog";
 
 type DocTab = "transcript" | "boardPackage";
 
+type AgendaOverlayItem = {
+  id: string;
+  title: string;
+  itemNumber: string | null;
+  sourceText?: string | null;
+};
+
 type Props = {
   open: boolean;
   meetingId: string;
@@ -14,6 +21,7 @@ type Props = {
   hasTranscript: boolean;
   hasBoardPackage: boolean;
   initialTab?: DocTab;
+  agendaItems?: AgendaOverlayItem[];
   onClose: () => void;
 };
 
@@ -24,6 +32,7 @@ export function MeetingDocumentsDialog({
   hasTranscript,
   hasBoardPackage,
   initialTab,
+  agendaItems,
   onClose,
 }: Props) {
   const [activeTab, setActiveTab] = useState<DocTab>(
@@ -113,6 +122,7 @@ export function MeetingDocumentsDialog({
               embedded
               meetingId={meetingId}
               fileLabel={transcriptFileName ?? "transcript.vtt"}
+              agendaItems={agendaItems}
               onClose={onClose}
             />
           ) : showBoardPackage ? (

@@ -66,6 +66,7 @@ import { TranscriptRangeModal } from "@/components/TranscriptRangeModal";
 import {
   buildAgendaOutlineTree,
   decorateAgendaOutlineTree,
+  filterAgendaItemsPreservingAncestors,
   inferPropertyManagementReportNumber,
   planAdHocPlacement,
   type AgendaListMarker,
@@ -1211,6 +1212,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         transcriptFileName={status?.sources.transcript?.fileName}
         hasTranscript={Boolean(status?.sources.transcript?.available)}
         hasBoardPackage={Boolean(status?.sources.boardPackage?.available)}
+        agendaItems={status?.items}
         onClose={() => setDocumentsDialogOpen(false)}
       />
       <AiUsageDialog
@@ -2213,7 +2215,7 @@ function filterItemsForValidatedReview(
   const excluded = new Set(agendaApproval?.excludedItemIds ?? []);
   const itemStatuses = agendaApproval?.itemStatuses ?? {};
 
-  return items.filter((item) => {
+  return filterAgendaItemsPreservingAncestors(items, (item) => {
     if (excluded.has(item.id)) return false;
     const status = itemStatuses[item.id] ?? item.discussionStatus ?? "discussed";
     return status !== "not_discussed";
@@ -2349,6 +2351,7 @@ function AgendaReviewListItem({
   subItems = [],
   discussionTiming = null,
   showStatusControls = true,
+  isHeading = false,
   itemStatuses,
   excludedItemIds,
   editedTitles,
@@ -2368,6 +2371,7 @@ function AgendaReviewListItem({
   subItems?: Array<{ label: string; title: string }>;
   discussionTiming?: string | null;
   showStatusControls?: boolean;
+  isHeading?: boolean;
   itemStatuses: Record<string, "discussed" | "not_discussed" | "ad_hoc">;
   excludedItemIds: Set<string>;
   editedTitles: Record<string, string>;
@@ -2451,23 +2455,23 @@ function AgendaReviewListItem({
                   </span>
                 ) : null}
 
-                {currentStatus === "not_discussed" ? (
+                {!isHeading && currentStatus === "not_discussed" ? (
                   <span className="rounded bg-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-700">
                     Deferred (Zero LLM Tokens)
                   </span>
-                ) : currentStatus === "ad_hoc" ? (
+                ) : !isHeading && currentStatus === "ad_hoc" ? (
                   <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
                     Ad-Hoc Discussion
                   </span>
-                ) : parsedSnippet.isUncertain ? (
+                ) : !isHeading && parsedSnippet.isUncertain ? (
                   <span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
                     ⚠️ Uncertain Match
                   </span>
-                ) : (
+                ) : !isHeading ? (
                   <span className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
                     Verified in Audio
                   </span>
-                )}
+                ) : null}
 
                 {isRyanRatcliffGuestItem ? (
                   <span
@@ -2575,6 +2579,7 @@ function ValidatedAgendaReviewListItem({
   listMarker = "decimal",
   subItems = [],
   discussionTiming = null,
+  isHeading = false,
   isOpen,
   answers,
   dirtyItems,
@@ -2593,6 +2598,7 @@ function ValidatedAgendaReviewListItem({
   listMarker?: AgendaListMarker;
   subItems?: Array<{ label: string; title: string }>;
   discussionTiming?: string | null;
+  isHeading?: boolean;
   isOpen: boolean;
   answers: Record<string, string>;
   dirtyItems: Record<string, boolean>;
@@ -2617,13 +2623,15 @@ function ValidatedAgendaReviewListItem({
   return (
     <li
       className={`border-b border-slate-100 last:border-b-0 ${
-        openQuestionCount > 0
-          ? "bg-amber-50/30"
-          : flagCount > 0
-            ? hasErrorFlags
-              ? "bg-rose-50/20"
-              : "bg-amber-50/20"
-            : "hover:bg-slate-50/40"
+        isHeading
+          ? "hover:bg-slate-50/40"
+          : openQuestionCount > 0
+            ? "bg-amber-50/30"
+            : flagCount > 0
+              ? hasErrorFlags
+                ? "bg-rose-50/20"
+                : "bg-amber-50/20"
+              : "hover:bg-slate-50/40"
       }`}
     >
       <div className="flex gap-3 px-4 py-3">
@@ -2639,16 +2647,22 @@ function ValidatedAgendaReviewListItem({
           <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0 flex-1 space-y-1.5">
               <div
-                role="button"
-                tabIndex={0}
-                onClick={onToggleOpen}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onToggleOpen();
-                  }
-                }}
-                className="flex w-full flex-wrap items-center gap-2 text-left cursor-pointer"
+                role={isHeading ? undefined : "button"}
+                tabIndex={isHeading ? undefined : 0}
+                onClick={isHeading ? undefined : onToggleOpen}
+                onKeyDown={
+                  isHeading
+                    ? undefined
+                    : (event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onToggleOpen();
+                        }
+                      }
+                }
+                className={`flex w-full flex-wrap items-center gap-2 text-left ${
+                  isHeading ? "" : "cursor-pointer"
+                }`}
               >
                 <span className="text-sm font-semibold text-slate-900">{item.title}</span>
 
@@ -2672,23 +2686,27 @@ function ValidatedAgendaReviewListItem({
                   </button>
                 ) : null}
 
-                <span
-                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${outcomeTone(item.outcome)}`}
-                >
-                  {startCase(item.outcome ?? "pending")}
-                </span>
+                {!isHeading ? (
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${outcomeTone(item.outcome)}`}
+                  >
+                    {startCase(item.outcome ?? "pending")}
+                  </span>
+                ) : null}
 
-                <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
-                  {item.confidence ? startCase(item.confidence) : "Unknown"}
-                </span>
+                {!isHeading ? (
+                  <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                    {item.confidence ? startCase(item.confidence) : "Unknown"}
+                  </span>
+                ) : null}
 
-                {openQuestionCount > 0 ? (
+                {!isHeading && openQuestionCount > 0 ? (
                   <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-950">
                     {openQuestionCount} {openQuestionCount === 1 ? "Question" : "Questions"}
                   </span>
                 ) : null}
 
-                {flagCount > 0 ? (
+                {!isHeading && flagCount > 0 ? (
                   <span
                     className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
                       hasErrorFlags
@@ -2701,14 +2719,14 @@ function ValidatedAgendaReviewListItem({
                 ) : null}
               </div>
 
-              {goldStandardFindings && onOpenGoldStandardPanel ? (
+              {!isHeading && goldStandardFindings && onOpenGoldStandardPanel ? (
                 <GoldStandardItemFindingBadgesRow
                   findings={goldStandardFindings}
                   onOpenGoldStandardPanel={onOpenGoldStandardPanel}
                 />
               ) : null}
 
-              {item.discussionSummary ? (
+              {!isHeading && item.discussionSummary ? (
                 <p className="text-xs leading-5 text-slate-600">{item.discussionSummary}</p>
               ) : null}
 
@@ -2732,7 +2750,7 @@ function ValidatedAgendaReviewListItem({
             </div>
           </div>
 
-          {isOpen ? (
+          {!isHeading && isOpen ? (
             <div className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="mb-4 flex flex-wrap items-center gap-3">
                 <button
@@ -3144,19 +3162,11 @@ function HitlAgendaApprovalWorkspace({
   function renderOutlineNodes(
     nodes: AgendaOutlineNode[],
     depth = 0,
-    parentSectionNotDiscussed = false,
   ): ReactNode {
     return nodes.map((node) => {
-      const currentStatus =
-        itemStatuses[node.item.id] || node.item.discussionStatus || "discussed";
       const hasChildren = node.children.length > 0;
-      const sectionNotDiscussed = currentStatus === "not_discussed";
-      const showStatusControls = parentSectionNotDiscussed
-        ? false
-        : hasChildren
-          ? sectionNotDiscussed
-          : true;
-      const childParentNotDiscussed = parentSectionNotDiscussed || sectionNotDiscussed;
+      const isHeading = hasChildren || node.item.itemType === "agenda_section";
+      const showStatusControls = !isHeading;
 
       return (
         <div key={node.item.id}>
@@ -3167,6 +3177,7 @@ function HitlAgendaApprovalWorkspace({
             subItems={node.subItems}
             discussionTiming={node.discussionTiming ?? null}
             showStatusControls={showStatusControls}
+            isHeading={isHeading}
             itemStatuses={itemStatuses}
             excludedItemIds={excludedItemIds}
             editedTitles={editedTitles}
@@ -3188,7 +3199,7 @@ function HitlAgendaApprovalWorkspace({
                 depth === 0 ? "border-t border-slate-100 bg-slate-50/40" : "bg-white/70"
               }`}
             >
-              {renderOutlineNodes(node.children, depth + 1, childParentNotDiscussed)}
+              {renderOutlineNodes(node.children, depth + 1)}
             </ol>
           ) : null}
         </div>
@@ -3660,6 +3671,7 @@ function AgendaReviewPanel({
   ): ReactNode {
     return nodes.map((node) => {
       const hasChildren = node.children.length > 0;
+      const isHeading = hasChildren || node.item.itemType === "agenda_section";
 
       return (
         <div key={node.item.id}>
@@ -3669,6 +3681,7 @@ function AgendaReviewPanel({
             listMarker={node.listMarker}
             subItems={node.subItems}
             discussionTiming={node.discussionTiming ?? null}
+            isHeading={isHeading}
             isOpen={openItemId === node.item.id}
             answers={answers}
             dirtyItems={dirtyItems}

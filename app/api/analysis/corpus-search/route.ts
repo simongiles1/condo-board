@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 
+import { formatGeminiApiErrorMessage } from "@/lib/gemini/client";
 import { searchCorpus, type CorpusSearchOptions } from "@/lib/rag/search";
 
 export async function POST(request: Request) {
@@ -24,18 +25,22 @@ export async function POST(request: Request) {
       sourceKind: body.sourceKind,
     };
 
-    const { results, usage } = await searchCorpus(options);
+    const { results, matchedEntities, usage } = await searchCorpus(options);
     return NextResponse.json({
       query,
       count: results.length,
       results,
+      matchedEntities,
       usage,
     });
   } catch (err) {
     console.error("[corpus-search] error:", err);
+    const friendly = formatGeminiApiErrorMessage(err);
+    const billingBlocked =
+      friendly?.includes("credits") || friendly?.includes("spending cap");
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Search failed" },
-      { status: 500 },
+      { error: friendly ?? (err instanceof Error ? err.message : "Search failed") },
+      { status: billingBlocked ? 402 : 500 },
     );
   }
 }

@@ -8,6 +8,8 @@ Important rules:
 - Preserve conclusions that are already supported.
 - Change any field that the validation findings correctly identify as too strong, incomplete, or internally inconsistent.
 - Transcript is authoritative for what was discussed, approved, rejected, deferred, or left unresolved, AND overrides the board package for names, amounts, and details if there is a discrepancy.
+- If the transcript contradicts package Amount / Recommendation / contractor notes, return revised_notes with the full corrected notes list. Otherwise omit revised_notes.
+- Guest-presentation outline items stay on the passing mention. Do not copy later PM-report discussion of the same project onto a guest_presentation item.
 - Board package provides baseline agenda framing, names, amounts, and supporting details, but transcript takes precedence in conflicts.
 - A package or email approval can prove that a prior approval happened, but it does not automatically prove that an in-meeting ratification vote was explicit in the prepared evidence.
 - If approval or rejection is not explicit in the evidence, do not overstate it.
@@ -49,7 +51,8 @@ Return JSON only with this exact shape:
       "recommended_answer": "string",
       "confidence": "high | medium | low"
     }
-  ]
+  ],
+  "revised_notes": ["string"]
 }
 
 Constraints:
@@ -60,5 +63,6 @@ Constraints:
 - open_questions should capture any remaining ambiguity after repair.
 - If there is no reliable motion, set motion to null.
 - If there are no actions or questions, return empty arrays.
+- revised_notes is optional. Omit it when package notes still match the transcript.
 - Return raw JSON only. Do not add headings, commentary, or markdown fences.
 `;

@@ -16,6 +16,8 @@ Important rules:
 
 - Transcript is authoritative for what was actually discussed, decided, and all details (including names, amounts, and contractors) when there is a discrepancy.
 - Board package provides baseline names, amounts, quote details, and agenda framing, but MUST be overridden by the transcript if the transcript mentions different details or prior approvals.
+- Package Amount / Recommendation notes are a starting point only. If the transcript states a different amount, contractor, or recommendation, you MUST return revised_notes: the full notes list after applying the transcript. Do not leave a contradicted package Amount or Recommendation in place. If the transcript does not contradict those notes, omit revised_notes.
+- Guest-presentation outline items (itemType guest_presentation, e.g. 1.A / 1.B / 1.C) stay distinct from later Property Management Report items about the same project (e.g. 4.B.1). If this guest item was only mentioned as already completed, write that passing mention only. Do not copy later PM-report discussion (amounts, CCDC, legal review, skip/ratify) onto this item, even if those details appear in the prepared context. Do not call find_later_resolution_for_item for guest_presentation items.
 - The prepared context bundle is your primary evidence set and should usually be enough.
 - Start from the prepared context bundle alone before considering any tool use.
 - Treat the prepared context as already-curated evidence around this item, not as a hint to go re-explore the meeting.
@@ -26,7 +28,7 @@ Important rules:
   missing vote/result, missing motion detail, unclear speaker wording, unclear neighboring transcript context, or a direct contradiction in the prepared context.
 - Bad reasons to use a tool:
   curiosity, broad fishing, searching for "anything else", or re-reading large parts of the meeting without a focused question.
-- If an item looks like a presentation, technical discussion, or budget discussion and the actual decision may have happened later, use find_later_resolution_for_item before broad keyword search.
+- If an item looks like a technical discussion or budget discussion and the actual decision may have happened later on the same agenda item, use find_later_resolution_for_item before broad keyword search. Do not use that tool for guest_presentation outline items.
 - Do not call tools merely to restate anchor chunks that are already present in the prepared context.
 - If the prepared context gives enough support for a careful answer, stop and return the final JSON immediately.
 - After each tool call, reassess whether you already have enough evidence to answer. If yes, stop calling tools and return the final JSON.
@@ -81,14 +83,14 @@ Working method:
 2. Decide whether the prepared context already supports a careful answer.
 3. If yes, return the final JSON without tools.
 4. If no, identify the single missing fact.
-5. If the likely missing fact is a later approval, later motion, later ratification, or later condition attached to the same item, call find_later_resolution_for_item first.
+5. If the likely missing fact is a later approval, later motion, later ratification, or later condition attached to the same agenda item (not a guest_presentation outline slot), call find_later_resolution_for_item first.
 6. Reassess and either finish or make one more narrow tool call.
 7. Keep the final answer conservative and evidence-backed.
 
 Tool guidance:
 
-- Use find_later_resolution_for_item when the prepared context shows the topic discussion but not the final board decision.
-- This tool is especially useful when the meeting discusses an item in one place and resolves it later.
+- Use find_later_resolution_for_item when the prepared context shows the topic discussion but not the final board decision, and this item is not a guest_presentation outline slot.
+- This tool is especially useful when the meeting discusses an item in one place and resolves it later on the same agenda item.
 - Use get_chunk or get_chunks_by_ids after find_later_resolution_for_item if you need to read one of the returned resolution chunks in full.
 - Use search_meeting_chunks only if the targeted later-resolution tool still does not answer the missing question.
 
@@ -119,7 +121,8 @@ Return JSON only with this exact shape:
       "recommended_answer": "string",
       "confidence": "high | medium | low"
     }
-  ]
+  ],
+  "revised_notes": ["string"]
 }
 
 Constraints:
@@ -135,6 +138,7 @@ Constraints:
 - If you apply the default mover and seconder rules, DO NOT log an open_question about the missing formal language. Applying the parliamentary defaults resolves this ambiguity.
 - If there is no reliable motion, set motion to null.
 - If there are no actions or questions, return empty arrays.
+- revised_notes is optional. Omit it when package notes still match the transcript. When the transcript contradicts package Amount / Recommendation / contractor notes, return the full corrected notes list.
 - Do not think out loud.
 - Do not explain your reasoning before or after the JSON.
 - Your entire reply must be exactly one JSON object that begins with { and ends with }.

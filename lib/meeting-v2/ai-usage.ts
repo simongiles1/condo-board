@@ -289,19 +289,39 @@ export async function loadMeetingV2AiUsageStages(
     usageByStageId.set(stage.id, stage);
   }
 
-  const doclingPageCount = documentPages.filter((page) =>
+  const settings = readMeetingV2Settings(v2Meeting[0]?.settings ?? null);
+  const inferredDoclingPageCount = documentPages.filter((page) =>
     isLikelyDoclingMarkdown(page.extractedText),
   ).length;
+  const storedIngestUsage = settings.ingestUsage;
+  const totalIngestPages =
+    storedIngestUsage?.totalPages ?? documentPages.length;
+  const doclingPageCount = Math.max(
+    storedIngestUsage?.doclingPages ?? 0,
+    inferredDoclingPageCount,
+  );
 
-  if (doclingPageCount > 0) {
+  if (totalIngestPages > 0) {
+    const doclingPagesForDisplay = Math.min(doclingPageCount, totalIngestPages);
+    const pdfJsPages = Math.max(0, totalIngestPages - doclingPagesForDisplay);
     usageByStageId.set(
       "ingest",
       buildNotApplicableStage({
         id: "ingest",
         label: "Ingest",
         stageKind: "pipeline",
-        modelName: "IBM Docling",
-        usageDetail: `${doclingPageCount} page${doclingPageCount === 1 ? "" : "s"} processed`,
+        modelName:
+          doclingPagesForDisplay > 0
+            ? pdfJsPages > 0
+              ? "IBM Docling + pdf.js"
+              : "IBM Docling"
+            : "pdf.js",
+        usageDetail:
+          doclingPagesForDisplay > 0
+            ? pdfJsPages > 0
+              ? `${doclingPagesForDisplay} Docling page${doclingPagesForDisplay === 1 ? "" : "s"}, ${pdfJsPages} pdf.js page${pdfJsPages === 1 ? "" : "s"}`
+              : `${doclingPagesForDisplay} page${doclingPagesForDisplay === 1 ? "" : "s"} processed`
+            : `${totalIngestPages} page${totalIngestPages === 1 ? "" : "s"} ingested (Docling not used)`,
       }),
     );
   }
@@ -380,7 +400,6 @@ export async function loadMeetingV2AiUsageStages(
     );
   }
 
-  const settings = readMeetingV2Settings(v2Meeting[0]?.settings ?? null);
   if (settings.validationUsage && settings.validationUsage.totalTokens > 0) {
     const validationSegments = settings.validationUsage.segments ?? [];
     const pipelineValidationSegments = validationSegments.filter(

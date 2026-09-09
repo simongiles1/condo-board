@@ -139,6 +139,7 @@ export async function extractPdfPagesWithText(
 ): Promise<{
   pageCount: number;
   pages: PdfPageText[];
+  doclingPageCount: number;
 }> {
   const pdfjs = await loadPdfJs();
   const loadingTask = pdfjs.getDocument({
@@ -227,6 +228,7 @@ export async function extractPdfPagesWithText(
   return {
     pageCount: doc.numPages,
     pages,
+    doclingPageCount: doclingMap.size,
   };
 }
 

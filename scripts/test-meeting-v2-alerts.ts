@@ -131,6 +131,37 @@ describe("buildMeetingV2Alerts", () => {
     assert.equal(alerts.length, 0);
   });
 
+  it("suppresses expected post-approval evidence lag while the meeting was just updated", () => {
+    const alerts = buildMeetingV2Alerts({
+      extractionQuality: quality({ likelyIncomplete: false, issueCode: "none" }),
+      integrityNote: "Evidence contexts are missing for one or more agenda items.",
+      isConsistent: false,
+      lastError: null,
+      pipelineState: "validated",
+      computedPipelineState: "gathering_evidence",
+      pipelineActivelyRunning: false,
+      updatedAt: new Date().toISOString(),
+    });
+
+    assert.equal(alerts.some((alert) => alert.id === "pipeline-progress"), false);
+    assert.equal(alerts.some((alert) => alert.blocksPipeline), false);
+  });
+
+  it("uses computed pipeline state when deciding expected integrity lag", () => {
+    const alerts = buildMeetingV2Alerts({
+      extractionQuality: quality({ likelyIncomplete: false, issueCode: "none" }),
+      integrityNote: "Evidence contexts are missing for one or more agenda items.",
+      isConsistent: false,
+      lastError: null,
+      pipelineState: "extracted",
+      computedPipelineState: "gathering_evidence",
+      pipelineActivelyRunning: true,
+      updatedAt: "2026-09-06T23:00:00.000Z",
+    });
+
+    assert.equal(alerts.some((alert) => alert.id === "pipeline-progress"), false);
+  });
+
   it("shows unexpected in-progress integrity mismatches as warnings without blocking", () => {
     const alerts = buildMeetingV2Alerts({
       extractionQuality: quality({

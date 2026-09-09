@@ -22,6 +22,11 @@ import {
   getCorpusIndexTimingSnapshot,
   type CorpusIndexStint,
 } from "@/lib/rag/index-timing";
+import { useEntityProfile } from "@/components/EntityProfileProvider";
+import type {
+  CorpusSearchEntityBadge,
+  MatchedRegistryEntity,
+} from "@/lib/rag/registry-boost";
 import type { CorpusSearchResult, CorpusSearchUsage } from "@/lib/rag/search";
 
 const EXAMPLE_QUERIES = [
@@ -56,7 +61,9 @@ export function ArchiveSearchClient() {
   const [searching, setSearching] = useState(false);
   const [searchDurationMs, setSearchDurationMs] = useState<number | null>(null);
   const [searchResults, setSearchResults] = useState<CorpusSearchResult[] | null>(null);
+  const [matchedEntities, setMatchedEntities] = useState<MatchedRegistryEntity[]>([]);
   const [lastSearchUsage, setLastSearchUsage] = useState<CorpusSearchUsage | null>(null);
+  const { openProfile } = useEntityProfile();
   const [searchError, setSearchError] = useState<string | null>(null);
   const [expandedChunkIds, setExpandedChunkIds] = useState<Set<string>>(new Set());
 
@@ -312,6 +319,7 @@ export function ArchiveSearchClient() {
 
       const data = (await res.json()) as {
         results?: CorpusSearchResult[];
+        matchedEntities?: MatchedRegistryEntity[];
         count?: number;
         usage?: CorpusSearchUsage;
         error?: string;
@@ -322,6 +330,7 @@ export function ArchiveSearchClient() {
       }
 
       setSearchResults(data.results ?? []);
+      setMatchedEntities(data.matchedEntities ?? []);
       setLastSearchUsage(data.usage ?? null);
       if (data.usage?.costUsd) {
         setSessionSearchCostUsd((prev) => prev + data.usage!.costUsd);
@@ -330,6 +339,7 @@ export function ArchiveSearchClient() {
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : "Search failed");
       setSearchResults(null);
+      setMatchedEntities([]);
     } finally {
       setSearching(false);
     }
@@ -434,7 +444,8 @@ export function ArchiveSearchClient() {
             Ask the Archive
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Natural-language semantic search across 7,000+ emails and parsed attachment documents using pgvector.
+            Natural-language semantic search across emails and parsed attachments.
+            Hits linked to projects, equipment, or organizations are boosted and badged.
           </p>
         </div>
       </div>
@@ -819,13 +830,28 @@ export function ArchiveSearchClient() {
       {/* Search Error */}
       {searchError ? (
         <div className="mb-6 rounded-lg bg-red-50 p-4 text-sm text-red-800">
-          Search error: {searchError}
+          <p className="font-medium">Search error: {searchError}</p>
+          {searchError.includes("spending cap") ? (
+            <p className="mt-2 text-red-700">
+              Indexing used about $6.62 of your Gemini budget. Raise the monthly
+              cap in{" "}
+              <a
+                href="https://aistudio.google.com/usage"
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium underline decoration-red-300 underline-offset-2"
+              >
+                Google AI Studio
+              </a>
+              , then retry — each search only costs a fraction of a cent.
+            </p>
+          ) : null}
         </div>
       ) : null}
 
       {/* Results Header */}
       {searchResults !== null && (
-        <div className="mb-3 flex items-center justify-between px-1">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
           <span className="text-xs font-semibold text-slate-600 uppercase">
             Found {searchResults.length} matching excerpts
             {searchDurationMs !== null ? ` in ${searchDurationMs}ms` : ""}
@@ -835,9 +861,39 @@ export function ArchiveSearchClient() {
                 {formatTokenCount(lastSearchUsage.inputTokens)} tokens)
               </span>
             ) : null}
+            {searchResults.some((result) => (result.boost ?? 0) > 0) ? (
+              <span className="ml-2 normal-case font-medium text-orange-800">
+                · Registry boost applied
+              </span>
+            ) : null}
           </span>
         </div>
       )}
+
+      {matchedEntities.length > 0 ? (
+        <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-lg border border-orange-100 bg-orange-50/70 px-3 py-2">
+          <span className="text-xs font-semibold text-orange-900">
+            Registry matches
+          </span>
+          {matchedEntities.map((entity) => (
+            <button
+              key={`${entity.kind}:${entity.id}`}
+              type="button"
+              onClick={() =>
+                openProfile({
+                  kind: entity.kind,
+                  id: entity.id,
+                  displayName: entity.name,
+                })
+              }
+              className={`${registryBadgeClass(entity.kind, true)} cursor-pointer`}
+              title={`Matched via “${entity.surface}” (${entity.strength})`}
+            >
+              {registryKindLabel(entity.kind)}: {entity.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {/* Search Results List */}
       {searchResults !== null && (
@@ -870,8 +926,14 @@ export function ArchiveSearchClient() {
                               ? "bg-blue-100 text-blue-800"
                               : "bg-slate-100 text-slate-700"
                         }`}
+                        title={
+                          result.boost > 0
+                            ? `${Math.round(result.rawSimilarity * 100)}% semantic + registry boost`
+                            : "Semantic similarity"
+                        }
                       >
                         {similarityPercent}% match
+                        {result.boost > 0 ? " ↑" : ""}
                       </span>
 
                       {/* Source Kind Badge */}
@@ -923,6 +985,24 @@ export function ArchiveSearchClient() {
                     </div>
                   </div>
 
+                  {(result.entities ?? []).length > 0 ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      {result.entities.map((entity) => (
+                        <EntityResultBadge
+                          key={`${result.id}:${entity.kind}:${entity.id}`}
+                          entity={entity}
+                          onOpen={() =>
+                            openProfile({
+                              kind: entity.kind,
+                              id: entity.id,
+                              displayName: entity.name,
+                            })
+                          }
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+
                   {/* Metadata Row */}
                   <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
                     {result.metadata.subject && result.sourceKind !== "email_body" ? (
@@ -969,6 +1049,50 @@ export function ArchiveSearchClient() {
         </div>
       )}
     </div>
+  );
+}
+
+function registryKindLabel(kind: CorpusSearchEntityBadge["kind"]): string {
+  if (kind === "project") return "Project";
+  if (kind === "equipment") return "Equipment";
+  return "Org";
+}
+
+function registryBadgeClass(
+  kind: CorpusSearchEntityBadge["kind"],
+  boosted: boolean,
+): string {
+  const tone =
+    kind === "project"
+      ? "border-orange-200 bg-orange-50 text-orange-900 hover:bg-orange-100"
+      : kind === "equipment"
+        ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
+        : "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-900 hover:bg-fuchsia-100";
+  const ring = boosted ? " ring-1 ring-orange-300" : "";
+  return `inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${tone}${ring}`;
+}
+
+function EntityResultBadge({
+  entity,
+  onOpen,
+}: {
+  entity: CorpusSearchEntityBadge;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`${registryBadgeClass(entity.kind, entity.boosted)} cursor-pointer`}
+      title={
+        entity.boosted
+          ? `${registryKindLabel(entity.kind)} matched this query`
+          : `${registryKindLabel(entity.kind)} linked to this email`
+      }
+    >
+      {registryKindLabel(entity.kind)}: {entity.name}
+      {entity.boosted ? " ↑" : ""}
+    </button>
   );
 }
 

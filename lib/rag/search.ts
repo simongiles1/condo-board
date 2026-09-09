@@ -1,9 +1,15 @@
-import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { documentChunks } from "@/lib/db/schema";
-import { embedQuery } from "@/lib/rag/embed";
+import { emailMessageDetailHref } from "@/lib/email/thread-filters";
 import { summarizeEmbeddingUsage } from "@/lib/rag/cost";
+import { embedQuery } from "@/lib/rag/embed";
+import {
+  enrichSearchWithRegistry,
+  type CorpusSearchEntityBadge,
+  type MatchedRegistryEntity,
+} from "@/lib/rag/registry-boost";
 
 export type CorpusSearchOptions = {
   query: string;
@@ -34,6 +40,9 @@ export type CorpusSearchResult = {
   };
   sourceLink: string | null;
   emailLink: string | null;
+  rawSimilarity: number;
+  boost: number;
+  entities: CorpusSearchEntityBadge[];
 };
 
 export type CorpusSearchUsage = {
@@ -44,6 +53,7 @@ export type CorpusSearchUsage = {
 
 export type CorpusSearchResponse = {
   results: CorpusSearchResult[];
+  matchedEntities: MatchedRegistryEntity[];
   usage: CorpusSearchUsage;
 };
 
@@ -122,11 +132,13 @@ export async function searchCorpus(
   if (!query) {
     return {
       results: [],
+      matchedEntities: [],
       usage: { inputTokens: 0, costUsd: 0, tokenSource: "estimate" },
     };
   }
 
   const limit = Math.max(1, Math.min(50, options.limit ?? 10));
+  const candidateLimit = Math.min(50, Math.max(limit * 3, limit));
   const minSimilarity = options.minSimilarity ?? 0.2;
   const sourceKind = options.sourceKind ?? "all";
 
@@ -163,10 +175,9 @@ export async function searchCorpus(
     .from(documentChunks)
     .where(and(...conditions))
     .orderBy(distanceExpr)
-    .limit(limit);
+    .limit(candidateLimit);
 
-  return {
-    results: rows.map((row) => {
+  const mapped: CorpusSearchResult[] = rows.map((row) => {
     let metadata: CorpusSearchResult["metadata"] = {};
     try {
       metadata = JSON.parse(row.metadataJson || "{}");
@@ -178,7 +189,7 @@ export async function searchCorpus(
     let emailLink: string | null = null;
 
     if (row.emailId) {
-      emailLink = `/knowledge/emails/${row.emailId}`;
+      emailLink = emailMessageDetailHref(row.emailId);
     }
 
     if (row.sourceKind === "email_body") {
@@ -187,6 +198,7 @@ export async function searchCorpus(
       sourceLink = `/api/email/attachments/${metadata.attachmentId}`;
     }
 
+    const similarity = Number(row.similarity.toFixed(4));
     return {
       id: row.id,
       sourceKind: row.sourceKind as CorpusSearchResult["sourceKind"],
@@ -195,13 +207,34 @@ export async function searchCorpus(
       pageNo: row.pageNo,
       chunkIndex: row.chunkIndex,
       chunkText: row.chunkText,
-      similarity: Number(row.similarity.toFixed(4)),
+      similarity,
       excerpt: extractExcerpt(row.chunkText, query),
       metadata,
       sourceLink,
       emailLink,
+      rawSimilarity: similarity,
+      boost: 0,
+      entities: [],
     };
-    }),
-    usage,
-  };
+  });
+
+  try {
+    const enriched = await enrichSearchWithRegistry({
+      query,
+      results: mapped,
+      limit,
+    });
+    return {
+      results: enriched.results,
+      matchedEntities: enriched.matchedEntities,
+      usage,
+    };
+  } catch (err) {
+    console.error("[corpus-search] registry boost failed:", err);
+    return {
+      results: mapped.slice(0, limit),
+      matchedEntities: [],
+      usage,
+    };
+  }
 }

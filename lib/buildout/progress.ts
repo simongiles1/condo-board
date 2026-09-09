@@ -197,9 +197,9 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
       "Natural-language search over the full email + attachment archive. Chunk email bodies and Docling/vision markdown into document_chunks, embed with pgvector in Supabase, and surface ranked excerpts with click-through to source email or attachment. Dev qualification first ('where is the reserve fund study?'); later board questions ('what elevator project ran this year?'). OpenSearch deemed overkill — pgvector on existing Postgres is the stack. Distinct from OKF (curated wiki export) and wiki graph (entity profile navigation).",
     remaining: [
       "Phase A shipped: schema, gemini-embedding-001 embedder, chunking engine, incremental indexer, search API, and /admin/analysis/archive-search dev UI.",
+      "Phase B shipped: lexical match against projects / equipment / orgs, similarity boost when the source email has a resolved mention link, and entity badges on archive search.",
       "Run incremental indexer across corpus as attachment vision backfill progresses.",
-      "Phase B: boost with structured registries (projects, equipment, orgs) when entity links exist.",
-      "Phase C: tie into OKF entity wiki and governance ask-AI — not a prerequisite for Phase A.",
+      "Phase C: tie into OKF entity wiki and governance ask-AI — not a prerequisite for Phase B.",
       "Entity-register embeddings for Pass B resolution are a separate index — do not conflate with document_chunks.",
     ],
   },

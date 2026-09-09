@@ -40,6 +40,14 @@ import {
   hashChunkText,
 } from "../lib/rag/chunk";
 import { cosineSimilarity } from "../lib/rag/embed";
+import {
+  applyRegistryBoost,
+  matchRegistryCatalog,
+  REGISTRY_BOOST_PHRASE,
+  REGISTRY_BOOST_TOKEN,
+  scoreRegistryEntry,
+  type RegistryCatalogEntry,
+} from "../lib/rag/registry-boost";
 import { extractExcerpt } from "../lib/rag/search";
 
 describe("Corpus RAG - Text Chunking", () => {
@@ -307,6 +315,138 @@ describe("Corpus RAG - Cosine Similarity & Excerpt Extraction", () => {
   });
 });
 
+describe("Corpus RAG - Registry boost (Phase B)", () => {
+  const catalog: RegistryCatalogEntry[] = [
+    {
+      kind: "project",
+      id: "proj_elev",
+      name: "Elevator Modernization 2024",
+      surfaces: ["Elevator Modernization 2024", "RFP-ELEV-2024"],
+    },
+    {
+      kind: "equipment",
+      id: "ELEV-HIGH-01",
+      name: "High-rise elevator 01",
+      surfaces: ["High-rise elevator 01", "ELEV-HIGH-01"],
+    },
+    {
+      kind: "organization",
+      id: "org_tcg",
+      name: "TCG",
+      surfaces: ["TCG", "tcgproperty.ca"],
+    },
+    {
+      kind: "organization",
+      id: "org_del",
+      name: "Del Property Management",
+      surfaces: ["Del Property Management"],
+    },
+    {
+      kind: "organization",
+      id: "org_icc",
+      name: "ICC Property Management Ltd.",
+      surfaces: ["ICC Property Management Ltd."],
+    },
+    {
+      kind: "organization",
+      id: "org_duka",
+      name: "DUKA Management",
+      surfaces: ["DUKA Management"],
+    },
+    {
+      kind: "project",
+      id: "proj_energy",
+      name: "Energy Management System",
+      surfaces: ["Energy Management System"],
+    },
+  ];
+
+  it("phrase-matches a project name inside a longer query", () => {
+    const matches = matchRegistryCatalog(
+      "what elevator modernization ran this year",
+      catalog,
+    );
+    const project = matches.find((item) => item.id === "proj_elev");
+    assert.ok(project);
+    assert.equal(project?.strength, "phrase");
+  });
+
+  it("does not match every elevator asset from the generic word elevator", () => {
+    const hit = scoreRegistryEntry("elevator", catalog[1]!);
+    assert.equal(hit, null);
+  });
+
+  it("matches a short distinctive org alias as a token", () => {
+    const matches = matchRegistryCatalog("what did TCG invoice?", catalog);
+    assert.equal(matches.some((item) => item.id === "org_tcg"), true);
+  });
+
+  it("boosts linked hits above unlinked hits with the same raw similarity", () => {
+    const matched = matchRegistryCatalog("elevator modernization", catalog);
+    const boosted = applyRegistryBoost({
+      results: [
+        {
+          emailId: "email_unlinked",
+          similarity: 0.7,
+        },
+        {
+          emailId: "email_linked",
+          similarity: 0.7,
+        },
+      ],
+      matchedEntities: matched,
+      linksByEmail: new Map([
+        [
+          "email_linked",
+          [{ kind: "project", id: "proj_elev", name: "Elevator Modernization 2024" }],
+        ],
+      ]),
+      limit: 10,
+    });
+
+    assert.equal(boosted[0]?.emailId, "email_linked");
+    assert.equal(boosted[0]?.boost, REGISTRY_BOOST_PHRASE);
+    assert.equal(boosted[0]?.similarity, Number((0.7 + REGISTRY_BOOST_PHRASE).toFixed(4)));
+    assert.equal(boosted[0]?.entities[0]?.boosted, true);
+    assert.equal(boosted[1]?.boost, 0);
+    assert.equal(boosted[1]?.similarity, 0.7);
+  });
+
+  it("does not match unrelated management firms from the word management", () => {
+    const matches = matchRegistryCatalog(
+      "ICC Property Management elevator quote",
+      catalog,
+    );
+    assert.equal(matches.some((item) => item.id === "org_icc"), true);
+    assert.equal(matches.some((item) => item.id === "org_duka"), false);
+    assert.equal(matches.some((item) => item.id === "proj_energy"), false);
+  });
+
+  it("does not boost an email that lacks the matched entity link", () => {
+    const matched = matchRegistryCatalog("Del Property Management", catalog);
+    const boosted = applyRegistryBoost({
+      results: [
+        {
+          emailId: "email_other_org",
+          similarity: 0.65,
+        },
+      ],
+      matchedEntities: matched,
+      linksByEmail: new Map([
+        [
+          "email_other_org",
+          [{ kind: "organization", id: "org_tcg", name: "TCG" }],
+        ],
+      ]),
+      limit: 5,
+    });
+
+    assert.equal(boosted[0]?.boost, 0);
+    assert.equal(boosted[0]?.entities[0]?.boosted, false);
+    assert.ok(REGISTRY_BOOST_TOKEN > 0);
+  });
+});
+
 // Integration checks with Database & Gemini (if configured)
 describe("Corpus RAG - Database & API Integration", () => {
   after(async () => {
@@ -350,6 +490,7 @@ describe("Corpus RAG - Database & API Integration", () => {
       assert.ok(res.chunkText);
       assert.ok(typeof res.similarity === "number");
       assert.ok(res.excerpt);
+      assert.ok(Array.isArray(res.entities));
       console.log(`    • [${Math.round(res.similarity * 100)}%] (${res.sourceKind}) ${res.metadata.subject || res.metadata.filename}: ${res.excerpt.slice(0, 75)}...`);
     }
   });

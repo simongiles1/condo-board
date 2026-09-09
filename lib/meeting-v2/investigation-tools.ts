@@ -9,6 +9,10 @@ import {
   type AgendaItemContextDocument,
   type ChunkContext,
 } from "@/lib/meeting-v2/evidence";
+import {
+  GUEST_PRESENTATION_LATER_RESOLUTION_REASON,
+  isGuestPresentationItem,
+} from "@/lib/meeting-v2/investigation-reconcile";
 
 type ChunkMetadata = {
   aiChunkId?: string;
@@ -441,7 +445,8 @@ function getInvestigationToolDefinitions(): DeepSeekToolDefinition[] {
       type: "function",
       function: {
         name: "find_later_resolution_for_item",
-        description: "Find later transcript chunks in the same meeting where this agenda item appears to be resolved, approved, deferred, or otherwise concluded.",
+        description:
+          "Find later transcript chunks in the same meeting where this agenda item appears to be resolved, approved, deferred, or otherwise concluded. Do not use for guest_presentation outline items; later Property Management Report resolutions belong to the later agenda slot.",
         parameters: {
           type: "object",
           properties: {
@@ -622,6 +627,13 @@ export async function executeInvestigationTool(
     const storedContext = runtime.contextsByAgendaItemId.get(agendaItemId);
     if (!storedContext) {
       return { found: false, agendaItemId, reason: "No stored agenda item context found." };
+    }
+    if (isGuestPresentationItem(storedContext.context.itemType)) {
+      return {
+        found: false,
+        agendaItemId,
+        reason: GUEST_PRESENTATION_LATER_RESOLUTION_REASON,
+      };
     }
 
     const transcriptAnchorChunks = storedContext.context.anchorChunkIds

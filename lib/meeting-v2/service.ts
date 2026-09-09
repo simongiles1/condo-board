@@ -23,6 +23,10 @@ import {
   meetingsV2ValidationResults,
 } from "@/lib/db/schema";
 import { AGENDA_ITEM_INVESTIGATION_PROMPT } from "@/lib/meeting-v2/investigation-prompts";
+import {
+  applyRevisedNotes,
+  recommendedAnswerAddsNewFact,
+} from "@/lib/meeting-v2/investigation-reconcile";
 import { AGENDA_ITEM_VALIDATION_PROMPT } from "@/lib/meeting-v2/validation-prompts";
 import { loadMeetingBoardPackageMeta } from "@/lib/meeting-v2/board-package";
 import { extractAgendaItemsWithAi } from "@/lib/meeting-v2/agenda-ai";
@@ -33,6 +37,8 @@ import {
   isDeepSeekKeyConfigured,
   readMeetingV2Settings,
   recordMeetingV2ExtractionRun,
+  recordMeetingV2IngestUsage,
+  clearMeetingV2IngestUsage,
   clearMeetingV2ValidationUsage,
   recordMeetingV2ValidationUsage,
   type AgendaApprovalSettings,
@@ -63,7 +69,11 @@ import {
   loadInvestigationToolRuntime,
   runToolEnabledInvestigation,
 } from "@/lib/meeting-v2/investigation-tools";
-import { extractPdfPagesWithText, buildBasicDocumentSections } from "@/lib/meeting-v2/pdf";
+import {
+  extractPdfPagesWithText,
+  buildBasicDocumentSections,
+  isLikelyDoclingMarkdown,
+} from "@/lib/meeting-v2/pdf";
 import {
   dedupeTranscriptSegmentsBySequence,
   mergedCuesToSegmentRows,
@@ -1478,6 +1488,14 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
     .from(meetingsV2DocumentChunks)
     .where(eq(meetingsV2DocumentChunks.meetingV2Id, meetingId));
 
+  const inferredDoclingPages = refreshedPages.filter((page) =>
+    isLikelyDoclingMarkdown(page.extractedText),
+  ).length;
+  await recordMeetingV2IngestUsage(meetingId, {
+    doclingPages: Math.max(pdfExtract.doclingPageCount, inferredDoclingPages),
+    totalPages: refreshedPages.length,
+  });
+
   return {
     transcriptSegments: refreshedSegments.length,
     documentPages: refreshedPages.length,
@@ -1741,6 +1759,7 @@ type AiInvestigationDocument = {
     due_date: string | null;
   }>;
   open_questions: Array<{ question: string; recommended_answer: string; confidence: "high" | "medium" | "low" }>;
+  revised_notes?: string[];
 };
 
 type AiValidationDocument = {
@@ -1822,6 +1841,12 @@ function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument
           confidence: ["high", "medium", "low"].includes(entry.confidence?.toLowerCase()) ? entry.confidence.toLowerCase() : "medium",
         })).filter((q: any) => Boolean(q.question))
       : [],
+    revised_notes: Array.isArray(record.revised_notes)
+      ? record.revised_notes
+          .filter((entry): entry is string => typeof entry === "string")
+          .map(normalizeWhitespace)
+          .filter(Boolean)
+      : undefined,
   };
 }
 
@@ -2717,6 +2742,8 @@ export async function investigateAgendaItems(
     const answerText = Object.values(userAnswers).filter(Boolean).join("\n").trim() || null;
     const promptInput = [
       `Agenda item title: ${item.title}`,
+      `Item number: ${item.itemNumber ?? "Unknown"}`,
+      `Item type: ${item.itemType}`,
       `Section label: ${item.sectionLabel ?? "Unknown"}`,
       `Board package source text: ${item.sourceText ?? "None"}`,
       "",
@@ -2811,16 +2838,41 @@ export async function investigateAgendaItems(
     
     const AUTONOMY_TEMPERATURE = (meetingRec?.settings as { autonomyTemperature?: number })?.autonomyTemperature ?? 0.8;
     if (AUTONOMY_TEMPERATURE >= 0.5 && normalized.open_questions && normalized.open_questions.length > 0) {
-      const remainingQuestions = [];
+      const remainingQuestions: AiInvestigationDocument["open_questions"] = [];
       for (const q of normalized.open_questions) {
         if ((q.confidence === "high" || q.confidence === "medium") && q.recommended_answer) {
-          // Silently accept the AI's recommended answer
-          normalized.discussion_summary += `\n\n${q.recommended_answer}`;
+          if (recommendedAnswerAddsNewFact(normalized.discussion_summary, q.recommended_answer)) {
+            normalized.discussion_summary += `\n\n${q.recommended_answer}`;
+          }
         } else {
           remainingQuestions.push(q);
         }
       }
       normalized.open_questions = remainingQuestions;
+    }
+
+    if (normalized.revised_notes && normalized.revised_notes.length > 0 && context) {
+      const parsedContext = safeJsonParse<AgendaItemContextDocument | null>(context.contextJson, null);
+      if (parsedContext) {
+        const applied = applyRevisedNotes({
+          notes: normalized.revised_notes,
+          sourceText: item.sourceText ?? "",
+          assembledContextText: context.assembledContextText,
+        });
+        parsedContext.notes = applied.notes;
+        await db
+          .update(meetingsV2AgendaItemContexts)
+          .set({
+            contextJson: JSON.stringify(parsedContext),
+            assembledContextText: applied.assembledContextText,
+            updatedAt: nowIso(),
+          })
+          .where(eq(meetingsV2AgendaItemContexts.id, context.id));
+        await db
+          .update(meetingsV2AgendaItems)
+          .set({ sourceText: applied.sourceText })
+          .where(eq(meetingsV2AgendaItems.id, item.id));
+      }
     }
 
     const investigationRow: typeof meetingsV2AgendaItemInvestigations.$inferInsert = {
@@ -3288,6 +3340,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
     isConsistent,
     lastError: selectedMeeting.lastError,
     pipelineState: selectedMeeting.pipelineState,
+    computedPipelineState,
     pipelineActivelyRunning: isMeetingV2PipelineActivelyRunning({
       pipelineState: selectedMeeting.pipelineState,
       lastError: selectedMeeting.lastError,
@@ -3537,6 +3590,7 @@ export async function resetMeetingV2AllData(meetingId: string): Promise<void> {
   await db
     .delete(meetingsV2SourceArtifacts)
     .where(eq(meetingsV2SourceArtifacts.meetingV2Id, meetingId));
+  await clearMeetingV2IngestUsage(meetingId);
   await updateMeetingV2Status(meetingId, "created", "Ready to start", 0, null);
 }
 

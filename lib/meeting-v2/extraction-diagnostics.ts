@@ -3,6 +3,7 @@ import { count, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2AgendaChunkSnapshots } from "@/lib/db/schema";
 import type { GoldStandardValidationUsageRun } from "@/lib/gemini/usage";
+import { MEETING_V2_PIPELINE_STALE_MS } from "@/lib/meeting-v2/workflow-progress";
 import type { TranscriptDiscrepancyKind } from "@/lib/meeting-v2/transcript-discrepancies";
 
 export type { TranscriptDiscrepancyKind } from "@/lib/meeting-v2/transcript-discrepancies";
@@ -77,6 +78,12 @@ export type MeetingV2Settings = {
   pipelineTiming?: {
     segment: "ingest" | "extract" | "evidence" | "investigate" | "validate";
     startedAt: string;
+  };
+  /** Board-package ingest counts recorded when pages are written. */
+  ingestUsage?: {
+    doclingPages: number;
+    totalPages: number;
+    recordedAt: string;
   };
 };
 
@@ -257,6 +264,49 @@ export async function clearMeetingV2ValidationUsage(meetingId: string): Promise<
     .set({
       settings: rest,
     })
+    .where(eq(meetingsV2.id, meetingId));
+}
+
+export async function recordMeetingV2IngestUsage(
+  meetingId: string,
+  usage: { doclingPages: number; totalPages: number },
+): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select({ settings: meetingsV2.settings })
+    .from(meetingsV2)
+    .where(eq(meetingsV2.id, meetingId));
+
+  const settings = readMeetingV2Settings(row?.settings as MeetingV2Settings | null);
+  const nextSettings: MeetingV2Settings = {
+    ...settings,
+    ingestUsage: {
+      doclingPages: usage.doclingPages,
+      totalPages: usage.totalPages,
+      recordedAt: new Date().toISOString(),
+    },
+  };
+
+  await db
+    .update(meetingsV2)
+    .set({ settings: nextSettings })
+    .where(eq(meetingsV2.id, meetingId));
+}
+
+export async function clearMeetingV2IngestUsage(meetingId: string): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select({ settings: meetingsV2.settings })
+    .from(meetingsV2)
+    .where(eq(meetingsV2.id, meetingId));
+
+  const settings = readMeetingV2Settings(row?.settings as MeetingV2Settings | null);
+  if (!settings.ingestUsage) return;
+
+  const { ingestUsage: _removed, ...rest } = settings;
+  await db
+    .update(meetingsV2)
+    .set({ settings: rest })
     .where(eq(meetingsV2.id, meetingId));
 }
 
@@ -493,15 +543,37 @@ export function isExpectedNoAgendaItemsYetDuringActiveRun(pipelineState: string)
   return phase === "ingest" || pipelineState === "extracting";
 }
 
+/** Count/data lag that matches one of the given pipeline stages — not a user-facing alert. */
+export function isExpectedMeetingV2IntegrityMismatch(
+  integrityNote: string,
+  pipelineStates: string[],
+): boolean {
+  const note = integrityNote.trim();
+  if (!note) return false;
+  for (const pipelineState of pipelineStates) {
+    const phase = meetingV2PipelinePhase(pipelineState);
+    if (!phase) continue;
+    if (EXPECTED_INTEGRITY_NOTES_BY_PIPELINE_PHASE[phase]?.includes(note)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Count/data lag that matches the current running stage — not a user-facing alert. */
 export function isExpectedMeetingV2IntegrityMismatchDuringActiveRun(
   pipelineState: string,
   integrityNote: string,
 ): boolean {
-  const phase = meetingV2PipelinePhase(pipelineState);
-  if (!phase) return false;
-  const note = integrityNote.trim();
-  return EXPECTED_INTEGRITY_NOTES_BY_PIPELINE_PHASE[phase]?.includes(note) ?? false;
+  return isExpectedMeetingV2IntegrityMismatch(integrityNote, [pipelineState]);
+}
+
+function isMeetingV2RecentlyTouched(updatedAt?: string | null): boolean {
+  if (!updatedAt?.trim()) return false;
+  const updatedMs = Date.parse(updatedAt);
+  return (
+    Number.isFinite(updatedMs) && Date.now() - updatedMs <= MEETING_V2_PIPELINE_STALE_MS
+  );
 }
 
 function lastErrorAlreadyCovered(
@@ -529,6 +601,7 @@ export function buildMeetingV2Alerts(options: {
   isConsistent: boolean;
   lastError: string | null;
   pipelineState: string;
+  computedPipelineState?: string;
   pipelineActivelyRunning?: boolean;
   updatedAt?: string;
 }): MeetingV2Alert[] {
@@ -558,12 +631,16 @@ export function buildMeetingV2Alerts(options: {
     options.updatedAt ?? extractionQuality.extractionRun?.completedAt;
 
   if (!isConsistent && integrityNote.trim()) {
-    const expectedActiveRunLag = isExpectedMeetingV2IntegrityMismatchDuringActiveRun(
+    const expectedIntegrityLag = isExpectedMeetingV2IntegrityMismatch(integrityNote, [
       pipelineState,
-      integrityNote,
-    );
-    if (pipelineActivelyRunning) {
-      if (!expectedActiveRunLag) {
+      options.computedPipelineState ?? "",
+    ]);
+    const pipelineResuming =
+      expectedIntegrityLag && isMeetingV2RecentlyTouched(options.updatedAt);
+    const pipelineInFlight = pipelineActivelyRunning || pipelineResuming;
+
+    if (pipelineInFlight) {
+      if (!expectedIntegrityLag) {
         alerts.push({
           id: "pipeline-progress",
           severity: "warning",

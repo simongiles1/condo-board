@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Phase B: Corpus search registry boosts** — Archive search now lexically matches the query against the projects, equipment, and organizations registries and boosts excerpts whose source email already has a resolved mention link. Results show clickable entity badges; query-level registry matches appear above the hit list. Vector search still uses `document_chunks` only — this is not a second embedding index.
+
 - **Meetings V2 transcript hole assignment** — After span-edge review, unmatched package leaves in a transcript hole (for example 4.D.h / 4.D.i / 4.D.j between 4.D.g and 4.D.k) are assigned in looping two-minute windows. Wrap-up of the current item can overlap the next named unit. Extract also lists upcoming undiscussed package leaves on the floor pointer so the chunk walk does not skip them.
 
 - **Meetings V2 looping span-edge review** — After transcript extraction, each leaf item's discussion span is grown in looping two-minute windows (up to 12 loops, 24 minutes) so a six-minute interior hole can be filled instead of a single one-window peek. A backward 60-second look and a trim-start pass reclaim wrap-up that was given to the next item.
@@ -27,6 +29,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V2 editable attendance** — The Draft Preview tab now surfaces auto-detected attendees (present, by invitation, guests, regrets) with titles and roles inferred from the board package and transcript. A dedicated attendance panel appears above the editor and PDF preview, with the same drag-and-drop attendee editor used in V1 minutes. Edits persist correctly without stripping draft assembly metadata.
 
 ### Fixed
+
+- **Meetings V2 investigation wrap-up sentences** — A recommended answer is appended to the discussion summary only when it adds a new amount or named party. Restatements such as “no further action was required at this meeting” are dropped instead of doubling the paragraph.
+
+- **Meetings V2 package notes vs transcript** — When investigation finds that the transcript contradicts board-package Amount or Recommendation notes, those structured notes (and the Item Review a/b/c list built from them) are rewritten to the transcript. Package figures are no longer left sitting beside a transcript-correct summary.
+
+- **Meetings V2 guest vs PM-report investigation** — Guest-presentation outline items (1.A / 1.B / 1.C) stay on the passing “already met / done” mention. Investigation no longer follows later resolution onto those slots; CCDC, amounts, and later decisions stay on the later Property Management Report item (for example 4.B.1).
 
 - **Meetings V2 agenda-review progress timing** — While the pipeline waits on human agenda review, the header no longer shows a running extract badge or “Calculating…” rate/ETA rows. Those estimates apply only to automated pipeline work.
 

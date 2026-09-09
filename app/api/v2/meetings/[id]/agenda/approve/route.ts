@@ -5,6 +5,8 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2AgendaItems } from "@/lib/db/schema-v2";
 import { inngest } from "@/lib/inngest/client";
+import { resolveMeetingV2SegmentMilestonePercent } from "@/lib/meeting-v2/pipeline-segment-timing";
+import { updateMeetingV2Status } from "@/lib/meeting-v2/service";
 import {
   inferPropertyManagementReportNumber,
   planAdHocPlacement,
@@ -197,11 +199,20 @@ export async function POST(
 
     await db
       .update(meetingsV2)
-      .set({
-        settings: updatedSettings,
-        currentStep: "Agenda approved. Assembling evidence context...",
-      })
+      .set({ settings: updatedSettings })
       .where(eq(meetingsV2.id, meetingId));
+
+    const evidenceStartPercent = await resolveMeetingV2SegmentMilestonePercent(
+      "evidence",
+      "start",
+    );
+    await updateMeetingV2Status(
+      meetingId,
+      "gathering_evidence",
+      "Agenda approved. Assembling evidence context...",
+      evidenceStartPercent,
+      null,
+    );
 
     // 7. Trigger Inngest to resume evidence, investigation, and validation
     await inngest.send({

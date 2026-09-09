@@ -1,8 +1,13 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
-import { meetingsV2DocumentChunks } from "@/lib/db/schema-v2";
+import { meetingsV2AgendaItems, meetingsV2DocumentChunks } from "@/lib/db/schema-v2";
+import {
+  parseClockToSeconds,
+  parseDiscussionTimestampRanges,
+} from "@/lib/meeting-v2/agenda-outline";
+import { discussionTimingFromSourceText } from "@/lib/transcript/section-overlay";
 
 export async function GET(
   req: Request,
@@ -12,6 +17,7 @@ export async function GET(
     const { id } = await params;
     const url = new URL(req.url);
     const chunkId = url.searchParams.get("chunkId");
+    const agendaItemId = url.searchParams.get("agendaItemId");
 
     const db = getDb();
     const chunks = await db
@@ -62,6 +68,7 @@ export async function GET(
         startTimestamp: chunk.startTimestamp,
         endTimestamp: chunk.endTimestamp,
         text: chunk.text,
+        sortOrder: chunk.sortOrder,
       };
     });
 
@@ -73,6 +80,85 @@ export async function GET(
         return NextResponse.json({ error: "Chunk not found" }, { status: 404 });
       }
       return NextResponse.json({ chunk: match });
+    }
+
+    if (agendaItemId) {
+      const [item] = await db
+        .select({
+          id: meetingsV2AgendaItems.id,
+          title: meetingsV2AgendaItems.title,
+          itemNumber: meetingsV2AgendaItems.itemNumber,
+          sourceText: meetingsV2AgendaItems.sourceText,
+          sourcePagesJson: meetingsV2AgendaItems.sourcePagesJson,
+        })
+        .from(meetingsV2AgendaItems)
+        .where(
+          and(
+            eq(meetingsV2AgendaItems.id, agendaItemId),
+            eq(meetingsV2AgendaItems.meetingV2Id, id),
+          ),
+        );
+      if (!item) {
+        return NextResponse.json({ error: "Agenda item not found" }, { status: 404 });
+      }
+
+      const namedIds = new Set(
+        (item.sourceText?.match(/Chunk IDs:\s*([^\n]+)/i)?.[1] ?? "")
+          .split(/[,;]/)
+          .map((value) => value.trim().toLowerCase())
+          .filter(Boolean),
+      );
+      let sourcePages: number[] = [];
+      try {
+        const parsed = JSON.parse(item.sourcePagesJson || "[]") as unknown;
+        if (Array.isArray(parsed)) {
+          sourcePages = parsed.filter((page): page is number => typeof page === "number");
+        }
+      } catch {
+        sourcePages = [];
+      }
+      const timing = parseDiscussionTimestampRanges(
+        discussionTimingFromSourceText(item.sourceText),
+      );
+
+      const matched = enriched.filter((chunk) => {
+        if (namedIds.has(chunk.aiChunkId.toLowerCase()) || namedIds.has(chunk.id.toLowerCase())) {
+          return true;
+        }
+        if (chunk.chunkKind === "document") {
+          const pages =
+            chunk.pageNumbers.length > 0
+              ? chunk.pageNumbers
+              : [chunk.pageStart, chunk.pageEnd].filter(
+                  (page): page is number => typeof page === "number",
+                );
+          return pages.some((page) => sourcePages.includes(page));
+        }
+        if (timing.length === 0) return false;
+        const start = parseClockToSeconds(chunk.startTimestamp);
+        const end = parseClockToSeconds(chunk.endTimestamp) ?? start;
+        if (start === null) return false;
+        const endSeconds = end ?? start;
+        return timing.some(
+          (range) => start <= range.endSeconds && endSeconds >= range.startSeconds,
+        );
+      });
+
+      matched.sort((left, right) => {
+        if (left.chunkKind !== right.chunkKind) {
+          return left.chunkKind === "transcript" ? -1 : 1;
+        }
+        return left.sortOrder - right.sortOrder;
+      });
+
+      return NextResponse.json({
+        agendaItem: {
+          id: item.id,
+          title: item.title,
+          itemNumber: item.itemNumber,
+        },
+        chunks: matched,
+      });
     }
 
     return NextResponse.json({ chunks: enriched });

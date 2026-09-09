@@ -9,6 +9,12 @@ import {
   type MeetingV2Settings,
 } from "@/lib/meeting-v2/extraction-diagnostics";
 import {
+  markMeetingV2PipelineSegmentStarted,
+  recordMeetingV2PipelineSegmentDuration,
+  resolveMeetingV2SegmentMilestonePercent,
+  runTimedMeetingV2PipelineSegment,
+} from "@/lib/meeting-v2/pipeline-segment-timing";
+import {
   assessMeetingV2Extraction,
   deriveMeetingV2ComputedStatus,
   ensureMeetingV2Seed,
@@ -70,36 +76,82 @@ export const runMeetingV2Pipeline = inngest.createFunction(
 
       if (!ingestComplete) {
         await step.run("ingest-meeting-v2-sources", async () => {
-          await updateMeetingV2Status(meetingId, "ingesting", "Loading legacy meeting sources", 5, null);
-          await ingestMeetingV2Sources(meetingId);
-          await updateMeetingV2Status(meetingId, "ingested", "Source ingestion complete", 20, null);
+          const ingestStartPercent = await resolveMeetingV2SegmentMilestonePercent("ingest", "start");
+          const ingestEndPercent = await resolveMeetingV2SegmentMilestonePercent("ingest", "end");
+          await updateMeetingV2Status(
+            meetingId,
+            "ingesting",
+            "Loading legacy meeting sources",
+            ingestStartPercent,
+            null,
+          );
+          await runTimedMeetingV2PipelineSegment(meetingId, "ingest", async () => {
+            await ingestMeetingV2Sources(meetingId);
+          });
+          await updateMeetingV2Status(
+            meetingId,
+            "ingested",
+            "Source ingestion complete",
+            ingestEndPercent,
+            null,
+          );
         });
       } else {
         await step.run("skip-ingest-meeting-v2-sources", async () => {
-          await updateMeetingV2Status(meetingId, "ingested", "Source ingestion already complete", 20, null);
+          const ingestEndPercent = await resolveMeetingV2SegmentMilestonePercent("ingest", "end");
+          await updateMeetingV2Status(
+            meetingId,
+            "ingested",
+            "Source ingestion already complete",
+            ingestEndPercent,
+            null,
+          );
         });
       }
 
       if (!extractComplete) {
         await step.run("extract-meeting-v2-agenda", async () => {
-          await updateMeetingV2Status(meetingId, "extracting", "Extracting agenda items", 25, null);
-          await extractMeetingV2Agenda(meetingId);
+          const extractStartPercent = await resolveMeetingV2SegmentMilestonePercent("extract", "start");
+          const extractEndPercent = await resolveMeetingV2SegmentMilestonePercent("extract", "end");
+          await updateMeetingV2Status(
+            meetingId,
+            "extracting",
+            "Extracting agenda items",
+            extractStartPercent,
+            null,
+          );
+          await runTimedMeetingV2PipelineSegment(meetingId, "extract", async () => {
+            await extractMeetingV2Agenda(meetingId);
+          });
           const extractionQuality = await assessMeetingV2Extraction(meetingId);
           if (extractionQuality.likelyIncomplete) {
             await updateMeetingV2Status(
               meetingId,
               "extracting",
               "Agenda extraction looks incomplete",
-              30,
+              extractStartPercent + Math.round((extractEndPercent - extractStartPercent) * 0.25),
               extractionQuality.note,
             );
             return;
           }
-          await updateMeetingV2Status(meetingId, "extracted", "Agenda extraction complete", 40, null);
+          await updateMeetingV2Status(
+            meetingId,
+            "extracted",
+            "Agenda extraction complete",
+            extractEndPercent,
+            null,
+          );
         });
       } else {
         await step.run("skip-extract-meeting-v2-agenda", async () => {
-          await updateMeetingV2Status(meetingId, "extracted", "Agenda extraction already complete", 40, null);
+          const extractEndPercent = await resolveMeetingV2SegmentMilestonePercent("extract", "end");
+          await updateMeetingV2Status(
+            meetingId,
+            "extracted",
+            "Agenda extraction already complete",
+            extractEndPercent,
+            null,
+          );
         });
       }
 
@@ -122,11 +174,12 @@ export const runMeetingV2Pipeline = inngest.createFunction(
 
       if (!isAgendaApproved) {
         await step.run("await-agenda-approval", async () => {
+          const extractEndPercent = await resolveMeetingV2SegmentMilestonePercent("extract", "end");
           await updateMeetingV2Status(
             meetingId,
             "extracted",
             "Awaiting agenda review & approval",
-            40,
+            extractEndPercent,
             null,
           );
         });
@@ -146,36 +199,93 @@ export const runMeetingV2Pipeline = inngest.createFunction(
 
       if (!evidenceComplete || (evidenceComplete && investigationsComplete && validationsComplete)) {
         await step.run("gather-meeting-v2-evidence", async () => {
-          await updateMeetingV2Status(meetingId, "gathering_evidence", "Assembling evidence context", 40, null);
-          await retrieveAgendaItemEvidence(meetingId);
-          await updateMeetingV2Status(meetingId, "evidence_gathered", "Evidence gathering complete", 60, null);
+          const evidenceStartPercent = await resolveMeetingV2SegmentMilestonePercent("evidence", "start");
+          const evidenceEndPercent = await resolveMeetingV2SegmentMilestonePercent("evidence", "end");
+          await updateMeetingV2Status(
+            meetingId,
+            "gathering_evidence",
+            "Assembling evidence context",
+            evidenceStartPercent,
+            null,
+          );
+          await runTimedMeetingV2PipelineSegment(meetingId, "evidence", async () => {
+            await retrieveAgendaItemEvidence(meetingId);
+          });
+          await updateMeetingV2Status(
+            meetingId,
+            "evidence_gathered",
+            "Evidence gathering complete",
+            evidenceEndPercent,
+            null,
+          );
         });
       } else {
         await step.run("skip-gather-meeting-v2-evidence", async () => {
-          await updateMeetingV2Status(meetingId, "evidence_gathered", "Evidence already assembled", 60, null);
+          const evidenceEndPercent = await resolveMeetingV2SegmentMilestonePercent("evidence", "end");
+          await updateMeetingV2Status(
+            meetingId,
+            "evidence_gathered",
+            "Evidence already assembled",
+            evidenceEndPercent,
+            null,
+          );
         });
       }
 
       if (!investigationsComplete || (evidenceComplete && investigationsComplete && validationsComplete)) {
         await step.run("investigate-meeting-v2-items", async () => {
-          await updateMeetingV2Status(meetingId, "investigating", "Investigating agenda items", 60, null);
-          await investigateAgendaItems(meetingId);
-          await updateMeetingV2Status(meetingId, "investigated", "Agenda investigation complete", 80, null);
+          const investigateStartPercent = await resolveMeetingV2SegmentMilestonePercent("investigate", "start");
+          const investigateEndPercent = await resolveMeetingV2SegmentMilestonePercent("investigate", "end");
+          await updateMeetingV2Status(
+            meetingId,
+            "investigating",
+            "Investigating agenda items",
+            investigateStartPercent,
+            null,
+          );
+          await runTimedMeetingV2PipelineSegment(meetingId, "investigate", async () => {
+            await investigateAgendaItems(meetingId);
+          });
+          await updateMeetingV2Status(
+            meetingId,
+            "investigated",
+            "Agenda investigation complete",
+            investigateEndPercent,
+            null,
+          );
         });
       } else {
         await step.run("skip-investigate-meeting-v2-items", async () => {
-          await updateMeetingV2Status(meetingId, "investigated", "Agenda investigation already complete", 80, null);
+          const investigateEndPercent = await resolveMeetingV2SegmentMilestonePercent("investigate", "end");
+          await updateMeetingV2Status(
+            meetingId,
+            "investigated",
+            "Agenda investigation already complete",
+            investigateEndPercent,
+            null,
+          );
         });
       }
 
       if (!validationsComplete || (evidenceComplete && investigationsComplete && validationsComplete)) {
         await step.run("prepare-meeting-v2-validation", async () => {
-          await updateMeetingV2Status(meetingId, "validating", "Checking draft readiness", 80, null);
+          const validateStartPercent = await resolveMeetingV2SegmentMilestonePercent("validate", "start");
+          await updateMeetingV2Status(
+            meetingId,
+            "validating",
+            "Checking draft readiness",
+            validateStartPercent,
+            null,
+          );
           await clearMeetingV2ValidationUsage(meetingId);
         });
 
         const pendingValidationItemIds = await step.run("list-pending-validation-items", async () => {
           return listPendingValidationAgendaItemIds(meetingId);
+        });
+
+        await step.run("start-meeting-v2-validation-timing", async () => {
+          await markMeetingV2PipelineSegmentStarted(meetingId, "validate");
         });
 
         for (let index = 0; index < pendingValidationItemIds.length; index += 1) {
@@ -190,9 +300,36 @@ export const runMeetingV2Pipeline = inngest.createFunction(
             await validateAgendaItemInvestigations(meetingId, agendaItemId);
           });
         }
+
+        await step.run("record-meeting-v2-validation-timing", async () => {
+          const db = getDb();
+          const [meeting] = await db
+            .select({ settings: meetingsV2.settings })
+            .from(meetingsV2)
+            .where(eq(meetingsV2.id, meetingId));
+          const settings = (meeting?.settings as MeetingV2Settings) || {};
+          const startedAt = settings.pipelineTiming?.segment === "validate"
+            ? settings.pipelineTiming.startedAt
+            : null;
+          const startedMs = startedAt ? Date.parse(startedAt) : NaN;
+          if (Number.isFinite(startedMs)) {
+            await recordMeetingV2PipelineSegmentDuration(
+              meetingId,
+              "validate",
+              Date.now() - startedMs,
+            );
+          }
+        });
       } else {
         await step.run("skip-validate-meeting-v2-items", async () => {
-          await updateMeetingV2Status(meetingId, "validating", "Validation already complete", 95, null);
+          const validateEndPercent = await resolveMeetingV2SegmentMilestonePercent("validate", "end");
+          await updateMeetingV2Status(
+            meetingId,
+            "validating",
+            "Validation already complete",
+            validateEndPercent,
+            null,
+          );
         });
       }
       await step.run("finalize-meeting-v2-status", async () => {

@@ -11,6 +11,7 @@ import {
   meetingsV2DocumentChunks,
   meetingsV2DocumentSections,
   meetingsV2SourceArtifacts,
+  meetingsV2TranscriptSegments,
 } from "@/lib/db/schema";
 import type {
   AgendaItemDiscussionStatus,
@@ -32,6 +33,10 @@ import {
   parseDiscussionTimestampRanges,
   planAdHocPlacement,
 } from "@/lib/meeting-v2/agenda-outline";
+import {
+  reviewTranscriptTopicSpans,
+  transcriptSegmentsToReviewCues,
+} from "@/lib/meeting-v2/span-edge-review";
 
 type WorkflowTopic = {
   title: string;
@@ -1542,13 +1547,52 @@ export async function extractAgendaItemsWithAi(
   }
 
   const placed = applyAdHocOutlinePlacement(state);
-  const finalTopics = applyAgendaHierarchyCorrections(
+  let finalTopics = applyAgendaHierarchyCorrections(
     sortTopics([...placed.documentTopics, ...placed.extraTopics]).map((topic, index) => ({
       ...topic,
       id: `topic-${index}`,
       itemNumber: topic.itemNumber || String(index + 1),
     })),
   );
+
+  const transcriptSegments = await db
+    .select({
+      sequence: meetingsV2TranscriptSegments.sequence,
+      startMs: meetingsV2TranscriptSegments.startMs,
+      endMs: meetingsV2TranscriptSegments.endMs,
+      startTimestamp: meetingsV2TranscriptSegments.startTimestamp,
+      speakerLabel: meetingsV2TranscriptSegments.speakerLabel,
+      text: meetingsV2TranscriptSegments.text,
+    })
+    .from(meetingsV2TranscriptSegments)
+    .where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId))
+    .orderBy(asc(meetingsV2TranscriptSegments.sequence));
+
+  if (transcriptSegments.length > 0) {
+    await options?.onProgress?.({
+      current: totalChunks,
+      total: totalChunks + 1,
+      label: "Reviewing transcript span edges",
+    });
+    const reviewed = await reviewTranscriptTopicSpans({
+      topics: finalTopics,
+      cues: transcriptSegmentsToReviewCues(transcriptSegments),
+      onProgress: async (label) => {
+        await options?.onProgress?.({
+          current: totalChunks,
+          total: totalChunks + 1,
+          label,
+        });
+      },
+    });
+    finalTopics = finalTopics.map((topic, index) => ({
+      ...topic,
+      discussionTimestampRange:
+        reviewed[index]?.discussionTimestampRange ?? topic.discussionTimestampRange,
+      sourceTranscriptRanges:
+        reviewed[index]?.sourceTranscriptRanges ?? topic.sourceTranscriptRanges,
+    }));
+  }
 
   await db.delete(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));
 

@@ -312,6 +312,21 @@ export const meetingsV2ValidationResults = pgTable(
   }
 );
 
+export const meetingsV2PipelineSegmentDurations = pgTable(
+  "meetings_v2_pipeline_segment_durations",
+  {
+    id: text("id").primaryKey(),
+    meetingV2Id: text("meeting_v2_id")
+      .notNull()
+      .references(() => meetingsV2.id, { onDelete: "cascade" }),
+    segment: text("segment", {
+      enum: ["ingest", "extract", "evidence", "investigate", "validate"],
+    }).notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    recordedAt: text("recorded_at").notNull(),
+  },
+);
+
 export const meetingsV2MinutesDrafts = pgTable(
   "meetings_v2_minutes_drafts",
   {

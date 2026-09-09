@@ -22,11 +22,13 @@ export function ChunkPreviewModal({
   meetingId,
   chunkId,
   onClose,
+  elevated = false,
 }: {
   open: boolean;
   meetingId: string;
   chunkId: string | null;
   onClose: () => void;
+  elevated?: boolean;
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,7 +92,7 @@ export function ChunkPreviewModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
+    <div className={`fixed inset-0 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs ${elevated ? "z-[80]" : "z-50"}`}>
       <div className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/90 px-5 py-4">

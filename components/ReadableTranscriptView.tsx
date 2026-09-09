@@ -56,6 +56,7 @@ type Props = {
   firstHighlightRef?: RefObject<HTMLElement | null>;
   sectionOverlays?: TranscriptSectionOverlay[];
   showSectionOverlay?: boolean;
+  onSectionClick?: (section: TranscriptSectionOverlay) => void;
 };
 
 function sectionLabel(section: TranscriptSectionOverlay): string {
@@ -139,6 +140,7 @@ export function ReadableTranscriptView({
   firstHighlightRef,
   sectionOverlays = [],
   showSectionOverlay = false,
+  onSectionClick,
 }: Props) {
   const hasSearch = searchQuery.trim().length > 0;
   const highlightRanges = normalizeHighlightRanges(highlightRangeMs, highlightRangesMs);
@@ -213,16 +215,31 @@ export function ReadableTranscriptView({
                 {group.sections.map((section) => {
                   const color = colorBySectionId.get(section.id) ?? borderColor;
                   const label = sectionLabel(section);
+                  const overlapTitle = isOverlap
+                    ? `Overlap: ${group.sections.map(sectionLabel).join(" · ")}`
+                    : label;
+                  const className =
+                    "max-w-[90%] truncate rounded-full border bg-white px-2.5 py-0.5 text-xs font-semibold shadow-sm";
+                  if (onSectionClick) {
+                    return (
+                      <button
+                        key={`${section.id}-${section.startSeconds}`}
+                        type="button"
+                        className={`${className} cursor-pointer hover:bg-slate-50`}
+                        style={{ borderColor: color, color }}
+                        title={`${overlapTitle} — view linked chunks`}
+                        onClick={() => onSectionClick(section)}
+                      >
+                        {label}
+                      </button>
+                    );
+                  }
                   return (
                     <span
-                      key={section.id}
-                      className="max-w-[90%] truncate rounded-full border bg-white px-2.5 py-0.5 text-xs font-semibold shadow-sm"
+                      key={`${section.id}-${section.startSeconds}`}
+                      className={className}
                       style={{ borderColor: color, color }}
-                      title={
-                        isOverlap
-                          ? `Overlap: ${group.sections.map(sectionLabel).join(" · ")}`
-                          : label
-                      }
+                      title={overlapTitle}
                     >
                       {label}
                     </span>

@@ -58,6 +58,14 @@ export const PIPELINE_STAGE_TOOLTIPS: Record<string, PipelineStageTooltip> = {
         ],
       },
       {
+        title: "Phase 3 — Span-edge review",
+        items: [
+          "After the chunk walk, review each leaf item's transcript spans in looping 1–2 minute windows (up to 12 loops / 24 minutes per span).",
+          "Grow the span forward while the next window still belongs to that item; stop at the next named leaf or when the window is a new matter.",
+          "Look 60 seconds before the span start to reclaim wrap-up that was given to the next item, and trim a start that opened too early.",
+        ],
+      },
+      {
         title: "Output",
         items: [
           "When both passes finish, persist the topic JSON and materialize agenda-item rows in the database.",

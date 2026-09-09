@@ -8,6 +8,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Meetings V2 looping span-edge review** — After transcript extraction, each leaf item's discussion span is grown in looping two-minute windows (up to 12 loops, 24 minutes) so a six-minute interior hole can be filled instead of a single one-window peek. A backward 60-second look and a trim-start pass reclaim wrap-up that was given to the next item.
+
+- **Meetings V2 section chunk diagnostic** — In Meeting Documents, clicking a transcript **Sections** heading opens a second popup listing the document and transcript chunks linked to that agenda item (named chunk ids, overlapping discussion times, and matching package pages). Click a row to open the existing chunk preview.
+
 - **Meetings V2 section overlay pinhole cues** — A leftover cue between two boxes of the **same** agenda item is painted as that item (the extractor skipped a line, not a real stop/start). A leftover cue in the 1–2 second fence between **two different** items is painted as overlap. Reload Meeting Documents to see it; no pipeline rerun. True revisits stay split when another labeled topic sits in the gap.
 
 - **Meetings V2 multi-span transcript sections** — Agenda items can keep several disjoint discussion time ranges (for example `00:01:00 - 00:02:00; 00:10:00 - 00:11:00`) instead of one start and end. The readable transcript **Sections** overlay paints each span as its own box, so a later revisit of the same topic shows up again after a gap. When one cue falls in two leaf items, the box shows an **Overlap** chip plus both headings. Extractor state now union-merges earlier transcript ranges in code so a later chunk cannot wipe them, and evidence gathering also pulls keyword-matched transcript anchors into the item context bundle.

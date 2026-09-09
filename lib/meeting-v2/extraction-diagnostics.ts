@@ -73,6 +73,11 @@ export type MeetingV2Settings = {
   goldStandardValidationRuns?: GoldStandardValidationUsageRun[];
   /** Human-in-the-loop agenda review approval and transcript alignment. */
   agendaApproval?: AgendaApprovalSettings;
+  /** Active automated pipeline segment start time for elapsed-time progress. */
+  pipelineTiming?: {
+    segment: "ingest" | "extract" | "evidence" | "investigate" | "validate";
+    startedAt: string;
+  };
 };
 
 export type MeetingV2ExtractionRun = {

@@ -8,6 +8,7 @@ import {
   vttToReadableTranscript,
 } from "@/lib/parsers/vtt";
 import { ReadableTranscriptView } from "@/components/ReadableTranscriptView";
+import { SectionChunksDialog } from "@/components/SectionChunksDialog";
 import { SearchHighlightedText } from "@/components/SearchHighlightedText";
 import {
   findCueMatches,
@@ -63,6 +64,10 @@ export function VttViewerDialog({
   const [searchQuery, setSearchQuery] = useState("");
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [showSectionOverlay, setShowSectionOverlay] = useState(true);
+  const [sectionChunksTarget, setSectionChunksTarget] = useState<{
+    id: string;
+    heading: string;
+  } | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -426,6 +431,17 @@ export function VttViewerDialog({
               currentMatchIndex={currentMatchIndex}
               sectionOverlays={sectionOverlays}
               showSectionOverlay={showSectionOverlay && canShowSections}
+              onSectionClick={
+                meetingId
+                  ? (section) =>
+                      setSectionChunksTarget({
+                        id: section.id,
+                        heading: section.title
+                          ? `${section.code} — ${section.title}`
+                          : section.code,
+                      })
+                  : undefined
+              }
             />
           ) : isReadableTab ? (
             <p className="text-sm text-slate-600">No transcript cues found.</p>
@@ -446,12 +462,26 @@ export function VttViewerDialog({
     </div>
   );
 
+  const sectionChunksDialog =
+    meetingId ? (
+      <SectionChunksDialog
+        open={Boolean(sectionChunksTarget)}
+        meetingId={meetingId}
+        agendaItemId={sectionChunksTarget?.id ?? null}
+        heading={sectionChunksTarget?.heading ?? ""}
+        onClose={() => setSectionChunksTarget(null)}
+      />
+    ) : null;
+
   if (embedded) {
     return (
-      <div className="flex h-full flex-col">
-        {headerBlock}
-        {bodyBlock}
-      </div>
+      <>
+        <div className="flex h-full flex-col">
+          {headerBlock}
+          {bodyBlock}
+        </div>
+        {sectionChunksDialog}
+      </>
     );
   }
 
@@ -482,6 +512,7 @@ export function VttViewerDialog({
           </button>
         </div>
       </div>
+      {sectionChunksDialog}
     </div>
   );
 }

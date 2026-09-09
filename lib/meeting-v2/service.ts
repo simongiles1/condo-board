@@ -43,6 +43,15 @@ import {
   type TranscriptDiscrepancy,
 } from "@/lib/meeting-v2/extraction-diagnostics";
 import {
+  computePipelineProgressPercent,
+  computeSegmentProgressBounds,
+  computeSegmentWeightsFromAverages,
+  loadMeetingV2PipelineSegmentAverages,
+  MEETING_V2_MIN_SEGMENT_DURATION_SAMPLES,
+  readMeetingV2PipelineSegmentStartedAt,
+  resolvePipelineSegmentFromState,
+} from "@/lib/meeting-v2/pipeline-segment-timing";
+import {
   buildMeetingV2DisplayProgress,
   buildMeetingV2WorkflowProgress,
   isMeetingV2PipelineActivelyRunning,
@@ -529,19 +538,47 @@ export async function updateMeetingV2Status(
 async function updatePhaseProgress(options: {
   meetingId: string;
   pipelineState: StatusState;
-  basePercent: number;
-  spanPercent: number;
   current: number;
   total: number;
   label: string;
 }): Promise<void> {
-  const { meetingId, pipelineState, basePercent, spanPercent, current, total, label } = options;
-  const ratio = total <= 0 ? 1 : current / total;
+  const { meetingId, pipelineState, current, total, label } = options;
+  const segment = resolvePipelineSegmentFromState(pipelineState);
+  if (!segment) {
+    await updateMeetingV2Status(meetingId, pipelineState, label, 0, null);
+    return;
+  }
+
+  const averages = await loadMeetingV2PipelineSegmentAverages();
+  const segmentBounds = computeSegmentProgressBounds(
+    computeSegmentWeightsFromAverages(averages),
+  );
+  const segmentStartedAtMs = await readMeetingV2PipelineSegmentStartedAt(
+    meetingId,
+    segment,
+  );
+  const segmentAverage = averages[segment];
+  const expectedSegmentDurationMs =
+    segmentAverage &&
+    segmentAverage.sampleCount >= MEETING_V2_MIN_SEGMENT_DURATION_SAMPLES &&
+    segmentAverage.avgMs > 0
+      ? segmentAverage.avgMs
+      : null;
+
+  const progressPercent = computePipelineProgressPercent({
+    segment,
+    current,
+    total,
+    segmentBounds,
+    segmentStartedAtMs,
+    expectedSegmentDurationMs,
+  });
+
   await updateMeetingV2Status(
     meetingId,
     pipelineState,
     label,
-    clampProgress(basePercent + spanPercent * ratio),
+    clampProgress(progressPercent),
     null,
   );
 }
@@ -1331,8 +1368,6 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
       await updatePhaseProgress({
         meetingId,
         pipelineState: "ingesting",
-        basePercent: 5,
-        spanPercent: 15,
         current: extractedPageCount,
         total: totalPages,
         label: `Ingesting board package pages (${extractedPageCount}/${totalPages})`,
@@ -1548,8 +1583,6 @@ export async function extractMeetingV2Agenda(meetingId: string): Promise<{ count
           await updatePhaseProgress({
             meetingId,
             pipelineState: "extracting",
-            basePercent: 25,
-            spanPercent: 15,
             current,
             total,
             label,
@@ -1619,8 +1652,6 @@ export async function extractMeetingV2Agenda(meetingId: string): Promise<{ count
     await updatePhaseProgress({
       meetingId,
       pipelineState: "extracting",
-      basePercent: 25,
-      spanPercent: 15,
       current: processedCount,
       total: extractionSource.length,
       label: `Extracting agenda items (${processedCount}/${extractionSource.length})`,
@@ -1945,8 +1976,6 @@ async function updateValidationPhaseProgress(
   await updatePhaseProgress({
     meetingId,
     pipelineState: "validating",
-    basePercent: 80,
-    spanPercent: 15,
     current,
     total,
     label: `Validating items (${current}/${total})${suffix}`,
@@ -2591,8 +2620,6 @@ export async function retrieveAgendaItemEvidence(
     await updatePhaseProgress({
       meetingId,
       pipelineState: "gathering_evidence",
-      basePercent: 40,
-      spanPercent: 20,
       current: completedCount,
       total: agendaItems.length,
       label: `Gathering evidence (${completedCount}/${agendaItems.length})`,
@@ -2821,8 +2848,6 @@ export async function investigateAgendaItems(
     await updatePhaseProgress({
       meetingId,
       pipelineState: "investigating",
-      basePercent: 60,
-      spanPercent: 20,
       current: completedCount,
       total: agendaItems.length,
       label: `Investigating items (${completedCount}/${agendaItems.length})`,

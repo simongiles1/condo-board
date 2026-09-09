@@ -18,6 +18,10 @@ import {
 } from "@/components/AiUsageDialog";
 import { DeleteMeetingButton } from "@/components/DeleteMeetingButton";
 import {
+  AgendaApprovalConfirmDialog,
+  type AgendaApprovalConfirmMode,
+} from "@/components/AgendaApprovalConfirmDialog";
+import {
   PipelineRunConfirmDialog,
   type PipelineConfirmAction,
 } from "@/components/PipelineRunConfirmDialog";
@@ -2886,16 +2890,71 @@ function HitlAgendaApprovalWorkspace({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
   const [selectedTimeRange, setSelectedTimeRange] = useState<string | null>(null);
   const [activeReviewTab, setActiveReviewTab] = useState<AgendaReviewTab>("agenda");
 
   const isApproved = Boolean(status.meeting.agendaApproval?.approvedAt);
 
+  const hasApprovalChanges = useMemo(() => {
+    const savedItemStatuses = status.meeting.agendaApproval?.itemStatuses ?? {};
+    const savedExcludedIds = new Set(status.meeting.agendaApproval?.excludedItemIds ?? []);
+
+    for (const item of status.items) {
+      const saved =
+        savedItemStatuses[item.id] ?? item.discussionStatus ?? "discussed";
+      const current = itemStatuses[item.id] ?? saved;
+      if (current !== saved) return true;
+    }
+
+    if (excludedItemIds.size !== savedExcludedIds.size) return true;
+    for (const id of excludedItemIds) {
+      if (!savedExcludedIds.has(id)) return true;
+    }
+    for (const id of savedExcludedIds) {
+      if (!excludedItemIds.has(id)) return true;
+    }
+
+    for (const [id, title] of Object.entries(editedTitles)) {
+      const item = status.items.find((entry) => entry.id === id);
+      if (item && title.trim() !== item.title) return true;
+    }
+
+    if (newItems.length > 0) return true;
+
+    for (const disc of initialDiscrepancies) {
+      const saved = disc.status || "pending";
+      const current = discrepancyActions[disc.id] || "pending";
+      if (current !== saved) return true;
+    }
+
+    return false;
+  }, [
+    status.items,
+    status.meeting.agendaApproval?.itemStatuses,
+    status.meeting.agendaApproval?.excludedItemIds,
+    itemStatuses,
+    excludedItemIds,
+    editedTitles,
+    newItems,
+    initialDiscrepancies,
+    discrepancyActions,
+  ]);
+
   const activeItems = status.items.filter((item) => !excludedItemIds.has(item.id));
   const discussedCount =
     activeItems.filter((item) => (itemStatuses[item.id] || "discussed") === "discussed").length +
     newItems.filter((i) => i.discussionStatus === "discussed").length;
+
+  const approvalButtonDisabled =
+    submitting || discussedCount === 0 || (isApproved && !hasApprovalChanges);
+  const approvalButtonDisabledReason = isApproved && !hasApprovalChanges
+    ? "No agenda changes to save"
+    : discussedCount === 0
+      ? "At least one discussed item is required"
+      : undefined;
+  const approvalConfirmMode: AgendaApprovalConfirmMode = isApproved ? "update" : "approve";
 
   const deferredCount = activeItems.filter(
     (item) => itemStatuses[item.id] === "not_discussed",
@@ -3040,7 +3099,12 @@ function HitlAgendaApprovalWorkspace({
         throw new Error(data.error || `HTTP ${res.status}`);
       }
 
-      setSubmitSuccess("Agenda approved! Resuming pipeline for investigated items...");
+      setSubmitSuccess(
+        isApproved
+          ? "Agenda approval updated! Resuming pipeline for investigated items..."
+          : "Agenda approved! Resuming pipeline for investigated items...",
+      );
+      setConfirmOpen(false);
       onApproved?.();
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Failed to approve agenda");
@@ -3443,8 +3507,9 @@ function HitlAgendaApprovalWorkspace({
 
             <button
               type="button"
-              onClick={handleApproveAndProceed}
-              disabled={submitting || discussedCount === 0}
+              onClick={() => setConfirmOpen(true)}
+              disabled={approvalButtonDisabled}
+              title={approvalButtonDisabledReason}
               className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-emerald-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {submitting ? (
@@ -3475,6 +3540,16 @@ function HitlAgendaApprovalWorkspace({
         meetingId={meetingId}
         timeRange={selectedTimeRange}
         onClose={() => setSelectedTimeRange(null)}
+      />
+
+      <AgendaApprovalConfirmDialog
+        open={confirmOpen}
+        mode={approvalConfirmMode}
+        busy={submitting}
+        onConfirm={() => void handleApproveAndProceed()}
+        onCancel={() => {
+          if (!submitting) setConfirmOpen(false);
+        }}
       />
     </SectionCard>
   );

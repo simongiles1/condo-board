@@ -16,6 +16,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 agenda approval action bar** — After initial approval, **Update Agenda Approval** is now disabled until the reviewer changes item statuses, exclusions, titles, discrepancies, or ad-hoc items. Both initial approval and updates now open a confirmation dialog with DeepSeek peak/off-peak pricing context before resuming the pipeline.
+
 - **V2 PDF running header corp line** — When draft metadata stored the meeting title (e.g. `Minutes - 2026-08-12 v5`) as `corporationName`, the page 2+ header incorrectly used that string instead of `T.S.C.C. #2517`. Corporation name resolution now rejects meeting-title values, falls back to the configured corporation, and new drafts no longer use `meeting.title` as a corporation-name fallback.
 
 - **PDF template header alignment** — Page 1 title block and page 2+ running header now share the same first-line vertical position (`margins.top − 36 pt`) in both the template preview and exported PDF.

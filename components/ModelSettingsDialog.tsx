@@ -5,13 +5,6 @@ import { useEffect, useState } from "react";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
-  defaultDraftPdfMargins,
-  draftPdfMarginsFrom,
-  normalizeDraftPdfMargins,
-  PdfMarginsFields,
-  type DraftPdfMargins,
-} from "@/components/PdfMarginsFields";
-import {
   ATTACHMENT_VISIBILITY_SURFACE_LABELS,
   ATTACHMENT_VISIBILITY_SURFACES,
   type AttachmentVisibilitySettings,
@@ -23,7 +16,6 @@ import {
   isAllowedAnalysisModel,
   type AnalysisSettings,
 } from "@/lib/email-analysis/settings-shared";
-import { type PdfMargins } from "@/lib/pdf/margins";
 import {
   DEFAULT_ATTACHMENT_VISIBILITY_SETTINGS,
   normalizeAttachmentVisibilitySettings,
@@ -38,17 +30,15 @@ import {
   type ModelSettings,
 } from "@/lib/settings/model-settings";
 
-type SettingsTab = "models" | "pdf" | "attachments" | "processed";
+export type ModelSettingsTab = "models" | "attachments" | "processed";
 
 type Props = {
   open: boolean;
   settings: ModelSettings;
-  pdfMargins: PdfMargins;
   attachmentVisibility: AttachmentVisibilitySettings;
   onClose: () => void;
   onSave: (
     settings: ModelSettings,
-    pdfMargins: PdfMargins,
     attachmentVisibility: AttachmentVisibilitySettings,
   ) => void | Promise<void>;
 };
@@ -92,12 +82,11 @@ function SettingsTabs({
   activeTab,
   onChange,
 }: {
-  activeTab: SettingsTab;
-  onChange: (tab: SettingsTab) => void;
+  activeTab: ModelSettingsTab;
+  onChange: (tab: ModelSettingsTab) => void;
 }) {
-  const tabs: Array<{ id: SettingsTab; label: string }> = [
+  const tabs: Array<{ id: ModelSettingsTab; label: string }> = [
     { id: "models", label: "API models" },
-    { id: "pdf", label: "PDF margins" },
     { id: "attachments", label: "Attachments" },
     { id: "processed", label: "Processed data" },
   ];
@@ -135,17 +124,13 @@ function SettingsTabs({
 export function ModelSettingsDialog({
   open,
   settings,
-  pdfMargins,
   attachmentVisibility,
   onClose,
   onSave,
 }: Props) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<SettingsTab>("models");
+  const [activeTab, setActiveTab] = useState<ModelSettingsTab>("models");
   const [draft, setDraft] = useState<ModelSettings>(settings);
-  const [marginDraft, setMarginDraft] = useState<DraftPdfMargins>(() =>
-    draftPdfMarginsFrom(pdfMargins),
-  );
   const [analysisDraft, setAnalysisDraft] = useState<AnalysisSettings | null>(
     null,
   );
@@ -162,13 +147,12 @@ export function ModelSettingsDialog({
     if (open) {
       setActiveTab("models");
       setDraft(normalizeModelSettings(settings));
-      setMarginDraft(draftPdfMarginsFrom(pdfMargins));
       setAttachmentVisibilityDraft(
         normalizeAttachmentVisibilitySettings(attachmentVisibility),
       );
       setSaveError(null);
     }
-  }, [open, settings, pdfMargins, attachmentVisibility]);
+  }, [open, settings, attachmentVisibility]);
 
   useEffect(() => {
     if (!open) return;
@@ -230,7 +214,6 @@ export function ModelSettingsDialog({
 
   function handleReset() {
     setDraft({ ...DEFAULT_MODEL_SETTINGS });
-    setMarginDraft(defaultDraftPdfMargins());
     setAttachmentVisibilityDraft(DEFAULT_ATTACHMENT_VISIBILITY_SETTINGS);
     setAnalysisDraft((current) =>
       current
@@ -272,7 +255,6 @@ export function ModelSettingsDialog({
 
       await onSave(
         normalizeModelSettings(draft),
-        normalizeDraftPdfMargins(marginDraft),
         normalizeAttachmentVisibilitySettings(attachmentVisibilityDraft),
       );
     } catch (error) {
@@ -282,10 +264,6 @@ export function ModelSettingsDialog({
     } finally {
       setSaveBusy(false);
     }
-  }
-
-  function updateMarginField(id: keyof PdfMargins, value: string) {
-    setMarginDraft((current) => ({ ...current, [id]: value }));
   }
 
   async function confirmPurgeProcessedData() {
@@ -346,7 +324,7 @@ export function ModelSettingsDialog({
             Settings
           </h2>
           <p className="mt-1 text-sm text-slate-600">
-            Configure AI models, PDF export margins, and processed data.
+            Configure AI models and processed data.
           </p>
         </div>
 
@@ -472,24 +450,6 @@ export function ModelSettingsDialog({
                   />
                 </section>
               </div>
-            ) : null}
-
-            {activeTab === "pdf" ? (
-              <section className="space-y-4">
-                <div>
-                  <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-                    PDF margins
-                  </h3>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Values are in points (72 pt ≈ 1 inch). Saved margins apply
-                    to every PDF download.
-                  </p>
-                </div>
-                <PdfMarginsFields
-                  draft={marginDraft}
-                  onChange={updateMarginField}
-                />
-              </section>
             ) : null}
 
             {activeTab === "attachments" ? (

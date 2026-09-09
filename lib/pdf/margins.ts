@@ -7,7 +7,9 @@ export type PdfMargins = {
   bottom: number;
   left: number;
   right: number;
-  /** Distance from page top to the running-header horizontal rule (pt). */
+  /** Distance from page top to the page 1 title-block horizontal rule (pt). */
+  pageOneRuleTop: number;
+  /** Distance from page top to the running-header horizontal rule on pages 2+ (pt). */
   headerRuleTop: number;
 };
 
@@ -16,8 +18,12 @@ export const DEFAULT_PDF_MARGINS: PdfMargins = {
   bottom: 72,
   left: 72,
   right: 72,
+  pageOneRuleTop: 94,
   headerRuleTop: 71,
 };
+
+/** Gap between a header rule and the body content below it (pt). */
+export const HEADER_RULE_BODY_GAP = 10;
 
 /** Extra top padding on continuation pages for running header + rule. */
 export const CONTINUATION_PAGE_EXTRA = 22;
@@ -54,16 +60,31 @@ export function normalizePdfMargins(
     return Math.min(max, Math.max(0, Math.round(n)));
   };
 
+  const clampPage = (value: unknown, fallback: number) =>
+    clamp(value, fallback, LETTER_HEIGHT);
+
+  const headerRuleTop = clampPage(
+    input?.headerRuleTop,
+    DEFAULT_PDF_MARGINS.headerRuleTop,
+  );
+  const pageOneFallback =
+    (input?.pageOneRuleTop === undefined ||
+      input?.pageOneRuleTop === null ||
+      input?.pageOneRuleTop === "") &&
+    input?.headerRuleTop !== undefined &&
+    input?.headerRuleTop !== null &&
+    input?.headerRuleTop !== ""
+      ? headerRuleTop
+      : DEFAULT_PDF_MARGINS.pageOneRuleTop;
+  const pageOneRuleTop = clampPage(input?.pageOneRuleTop, pageOneFallback);
+
   return {
     top: clamp(input?.top, DEFAULT_PDF_MARGINS.top),
     bottom: clamp(input?.bottom, DEFAULT_PDF_MARGINS.bottom),
     left: clamp(input?.left, DEFAULT_PDF_MARGINS.left),
     right: clamp(input?.right, DEFAULT_PDF_MARGINS.right),
-    headerRuleTop: clamp(
-      input?.headerRuleTop,
-      DEFAULT_PDF_MARGINS.headerRuleTop,
-      LETTER_HEIGHT,
-    ),
+    pageOneRuleTop,
+    headerRuleTop,
   };
 }
 
@@ -75,6 +96,7 @@ export function parsePdfMarginsFromSearchParams(
     bottom: params.get("bottom") ?? undefined,
     left: params.get("left") ?? undefined,
     right: params.get("right") ?? undefined,
+    pageOneRuleTop: params.get("pageOneRuleTop") ?? undefined,
     headerRuleTop: params.get("headerRuleTop") ?? undefined,
   });
 }
@@ -85,6 +107,7 @@ export function pdfMarginsSearchParams(margins: PdfMargins): string {
     bottom: String(margins.bottom),
     left: String(margins.left),
     right: String(margins.right),
+    pageOneRuleTop: String(margins.pageOneRuleTop),
     headerRuleTop: String(margins.headerRuleTop),
   }).toString();
 }
@@ -92,26 +115,38 @@ export function pdfMarginsSearchParams(margins: PdfMargins): string {
 export type PdfMarginLayout = {
   margins: PdfMargins;
   pagePaddingTop: number;
+  pageOneBodyTop: number;
   pageOneTitleOffset: number;
+  pageOneTitleBlockHeight: number;
   contentWidth: number;
   headerCorpTop: number;
   headerMeetingTypeTop: number;
   headerDateTop: number;
+  pageOneRuleTop: number;
   headerRuleTop: number;
 };
 
 export function computeMarginLayout(margins: PdfMargins): PdfMarginLayout {
   const pagePaddingTop =
     margins.headerRuleTop + 1 + CONTINUATION_PAGE_EXTRA;
+  const headerCorpTop = margins.top - 36;
+  const pageOneBodyTop = Math.max(
+    pagePaddingTop,
+    margins.pageOneRuleTop + HEADER_RULE_BODY_GAP,
+  );
 
   return {
     margins,
     pagePaddingTop,
-    pageOneTitleOffset: -(pagePaddingTop - margins.top),
+    pageOneBodyTop,
+    // Pull page 1 title up to the same first-line position as the running header.
+    pageOneTitleOffset: -(pagePaddingTop - headerCorpTop),
+    pageOneTitleBlockHeight: Math.max(0, margins.pageOneRuleTop - headerCorpTop),
     contentWidth: LETTER_WIDTH - margins.left - margins.right,
-    headerCorpTop: margins.top - 36,
+    headerCorpTop,
     headerMeetingTypeTop: margins.top - 24,
     headerDateTop: margins.top - 12,
+    pageOneRuleTop: margins.pageOneRuleTop,
     headerRuleTop: margins.headerRuleTop,
   };
 }

@@ -6,7 +6,21 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **PDF template editor** — PDF margin and header layout editing now lives in a dedicated full-width dialog instead of the general Settings modal. The editor shows a single large page preview with toggles for page 1 vs pages 2+ and for evaluated values vs variable tokens. Headers render in a consistent header band above the body content region on both page types.
+
+- **Meetings V2 editable attendance** — The Draft Preview tab now surfaces auto-detected attendees (present, by invitation, guests, regrets) with titles and roles inferred from the board package and transcript. A dedicated attendance panel appears above the editor and PDF preview, with the same drag-and-drop attendee editor used in V1 minutes. Edits persist correctly without stripping draft assembly metadata.
+
 ### Fixed
+
+- **V2 PDF running header corp line** — When draft metadata stored the meeting title (e.g. `Minutes - 2026-08-12 v5`) as `corporationName`, the page 2+ header incorrectly used that string instead of `T.S.C.C. #2517`. Corporation name resolution now rejects meeting-title values, falls back to the configured corporation, and new drafts no longer use `meeting.title` as a corporation-name fallback.
+
+- **PDF template header alignment** — Page 1 title block and page 2+ running header now share the same first-line vertical position (`margins.top − 36 pt`) in both the template preview and exported PDF.
+
+- **Separate page 1 and page 2+ horizontal rules** — Template settings now expose independent rule offsets from the page top. The preview and exported PDF position each rule from its own value (page 1 no longer uses a hard-coded offset below the title). Both rules render black in the preview.
+
+- **Meetings V2 attendee editor reset while typing** — The Edit attendees dialog no longer wipes in-progress changes when the workspace status poll re-renders (~every 10 seconds). Draft saves now also update the in-memory draft JSON so attendance edits persist after save.
 
 - **Meetings V2 minutes draft tab refresh** — Generating a minutes draft no longer briefly reverts to the empty state when a background status poll returns stale data. The structured editor now repopulates when lazy-loaded draft JSON arrives, without requiring a tab switch.
 
@@ -22,7 +36,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Meetings V2 post-approval agenda review layout** — After agenda approval, the Agenda Review tab now uses the same hierarchical outline layout as the pre-approval candidate agenda (official order: 1, 2, 3, 4.A.1, 4.D.a). Items are no longer sorted by open-question or flag count. Deferred and excluded items are hidden; discussed/ad-hoc items keep outcome, confidence, question, and flag badges without the discussed/not-discussed control strip.
+- **PDF template access** — The user menu and Meetings V2 More menu open the new PDF template dialog directly. General Settings no longer includes a PDF margins tab.
+
+- **Meetings V2 post-approval agenda review layout** — After agenda approval, the Agenda Review tab now uses the same hierarchical outline layout as the pre-approval candidate agenda (official order: 1, 2, 3, 4.A.1, 4.D.a). Items are no longer sorted by open-question or flag count. Deferred and excluded items are hidden; discussed/ad-hoc items keep outcome, confidence, question, and flag badges without the discussed/not-discussed control strip. A header toggle switches between item review and agenda approval views during the post-approval phase only. Gold-standard compare findings now surface per agenda item as **In AI only** / **In gold only** badges with hover detail tooltips; clicking a badge opens the existing compare side panel on the matching tab.
 
 - **Build-out progress modal mobile layout** — On small screens the Gantt chart now uses the full modal height with narrower columns and horizontal scroll. The details sidebar is hidden; tapping any timeline row or phase bar opens a bottom sheet with the item summary and remaining work.
 

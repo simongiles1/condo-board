@@ -21,6 +21,7 @@ import {
   meetingsV2DocumentPages,
   meetingsV2ValidationResults,
 } from "@/lib/db/schema";
+import { CORP_LONG } from "@/lib/pdf/corporation";
 
 type MeetingRow = typeof meetingsV2.$inferSelect;
 type AgendaItemRow = typeof meetingsV2AgendaItems.$inferSelect;
@@ -1119,9 +1120,7 @@ function buildMetadata(
 ) {
   return {
     corporationName:
-      meetingFrame.metadataHints.corporationName ||
-      meeting.title ||
-      "Condominium Corporation",
+      meetingFrame.metadataHints.corporationName || CORP_LONG,
     meetingDate: meeting.meetingDate,
     meetingTime: meetingFrame.metadataHints.meetingTime || "6:00 pm",
     meetingLocation: meetingFrame.metadataHints.meetingLocation || undefined,

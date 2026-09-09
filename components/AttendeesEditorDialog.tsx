@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   DRAG_MIME,
+  collectChairCandidates,
   decodeAttendeeDrag,
   emptyAttendee,
   encodeAttendeeDrag,
   moveAttendeeInDraft,
+  type AttendanceSavePayload,
   type AttendanceSectionKey,
   type EditableAttendance,
   type EditableAttendee,
@@ -18,12 +20,7 @@ type Props = {
   attendance: EditableAttendance | null;
   busy?: boolean;
   onClose: () => void;
-  onSave: (
-    attendance: Pick<
-      EditableAttendance,
-      "present" | "byInvitation" | "regrets" | "guests"
-    >,
-  ) => void;
+  onSave: (attendance: AttendanceSavePayload) => void;
 };
 
 const BASE_SECTIONS: { key: AttendanceSectionKey; label: string }[] = [
@@ -35,6 +32,7 @@ const BASE_SECTIONS: { key: AttendanceSectionKey; label: string }[] = [
 function cloneAttendance(attendance: EditableAttendance): EditableAttendance {
   return {
     ...attendance,
+    chairName: attendance.chairName ?? "",
     present: attendance.present.length
       ? attendance.present.map((a) => ({ ...a }))
       : [emptyAttendee()],
@@ -311,13 +309,22 @@ export function AttendeesEditorDialog({
   } | null>(null);
   const [dragOverSection, setDragOverSection] =
     useState<AttendanceSectionKey | null>(null);
+  const initializedForOpenRef = useRef(false);
 
+  // Seed draft once per open. Parent re-renders (e.g. status polling) pass a new
+  // attendance object reference and must not wipe in-progress edits.
   useEffect(() => {
-    if (open && attendance) {
-      setDraft(cloneAttendance(attendance));
+    if (!open) {
+      initializedForOpenRef.current = false;
       setDraggedItem(null);
       setDragOverSection(null);
+      return;
     }
+    if (!attendance || initializedForOpenRef.current) return;
+    initializedForOpenRef.current = true;
+    setDraft(cloneAttendance(attendance));
+    setDraggedItem(null);
+    setDragOverSection(null);
   }, [open, attendance]);
 
   useEffect(() => {
@@ -360,8 +367,14 @@ export function AttendeesEditorDialog({
       byInvitation: draft.byInvitation,
       regrets: draft.regrets,
       guests: draft.guests,
+      ...(draft.schemaVersion === "v2"
+        ? { chairName: draft.chairName ?? "" }
+        : {}),
     });
   }
+
+  const chairCandidates =
+    draft.schemaVersion === "v2" ? collectChairCandidates(draft) : [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -396,6 +409,63 @@ export function AttendeesEditorDialog({
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
           <div className="space-y-6 overflow-y-auto px-6 py-5">
+            {draft.schemaVersion === "v2" ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-4">
+                <label
+                  htmlFor="meeting-chair-name"
+                  className="block text-sm font-semibold text-slate-900"
+                >
+                  Meeting chair
+                </label>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Used in the Call to Order paragraph (e.g. “[Chair] called the
+                  meeting to order…”).
+                </p>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <input
+                    id="meeting-chair-name"
+                    type="text"
+                    list="meeting-chair-suggestions"
+                    value={draft.chairName ?? ""}
+                    onChange={(event) =>
+                      setDraft((current) =>
+                        current
+                          ? { ...current, chairName: event.target.value }
+                          : current,
+                      )
+                    }
+                    placeholder="S. Greenspan or Management"
+                    className={`${INPUT_CLASS} sm:min-w-0 sm:flex-1`}
+                  />
+                  <label className="block shrink-0 text-xs font-medium text-slate-500 sm:w-44">
+                    Quick pick
+                    <select
+                      value=""
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        if (!value) return;
+                        setDraft((current) =>
+                          current ? { ...current, chairName: value } : current,
+                        );
+                      }}
+                      className={`${INPUT_CLASS} mt-1`}
+                    >
+                      <option value="">From list…</option>
+                      {chairCandidates.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <datalist id="meeting-chair-suggestions">
+                  {chairCandidates.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+              </div>
+            ) : null}
             {sections.map(({ key, label }) => (
               <AttendanceSection
                 key={key}

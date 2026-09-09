@@ -34,6 +34,7 @@ import { enhanceMinutesMarkdown } from "@/lib/markdown/enhance-minutes";
 import {
   applyAttendanceToMinutesJson,
   extractAttendanceFromMinutesJson,
+  type AttendanceSavePayload,
   type EditableAttendance,
 } from "@/lib/minutes/attendance-edit";
 import { applyOmissionsToMinutesJson } from "@/lib/minutes/merge-omissions";
@@ -256,12 +257,7 @@ export default function MeetingEditorClient({ meeting }: { meeting: Meeting }) {
     }
   }
 
-  async function saveAttendees(
-    attendance: Pick<
-      EditableAttendance,
-      "present" | "byInvitation" | "regrets" | "guests"
-    >,
-  ) {
+  async function saveAttendees(attendance: AttendanceSavePayload) {
     if (!minutesJson?.trim()) return;
 
     setError(null);

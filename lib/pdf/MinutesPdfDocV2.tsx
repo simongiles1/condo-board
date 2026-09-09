@@ -35,7 +35,12 @@ import {
   shouldBoldAgendaStatus,
   shouldRenderAgendaStatus,
 } from "@/lib/minutes/v2-render-helpers";
-import { MEETING_TYPE_HEADER } from "@/lib/pdf/corporation";
+import {
+  CORP_LONG,
+  corpShortFromName,
+  MEETING_TYPE_HEADER,
+  resolveCorporationName,
+} from "@/lib/pdf/corporation";
 import { PDF_FONT, registerPdfFonts } from "@/lib/pdf/fonts";
 import {
   hangingIndentStyles,
@@ -253,6 +258,30 @@ function RunningHeaderRule({ layout }: { layout: PdfMarginLayout }) {
   );
 }
 
+function PageOneHeaderRule({ layout }: { layout: PdfMarginLayout }) {
+  return (
+    <View
+      fixed
+      style={{ position: "absolute", top: 0, left: 0, width: 0, height: 0 }}
+      render={({ pageNumber }) => {
+        if (pageNumber !== 1) return null;
+        return (
+          <View
+            style={{
+              position: "absolute",
+              top: layout.pageOneRuleTop,
+              left: layout.margins.left,
+              width: layout.contentWidth,
+              height: 1,
+              backgroundColor: "#000",
+            }}
+          />
+        );
+      }}
+    />
+  );
+}
+
 function FixedChrome({
   corpShort,
   meetingDateDisplay,
@@ -322,6 +351,7 @@ function FixedChrome({
           pageNumber > 1 ? `Page ${pageNumber}` : ""
         }
       />
+      <PageOneHeaderRule layout={layout} />
       <RunningHeaderRule layout={layout} />
     </>
   );
@@ -676,29 +706,38 @@ function ManagementBucket({
   );
 }
 
-function TitleAndAttendees({ doc }: { doc: MinutesDocumentV2 }) {
+function TitleAndAttendees({
+  doc,
+  layout,
+}: {
+  doc: MinutesDocumentV2;
+  layout: PdfMarginLayout;
+}) {
   const medium = meetingMediumFromMetadata(doc.metadata.meetingPlatform);
   const dateDisplay = formatMeetingDateDisplay(doc.metadata.meetingDate);
-  const corp = doc.metadata.corporationName.trim();
+  const corp = resolveCorporationName(doc.metadata.corporationName).trim();
   const timeClause = formatMeetingTimeClause(doc.metadata.meetingTime);
   const openerRest = ` of the meeting of the Board of Directors of ${corp} held ${medium} on ${dateDisplay}${timeClause}`;
 
   return (
     <View>
-      <Text style={styles.docTitle}>
-        <Text style={{ fontFamily: PDF_FONT, fontWeight: "bold" }}>MINUTES</Text>
-        <Text>{openerRest}</Text>
-      </Text>
-      <HorizontalRule style={styles.attendanceSectionTopRule} />
-      <AttendeeBlocks label="Present:" people={doc.attendance.present} />
-      <AttendeeBlocks
-        label="By Invitation:"
-        people={doc.attendance.byInvitation}
-      />
-      {doc.attendance.guests.length > 0 ? (
-        <AttendeeBlocks label="Guests:" people={doc.attendance.guests} />
-      ) : null}
-      <AttendeeBlocks label="Regrets:" people={doc.attendance.regrets} />
+      <View style={{ minHeight: layout.pageOneTitleBlockHeight }}>
+        <Text style={[styles.docTitle, { marginBottom: 0 }]}>
+          <Text style={{ fontFamily: PDF_FONT, fontWeight: "bold" }}>MINUTES</Text>
+          <Text>{openerRest}</Text>
+        </Text>
+      </View>
+      <View style={{ marginTop: 10 }}>
+        <AttendeeBlocks label="Present:" people={doc.attendance.present} />
+        <AttendeeBlocks
+          label="By Invitation:"
+          people={doc.attendance.byInvitation}
+        />
+        {doc.attendance.guests.length > 0 ? (
+          <AttendeeBlocks label="Guests:" people={doc.attendance.guests} />
+        ) : null}
+        <AttendeeBlocks label="Regrets:" people={doc.attendance.regrets} />
+      </View>
       <HorizontalRule style={styles.attendanceSectionBottomRule} />
     </View>
   );
@@ -1028,12 +1067,6 @@ type Props = {
   margins?: PdfMargins;
 };
 
-function corpShortFromName(corpLong: string): string {
-  const match = /No\.\s*(\d+)/i.exec(corpLong);
-  if (match) return `T.S.C.C. #${match[1]}`;
-  return corpLong.slice(0, 24);
-}
-
 /** Letter-sized PDF from semantic minutes schema v2. */
 export default function MinutesPdfDocV2({
   document: doc,
@@ -1052,7 +1085,7 @@ export default function MinutesPdfDocV2({
           layout={layout}
         />
         <View style={{ marginTop: layout.pageOneTitleOffset }}>
-          <TitleAndAttendees doc={doc} />
+          <TitleAndAttendees doc={doc} layout={layout} />
         </View>
         <MainBody doc={doc} />
       </Page>

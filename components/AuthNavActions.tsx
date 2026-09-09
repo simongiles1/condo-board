@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
+import { PdfTemplateDialog } from "@/components/PdfTemplateDialog";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import type { UserRole } from "@/lib/auth/roles";
 import type { AttachmentVisibilitySettings } from "@/lib/email/attachment-visibility";
@@ -71,6 +72,7 @@ export function AuthNavActions({
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [pdfTemplateOpen, setPdfTemplateOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [settings, setSettings] = useState<ModelSettings>(DEFAULT_MODEL_SETTINGS);
   const [pdfMargins, setPdfMargins] = useState<PdfMargins>(DEFAULT_PDF_MARGINS);
@@ -128,6 +130,11 @@ export function AuthNavActions({
     setSettingsOpen(true);
   }
 
+  function openPdfTemplate() {
+    setMenuOpen(false);
+    setPdfTemplateOpen(true);
+  }
+
   function openEmailSettings() {
     setMenuOpen(false);
     router.push("/admin/system/settings");
@@ -135,16 +142,19 @@ export function AuthNavActions({
 
   function handleSave(
     next: ModelSettings,
-    nextMargins: PdfMargins,
     nextAttachmentVisibility: AttachmentVisibilitySettings,
   ) {
     setSettings(next);
-    setPdfMargins(nextMargins);
     setAttachmentVisibility(nextAttachmentVisibility);
     saveModelSettings(next);
-    savePdfMargins(nextMargins);
     saveAttachmentVisibilitySettings(nextAttachmentVisibility);
     setSettingsOpen(false);
+  }
+
+  function handlePdfTemplateSave(nextMargins: PdfMargins) {
+    setPdfMargins(nextMargins);
+    savePdfMargins(nextMargins);
+    setPdfTemplateOpen(false);
   }
 
   const triggerClass = iconOnly
@@ -229,6 +239,16 @@ export function AuthNavActions({
               Settings
             </button>
 
+            <button
+              type="button"
+              role="menuitem"
+              onClick={openPdfTemplate}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+            >
+              <PdfTemplateIcon />
+              PDF template
+            </button>
+
             {isSuperAdmin ? (
               <button
                 type="button"
@@ -264,10 +284,15 @@ export function AuthNavActions({
       <ModelSettingsDialog
         open={settingsOpen}
         settings={settings}
-        pdfMargins={pdfMargins}
         attachmentVisibility={attachmentVisibility}
         onClose={() => setSettingsOpen(false)}
         onSave={handleSave}
+      />
+      <PdfTemplateDialog
+        open={pdfTemplateOpen}
+        pdfMargins={pdfMargins}
+        onClose={() => setPdfTemplateOpen(false)}
+        onSave={handlePdfTemplateSave}
       />
     </>
   );
@@ -307,6 +332,27 @@ function SettingsIcon() {
     >
       <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
       <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function PdfTemplateIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4 shrink-0 text-slate-500"
+      aria-hidden="true"
+    >
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6" />
+      <path d="M8 13h8" />
+      <path d="M8 17h5" />
     </svg>
   );
 }

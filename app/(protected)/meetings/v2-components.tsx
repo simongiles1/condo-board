@@ -25,6 +25,9 @@ import { PipelineTransitionsDialog } from "@/components/PipelineTransitionsDialo
 import { GoldStandardValidationBadge } from "@/components/GoldStandardValidationBadge";
 import { GoldStandardCompareDialog } from "@/components/GoldStandardCompareDialog";
 import { GoldStandardValidationSidePanel } from "@/components/GoldStandardValidationSidePanel";
+import type { GoldStandardValidationTab } from "@/components/GoldStandardValidationSidePanel";
+import { PdfTemplateDialog } from "@/components/PdfTemplateDialog";
+import { GoldStandardItemFindingBadgesRow } from "@/components/GoldStandardItemFindingBadge";
 import {
   AgendaItemDetailSidePanel,
   type AgendaItemDetail,
@@ -34,11 +37,31 @@ import {
   validationScoreLabel,
   type GoldStandardValidationResult,
 } from "@/lib/minutes/gold-standard-schema";
-import type { EditableAttendance } from "@/lib/minutes/attendance-edit";
+import type { AttendanceSavePayload, EditableAttendance } from "@/lib/minutes/attendance-edit";
+import {
+  applyAttendanceToMinutesDoc,
+  extractEditableAttendanceFromDoc,
+} from "@/lib/minutes/attendance-edit";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
-import { serializeMinutesDoc } from "@/lib/minutes/doc-v2-edits";
-import type { MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
+import {
+  buildGoldStandardFindingsByItemId,
+  type ItemGoldStandardFindings,
+} from "@/lib/minutes/gold-standard-item-match";
+import {
+  parseDraftMinutesDoc,
+  serializeDraftSummaryJson,
+} from "@/lib/minutes/doc-v2-edits";
+import type { AttendeeV2, MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
+import { formatAttendeeLine } from "@/lib/minutes/v2-render-helpers";
+import {
+  DEFAULT_PDF_MARGINS,
+  loadPdfMargins,
+  pdfMarginsSearchParams,
+  savePdfMargins,
+  type PdfMargins,
+} from "@/lib/pdf/margins";
+import type { PdfTemplatePreviewContext } from "@/lib/pdf/template-preview";
 import { ChunkPreviewModal } from "@/components/ChunkPreviewModal";
 import { TranscriptRangeModal } from "@/components/TranscriptRangeModal";
 import {
@@ -293,6 +316,48 @@ function tabTone(active: boolean): string {
     : "text-slate-600 hover:bg-slate-100 hover:text-slate-900";
 }
 
+type AgendaReviewViewMode = "validated" | "approval";
+
+function AgendaReviewViewToggle({
+  mode,
+  onModeChange,
+}: {
+  mode: AgendaReviewViewMode;
+  onModeChange: (mode: AgendaReviewViewMode) => void;
+}) {
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+        Review view
+      </span>
+      <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-xs font-medium shadow-sm">
+        <button
+          type="button"
+          onClick={() => onModeChange("validated")}
+          className={`rounded-lg px-3 py-1.5 transition ${
+            mode === "validated"
+              ? "bg-white font-semibold text-slate-900 shadow-sm"
+              : "text-slate-600 hover:text-slate-900"
+          }`}
+        >
+          Item review
+        </button>
+        <button
+          type="button"
+          onClick={() => onModeChange("approval")}
+          className={`rounded-lg px-3 py-1.5 transition ${
+            mode === "approval"
+              ? "bg-white font-semibold text-slate-900 shadow-sm"
+              : "text-slate-600 hover:text-slate-900"
+          }`}
+        >
+          Agenda approval
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
   const [panelMeetingId, setPanelMeetingId] = useState<string | null>(null);
   const [compareDialogMeetingId, setCompareDialogMeetingId] = useState<string | null>(null);
@@ -476,12 +541,49 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [pollWindowUntil, setPollWindowUntil] = useState<number | null>(null);
   const [compareDialogOpen, setCompareDialogOpen] = useState(false);
   const [transitionsDialogOpen, setTransitionsDialogOpen] = useState(false);
+  const [pdfTemplateDialogOpen, setPdfTemplateDialogOpen] = useState(false);
+  const [pdfMargins, setPdfMargins] = useState<PdfMargins>(DEFAULT_PDF_MARGINS);
+  const [pdfMarginsRevision, setPdfMarginsRevision] = useState(0);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
+  const [sidePanelInitialTab, setSidePanelInitialTab] =
+    useState<GoldStandardValidationTab>("generatedOnly");
   const [liveValidation, setLiveValidation] =
     useState<GoldStandardValidationResult | null>(null);
   const [liveAiUsage, setLiveAiUsage] = useState<string | null>(null);
   const statusRequestSeq = useRef(0);
   const statusAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    setPdfMargins(loadPdfMargins());
+  }, []);
+
+  const pdfTemplatePreviewContext = useMemo((): PdfTemplatePreviewContext => {
+    const draftJson = status?.latestDraft?.json;
+    if (!draftJson) {
+      return {
+        meetingDate: status?.meeting.meetingDate,
+      };
+    }
+    const doc = parseDraftMinutesDoc(draftJson);
+    if (!doc) {
+      return {
+        meetingDate: status?.meeting.meetingDate,
+      };
+    }
+    return {
+      corporationName: doc.metadata.corporationName,
+      meetingDate: doc.metadata.meetingDate || status?.meeting.meetingDate,
+      meetingTime: doc.metadata.meetingTime,
+      meetingPlatform: doc.metadata.meetingPlatform,
+    };
+  }, [status?.latestDraft?.json, status?.meeting.meetingDate]);
+
+  function handlePdfTemplateSave(nextMargins: PdfMargins) {
+    setPdfMargins(nextMargins);
+    savePdfMargins(nextMargins);
+    setPdfMarginsRevision((revision) => revision + 1);
+    setPdfTemplateDialogOpen(false);
+  }
 
   const currentValidation = useMemo(() => {
     if (liveValidation) return liveValidation;
@@ -494,6 +596,16 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
 
   function handleValidationBadgeClick() {
     if (validationScore !== null) {
+      setSidePanelInitialTab("generatedOnly");
+      setSidePanelOpen(true);
+    } else {
+      setCompareDialogOpen(true);
+    }
+  }
+
+  function handleOpenGoldStandardPanel(tab: GoldStandardValidationTab = "generatedOnly") {
+    if (validationScore !== null) {
+      setSidePanelInitialTab(tab);
       setSidePanelOpen(true);
     } else {
       setCompareDialogOpen(true);
@@ -953,6 +1065,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 onCompare={handleValidationBadgeClick}
                 onOpenDocuments={() => setDocumentsDialogOpen(true)}
                 onOpenUsage={() => setUsageDialogOpen(true)}
+                onOpenPdfTemplate={() => setPdfTemplateDialogOpen(true)}
                 onSourcesPulled={() => void refreshStatus()}
               />
               <PipelineActionButton
@@ -967,7 +1080,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               />
               {status?.latestDraft ? (
                 <a
-                  href={`/api/v2/meetings/${meetingId}/draft/file?download=1`}
+                  href={`/api/v2/meetings/${meetingId}/draft/file?download=1&${pdfMarginsSearchParams(pdfMargins)}`}
                   className="inline-flex items-center justify-center rounded-lg border border-white/15 bg-white px-3 py-2 text-sm font-semibold text-slate-900 transition hover:bg-slate-100"
                 >
                   Download PDF
@@ -1049,6 +1162,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   <AgendaReviewPanel
                     meetingId={meetingId}
                     status={status}
+                    goldStandardValidation={currentValidation}
+                    onOpenGoldStandardPanel={handleOpenGoldStandardPanel}
                     onReEvaluateSubmitted={kickPollWindow}
                   />
                 ) : null}
@@ -1059,8 +1174,24 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                     draftBusy={draftBusy}
                     draftError={draftError}
                     validationScore={validationScore}
+                    pdfMargins={pdfMargins}
+                    pdfMarginsRevision={pdfMarginsRevision}
                     onValidationBadgeClick={handleValidationBadgeClick}
                     onGenerateDraft={handleGenerateDraft}
+                    onDraftJsonSaved={(summaryJson) => {
+                      setStatus((current) =>
+                        current?.latestDraft
+                          ? {
+                              ...current,
+                              latestDraft: {
+                                ...current.latestDraft,
+                                json: summaryJson,
+                                updatedAt: new Date().toISOString(),
+                              },
+                            }
+                          : current,
+                      );
+                    }}
                   />
                 ) : null}
                 {activeTab === "pipeline" ? (
@@ -1118,11 +1249,19 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
             : null
         }
         validation={sidePanelOpen ? currentValidation : null}
+        initialTab={sidePanelInitialTab}
         onClose={() => setSidePanelOpen(false)}
         onReCompare={() => {
           setSidePanelOpen(false);
           setCompareDialogOpen(true);
         }}
+      />
+      <PdfTemplateDialog
+        open={pdfTemplateDialogOpen}
+        pdfMargins={pdfMargins}
+        previewContext={pdfTemplatePreviewContext}
+        onClose={() => setPdfTemplateDialogOpen(false)}
+        onSave={handlePdfTemplateSave}
       />
     </div>
   );
@@ -1137,6 +1276,7 @@ function MeetingWorkspaceMoreMenu({
   onCompare,
   onOpenDocuments,
   onOpenUsage,
+  onOpenPdfTemplate,
   onSourcesPulled,
 }: {
   hasMeetingDocuments: boolean;
@@ -1147,6 +1287,7 @@ function MeetingWorkspaceMoreMenu({
   onCompare: () => void;
   onOpenDocuments: () => void;
   onOpenUsage: () => void;
+  onOpenPdfTemplate: () => void;
   onSourcesPulled: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1251,6 +1392,23 @@ function MeetingWorkspaceMoreMenu({
               <span className="block text-xs text-slate-500">Token usage and spend by stage</span>
             </span>
           </button>
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              closeMenu();
+              onOpenPdfTemplate();
+            }}
+            className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+          >
+            <PdfTemplateMenuIcon className="h-5 w-5 shrink-0 text-slate-500" />
+            <span>
+              <span className="block font-medium text-slate-900">PDF template</span>
+              <span className="block text-xs text-slate-500">
+                Margins and layout for minutes export
+              </span>
+            </span>
+          </button>
           <PullMeetingSourcesButton
             meetingId={meetingId}
             showWhenSourcesMissing
@@ -1321,6 +1479,21 @@ function AiUsageMenuIcon({ className = "h-5 w-5" }: { className?: string }) {
   return (
     <svg aria-hidden className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
       <path strokeLinecap="round" d="M12 6v12M9.5 8.5c0-1.25 1.12-2.25 2.5-2.25s2.5 1 2.5 2.25M9.5 15.5c0 1.25 1.12 2.25 2.5 2.25s2.5-1 2.5-2.25" />
+    </svg>
+  );
+}
+
+function PdfTemplateMenuIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg aria-hidden className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8 4.5h8l3 3v12a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1v-14a1 1 0 0 1 1-1Z"
+      />
+      <path strokeLinecap="round" d="M16 4.5v3h3" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6M9 15h4" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5.5 19.5 4 21l1.5 1.5" />
     </svg>
   );
 }
@@ -1560,23 +1733,30 @@ function SectionCard({
   eyebrow,
   title,
   description,
+  headerAside,
   children,
   compact = false,
 }: {
   eyebrow?: string;
   title: string;
   description?: string;
+  headerAside?: ReactNode;
   children: ReactNode;
   compact?: boolean;
 }) {
   return (
     <div className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${compact ? "p-4" : "p-5"}`}>
-      <div className={`space-y-1 ${compact ? "mb-3" : "mb-4"}`}>
-        {eyebrow ? (
-          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{eyebrow}</p>
-        ) : null}
-        <h2 className="text-lg font-semibold tracking-tight text-slate-950">{title}</h2>
-        {description ? <p className="text-sm leading-5 text-slate-600">{description}</p> : null}
+      <div
+        className={`flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between ${compact ? "mb-3" : "mb-4"}`}
+      >
+        <div className="min-w-0 space-y-1">
+          {eyebrow ? (
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{eyebrow}</p>
+          ) : null}
+          <h2 className="text-lg font-semibold tracking-tight text-slate-950">{title}</h2>
+          {description ? <p className="text-sm leading-5 text-slate-600">{description}</p> : null}
+        </div>
+        {headerAside ? <div className="shrink-0 self-start sm:pt-0.5">{headerAside}</div> : null}
       </div>
       {children}
     </div>
@@ -2185,6 +2365,8 @@ function AgendaReviewListItem({
   onSetEditingItemId,
   onSelectChunkId,
   onSelectTimeRange,
+  goldStandardFindings,
+  onOpenGoldStandardPanel,
 }: {
   item: MeetingV2Status["items"][number];
   displayNumber: string;
@@ -2202,6 +2384,8 @@ function AgendaReviewListItem({
   onSetEditingItemId: (itemId: string | null) => void;
   onSelectChunkId: (chunkId: string) => void;
   onSelectTimeRange: (timeRange: string) => void;
+  goldStandardFindings?: ItemGoldStandardFindings;
+  onOpenGoldStandardPanel?: (tab: GoldStandardValidationTab) => void;
 }) {
   const isExcluded = excludedItemIds.has(item.id);
     const currentStatus = itemStatuses[item.id] || item.discussionStatus || "discussed";
@@ -2299,6 +2483,11 @@ function AgendaReviewListItem({
                     ℹ️ Presenter not in audio
                   </span>
                 ) : null}
+
+                <GoldStandardItemFindingBadgesRow
+                  findings={goldStandardFindings}
+                  onOpenGoldStandardPanel={onOpenGoldStandardPanel}
+                />
               </div>
 
               {subItems.length > 0 ? (
@@ -2402,6 +2591,8 @@ function ValidatedAgendaReviewListItem({
   onOpenDetailPanel,
   onSelectChunkId,
   onSelectTimeRange,
+  goldStandardFindings,
+  onOpenGoldStandardPanel,
 }: {
   item: AgendaReviewItem;
   displayNumber: string;
@@ -2418,6 +2609,8 @@ function ValidatedAgendaReviewListItem({
   onOpenDetailPanel: (item: AgendaReviewItem, initialTab: "flags" | "questions" | "evidence") => void;
   onSelectChunkId: (chunkId: string) => void;
   onSelectTimeRange: (timeRange: string) => void;
+  goldStandardFindings?: ItemGoldStandardFindings;
+  onOpenGoldStandardPanel?: (tab: GoldStandardValidationTab) => void;
 }) {
   const flagCount = item.validation.filter(
     (validation) => validation.severity === "error" || validation.severity === "warning",
@@ -2513,6 +2706,13 @@ function ValidatedAgendaReviewListItem({
                   </span>
                 ) : null}
               </div>
+
+              {goldStandardFindings && onOpenGoldStandardPanel ? (
+                <GoldStandardItemFindingBadgesRow
+                  findings={goldStandardFindings}
+                  onOpenGoldStandardPanel={onOpenGoldStandardPanel}
+                />
+              ) : null}
 
               {item.discussionSummary ? (
                 <p className="text-xs leading-5 text-slate-600">{item.discussionSummary}</p>
@@ -2629,11 +2829,17 @@ function HitlAgendaApprovalWorkspace({
   status,
   onApproved,
   onSwitchToValidatedReview,
+  headerAside,
+  goldStandardFindingsByItemId,
+  onOpenGoldStandardPanel,
 }: {
   meetingId: string;
   status: MeetingV2Status;
   onApproved?: () => void;
   onSwitchToValidatedReview?: () => void;
+  headerAside?: ReactNode;
+  goldStandardFindingsByItemId?: Map<string, ItemGoldStandardFindings>;
+  onOpenGoldStandardPanel?: (tab: GoldStandardValidationTab) => void;
 }) {
   const [itemStatuses, setItemStatuses] = useState<Record<string, "discussed" | "not_discussed" | "ad_hoc">>(() => {
     const initial: Record<string, "discussed" | "not_discussed" | "ad_hoc"> = {};
@@ -2919,6 +3125,8 @@ function HitlAgendaApprovalWorkspace({
             onSetEditingItemId={setEditingItemId}
             onSelectChunkId={setSelectedChunkId}
             onSelectTimeRange={setSelectedTimeRange}
+            goldStandardFindings={goldStandardFindingsByItemId?.get(node.item.id)}
+            onOpenGoldStandardPanel={onOpenGoldStandardPanel}
           />
           {hasChildren ? (
             <ol
@@ -2939,6 +3147,7 @@ function HitlAgendaApprovalWorkspace({
       eyebrow="Human-in-the-Loop Agenda Review"
       title={isApproved ? "Approved Meeting Agenda" : "Review & Approve Candidate Agenda"}
       description="The AI synthesized this candidate agenda by cross-referencing the Board Package and the recording transcript. Confirm which topics were discussed vs. adjourned or skipped, resolve any detected transcript discrepancies, and approve to proceed with targeted evidence gathering and investigation."
+      headerAside={headerAside}
     >
       <div className="space-y-6">
         <div className="flex flex-wrap gap-1.5 rounded-xl bg-slate-50 p-1">
@@ -3232,7 +3441,7 @@ function HitlAgendaApprovalWorkspace({
           </div>
 
           <div className="flex items-center gap-3">
-            {onSwitchToValidatedReview ? (
+            {onSwitchToValidatedReview && !headerAside ? (
               <button
                 type="button"
                 onClick={onSwitchToValidatedReview}
@@ -3284,10 +3493,14 @@ function HitlAgendaApprovalWorkspace({
 function AgendaReviewPanel({
   meetingId,
   status,
+  goldStandardValidation,
+  onOpenGoldStandardPanel,
   onReEvaluateSubmitted,
 }: {
   meetingId: string;
   status: MeetingV2Status;
+  goldStandardValidation?: GoldStandardValidationResult | null;
+  onOpenGoldStandardPanel?: (tab: GoldStandardValidationTab) => void;
   onReEvaluateSubmitted?: () => void;
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -3300,6 +3513,15 @@ function AgendaReviewPanel({
   >("flags");
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
   const [selectedTimeRange, setSelectedTimeRange] = useState<string | null>(null);
+
+  const goldStandardFindingsByItemId = useMemo(() => {
+    if (!goldStandardValidation) return new Map<string, ItemGoldStandardFindings>();
+    return buildGoldStandardFindingsByItemId(
+      status.items,
+      goldStandardValidation.generatedOnly,
+      goldStandardValidation.goldOnly,
+    );
+  }, [goldStandardValidation, status.items]);
 
   const reviewItems = useMemo(
     () => filterItemsForValidatedReview(status.items, status.meeting.agendaApproval),
@@ -3394,6 +3616,8 @@ function AgendaReviewPanel({
             onOpenDetailPanel={handleOpenDetailPanel}
             onSelectChunkId={setSelectedChunkId}
             onSelectTimeRange={setSelectedTimeRange}
+            goldStandardFindings={goldStandardFindingsByItemId.get(node.item.id)}
+            onOpenGoldStandardPanel={onOpenGoldStandardPanel}
           />
           {hasChildren ? (
             <ol
@@ -3424,6 +3648,15 @@ function AgendaReviewPanel({
   }, [isPendingApproval]);
 
   const canReviewItems = status.meeting.computedPipelineState === "validated";
+  const isPostAgendaPhase =
+    canReviewItems && Boolean(status.meeting.agendaApproval?.approvedAt);
+
+  const reviewViewToggle = isPostAgendaPhase ? (
+    <AgendaReviewViewToggle
+      mode={showApprovalWorkspace ? "approval" : "validated"}
+      onModeChange={(mode) => setShowApprovalWorkspace(mode === "approval")}
+    />
+  ) : null;
 
   if (showApprovalWorkspace || (!canReviewItems && status.items.length > 0)) {
     return (
@@ -3434,8 +3667,11 @@ function AgendaReviewPanel({
           onReEvaluateSubmitted?.();
         }}
         onSwitchToValidatedReview={
-          canReviewItems ? () => setShowApprovalWorkspace(false) : undefined
+          canReviewItems && !isPostAgendaPhase ? () => setShowApprovalWorkspace(false) : undefined
         }
+        headerAside={reviewViewToggle}
+        goldStandardFindingsByItemId={goldStandardFindingsByItemId}
+        onOpenGoldStandardPanel={onOpenGoldStandardPanel}
       />
     );
   }
@@ -3469,6 +3705,7 @@ function AgendaReviewPanel({
       eyebrow="Agenda Review"
       title="Review agenda items and resolve open questions"
       description="Work through items in official agenda order. Expand an item to answer clarifications, inspect flags and evidence, or re-run investigation for that topic only."
+      headerAside={reviewViewToggle}
     >
       <div className="mb-4 flex flex-col gap-3 border-b border-slate-100 pb-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -3486,13 +3723,6 @@ function AgendaReviewPanel({
             </span>
           ) : null}
         </div>
-        <button
-          type="button"
-          onClick={() => setShowApprovalWorkspace(true)}
-          className="self-start rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 sm:self-auto"
-        >
-          ⚙️ Manage Agenda Classification & Discrepancies
-        </button>
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -3772,16 +4002,22 @@ function DraftWorkspacePanel({
   draftBusy,
   draftError,
   validationScore,
+  pdfMargins,
+  pdfMarginsRevision,
   onValidationBadgeClick,
   onGenerateDraft,
+  onDraftJsonSaved,
 }: {
   meetingId: string;
   draft: MeetingV2Status["latestDraft"] | null;
   draftBusy: boolean;
   draftError: string | null;
   validationScore?: number | null;
+  pdfMargins: PdfMargins;
+  pdfMarginsRevision: number;
   onValidationBadgeClick?: () => void;
   onGenerateDraft: () => void;
+  onDraftJsonSaved?: (summaryJson: string) => void;
 }) {
   const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
   return (
@@ -3837,10 +4073,86 @@ function DraftWorkspacePanel({
               </button>
             </div>
           </div>
-          <DraftPreviewBody meetingId={meetingId} draft={draft} mode={editorMode} heightClassName="h-[65dvh] min-h-[32rem]" />
+          <DraftPreviewBody
+            meetingId={meetingId}
+            draft={draft}
+            mode={editorMode}
+            heightClassName="h-[65dvh] min-h-[32rem]"
+            pdfMargins={pdfMargins}
+            pdfMarginsRevision={pdfMarginsRevision}
+            onDraftJsonSaved={onDraftJsonSaved}
+          />
         </>
       )}
     </SectionCard>
+  );
+}
+
+function DraftAttendancePanel({
+  doc,
+  onEdit,
+}: {
+  doc: MinutesDocumentV2;
+  onEdit: () => void;
+}) {
+  const sections = [
+    { label: "Present", people: doc.attendance?.present ?? [] },
+    { label: "By invitation", people: doc.attendance?.byInvitation ?? [] },
+    { label: "Guests", people: doc.attendance?.guests ?? [] },
+    { label: "Regrets", people: doc.attendance?.regrets ?? [] },
+  ] as const;
+  const hasAnyAttendees = sections.some((section) => section.people.length > 0);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-900">Attendance</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Auto-detected from the board package and transcript. Edit names, titles,
+            and roles before finalizing.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onEdit}
+          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+        >
+          Edit attendees
+        </button>
+      </div>
+
+      {hasAnyAttendees ? (
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          {sections.map((section) =>
+            section.people.length > 0 ? (
+              <div key={section.label}>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  {section.label}
+                </div>
+                <ul className="mt-2 space-y-1.5">
+                  {section.people.map((person: AttendeeV2, index) => (
+                    <li key={`${section.label}-${index}`} className="text-sm text-slate-800">
+                      <span className="font-medium">{person.name}</span>
+                      {formatAttendeeLine(person).includes(" - ") ? (
+                        <span className="text-slate-600">
+                          {" — "}
+                          {formatAttendeeLine(person).slice(person.name.length + 3)}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null,
+          )}
+        </div>
+      ) : (
+        <p className="mt-4 text-sm text-slate-500">
+          No attendees detected yet. Open Edit attendees to add or adjust the roster.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -3849,23 +4161,58 @@ function DraftPreviewBody({
   draft,
   mode,
   heightClassName,
+  pdfMargins,
+  pdfMarginsRevision,
+  onDraftJsonSaved,
 }: {
   meetingId: string;
   draft: MeetingV2Status["latestDraft"] | null;
   mode: "edit" | "preview";
   heightClassName: string;
+  pdfMargins: PdfMargins;
+  pdfMarginsRevision: number;
+  onDraftJsonSaved?: (summaryJson: string) => void;
 }) {
   const [doc, setDoc] = useState<MinutesDocumentV2 | null>(null);
   const saveTimeout = useRef<NodeJS.Timeout | null>(null);
   const [attendeesDialogOpen, setAttendeesDialogOpen] = useState(false);
+  const [attendeesSaving, setAttendeesSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveRevision, setSaveRevision] = useState(0);
+  const editableAttendance = useMemo(
+    () => (doc ? extractEditableAttendanceFromDoc(doc) : null),
+    [doc],
+  );
 
-  function handleSaveAttendees(
-    attendance: Pick<EditableAttendance, "present" | "byInvitation" | "regrets" | "guests">,
-  ) {
-    if (!doc) return;
-    const updatedDoc = { ...doc, attendance };
-    handleDocChange(updatedDoc);
-    setAttendeesDialogOpen(false);
+  async function handleSaveAttendees(attendance: AttendanceSavePayload) {
+    if (!doc || !draft) return;
+
+    setAttendeesSaving(true);
+    setSaveError(null);
+
+    const updatedDoc = applyAttendanceToMinutesDoc(doc, attendance);
+    setDoc(updatedDoc);
+
+    try {
+      const summaryJson = serializeDraftSummaryJson(draft.json, updatedDoc);
+      const contentMarkdown = v2ToMarkdown(updatedDoc);
+      const response = await fetch(`/api/v2/meetings/${meetingId}/draft/save`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draftId: draft.id, summaryJson, contentMarkdown }),
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Could not save attendees.");
+      }
+      onDraftJsonSaved?.(summaryJson);
+      setSaveRevision((revision) => revision + 1);
+      setAttendeesDialogOpen(false);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Could not save attendees.");
+    } finally {
+      setAttendeesSaving(false);
+    }
   }
 
   useEffect(() => {
@@ -3873,30 +4220,35 @@ function DraftPreviewBody({
       setDoc(null);
       return;
     }
-    try {
-      const parsed = JSON.parse(draft.json);
-      const actualDoc = parsed.minutesV2?.data || parsed.data || parsed;
-      setDoc(actualDoc);
-    } catch (e) {
-      console.error("Failed to parse draft JSON", e);
-      setDoc(null);
-    }
+    setDoc(parseDraftMinutesDoc(draft.json));
   }, [draft?.id, draft?.json]);
 
   function handleDocChange(updated: MinutesDocumentV2) {
     setDoc(updated);
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
-    
-    saveTimeout.current = setTimeout(() => {
-      const summaryJson = serializeMinutesDoc(updated);
+
+    saveTimeout.current = setTimeout(async () => {
+      if (!draft) return;
+      const summaryJson = serializeDraftSummaryJson(draft.json, updated);
       const contentMarkdown = v2ToMarkdown(updated);
-      
-      fetch(`/api/v2/meetings/${meetingId}/draft/save`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ draftId: draft!.id, summaryJson, contentMarkdown }),
-      }).catch(console.error);
-    }, 1000); // 1s debounce
+
+      try {
+        const response = await fetch(`/api/v2/meetings/${meetingId}/draft/save`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ draftId: draft.id, summaryJson, contentMarkdown }),
+        });
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || "Could not save draft.");
+        }
+        onDraftJsonSaved?.(summaryJson);
+        setSaveRevision((revision) => revision + 1);
+        setSaveError(null);
+      } catch (error) {
+        setSaveError(error instanceof Error ? error.message : "Could not save draft.");
+      }
+    }, 1000);
   }
 
   if (!draft) {
@@ -3914,6 +4266,19 @@ function DraftPreviewBody({
         <div className="mt-1 text-sm text-slate-500">Updated {formatDateTime(draft.updatedAt)}</div>
       </div>
       
+      {saveError ? (
+        <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-800">
+          {saveError}
+        </p>
+      ) : null}
+
+      {doc ? (
+        <DraftAttendancePanel
+          doc={doc}
+          onEdit={() => setAttendeesDialogOpen(true)}
+        />
+      ) : null}
+
       {mode === "edit" && doc ? (
         <div className="rounded-2xl border border-slate-200 bg-white">
           <MinutesStructuredEditor
@@ -3921,24 +4286,30 @@ function DraftPreviewBody({
             onDocChange={handleDocChange}
             onOpenAttendeesDialog={() => setAttendeesDialogOpen(true)}
           />
-          <AttendeesEditorDialog
-            open={attendeesDialogOpen}
-            attendance={{ ...doc.attendance, schemaVersion: "v2" }}
-            onClose={() => setAttendeesDialogOpen(false)}
-            onSave={handleSaveAttendees}
-          />
         </div>
       ) : null}
 
       {mode === "preview" ? (
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
           <iframe
-            key={draft.id + doc?.metadata.meetingDate} // force refresh if needed
+            key={`${draft.id}-${saveRevision}-${pdfMarginsRevision}-${doc?.metadata.meetingDate ?? ""}`}
             title={`${draft.title} PDF preview`}
-            src={`/api/v2/meetings/${meetingId}/draft/file`}
+            src={`/api/v2/meetings/${meetingId}/draft/file?${pdfMarginsSearchParams(pdfMargins)}`}
             className={`${heightClassName} w-full bg-white`}
           />
         </div>
+      ) : null}
+
+      {doc && editableAttendance ? (
+        <AttendeesEditorDialog
+          open={attendeesDialogOpen}
+          attendance={editableAttendance}
+          busy={attendeesSaving}
+          onClose={() => {
+            if (!attendeesSaving) setAttendeesDialogOpen(false);
+          }}
+          onSave={handleSaveAttendees}
+        />
       ) : null}
     </div>
   );

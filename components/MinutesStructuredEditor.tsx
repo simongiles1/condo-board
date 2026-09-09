@@ -45,6 +45,7 @@ import {
   meetingMediumFromMetadata,
   romanMarker,
 } from "@/lib/minutes/v2-render-helpers";
+import { MinutesSectionInfoTooltip } from "@/components/MinutesSectionInfoTooltip";
 
 type Props = {
   doc: MinutesDocumentV2;
@@ -162,13 +163,26 @@ function indexPostTerminationItems(
   return entries;
 }
 
-function SectionHeading({ number, title }: { number: string; title: string }) {
+function SectionHeading({
+  number,
+  title,
+  tooltipId,
+}: {
+  number: string;
+  title: string;
+  tooltipId?: string;
+}) {
   return (
     <div className="minutes-section-heading">
       {number ? (
         <span className="minutes-section-number">{number}.</span>
       ) : null}
-      <span className="minutes-section-title">{title}</span>
+      <span className="minutes-section-title inline-flex items-baseline gap-1.5">
+        <span>{title}</span>
+        {tooltipId ? (
+          <MinutesSectionInfoTooltip tooltipId={tooltipId} />
+        ) : null}
+      </span>
     </div>
   );
 }
@@ -176,14 +190,21 @@ function SectionHeading({ number, title }: { number: string; title: string }) {
 function SubsectionHeading({
   number,
   title,
+  tooltipId,
 }: {
   number: string;
   title: string;
+  tooltipId?: string;
 }) {
   return (
     <div className="minutes-subsection-heading">
       <span className="minutes-section-number">{number}</span>
-      <span className="minutes-subsection-title">{title}</span>
+      <span className="minutes-subsection-title inline-flex items-baseline gap-1.5">
+        <span>{title}</span>
+        {tooltipId ? (
+          <MinutesSectionInfoTooltip tooltipId={tooltipId} />
+        ) : null}
+      </span>
     </div>
   );
 }
@@ -420,7 +441,7 @@ function AgendaItemEditor({
               ))}
             </select>
           </label>
-          <label className="minutes-meta-label ml-3">
+          <label className="minutes-meta-label ml-3 inline-flex items-center gap-1">
             <input
               type="checkbox"
               checked={Boolean(item.restricted)}
@@ -433,7 +454,8 @@ function AgendaItemEditor({
               }
               className="mr-1 accent-teal-600"
             />
-            Restricted (addendum only)
+            <span>Restricted (addendum only)</span>
+            <MinutesSectionInfoTooltip tooltipId="restricted-item-flag" />
           </label>
           {item.restricted ? (
             <span className="minutes-restricted-badge">Restricted</span>
@@ -578,6 +600,13 @@ function AttendanceSection({
   const dateDisplay = formatMeetingDateDisplay((doc.metadata || {}).meetingDate);
   const corp = (doc.metadata || {}).corporationName?.trim() || "";
   const timeClause = formatMeetingTimeClause((doc.metadata || {}).meetingTime);
+  const attendanceRows = [
+    ["Present:", doc?.attendance?.present || []],
+    ["By Invitation:", doc?.attendance?.byInvitation || []],
+    ["Guests:", doc?.attendance?.guests || []],
+    ["Regrets:", doc?.attendance?.regrets || []],
+  ] as const;
+  const hasAnyAttendees = attendanceRows.some(([, people]) => people.length > 0);
 
   return (
     <section className="minutes-structured-section">
@@ -587,7 +616,10 @@ function AttendanceSection({
       </p>
       <hr className="minutes-hr" />
       <div className="minutes-attendance-header">
-        <h3 className="text-sm font-semibold text-slate-700">Attendance</h3>
+        <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+          <span>Attendance</span>
+          <MinutesSectionInfoTooltip tooltipId="attendance" />
+        </h3>
         <button
           type="button"
           className={btnClass}
@@ -596,14 +628,14 @@ function AttendanceSection({
           Edit attendees
         </button>
       </div>
-      {(
-        [
-          ["Present:", doc?.attendance?.present || []],
-          ["By Invitation:", doc?.attendance?.byInvitation || []],
-          ["Guests:", doc?.attendance?.guests || []],
-          ["Regrets:", doc?.attendance?.regrets || []],
-        ] as const
-      ).map(([label, people]) =>
+      {!hasAnyAttendees ? (
+        <p className="mb-3 text-sm text-slate-500">
+          Attendees are auto-detected from the board package and transcript when
+          the draft is generated. Use Edit attendees to review names, titles, and
+          roles before finalizing.
+        </p>
+      ) : null}
+      {attendanceRows.map(([label, people]) =>
         people.length > 0 ? (
           <div key={label} className="minutes-attendance-block">
             <span className="minutes-attendance-label">{label}</span>
@@ -637,6 +669,7 @@ function ManagementBucket({
   bucket,
   entries,
   onDocChange,
+  tooltipId,
 }: {
   doc: MinutesDocumentV2;
   sectionNum: string;
@@ -645,12 +678,17 @@ function ManagementBucket({
   bucket: AgendaBucket;
   entries: IndexedAgendaEntry[];
   onDocChange: (next: MinutesDocumentV2) => void;
+  tooltipId?: string;
 }) {
   if (!entries.length) return null;
 
   return (
     <div className="minutes-management-bucket">
-      <SubsectionHeading number={`${sectionNum}.${subNum}`} title={title} />
+      <SubsectionHeading
+        number={`${sectionNum}.${subNum}`}
+        title={title}
+        tooltipId={tooltipId}
+      />
       <AgendaItemsList
         doc={doc}
         entries={entries}
@@ -740,7 +778,10 @@ function RestrictedAddendumSection({
 
   return (
     <section className="minutes-structured-section minutes-addendum">
-      <h2 className="minutes-addendum-title">{RESTRICTED_ADDENDUM_TITLE}</h2>
+      <h2 className="minutes-addendum-title inline-flex items-center gap-1.5">
+        <span>{RESTRICTED_ADDENDUM_TITLE}</span>
+        <MinutesSectionInfoTooltip tooltipId="restricted-addendum" />
+      </h2>
       <p className="minutes-addendum-subtitle">{RESTRICTED_ADDENDUM_SUBTITLE}</p>
       <p className="minutes-addendum-confidential">
         {RESTRICTED_ADDENDUM_SECTION_HEADING}
@@ -776,6 +817,7 @@ function RestrictedAddendumSection({
               displayIndex: ratPub.length + i,
             }))}
             onDocChange={onDocChange}
+            tooltipId="items-for-ratification"
           />
           {apprDiscRest.length > 0 ? (
             <div className="minutes-management-bucket">
@@ -908,7 +950,11 @@ export function MinutesStructuredEditor({
 
       {/* 1. Call to Order */}
       <section className="minutes-structured-section">
-        <SectionHeading number="1" title="Call to Order" />
+        <SectionHeading
+          number="1"
+          title="Call to Order"
+          tooltipId="call-to-order"
+        />
         <div className="minutes-body-paragraph space-y-2">
           <label className="block text-xs font-medium text-slate-500">
             Chair name
@@ -942,7 +988,11 @@ export function MinutesStructuredEditor({
       {/* 2. Approval of Previous Minutes */}
       <section className="minutes-structured-section">
         <div className="flex items-center justify-between gap-3">
-          <SectionHeading number="2" title="Approval of Previous Minutes" />
+          <SectionHeading
+            number="2"
+            title="Approval of Previous Minutes"
+            tooltipId="approval-of-previous-minutes"
+          />
           <button
             type="button"
             className={btnClass}
@@ -1049,6 +1099,7 @@ export function MinutesStructuredEditor({
             bucket="managementReport.itemsForRatification"
             entries={ratPub}
             onDocChange={onDocChange}
+            tooltipId="items-for-ratification"
           />
           {apprDiscPub.length > 0 ? (
             <div className="minutes-management-bucket">
@@ -1141,7 +1192,11 @@ export function MinutesStructuredEditor({
 
       {/* 6. Date of Next Meeting */}
       <section className="minutes-structured-section">
-        <SectionHeading number="6" title="Date of Next Meeting" />
+        <SectionHeading
+          number="6"
+          title="Date of Next Meeting"
+          tooltipId="date-of-next-meeting"
+        />
         <div className="minutes-body-paragraph space-y-2">
           <label className="block text-xs font-medium text-slate-500">
             Date
@@ -1188,7 +1243,11 @@ export function MinutesStructuredEditor({
 
       {/* 7. Meeting Conclusion */}
       <section className="minutes-structured-section">
-        <SectionHeading number="7" title="Meeting Conclusion" />
+        <SectionHeading
+          number="7"
+          title="Meeting Conclusion"
+          tooltipId="meeting-conclusion"
+        />
         <label className="block text-xs font-medium text-slate-500">
           Conclusion time
           <input

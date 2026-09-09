@@ -7,7 +7,10 @@ import type {
   MinutesDocumentV2,
   MotionV2,
 } from "@/lib/minutes/schema-v2";
-import { wrapMinutesV2 } from "@/lib/minutes/schema-v2";
+import {
+  validateMinutesV2,
+  wrapMinutesV2,
+} from "@/lib/minutes/schema-v2";
 
 export type AgendaBucket =
   | "financialMatters"
@@ -52,6 +55,47 @@ export function emptyActionItem(): ActionItemV2 {
 
 export function serializeMinutesDoc(doc: MinutesDocumentV2): string {
   return JSON.stringify(wrapMinutesV2(doc));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Parse structured minutes from a V2 draft summary_json envelope. */
+export function parseDraftMinutesDoc(summaryJson: string): MinutesDocumentV2 | null {
+  try {
+    const parsed: unknown = JSON.parse(summaryJson);
+    if (!isRecord(parsed)) return null;
+
+    const docData =
+      (isRecord(parsed.minutesV2) ? parsed.minutesV2.data : undefined) ??
+      parsed.data ??
+      parsed.minutesV2 ??
+      parsed;
+    const validated = validateMinutesV2(docData);
+    return validated.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist edits while preserving draft assembly metadata when present. */
+export function serializeDraftSummaryJson(
+  existingSummaryJson: string | null | undefined,
+  doc: MinutesDocumentV2,
+): string {
+  const wrapped = wrapMinutesV2(doc);
+  if (existingSummaryJson?.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(existingSummaryJson);
+      if (isRecord(parsed) && ("minutesV2" in parsed || "assemblyMode" in parsed)) {
+        return JSON.stringify({ ...parsed, minutesV2: wrapped });
+      }
+    } catch {
+      // fall through to bare envelope
+    }
+  }
+  return JSON.stringify(wrapped);
 }
 
 function cloneDoc(doc: MinutesDocumentV2): MinutesDocumentV2 {

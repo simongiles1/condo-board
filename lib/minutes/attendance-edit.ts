@@ -1,6 +1,6 @@
 import type { Attendee } from "@/lib/minutes/schema";
 import { validateMinutesJson } from "@/lib/minutes/schema";
-import type { AttendeeV2 } from "@/lib/minutes/schema-v2";
+import type { AttendeeV2, MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
 import {
   parseMinutesJsonEnvelope,
   wrapMinutesV2,
@@ -18,7 +18,14 @@ export type EditableAttendance = {
   byInvitation: EditableAttendee[];
   regrets: EditableAttendee[];
   guests: EditableAttendee[];
+  /** v2 only — feeds call_to_order.chair_name in the PDF Call to Order paragraph. */
+  chairName?: string;
 };
+
+export type AttendanceSavePayload = Pick<
+  EditableAttendance,
+  "present" | "byInvitation" | "regrets" | "guests" | "chairName"
+>;
 
 export type AttendanceSectionKey =
   | "present"
@@ -84,6 +91,7 @@ export function extractAttendanceFromMinutesJson(
       byInvitation: attendance.byInvitation.map(toEditableV2),
       regrets: attendance.regrets.map(toEditableV2),
       guests: attendance.guests.map(toEditableV2),
+      chairName: envelope.v2.callToOrder?.chairName ?? "",
     };
   }
 
@@ -102,13 +110,72 @@ export function extractAttendanceFromMinutesJson(
   return null;
 }
 
+const EMPTY_ATTENDANCE_V2 = {
+  present: [],
+  byInvitation: [],
+  guests: [],
+  regrets: [],
+} as const;
+
+/** Editable attendance lists from a v2 minutes document. */
+export function extractEditableAttendanceFromDoc(
+  doc: MinutesDocumentV2,
+): EditableAttendance {
+  const attendance = doc.attendance ?? EMPTY_ATTENDANCE_V2;
+  return {
+    schemaVersion: "v2",
+    present: attendance.present.map(toEditableV2),
+    byInvitation: attendance.byInvitation.map(toEditableV2),
+    regrets: attendance.regrets.map(toEditableV2),
+    guests: attendance.guests.map(toEditableV2),
+    chairName: doc.callToOrder?.chairName ?? "",
+  };
+}
+
+/** Names suggested when picking the meeting chair (Present + By invitation, plus Management). */
+export function collectChairCandidates(
+  attendance: Pick<EditableAttendance, "present" | "byInvitation">,
+): string[] {
+  const names = new Set<string>();
+  for (const person of [...attendance.present, ...attendance.byInvitation]) {
+    const name = person.name.trim();
+    if (name) names.add(name);
+  }
+  names.add("Management");
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
+/** Merge edited attendance into a v2 minutes document (filters empty names). */
+export function applyAttendanceToMinutesDoc(
+  doc: MinutesDocumentV2,
+  attendance: AttendanceSavePayload,
+): MinutesDocumentV2 {
+  const present = filterAttendees(attendance.present);
+  const byInvitation = filterAttendees(attendance.byInvitation);
+  const regrets = filterAttendees(attendance.regrets);
+  const guests = filterAttendees(attendance.guests);
+  const chairName = attendance.chairName?.trim();
+
+  return {
+    ...doc,
+    attendance: {
+      ...(doc.attendance ?? EMPTY_ATTENDANCE_V2),
+      present: present.map(fromEditableV2),
+      byInvitation: byInvitation.map(fromEditableV2),
+      regrets: regrets.map(fromEditableV2),
+      guests: guests.map(fromEditableV2),
+    },
+    callToOrder: {
+      ...doc.callToOrder,
+      chairName: chairName || undefined,
+    },
+  };
+}
+
 /** Merge edited attendance back into minutes_json; returns null if invalid. */
 export function applyAttendanceToMinutesJson(
   minutesJson: string,
-  attendance: Pick<
-    EditableAttendance,
-    "present" | "byInvitation" | "regrets" | "guests"
-  >,
+  attendance: AttendanceSavePayload,
 ): string | null {
   const envelope = parseMinutesJsonEnvelope(minutesJson);
 
@@ -118,6 +185,7 @@ export function applyAttendanceToMinutesJson(
   const guests = filterAttendees(attendance.guests);
 
   if (envelope.version === "v2" && envelope.v2) {
+    const chairName = attendance.chairName?.trim();
     const updated = {
       ...envelope.v2,
       attendance: {
@@ -126,6 +194,10 @@ export function applyAttendanceToMinutesJson(
         byInvitation: byInvitation.map(fromEditableV2),
         regrets: regrets.map(fromEditableV2),
         guests: guests.map(fromEditableV2),
+      },
+      callToOrder: {
+        ...envelope.v2.callToOrder,
+        chairName: chairName || undefined,
       },
     };
     return JSON.stringify(wrapMinutesV2(updated));

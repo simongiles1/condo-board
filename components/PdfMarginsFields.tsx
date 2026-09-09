@@ -14,6 +14,7 @@ export function draftPdfMarginsFrom(margins: PdfMargins): DraftPdfMargins {
     bottom: String(margins.bottom),
     left: String(margins.left),
     right: String(margins.right),
+    pageOneRuleTop: String(margins.pageOneRuleTop),
     headerRuleTop: String(margins.headerRuleTop),
   };
 }
@@ -28,6 +29,7 @@ export function normalizeDraftPdfMargins(draft: DraftPdfMargins): PdfMargins {
     bottom: draft.bottom,
     left: draft.left,
     right: draft.right,
+    pageOneRuleTop: draft.pageOneRuleTop,
     headerRuleTop: draft.headerRuleTop,
   });
 }
@@ -88,16 +90,25 @@ function MarginPreview({ margins }: { margins: PdfMargins }) {
         />
         <line
           x1={margins.left}
+          y1={margins.pageOneRuleTop}
+          x2={LETTER_WIDTH - margins.right}
+          y2={margins.pageOneRuleTop}
+          stroke="#000000"
+          strokeWidth={1.5}
+        />
+        <line
+          x1={margins.left}
           y1={margins.headerRuleTop}
           x2={LETTER_WIDTH - margins.right}
           y2={margins.headerRuleTop}
-          stroke="#0f766e"
+          stroke="#000000"
           strokeWidth={1.5}
+          strokeDasharray="4 3"
         />
       </svg>
       <p className="text-center text-xs text-slate-500">
-        Grey areas are margins; white is the content region. Teal line is the
-        header rule (pages 2+).
+        Grey areas are margins; white is the content region. Solid line is the
+        page 1 rule; dashed line is the pages 2+ rule.
       </p>
     </div>
   );
@@ -138,9 +149,14 @@ function marginField(
 type Props = {
   draft: DraftPdfMargins;
   onChange: (id: keyof PdfMargins, value: string) => void;
+  showPreview?: boolean;
 };
 
-export function PdfMarginsFields({ draft, onChange }: Props) {
+export function PdfMarginsFields({
+  draft,
+  onChange,
+  showPreview = true,
+}: Props) {
   const previewMargins = normalizeDraftPdfMargins(draft);
 
   return (
@@ -153,17 +169,28 @@ export function PdfMarginsFields({ draft, onChange }: Props) {
       </div>
 
       {marginField(
+        "pageOneRuleTop",
+        "Page 1 rule from top",
+        draft.pageOneRuleTop,
+        onChange,
+        {
+          max: LETTER_HEIGHT,
+          hint: "Distance from the page top to the horizontal rule below the title block.",
+        },
+      )}
+
+      {marginField(
         "headerRuleTop",
-        "Header rule from top",
+        "Page 2+ rule from top",
         draft.headerRuleTop,
         onChange,
         {
           max: LETTER_HEIGHT,
-          hint: "Distance from the page top to the horizontal rule below the running header (pages 2+).",
+          hint: "Distance from the page top to the horizontal rule below the running header.",
         },
       )}
 
-      <MarginPreview margins={previewMargins} />
+      {showPreview ? <MarginPreview margins={previewMargins} /> : null}
     </div>
   );
 }

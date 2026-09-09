@@ -20,6 +20,8 @@ import {
 
 type ValidationTab = "generatedOnly" | "goldOnly";
 
+export type GoldStandardValidationTab = ValidationTab;
+
 export type GoldStandardMeetingSummary = {
   title: string;
   meetingDate?: string;
@@ -29,6 +31,7 @@ export type GoldStandardMeetingSummary = {
 type Props = {
   meeting: GoldStandardMeetingSummary | null;
   validation: GoldStandardValidationResult | null;
+  initialTab?: ValidationTab;
   onClose: () => void;
   onReCompare: () => void;
 };
@@ -139,10 +142,17 @@ function FindingsList({ findings }: { findings: ValidationFinding[] }) {
 export function GoldStandardValidationSidePanel({
   meeting,
   validation,
+  initialTab = "generatedOnly",
   onClose,
   onReCompare,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<ValidationTab>("generatedOnly");
+  const [activeTab, setActiveTab] = useState<ValidationTab>(initialTab);
+
+  useEffect(() => {
+    if (meeting && validation) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab, meeting, validation]);
 
   useEffect(() => {
     if (!meeting) return;

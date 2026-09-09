@@ -30,6 +30,20 @@ export const CONTINUATION_PAGE_EXTRA = 22;
 
 export const PDF_MARGINS_STORAGE_KEY = "condo-board-pdf-margins";
 
+const PDF_MARGIN_KEYS: (keyof PdfMargins)[] = [
+  "top",
+  "bottom",
+  "left",
+  "right",
+  "pageOneRuleTop",
+  "headerRuleTop",
+];
+
+export function pdfMarginsEqual(a: PdfMargins, b: PdfMargins): boolean {
+  return PDF_MARGIN_KEYS.every((key) => a[key] === b[key]);
+}
+
+/** @deprecated Use server-backed PDF template settings instead. */
 export function loadPdfMargins(): PdfMargins {
   if (typeof window === "undefined") return DEFAULT_PDF_MARGINS;
 
@@ -42,6 +56,7 @@ export function loadPdfMargins(): PdfMargins {
   }
 }
 
+/** @deprecated Use server-backed PDF template settings instead. */
 export function savePdfMargins(margins: PdfMargins): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(

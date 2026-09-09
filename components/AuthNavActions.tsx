@@ -8,12 +8,8 @@ import { PdfTemplateDialog } from "@/components/PdfTemplateDialog";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import type { UserRole } from "@/lib/auth/roles";
 import type { AttachmentVisibilitySettings } from "@/lib/email/attachment-visibility";
-import {
-  DEFAULT_PDF_MARGINS,
-  loadPdfMargins,
-  savePdfMargins,
-  type PdfMargins,
-} from "@/lib/pdf/margins";
+import type { PdfMargins } from "@/lib/pdf/margins";
+import { usePdfTemplateSettings } from "@/lib/pdf/use-pdf-template-settings";
 import {
   DEFAULT_ATTACHMENT_VISIBILITY_SETTINGS,
   loadAttachmentVisibilitySettings,
@@ -75,7 +71,8 @@ export function AuthNavActions({
   const [pdfTemplateOpen, setPdfTemplateOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [settings, setSettings] = useState<ModelSettings>(DEFAULT_MODEL_SETTINGS);
-  const [pdfMargins, setPdfMargins] = useState<PdfMargins>(DEFAULT_PDF_MARGINS);
+  const { margins: pdfMargins, saveMargins: savePdfTemplateMargins } =
+    usePdfTemplateSettings();
   const [attachmentVisibility, setAttachmentVisibility] =
     useState<AttachmentVisibilitySettings>(DEFAULT_ATTACHMENT_VISIBILITY_SETTINGS);
 
@@ -86,7 +83,6 @@ export function AuthNavActions({
 
   useEffect(() => {
     setSettings(loadModelSettings());
-    setPdfMargins(loadPdfMargins());
     setAttachmentVisibility(loadAttachmentVisibilitySettings());
   }, []);
 
@@ -151,9 +147,8 @@ export function AuthNavActions({
     setSettingsOpen(false);
   }
 
-  function handlePdfTemplateSave(nextMargins: PdfMargins) {
-    setPdfMargins(nextMargins);
-    savePdfMargins(nextMargins);
+  async function handlePdfTemplateSave(nextMargins: PdfMargins) {
+    await savePdfTemplateMargins(nextMargins);
     setPdfTemplateOpen(false);
   }
 

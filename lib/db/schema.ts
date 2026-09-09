@@ -1692,6 +1692,18 @@ export const analysisSettings = pgTable("analysis_settings", {
   updatedAt: text("updated_at").notNull(),
 });
 
+/** Singleton corporation-wide PDF margin and header layout settings. */
+export const pdfTemplateSettings = pgTable("pdf_template_settings", {
+  id: text("id").primaryKey(),
+  top: integer("top").notNull().default(72),
+  bottom: integer("bottom").notNull().default(72),
+  left: integer("left").notNull().default(72),
+  right: integer("right").notNull().default(72),
+  pageOneRuleTop: integer("page_one_rule_top").notNull().default(94),
+  headerRuleTop: integer("header_rule_top").notNull().default(71),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const analysisQueue = pgTable("analysis_queue", {
   id: text("id").primaryKey(),
   unitType: text("unit_type", {

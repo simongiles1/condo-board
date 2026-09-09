@@ -11,15 +11,14 @@ import { getDb } from "@/lib/db";
 import { meetings } from "@/lib/db/schema";
 import { parseMinutesJsonEnvelope } from "@/lib/minutes/schema-v2";
 import { validateMinutesJson } from "@/lib/minutes/schema";
-import { parsePdfMarginsFromSearchParams } from "@/lib/pdf/margins";
+import { getPdfTemplateSettings } from "@/lib/pdf/template-settings";
 
 export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params;
-  const { searchParams } = new URL(request.url);
-  const margins = parsePdfMarginsFromSearchParams(searchParams);
+  const margins = await getPdfTemplateSettings();
   const db = getDb();
 
   const [record] = await db

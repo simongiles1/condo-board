@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Corporation-wide PDF template settings** — PDF margin and horizontal-rule layout is now stored in the database (`pdf_template_settings`) instead of per-browser `localStorage`. Every user and export path reads the same template. On first load after upgrade, customized values from `localStorage` are migrated automatically when the database row is still at defaults.
+
 - **PDF template editor** — PDF margin and header layout editing now lives in a dedicated full-width dialog instead of the general Settings modal. The editor shows a single large page preview with toggles for page 1 vs pages 2+ and for evaluated values vs variable tokens. Headers render in a consistent header band above the body content region on both page types.
 
 - **Meetings V2 editable attendance** — The Draft Preview tab now surfaces auto-detected attendees (present, by invitation, guests, regrets) with titles and roles inferred from the board package and transcript. A dedicated attendance panel appears above the editor and PDF preview, with the same drag-and-drop attendee editor used in V1 minutes. Edits persist correctly without stripping draft assembly metadata.

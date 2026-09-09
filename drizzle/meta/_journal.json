@@ -526,6 +526,13 @@
       "when": 1789800000000,
       "tag": "0074_meetings_v2_transcript_segment_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1789900000000,
+      "tag": "0075_pdf_template_settings",
+      "breakpoints": true
     }
   ]
 }

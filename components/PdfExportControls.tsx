@@ -1,27 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
-import {
-  DEFAULT_PDF_MARGINS,
-  loadPdfMargins,
-  pdfMarginsSearchParams,
-  type PdfMargins,
-} from "@/lib/pdf/margins";
-
 type Props = {
   meetingId: string;
   disabled?: boolean;
 };
 
 export function PdfExportControls({ meetingId, disabled }: Props) {
-  const [margins, setMargins] = useState<PdfMargins>(DEFAULT_PDF_MARGINS);
-
-  useEffect(() => {
-    setMargins(loadPdfMargins());
-  }, []);
-
-  const exportHref = `/api/export/${meetingId}?${pdfMarginsSearchParams(margins)}`;
+  const exportHref = `/api/export/${meetingId}`;
 
   if (disabled) {
     return (

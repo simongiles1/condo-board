@@ -9,7 +9,7 @@ import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2MinutesDrafts } from "@/lib/db/schema";
 import { validateMinutesV2 } from "@/lib/minutes/schema-v2";
 import MinutesPdfDocV2 from "@/lib/pdf/MinutesPdfDocV2";
-import { parsePdfMarginsFromSearchParams } from "@/lib/pdf/margins";
+import { getPdfTemplateSettings } from "@/lib/pdf/template-settings";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -21,7 +21,7 @@ export async function GET(
 ) {
   const { id } = await context.params;
   const { searchParams } = new URL(request.url);
-  const margins = parsePdfMarginsFromSearchParams(searchParams);
+  const margins = await getPdfTemplateSettings();
   const disposition = searchParams.get("download") === "1" ? "attachment" : "inline";
   const db = getDb();
 

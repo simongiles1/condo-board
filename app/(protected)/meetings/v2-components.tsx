@@ -54,13 +54,8 @@ import {
 } from "@/lib/minutes/doc-v2-edits";
 import type { AttendeeV2, MinutesDocumentV2 } from "@/lib/minutes/schema-v2";
 import { formatAttendeeLine } from "@/lib/minutes/v2-render-helpers";
-import {
-  DEFAULT_PDF_MARGINS,
-  loadPdfMargins,
-  pdfMarginsSearchParams,
-  savePdfMargins,
-  type PdfMargins,
-} from "@/lib/pdf/margins";
+import type { PdfMargins } from "@/lib/pdf/margins";
+import { usePdfTemplateSettings } from "@/lib/pdf/use-pdf-template-settings";
 import type { PdfTemplatePreviewContext } from "@/lib/pdf/template-preview";
 import { ChunkPreviewModal } from "@/components/ChunkPreviewModal";
 import { TranscriptRangeModal } from "@/components/TranscriptRangeModal";
@@ -542,7 +537,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [compareDialogOpen, setCompareDialogOpen] = useState(false);
   const [transitionsDialogOpen, setTransitionsDialogOpen] = useState(false);
   const [pdfTemplateDialogOpen, setPdfTemplateDialogOpen] = useState(false);
-  const [pdfMargins, setPdfMargins] = useState<PdfMargins>(DEFAULT_PDF_MARGINS);
+  const { margins: pdfMargins, saveMargins: savePdfTemplateMargins } =
+    usePdfTemplateSettings();
   const [pdfMarginsRevision, setPdfMarginsRevision] = useState(0);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [sidePanelInitialTab, setSidePanelInitialTab] =
@@ -552,10 +548,6 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [liveAiUsage, setLiveAiUsage] = useState<string | null>(null);
   const statusRequestSeq = useRef(0);
   const statusAbortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    setPdfMargins(loadPdfMargins());
-  }, []);
 
   const pdfTemplatePreviewContext = useMemo((): PdfTemplatePreviewContext => {
     const draftJson = status?.latestDraft?.json;
@@ -578,9 +570,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     };
   }, [status?.latestDraft?.json, status?.meeting.meetingDate]);
 
-  function handlePdfTemplateSave(nextMargins: PdfMargins) {
-    setPdfMargins(nextMargins);
-    savePdfMargins(nextMargins);
+  async function handlePdfTemplateSave(nextMargins: PdfMargins) {
+    await savePdfTemplateMargins(nextMargins);
     setPdfMarginsRevision((revision) => revision + 1);
     setPdfTemplateDialogOpen(false);
   }
@@ -1080,7 +1071,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               />
               {status?.latestDraft ? (
                 <a
-                  href={`/api/v2/meetings/${meetingId}/draft/file?download=1&${pdfMarginsSearchParams(pdfMargins)}`}
+                  href={`/api/v2/meetings/${meetingId}/draft/file?download=1`}
                   className="inline-flex items-center justify-center rounded-lg border border-white/15 bg-white px-3 py-2 text-sm font-semibold text-slate-900 transition hover:bg-slate-100"
                 >
                   Download PDF
@@ -1174,7 +1165,6 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                     draftBusy={draftBusy}
                     draftError={draftError}
                     validationScore={validationScore}
-                    pdfMargins={pdfMargins}
                     pdfMarginsRevision={pdfMarginsRevision}
                     onValidationBadgeClick={handleValidationBadgeClick}
                     onGenerateDraft={handleGenerateDraft}
@@ -4002,7 +3992,6 @@ function DraftWorkspacePanel({
   draftBusy,
   draftError,
   validationScore,
-  pdfMargins,
   pdfMarginsRevision,
   onValidationBadgeClick,
   onGenerateDraft,
@@ -4013,7 +4002,6 @@ function DraftWorkspacePanel({
   draftBusy: boolean;
   draftError: string | null;
   validationScore?: number | null;
-  pdfMargins: PdfMargins;
   pdfMarginsRevision: number;
   onValidationBadgeClick?: () => void;
   onGenerateDraft: () => void;
@@ -4078,7 +4066,6 @@ function DraftWorkspacePanel({
             draft={draft}
             mode={editorMode}
             heightClassName="h-[65dvh] min-h-[32rem]"
-            pdfMargins={pdfMargins}
             pdfMarginsRevision={pdfMarginsRevision}
             onDraftJsonSaved={onDraftJsonSaved}
           />
@@ -4161,7 +4148,6 @@ function DraftPreviewBody({
   draft,
   mode,
   heightClassName,
-  pdfMargins,
   pdfMarginsRevision,
   onDraftJsonSaved,
 }: {
@@ -4169,7 +4155,6 @@ function DraftPreviewBody({
   draft: MeetingV2Status["latestDraft"] | null;
   mode: "edit" | "preview";
   heightClassName: string;
-  pdfMargins: PdfMargins;
   pdfMarginsRevision: number;
   onDraftJsonSaved?: (summaryJson: string) => void;
 }) {
@@ -4294,7 +4279,7 @@ function DraftPreviewBody({
           <iframe
             key={`${draft.id}-${saveRevision}-${pdfMarginsRevision}-${doc?.metadata.meetingDate ?? ""}`}
             title={`${draft.title} PDF preview`}
-            src={`/api/v2/meetings/${meetingId}/draft/file?${pdfMarginsSearchParams(pdfMargins)}`}
+            src={`/api/v2/meetings/${meetingId}/draft/file`}
             className={`${heightClassName} w-full bg-white`}
           />
         </div>

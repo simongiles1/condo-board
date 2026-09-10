@@ -708,13 +708,19 @@ export function shouldRotateOnEmptyIbmResult(data: unknown): boolean {
   if (numSucceeded != null && numSucceeded > 0) return false;
   const summary = ibmConversionFailureSummary(data) ?? "";
   if (QUOTA_MESSAGE_RE.test(summary)) return true;
+  // Job reported success but artifact download was empty — not a dead API key.
+  if (/\bsucceeded\b/i.test(summary) && /\bconverted\b/i.test(summary)) {
+    return false;
+  }
   return true;
 }
 
 function throwOnEmptyIbmMarkdown(data: unknown, detail: string): never {
   const stats = ibmConversionFailureSummary(data);
   const suffix = stats ? ` (${stats})` : "";
-  const message = `${detail}${suffix}`;
+  const message = shouldRotateOnEmptyIbmResult(data)
+    ? `${detail}${suffix}`
+    : `${detail}${suffix} IBM accepted the job but returned empty result files (often 0-byte S3 artifacts). This is not fixed by adding another API key — retry later or contact IBM watsonx support.`;
   if (shouldRotateOnEmptyIbmResult(data)) {
     throw new IbmDoclingEmptyResultError(message);
   }
@@ -1055,7 +1061,9 @@ async function withIbmCredential<T>(
   fn: (cred: IbmDoclingCredential) => Promise<T>,
 ): Promise<{ value: T; slot: number }> {
   const slots = await import("@/lib/email/ibm-docling-slots");
+  slots.clearIbmSlotRunSkips();
   const tried = new Set<number>();
+  let lastRotatableError: unknown = null;
 
   while (true) {
     const ordered = await slots.withIbmSlotLock(() =>
@@ -1063,6 +1071,9 @@ async function withIbmCredential<T>(
     );
     const cred = ordered.find((c) => !tried.has(c.slot));
     if (!cred) {
+      if (lastRotatableError instanceof Error) {
+        throw lastRotatableError;
+      }
       const keyCount = listIbmDoclingCredentials().length;
       const nextSlot = keyCount + 1;
       throw new IbmDoclingAllKeysExhaustedError(
@@ -1077,6 +1088,7 @@ async function withIbmCredential<T>(
       return { value, slot: cred.slot };
     } catch (error) {
       if (!isRotatableIbmError(error)) throw error;
+      lastRotatableError = error;
       const reason = rotatableReason(error);
       const persist =
         error instanceof IbmDoclingKeyRejectedError ||

@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 
 import { isErrorResponse, requireSession } from "@/lib/auth/authorize";
 import {
+  countFileCards,
   listFileCards,
   updateFileCardRating,
 } from "@/lib/rag/file-card-runs";
@@ -19,9 +20,14 @@ export async function GET(request: Request) {
     const rating = ratingRaw === "up" || ratingRaw === "down" ? ratingRaw : undefined;
     const limitRaw = Number(searchParams.get("limit") ?? "50");
     const limit = Number.isFinite(limitRaw) ? limitRaw : 50;
+    const offsetRaw = Number(searchParams.get("offset") ?? "0");
+    const offset = Number.isFinite(offsetRaw) ? offsetRaw : 0;
 
-    const cards = await listFileCards({ runId, rating, limit });
-    return NextResponse.json({ cards });
+    const [cards, total] = await Promise.all([
+      listFileCards({ runId, rating, limit, offset }),
+      countFileCards({ runId, rating }),
+    ]);
+    return NextResponse.json({ cards, total });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Could not list file cards.";

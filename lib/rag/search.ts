@@ -22,10 +22,16 @@ import {
   type CorpusRewriteUsage,
 } from "@/lib/rag/query-rewrite";
 import {
+  loadCorpusSearchFileCards,
+  type CorpusSearchFileCard,
+} from "@/lib/rag/file-card-runs";
+import {
   enrichSearchWithRegistry,
   type CorpusSearchEntityBadge,
   type MatchedRegistryEntity,
 } from "@/lib/rag/registry-boost";
+
+export type { CorpusSearchFileCard };
 
 export type CorpusSearchOptions = {
   query: string;
@@ -61,6 +67,8 @@ export type CorpusSearchResult = {
   rawSimilarity: number;
   boost: number;
   entities: CorpusSearchEntityBadge[];
+  /** Structured file-card summary from the extraction lab (when generated). */
+  fileCard?: CorpusSearchFileCard;
 };
 
 export type CorpusSearchUsage = {
@@ -684,6 +692,20 @@ function applyFileSeekingAttachmentBoost(
     .sort((a, b) => b.similarity - a.similarity);
 }
 
+async function attachFileCardsToResults(
+  results: CorpusSearchResult[],
+): Promise<CorpusSearchResult[]> {
+  const map = await loadCorpusSearchFileCards(
+    results.map((r) => r.contentHash).filter((h): h is string => Boolean(h)),
+  );
+  if (map.size === 0) return results;
+  return results.map((result) => {
+    if (!result.contentHash) return result;
+    const fileCard = map.get(result.contentHash);
+    return fileCard ? { ...result, fileCard } : result;
+  });
+}
+
 async function enrichOrSlice(
   query: string,
   mapped: CorpusSearchResult[],
@@ -696,15 +718,21 @@ async function enrichOrSlice(
       results: mapped,
       limit: mapped.length,
     });
+    const results = await attachFileCardsToResults(
+      selectHybridResults(enriched.results, limit),
+    );
     return {
-      results: selectHybridResults(enriched.results, limit),
+      results,
       matchedEntities: enriched.matchedEntities,
       usage,
     };
   } catch (err) {
     console.error("[corpus-search] registry boost failed:", err);
+    const results = await attachFileCardsToResults(
+      selectHybridResults(mapped, limit),
+    );
     return {
-      results: selectHybridResults(mapped, limit),
+      results,
       matchedEntities: [],
       usage,
     };

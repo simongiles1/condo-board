@@ -532,14 +532,10 @@ export type FileCardDisplayItem = {
   fileMetadata: PdfFileMetadata | null;
 };
 
-export async function listFileCards(options?: {
+function fileCardListConditions(options?: {
   runId?: string;
   rating?: "up" | "down";
-  limit?: number;
-}): Promise<FileCardDisplayItem[]> {
-  const db = getDb();
-  const limit = options?.limit ?? 50;
-
+}) {
   const conditions = [];
   if (options?.runId) {
     conditions.push(eq(attachmentFileCards.runId, options.runId));
@@ -547,8 +543,162 @@ export async function listFileCards(options?: {
   if (options?.rating) {
     conditions.push(eq(attachmentFileCards.rating, options.rating));
   }
+  return conditions;
+}
 
-  const query = db
+export type FileCardCorpusSummary = {
+  /** Ready attachment file cards in the database. */
+  readyCardCount: number;
+  /** Unique email attachments with parse_status=parsed and stored markdown. */
+  parsedEligibleCount: number;
+  /** Unique email attachments still on parse_status=pending (not cardable yet). */
+  pendingParseStatusCount: number;
+  /** Pending attachments that already have markdown on disk (promotion usually blocked). */
+  pendingWithMarkdownCount: number;
+};
+
+export async function getFileCardCorpusSummary(): Promise<FileCardCorpusSummary> {
+  const db = getDb();
+
+  const emailAttachmentJoin = and(
+    eq(emailAttachments.contentHash, attachmentDocuments.contentHash),
+  );
+
+  const [readyRow] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(attachmentFileCards)
+    .where(eq(attachmentFileCards.status, "ready"));
+
+  const [parsedRow] = await db
+    .select({
+      c: sql<number>`count(distinct ${attachmentDocuments.contentHash})::int`,
+    })
+    .from(attachmentDocuments)
+    .innerJoin(emailAttachments, emailAttachmentJoin)
+    .where(
+      and(
+        eq(attachmentDocuments.parseStatus, "parsed"),
+        isNotNull(attachmentDocuments.markdownPath),
+      ),
+    );
+
+  const [pendingRow] = await db
+    .select({
+      c: sql<number>`count(distinct ${attachmentDocuments.contentHash})::int`,
+    })
+    .from(attachmentDocuments)
+    .innerJoin(emailAttachments, emailAttachmentJoin)
+    .where(eq(attachmentDocuments.parseStatus, "pending"));
+
+  const [pendingMarkdownRow] = await db
+    .select({
+      c: sql<number>`count(distinct ${attachmentDocuments.contentHash})::int`,
+    })
+    .from(attachmentDocuments)
+    .innerJoin(emailAttachments, emailAttachmentJoin)
+    .where(
+      and(
+        eq(attachmentDocuments.parseStatus, "pending"),
+        isNotNull(attachmentDocuments.markdownPath),
+        sql`trim(${attachmentDocuments.markdownPath}) <> ''`,
+      ),
+    );
+
+  return {
+    readyCardCount: Number(readyRow?.c ?? 0),
+    parsedEligibleCount: Number(parsedRow?.c ?? 0),
+    pendingParseStatusCount: Number(pendingRow?.c ?? 0),
+    pendingWithMarkdownCount: Number(pendingMarkdownRow?.c ?? 0),
+  };
+}
+
+export async function countFileCards(options?: {
+  runId?: string;
+  rating?: "up" | "down";
+}): Promise<number> {
+  const db = getDb();
+  const conditions = fileCardListConditions(options);
+  const base = db
+    .select({ count: sql<number>`count(*)` })
+    .from(attachmentFileCards);
+  const rows =
+    conditions.length > 0 ? await base.where(and(...conditions)) : await base;
+  return Number(rows[0]?.count ?? 0);
+}
+
+function fileCardDisplayFromRow(row: {
+  card: typeof attachmentFileCards.$inferSelect;
+  attachmentId: string | null;
+  filename: string | null;
+  emailId: string | null;
+  emailSubject: string | null;
+  emailReceivedAt: string | null;
+  fileMetadataJson: string | null;
+}): FileCardDisplayItem {
+  let parties: string[] = [];
+  try {
+    const parsed = JSON.parse(row.card.parties);
+    if (Array.isArray(parsed)) {
+      parties = parsed.filter((p): p is string => typeof p === "string");
+    }
+  } catch {
+    parties = [];
+  }
+
+  return {
+    contentHash: row.card.contentHash,
+    documentType: row.card.documentType,
+    summary: row.card.summary,
+    coveringEmailContext: row.card.coveringEmailContext,
+    parties,
+    documentDate: row.card.documentDate,
+    status: row.card.status as "ready" | "failed",
+    costUsd: Number(row.card.costUsd) || 0,
+    pricingTier: row.card.pricingTier,
+    rating: (row.card.rating as "up" | "down" | null) ?? null,
+    notes: row.card.notes,
+    packedExcerpt: row.card.packedExcerpt,
+    error: row.card.error,
+    runId: row.card.runId,
+    createdAt: row.card.createdAt,
+    updatedAt: row.card.updatedAt,
+    filename: row.filename || "attachment",
+    attachmentId: row.attachmentId ?? null,
+    emailId: row.emailId ?? null,
+    emailSubject: row.emailSubject ?? null,
+    emailReceivedAt: row.emailReceivedAt ?? null,
+    fileMetadata: parseStoredFileMetadata(row.fileMetadataJson),
+  };
+}
+
+export async function listFileCards(options?: {
+  runId?: string;
+  rating?: "up" | "down";
+  limit?: number;
+  offset?: number;
+}): Promise<FileCardDisplayItem[]> {
+  const db = getDb();
+  const limit = Math.min(Math.max(options?.limit ?? 50, 1), 100);
+  const offset = Math.max(options?.offset ?? 0, 0);
+  const conditions = fileCardListConditions(options);
+
+  const pageQuery = db
+    .select({ contentHash: attachmentFileCards.contentHash })
+    .from(attachmentFileCards)
+    .orderBy(desc(attachmentFileCards.updatedAt))
+    .limit(limit)
+    .offset(offset);
+
+  const pageRows =
+    conditions.length > 0
+      ? await pageQuery.where(and(...conditions))
+      : await pageQuery;
+
+  if (pageRows.length === 0) return [];
+
+  const hashes = pageRows.map((row) => row.contentHash);
+
+  const rows = await db
     .select({
       card: attachmentFileCards,
       attachmentId: emailAttachments.id,
@@ -568,55 +718,18 @@ export async function listFileCards(options?: {
       attachmentDocuments,
       eq(attachmentDocuments.contentHash, attachmentFileCards.contentHash),
     )
+    .where(inArray(attachmentFileCards.contentHash, hashes))
     .orderBy(desc(attachmentFileCards.updatedAt));
-
-  const rows = conditions.length > 0
-    ? await query.where(and(...conditions)).limit(limit * 3)
-    : await query.limit(limit * 3);
 
   const byHash = new Map<string, FileCardDisplayItem>();
   for (const row of rows) {
     if (byHash.has(row.card.contentHash)) continue;
-
-    let parties: string[] = [];
-    try {
-      const parsed = JSON.parse(row.card.parties);
-      if (Array.isArray(parsed)) {
-        parties = parsed.filter((p): p is string => typeof p === "string");
-      }
-    } catch {
-      parties = [];
-    }
-
-    byHash.set(row.card.contentHash, {
-      contentHash: row.card.contentHash,
-      documentType: row.card.documentType,
-      summary: row.card.summary,
-      coveringEmailContext: row.card.coveringEmailContext,
-      parties,
-      documentDate: row.card.documentDate,
-      status: row.card.status as "ready" | "failed",
-      costUsd: Number(row.card.costUsd) || 0,
-      pricingTier: row.card.pricingTier,
-      rating: (row.card.rating as "up" | "down" | null) ?? null,
-      notes: row.card.notes,
-      packedExcerpt: row.card.packedExcerpt,
-      error: row.card.error,
-      runId: row.card.runId,
-      createdAt: row.card.createdAt,
-      updatedAt: row.card.updatedAt,
-      filename: row.filename || "attachment",
-      attachmentId: row.attachmentId ?? null,
-      emailId: row.emailId ?? null,
-      emailSubject: row.emailSubject ?? null,
-      emailReceivedAt: row.emailReceivedAt ?? null,
-      fileMetadata: parseStoredFileMetadata(row.fileMetadataJson),
-    });
-
-    if (byHash.size >= limit) break;
+    byHash.set(row.card.contentHash, fileCardDisplayFromRow(row));
   }
 
-  return Array.from(byHash.values());
+  return hashes
+    .map((hash) => byHash.get(hash))
+    .filter((item): item is FileCardDisplayItem => item != null);
 }
 
 export async function updateFileCardRating(params: {
@@ -646,6 +759,62 @@ export type AttachmentFileCardLookup = {
   coveringEmailContext?: string | null;
   status: "ready" | "failed";
 };
+
+function parseFileCardPartiesJson(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((p): p is string => typeof p === "string");
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+export type CorpusSearchFileCard = {
+  documentType: string;
+  summary: string;
+  coveringEmailContext: string | null;
+  parties: string[];
+  documentDate: string | null;
+};
+
+export async function loadCorpusSearchFileCards(
+  contentHashes: string[],
+): Promise<Map<string, CorpusSearchFileCard>> {
+  const cleanHashes = Array.from(
+    new Set(contentHashes.map((h) => h?.trim()).filter((h): h is string => Boolean(h))),
+  );
+  if (cleanHashes.length === 0) return new Map();
+
+  const db = getDb();
+  const rows = await db
+    .select({
+      contentHash: attachmentFileCards.contentHash,
+      documentType: attachmentFileCards.documentType,
+      summary: attachmentFileCards.summary,
+      coveringEmailContext: attachmentFileCards.coveringEmailContext,
+      parties: attachmentFileCards.parties,
+      documentDate: attachmentFileCards.documentDate,
+      status: attachmentFileCards.status,
+    })
+    .from(attachmentFileCards)
+    .where(inArray(attachmentFileCards.contentHash, cleanHashes));
+
+  const map = new Map<string, CorpusSearchFileCard>();
+  for (const row of rows) {
+    if (row.status !== "ready" || !row.summary?.trim()) continue;
+    map.set(row.contentHash, {
+      documentType: row.documentType,
+      summary: row.summary,
+      coveringEmailContext: row.coveringEmailContext,
+      parties: parseFileCardPartiesJson(row.parties),
+      documentDate: row.documentDate,
+    });
+  }
+  return map;
+}
 
 export async function loadAttachmentFileCards(
   contentHashes: string[],

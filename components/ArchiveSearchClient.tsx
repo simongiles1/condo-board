@@ -26,6 +26,7 @@ import {
 } from "@/lib/rag/index-timing";
 import { useEntityProfile } from "@/components/EntityProfileProvider";
 import { ArchivePipelineDebug } from "@/components/ArchivePipelineDebug";
+import { FileCardSummaryBadge } from "@/components/FileCardSummaryBadge";
 import type {
   CorpusSearchEntityBadge,
   MatchedRegistryEntity,
@@ -1154,6 +1155,10 @@ export function ArchiveSearchClient() {
                         >
                           View File ↗
                         </Link>
+                      ) : null}
+
+                      {result.fileCard ? (
+                        <FileCardSummaryBadge card={result.fileCard} />
                       ) : null}
                     </div>
                   </div>

@@ -6,7 +6,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **File card qualify list pagination** — The Qualify cards tab in the Attachment File Cards modal now loads 10 cards per page with Previous/Next controls and a total count, instead of one long scroll of up to 100 cards.
+
 ### Added
+
+- **File card modal corpus status** — The Attachment File Cards modal header shows how many file cards are complete versus parsed attachments, plus a hover guide for attachments still in pending parse status (with steps via the Extraction lab before running Pending corpus).
+
+- **Archive search file card tooltip** — Search hit rows that have a generated file card show a document-type badge beside Open Email and View File. Hovering opens a formatted summary panel (summary, email context, parties, and date) matching the Extraction Lab qualify view.
 
 - **PDF file properties on attachments and file cards** — Parsed PDFs now store the Info dictionary Gmail shows (author, title, subject, keywords, creator, producer, created, modified) plus first-page header and footer text on `attachment_documents.file_metadata_json`. File-card generation feeds that block into the model, unions Author and letterhead firm names into `parties` when the covering email omitted them (for example Trace Consulting Group on an Excel-exported reserve-fund tables PDF), and the qualify list shows those properties on each card.
 

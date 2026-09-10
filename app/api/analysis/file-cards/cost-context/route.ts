@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { isErrorResponse, requireSession } from "@/lib/auth/authorize";
 import {
   estimateFileCardCostContext,
+  getFileCardCorpusSummary,
   getFileCardPerDocEstimateBasis,
   planFileCardTargets,
   type FileCardRunScope,
@@ -58,9 +59,12 @@ export async function POST(request: Request) {
       perDocBasis,
     );
 
+    const corpusSummary = await getFileCardCorpusSummary();
+
     return NextResponse.json({
       targetCount: plannedDocs.length,
       corpusTargetCount: corpusPlanned.length,
+      corpusSummary,
       costContext,
       corpusCostContext,
       sampleTargets: plannedDocs.slice(0, 10).map((d) => ({

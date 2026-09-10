@@ -4,16 +4,21 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { DeepSeekPricingTimeline } from "@/components/DeepSeekPricingTimeline";
+import { EntityListPagination } from "@/components/EntityListPagination";
 import { getDeepSeekPricingStatus } from "@/lib/deepseek/pricing";
 import { emailMessageDetailHref } from "@/lib/email/thread-filter-params";
 import { formatDateTime } from "@/lib/format/datetime";
+import { FileCardPendingParseTooltip } from "@/components/FileCardPendingParseTooltip";
 import type {
+  FileCardCorpusSummary,
   FileCardCostContext,
   FileCardDisplayItem,
   FileCardRunRecord,
   FileCardRunScope,
   TargetEmailSearchItem,
 } from "@/lib/rag/file-card-runs";
+
+const QUALIFY_CARDS_PAGE_SIZE = 10;
 
 function TargetEmailResultBadges({ item }: { item: TargetEmailSearchItem }) {
   const unparsedCount = Math.max(0, item.attachmentCount - item.parsedAttachmentCount);
@@ -94,12 +99,17 @@ export function FileCardBackfillButton() {
     null,
   );
   const [corpusTargetCount, setCorpusTargetCount] = useState<number>(0);
+  const [corpusSummary, setCorpusSummary] = useState<FileCardCorpusSummary | null>(
+    null,
+  );
   const [targetCount, setTargetCount] = useState<number>(0);
   const [costLoading, setCostLoading] = useState(false);
   const [costError, setCostError] = useState<string | null>(null);
 
   // Qualify state
   const [cards, setCards] = useState<FileCardDisplayItem[]>([]);
+  const [cardsTotal, setCardsTotal] = useState(0);
+  const [cardsPage, setCardsPage] = useState(1);
   const [cardsLoading, setCardsLoading] = useState(false);
   const [cardsRunFilter, setCardsRunFilter] = useState<string>("");
   const [expandedHashes, setExpandedHashes] = useState<Set<string>>(new Set());
@@ -109,20 +119,6 @@ export function FileCardBackfillButton() {
   const [error, setError] = useState<string | null>(null);
 
   const pricingStatus = getDeepSeekPricingStatus(Date.now());
-
-  // Poll active run
-  const pollActiveRun = useCallback(async (runId: string) => {
-    try {
-      const res = await fetch(`/api/analysis/file-cards/runs/${runId}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.run) {
-        setActiveRun(data.run);
-      }
-    } catch {
-      // ignore transient poll error
-    }
-  }, []);
 
   // Load runs list
   const loadRuns = useCallback(async () => {
@@ -142,16 +138,19 @@ export function FileCardBackfillButton() {
   }, []);
 
   // Load cards for qualify
-  const loadCards = useCallback(async (runId?: string) => {
+  const loadCards = useCallback(async (runId?: string, page = 1) => {
     setCardsLoading(true);
     try {
-      const url = runId
-        ? `/api/analysis/file-cards/cards?runId=${encodeURIComponent(runId)}&limit=100`
-        : "/api/analysis/file-cards/cards?limit=100";
-      const res = await fetch(url);
+      const params = new URLSearchParams({
+        limit: String(QUALIFY_CARDS_PAGE_SIZE),
+        offset: String((page - 1) * QUALIFY_CARDS_PAGE_SIZE),
+      });
+      if (runId) params.set("runId", runId);
+      const res = await fetch(`/api/analysis/file-cards/cards?${params}`);
       if (!res.ok) return;
       const data = await res.json();
       setCards(data.cards ?? []);
+      setCardsTotal(typeof data.total === "number" ? data.total : 0);
     } catch {
       // ignore
     } finally {
@@ -192,8 +191,8 @@ export function FileCardBackfillButton() {
   ];
 
   // Refresh cost context whenever configuration changes
-  const fetchCostContext = useCallback(async () => {
-    if (activeRun?.status === "running") return;
+  const fetchCostContext = useCallback(async (options?: { ignoreRunning?: boolean }) => {
+    if (!options?.ignoreRunning && activeRun?.status === "running") return;
     setCostLoading(true);
     setCostError(null);
     try {
@@ -216,6 +215,7 @@ export function FileCardBackfillButton() {
       setCostContext(data.costContext ?? null);
       setCorpusCostContext(data.corpusCostContext ?? null);
       setCorpusTargetCount(data.corpusTargetCount ?? 0);
+      setCorpusSummary(data.corpusSummary ?? null);
       setTargetCount(data.targetCount ?? 0);
     } catch (err) {
       setCostError(err instanceof Error ? err.message : String(err));
@@ -224,16 +224,44 @@ export function FileCardBackfillButton() {
     }
   }, [scope, testLimit, resolvedTargetEmailIds.join(","), forceOverwrite, activeRun?.status]);
 
+  const pollActiveRun = useCallback(
+    async (runId: string) => {
+      try {
+        const res = await fetch(`/api/analysis/file-cards/runs/${runId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.run) {
+          setActiveRun((prev) => {
+            if (prev?.status === "running" && data.run.status !== "running") {
+              queueMicrotask(() => {
+                void fetchCostContext({ ignoreRunning: true });
+              });
+            }
+            return data.run;
+          });
+        }
+      } catch {
+        // ignore transient poll error
+      }
+    },
+    [fetchCostContext],
+  );
+
   useEffect(() => {
     if (open) {
       void loadRuns();
-      if (tab === "run") {
-        void fetchCostContext();
-      } else if (tab === "qualify") {
-        void loadCards(cardsRunFilter || undefined);
+      void fetchCostContext();
+      if (tab === "qualify") {
+        void loadCards(cardsRunFilter || undefined, cardsPage);
       }
     }
-  }, [open, tab, fetchCostContext, loadRuns, loadCards, cardsRunFilter]);
+  }, [open, tab, fetchCostContext, loadRuns, loadCards, cardsRunFilter, cardsPage]);
+
+  useEffect(() => {
+    if (!open || tab !== "qualify" || cardsLoading) return;
+    const maxPage = Math.max(1, Math.ceil(cardsTotal / QUALIFY_CARDS_PAGE_SIZE));
+    if (cardsPage > maxPage) setCardsPage(maxPage);
+  }, [open, tab, cardsLoading, cardsPage, cardsTotal]);
 
   // Poll timer when run is active
   useEffect(() => {
@@ -356,6 +384,29 @@ export function FileCardBackfillButton() {
                 <p className="text-xs text-slate-500">
                   Generates document type classification and content summaries without rerunning extraction.
                 </p>
+                {corpusSummary ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <span
+                      className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-900 ring-1 ring-emerald-200"
+                      title="Ready file cards stored for archive search and rerank"
+                    >
+                      {corpusSummary.readyCardCount.toLocaleString()} file card
+                      {corpusSummary.readyCardCount === 1 ? "" : "s"} complete
+                    </span>
+                    {corpusSummary.parsedEligibleCount > 0 ? (
+                      <span className="text-slate-500">
+                        of {corpusSummary.parsedEligibleCount.toLocaleString()} parsed attachment
+                        {corpusSummary.parsedEligibleCount === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                    <FileCardPendingParseTooltip summary={corpusSummary} />
+                    {costLoading ? (
+                      <span className="text-[11px] text-slate-400">Refreshing…</span>
+                    ) : null}
+                  </div>
+                ) : costLoading ? (
+                  <p className="mt-2 text-[11px] text-slate-400">Loading corpus status…</p>
+                ) : null}
               </div>
               <div className="flex items-center gap-2">
                 <nav className="flex rounded-lg bg-slate-100 p-1 text-xs font-medium">
@@ -755,7 +806,7 @@ export function FileCardBackfillButton() {
                         value={cardsRunFilter}
                         onChange={(e) => {
                           setCardsRunFilter(e.target.value);
-                          void loadCards(e.target.value || undefined);
+                          setCardsPage(1);
                         }}
                         className="rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-800"
                       >
@@ -770,7 +821,7 @@ export function FileCardBackfillButton() {
 
                     <button
                       type="button"
-                      onClick={() => loadCards(cardsRunFilter || undefined)}
+                      onClick={() => loadCards(cardsRunFilter || undefined, cardsPage)}
                       className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
                     >
                       Refresh
@@ -966,6 +1017,15 @@ export function FileCardBackfillButton() {
                       })}
                     </div>
                   )}
+
+                  <EntityListPagination
+                    total={cardsTotal}
+                    page={cardsPage}
+                    pageSize={QUALIFY_CARDS_PAGE_SIZE}
+                    pending={cardsLoading}
+                    onPageChange={setCardsPage}
+                    ariaLabel="Qualified file cards pagination"
+                  />
                 </div>
               ) : (
                 /* History Tab */

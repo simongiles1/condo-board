@@ -219,6 +219,11 @@ export function AttachmentExtractionLabClient() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loadingList, setLoadingList] = useState(true);
   const [processing, setProcessing] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState<{
+    index: number;
+    total: number;
+    label: string | null;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [lastRun, setLastRun] = useState<ExtractionProcessResult | null>(null);
@@ -653,39 +658,86 @@ export function AttachmentExtractionLabClient() {
     }
 
     setProcessing(true);
+    setProcessingProgress(null);
     setError(null);
     setMessage(null);
+
+    const filenameByHash = new Map(
+      documents.map((d) => [d.contentHash, d.filename]),
+    );
+
+    const merged: ExtractionProcessResult = {
+      processed: 0,
+      doclingRan: 0,
+      doclingCostUsd: 0,
+      visionRan: 0,
+      visionCostUsd: 0,
+      files: [],
+    };
+
     try {
-      const res = await fetch("/api/analysis/extraction", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contentHashes: hashes }),
-      });
-      const data = (await res.json()) as ProcessResponse;
-      if (!res.ok) throw new Error(data.error ?? "Process failed.");
-      const result = data.result;
-      setLastRun(result ?? null);
-      if (data.costs) setCosts(data.costs);
-      if (result) {
-        const errs = result.files.filter((f) => f.error).length;
-        setMessage(
-          `Processed ${result.processed}: docling ${result.doclingRan}, vision ${result.visionRan}` +
-            (result.doclingCostUsd > 0
-              ? ` · ${formatCostUsd(result.doclingCostUsd)} docling`
-              : "") +
-            (result.visionCostUsd > 0
-              ? ` · ${formatCostUsd(result.visionCostUsd)} vision`
-              : result.doclingCostUsd > 0
-                ? ""
-                : " · $0 vision") +
-            (errs > 0 ? ` · ${errs} error${errs === 1 ? "" : "s"}` : ""),
-        );
+      for (let i = 0; i < hashes.length; i += 1) {
+        const contentHash = hashes[i]!;
+        const label =
+          filenameByHash.get(contentHash)?.trim() ||
+          `${contentHash.slice(0, 8)}…`;
+        setProcessingProgress({
+          index: i + 1,
+          total: hashes.length,
+          label,
+        });
+
+        const res = await fetch("/api/analysis/extraction", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contentHashes: [contentHash] }),
+        });
+        const data = (await res.json()) as ProcessResponse;
+        if (!res.ok) {
+          throw new Error(
+            data.error ??
+              `Process failed on file ${i + 1} of ${hashes.length} (${label}).`,
+          );
+        }
+        const result = data.result;
+        if (data.costs) setCosts(data.costs);
+        if (result) {
+          merged.processed += result.processed;
+          merged.doclingRan += result.doclingRan;
+          merged.doclingCostUsd += result.doclingCostUsd;
+          merged.visionRan += result.visionRan;
+          merged.visionCostUsd += result.visionCostUsd;
+          merged.files.push(...result.files);
+          setLastRun({ ...merged });
+        }
+        await loadList();
       }
-      await loadList();
+
+      const errs = merged.files.filter((f) => f.error).length;
+      setMessage(
+        `Processed ${merged.processed}: docling ${merged.doclingRan}, vision ${merged.visionRan}` +
+          (merged.doclingCostUsd > 0
+            ? ` · ${formatCostUsd(merged.doclingCostUsd)} docling`
+            : "") +
+          (merged.visionCostUsd > 0
+            ? ` · ${formatCostUsd(merged.visionCostUsd)} vision`
+            : merged.doclingCostUsd > 0
+              ? ""
+              : " · $0 vision") +
+          (errs > 0 ? ` · ${errs} error${errs === 1 ? "" : "s"}` : ""),
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Process failed.");
+      const partial = merged.processed > 0;
+      setError(
+        (err instanceof Error ? err.message : "Process failed.") +
+          (partial
+            ? ` (${merged.processed} of ${hashes.length} finished before this error — list refreshed.)`
+            : ""),
+      );
+      if (partial) setLastRun({ ...merged });
     } finally {
       setProcessing(false);
+      setProcessingProgress(null);
     }
   }
 
@@ -945,7 +997,9 @@ export function AttachmentExtractionLabClient() {
               Clear
             </button>
             <span className="text-xs text-slate-500">
-              {selectedCount} selected (max {EXTRACTION_PROCESS_MAX_HASHES})
+              {processingProgress?.label
+                ? `Now: ${processingProgress.label}`
+                : `${selectedCount} selected (max ${EXTRACTION_PROCESS_MAX_HASHES})`}
             </span>
             <button
               type="button"
@@ -954,7 +1008,9 @@ export function AttachmentExtractionLabClient() {
               className="ml-auto rounded-md border border-teal-300 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-900 hover:bg-teal-100 disabled:opacity-50"
             >
               {processing
-                ? "Processing…"
+                ? processingProgress
+                  ? `Processing ${processingProgress.index}/${processingProgress.total}…`
+                  : "Processing…"
                 : `Process selected (${selectedCount})`}
             </button>
           </div>

@@ -1,4 +1,6 @@
 export const runtime = "nodejs";
+/** IBM Docling + vision for one PDF can exceed default serverless limits. */
+export const maxDuration = 900;
 
 import { NextResponse } from "next/server";
 

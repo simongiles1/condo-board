@@ -13,6 +13,7 @@ import { processLabDocumentWithDocling } from "@/lib/email/extraction-lab-doclin
 import { isVisionImageExt } from "@/lib/email/attachment-vision-image-shared";
 import {
   processVisionForDocument,
+  reclaimStaleProcessingVisionPages,
   type PageVisionBatchResult,
 } from "@/lib/email/page-vision";
 
@@ -651,6 +652,8 @@ export async function listExtractionDocuments(options?: {
 export async function processSelectedExtractionsions(
   contentHashes: string[],
 ): Promise<ExtractionProcessResult> {
+  await reclaimStaleProcessingVisionPages();
+
   const unique = [
     ...new Set(
       contentHashes

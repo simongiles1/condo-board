@@ -8,6 +8,26 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **PDF file properties on attachments and file cards** — Parsed PDFs now store the Info dictionary Gmail shows (author, title, subject, keywords, creator, producer, created, modified) plus first-page header and footer text on `attachment_documents.file_metadata_json`. File-card generation feeds that block into the model, unions Author and letterhead firm names into `parties` when the covering email omitted them (for example Trace Consulting Group on an Excel-exported reserve-fund tables PDF), and the qualify list shows those properties on each card.
+
+- **Archive search file card rerank & answer packing (Phase 2)** — Ask the Archive now leverages stored `attachment_file_cards` in the rerank and answer generation steps. Reranking candidates prefer the structured `[document_type] summary` excerpt over truncated raw table/signature slices, giving Gemini immediate visibility into whether a candidate is a final study, financial tables, proposal, or draft. Grounded answer generation prepends structured card metadata (document type, summary, and covering email context) ahead of the 900-character excerpt chunk. The Ask Pipeline debug panel displays a document type badge on packed hits.
+
+- **File card generator & qualify lab (Phase 1)** — Added an in-process DeepSeek file card backfill to generate structured document summaries and metadata (`document_type`, `summary`, `covering_email_context`, `parties`, `document_date`, `email_summary`) for parsed attachments without re-running Docling or Vision OCR. Features an Extraction Lab modal with DeepSeek peak and off-peak cost estimation, timeline pricing status, test batches, email ID and search-based targeting, run cancellation and polling, and a card qualification list with prompt excerpt inspection and thumbs up/down quality feedback.
+
+- **File-seeking answers cite packed filename hits** — If the question is looking for a file, packed attachments found by filename are added to the cited sources even when the model’s prose skipped them. The answerer also returns a yes/no review of every packed source. This is not a per-document allowlist.
+
+- **Archive ask pipeline panel** — Ask the Archive shows the input and output of query rewrite, the retrieval pool (filename matches plus embeddings), reranked unique files, and the packed answer prompt versus cited sources. A filename search highlights where a file dropped out. Cited source chips are citations only, not the full pool.
+
+- **Hybrid search keeps filename hits** — Dense retrieval no longer evicts files found by name. The ask path retrieves a larger candidate pool of emails and attachments; Gemini then reorders that pool against the question. Filename matches are sampled across the score range so a later name-match is not dropped only because discussion PDFs scored higher. The model is not told to prefer signed, final, draft, or proposal files unless the question asks for that.
+
+- **Archive search query rewrite** — Before retrieval, Gemini expands the user’s question into a secondary search query plus short lexical needles (acronyms, names, filename fragments). Vector search embeds the rewritten query; filename and covering-email matching use the needles. The grounded answer still sees the original question. This replaces the one-off `reserve fund study` → `RFS` mapping so any query can pick up the abbreviations and names that actually appear in emails and attachments.
+
+- **Archive search by attachment filename** — Asking for a file by name now looks up `email_attachments.filename` instead of relying only on vector similarity of extracted PDF text. Filename lookup still returns the file if Gemini embeddings are rate-limited.
+
+- **Archive search via covering email** — File-seeking questions retrieve emails that name the vendors or topics in the question, then pull the PDFs attached to those emails. Extra lexical needles from query rewrite (for example an acronym that appears in a filename) enter ranking at a lower score so they do not drown the semantic hits. New attachment chunks prefix a short excerpt of the parent email so names in the covering message are embedded with the file after reindex.
+
+- **Phase C: Archive ask-AI answers** — Archive search now retrieves matching excerpts and asks Gemini to write a grounded answer with citations back to those chunks. Unknown claims stay off: the model may only cite retrieved `document_chunks` ids. Registry matches remain ranking hints, not extra facts. OKF wiki export and governance policy ingest are not in this slice. Toggle **Write an answer** off to keep retrieval-only search.
+
 - **Phase B: Corpus search registry boosts** — Archive search now lexically matches the query against the projects, equipment, and organizations registries and boosts excerpts whose source email already has a resolved mention link. Results show clickable entity badges; query-level registry matches appear above the hit list. Vector search still uses `document_chunks` only — this is not a second embedding index.
 
 - **Meetings V2 transcript hole assignment** — After span-edge review, unmatched package leaves in a transcript hole (for example 4.D.h / 4.D.i / 4.D.j between 4.D.g and 4.D.k) are assigned in looping two-minute windows. Wrap-up of the current item can overlap the next named unit. Extract also lists upcoming undiscussed package leaves on the floor pointer so the chunk walk does not skip them.
@@ -28,7 +48,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V2 editable attendance** — The Draft Preview tab now surfaces auto-detected attendees (present, by invitation, guests, regrets) with titles and roles inferred from the board package and transcript. A dedicated attendance panel appears above the editor and PDF preview, with the same drag-and-drop attendee editor used in V1 minutes. Edits persist correctly without stripping draft assembly metadata.
 
+### Changed
+
+- **File-card skip is identical packed prompt only** — A later file-card run regenerates when the packed prompt changes (letterhead properties, pack version, covering email). Near-miss character-length skipping no longer hides those upgrades.
+
 ### Fixed
+
+- **Thread-page attachment badges** — Each message on an email thread now has the same paperclip badge as the inbox (hover list, thumbnail, and viewer). Counts use the same inbox visibility filter so per-message badges add up to the thread total on the inbox.
 
 - **Meetings V2 investigation wrap-up sentences** — A recommended answer is appended to the discussion summary only when it adds a new amount or named party. Restatements such as “no further action was required at this meeting” are dropped instead of doubling the paragraph.
 

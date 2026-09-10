@@ -283,6 +283,8 @@ export const attachmentDocuments = pgTable("attachment_documents", {
   attempts: integer("attempts").notNull().default(0),
   firstSeenAt: text("first_seen_at").notNull(),
   parsedAt: text("parsed_at"),
+  /** PDF Info dictionary plus first-page header/footer text (JSON). */
+  fileMetadataJson: text("file_metadata_json"),
 });
 
 /**
@@ -1270,6 +1272,136 @@ export const ibmDoclingAccounts = pgTable("ibm_docling_accounts", {
   billedPages: integer("billed_pages").notNull().default(0),
   billedUsd: text("billed_usd").notNull().default("0"),
   archivedAt: text("archived_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/**
+ * DeepSeek file-card extraction runs (Extraction lab).
+ */
+export const fileCardRuns = pgTable("file_card_runs", {
+  id: text("id").primaryKey(),
+  status: text("status", {
+    enum: ["running", "completed", "failed", "cancelled"],
+  })
+    .notNull()
+    .default("running"),
+  scope: text("scope", {
+    enum: ["test", "target_emails", "pending_corpus"],
+  })
+    .notNull()
+    .default("test"),
+  docLimit: integer("doc_limit"),
+  totalDocs: integer("total_docs").notNull().default(0),
+  completedDocs: integer("completed_docs").notNull().default(0),
+  failedDocs: integer("failed_docs").notNull().default(0),
+  totalInputTokens: integer("total_input_tokens").notNull().default(0),
+  totalOutputTokens: integer("total_output_tokens").notNull().default(0),
+  totalCostUsd: text("total_cost_usd").notNull().default("0"),
+  peakCostUsd: text("peak_cost_usd").notNull().default("0"),
+  offPeakCostUsd: text("off_peak_cost_usd").notNull().default("0"),
+  plannedHashesJson: text("planned_hashes_json").notNull().default("[]"),
+  plannedEmailIdsJson: text("planned_email_ids_json").notNull().default("[]"),
+  currentDocIndex: integer("current_doc_index").notNull().default(0),
+  currentLabel: text("current_label"),
+  errorMessage: text("error_message"),
+  startedAt: text("started_at").notNull(),
+  completedAt: text("completed_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/**
+ * High-signal summary and classification per attachment document.
+ * Derived from parsed markdown and covering email via DeepSeek.
+ */
+export const attachmentFileCards = pgTable(
+  "attachment_file_cards",
+  {
+    contentHash: text("content_hash")
+      .primaryKey()
+      .references(() => attachmentDocuments.contentHash, {
+        onDelete: "cascade",
+      }),
+    documentType: text("document_type", {
+      enum: [
+        "study",
+        "tables",
+        "letter",
+        "proposal",
+        "draft",
+        "sample",
+        "signed_report",
+        "minutes",
+        "other",
+      ],
+    }).notNull(),
+    summary: text("summary").notNull(),
+    coveringEmailContext: text("covering_email_context").notNull(),
+    parties: text("parties").notNull().default("[]"),
+    documentDate: text("document_date"),
+    status: text("status", {
+      enum: ["ready", "failed"],
+    })
+      .notNull()
+      .default("ready"),
+    inputHash: text("input_hash").notNull(),
+    inputChars: integer("input_chars").notNull(),
+    packedExcerpt: text("packed_excerpt"),
+    modelName: text("model_name").notNull(),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    costUsd: text("cost_usd").notNull().default("0"),
+    pricingTier: text("pricing_tier", {
+      enum: ["peak", "off_peak"],
+    })
+      .notNull()
+      .default("off_peak"),
+    billedAt: text("billed_at").notNull(),
+    rating: text("rating", {
+      enum: ["up", "down"],
+    }),
+    notes: text("notes"),
+    error: text("error"),
+    runId: text("run_id").references(() => fileCardRuns.id, {
+      onDelete: "set null",
+    }),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    documentTypeIdx: index("attachment_file_cards_document_type_idx").on(
+      table.documentType,
+    ),
+    statusIdx: index("attachment_file_cards_status_idx").on(table.status),
+  }),
+);
+
+/**
+ * Summary for long emails produced alongside attachment file-card runs.
+ */
+export const emailFileCards = pgTable("email_file_cards", {
+  emailId: text("email_id")
+    .primaryKey()
+    .references(() => emails.id, {
+      onDelete: "cascade",
+    }),
+  summary: text("summary").notNull(),
+  inputHash: text("input_hash").notNull(),
+  inputChars: integer("input_chars").notNull(),
+  modelName: text("model_name").notNull(),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  costUsd: text("cost_usd").notNull().default("0"),
+  pricingTier: text("pricing_tier", {
+    enum: ["peak", "off_peak"],
+  })
+    .notNull()
+    .default("off_peak"),
+  billedAt: text("billed_at").notNull(),
+  runId: text("run_id").references(() => fileCardRuns.id, {
+    onDelete: "set null",
+  }),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -2355,5 +2487,38 @@ export const documentChunksRelations = relations(documentChunks, ({ one }) => ({
     references: [emails.id],
   }),
 }));
+
+export const fileCardRunsRelations = relations(fileCardRuns, ({ many }) => ({
+  attachmentCards: many(attachmentFileCards),
+  emailCards: many(emailFileCards),
+}));
+
+export const attachmentFileCardsRelations = relations(
+  attachmentFileCards,
+  ({ one }) => ({
+    document: one(attachmentDocuments, {
+      fields: [attachmentFileCards.contentHash],
+      references: [attachmentDocuments.contentHash],
+    }),
+    run: one(fileCardRuns, {
+      fields: [attachmentFileCards.runId],
+      references: [fileCardRuns.id],
+    }),
+  }),
+);
+
+export const emailFileCardsRelations = relations(
+  emailFileCards,
+  ({ one }) => ({
+    email: one(emails, {
+      fields: [emailFileCards.emailId],
+      references: [emails.id],
+    }),
+    run: one(fileCardRuns, {
+      fields: [emailFileCards.runId],
+      references: [fileCardRuns.id],
+    }),
+  }),
+);
 
 export * from "./schema-v2";

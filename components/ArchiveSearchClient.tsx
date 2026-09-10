@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import Markdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { formatDateTime } from "@/lib/format/datetime";
 import { formatCostUsd, formatTokenCount } from "@/lib/gemini/usage";
@@ -23,14 +25,22 @@ import {
   type CorpusIndexStint,
 } from "@/lib/rag/index-timing";
 import { useEntityProfile } from "@/components/EntityProfileProvider";
+import { ArchivePipelineDebug } from "@/components/ArchivePipelineDebug";
 import type {
   CorpusSearchEntityBadge,
   MatchedRegistryEntity,
 } from "@/lib/rag/registry-boost";
+import {
+  MAX_ANSWER_CONTEXT_CHUNKS,
+  type CorpusGroundedAnswer,
+} from "@/lib/rag/answer-shared";
+import type { CorpusAskPipeline } from "@/lib/rag/pipeline-debug";
+import type { CorpusQueryRewrite, CorpusRewriteUsage } from "@/lib/rag/query-rewrite";
+import type { CorpusRerankUsage } from "@/lib/rag/rerank";
 import type { CorpusSearchResult, CorpusSearchUsage } from "@/lib/rag/search";
 
 const EXAMPLE_QUERIES = [
-  "reserve fund study",
+  "where is the reserve fund study?",
   "elevator modernization",
   "water leak repair",
   "annual general meeting minutes",
@@ -63,8 +73,15 @@ export function ArchiveSearchClient() {
   const [searchResults, setSearchResults] = useState<CorpusSearchResult[] | null>(null);
   const [matchedEntities, setMatchedEntities] = useState<MatchedRegistryEntity[]>([]);
   const [lastSearchUsage, setLastSearchUsage] = useState<CorpusSearchUsage | null>(null);
+  const [lastRewriteUsage, setLastRewriteUsage] = useState<CorpusRewriteUsage | null>(null);
+  const [lastRerankUsage, setLastRerankUsage] = useState<CorpusRerankUsage | null>(null);
+  const [lastPipeline, setLastPipeline] = useState<CorpusAskPipeline | null>(null);
   const { openProfile } = useEntityProfile();
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [generateAnswer, setGenerateAnswer] = useState(true);
+  const [groundedAnswer, setGroundedAnswer] = useState<CorpusGroundedAnswer | null>(null);
+  const [answerError, setAnswerError] = useState<string | null>(null);
+  const [sessionAnswerCostUsd, setSessionAnswerCostUsd] = useState(0);
   const [expandedChunkIds, setExpandedChunkIds] = useState<Set<string>>(new Set());
 
   // Ref to cancel continuous indexing if user unchecks or unmounts
@@ -304,16 +321,25 @@ export function ArchiveSearchClient() {
 
     setSearching(true);
     setSearchError(null);
+    setAnswerError(null);
+    setGroundedAnswer(null);
+    setLastRewriteUsage(null);
+    setLastRerankUsage(null);
+    setLastPipeline(null);
     const start = performance.now();
 
     try {
-      const res = await fetch("/api/analysis/corpus-search", {
+      const endpoint = generateAnswer
+        ? "/api/analysis/corpus-ask"
+        : "/api/analysis/corpus-search";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query: q,
           limit: 15,
           sourceKind: sourceFilter === "all" ? undefined : sourceFilter,
+          generateAnswer,
         }),
       });
 
@@ -322,6 +348,13 @@ export function ArchiveSearchClient() {
         matchedEntities?: MatchedRegistryEntity[];
         count?: number;
         usage?: CorpusSearchUsage;
+        searchUsage?: CorpusSearchUsage;
+        rewrite?: CorpusQueryRewrite | null;
+        rewriteUsage?: CorpusRewriteUsage | null;
+        rerankUsage?: CorpusRerankUsage | null;
+        answer?: CorpusGroundedAnswer | null;
+        pipeline?: CorpusAskPipeline | null;
+        answerError?: string;
         error?: string;
       };
 
@@ -329,17 +362,39 @@ export function ArchiveSearchClient() {
         throw new Error(data.error ?? "Search failed");
       }
 
+      const searchUsage = data.searchUsage ?? data.usage ?? null;
       setSearchResults(data.results ?? []);
       setMatchedEntities(data.matchedEntities ?? []);
-      setLastSearchUsage(data.usage ?? null);
-      if (data.usage?.costUsd) {
-        setSessionSearchCostUsd((prev) => prev + data.usage!.costUsd);
+      setLastSearchUsage(searchUsage);
+      setLastRewriteUsage(data.rewriteUsage ?? null);
+      setLastRerankUsage(data.rerankUsage ?? null);
+      setLastPipeline(data.pipeline ?? null);
+      if (searchUsage?.costUsd) {
+        setSessionSearchCostUsd((prev) => prev + searchUsage.costUsd);
+      }
+      if (data.rewriteUsage?.costUsd) {
+        setSessionSearchCostUsd((prev) => prev + data.rewriteUsage!.costUsd);
+      }
+      if (data.rerankUsage?.costUsd) {
+        setSessionSearchCostUsd((prev) => prev + data.rerankUsage!.costUsd);
+      }
+      if (data.answer) {
+        setGroundedAnswer(data.answer);
+        if (data.answer.usage.costUsd) {
+          setSessionAnswerCostUsd((prev) => prev + data.answer!.usage.costUsd);
+        }
+      } else if (data.answerError) {
+        setAnswerError(data.answerError);
       }
       setSearchDurationMs(Math.round(performance.now() - start));
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : "Search failed");
       setSearchResults(null);
       setMatchedEntities([]);
+      setGroundedAnswer(null);
+      setLastRewriteUsage(null);
+      setLastRerankUsage(null);
+      setLastPipeline(null);
     } finally {
       setSearching(false);
     }
@@ -362,6 +417,16 @@ export function ArchiveSearchClient() {
       else next.add(id);
       return next;
     });
+  };
+
+  const focusChunk = (chunkId: string) => {
+    setExpandedChunkIds((prev) => {
+      const next = new Set(prev);
+      next.add(chunkId);
+      return next;
+    });
+    const el = document.getElementById(`corpus-chunk-${chunkId}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
   // Helper to highlight matching tokens in excerpt text
@@ -444,8 +509,9 @@ export function ArchiveSearchClient() {
             Ask the Archive
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Natural-language semantic search across emails and parsed attachments.
-            Hits linked to projects, equipment, or organizations are boosted and badged.
+            Ask a question and get a cited answer from emails and parsed
+            attachments. The Pipeline panel shows each stage: rewrite,
+            retrieval, rerank, and what the answerer actually saw versus cited.
           </p>
         </div>
       </div>
@@ -729,11 +795,14 @@ export function ArchiveSearchClient() {
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
               <div className="text-xs text-slate-600">This Session</div>
               <div className="mt-1 text-lg font-bold tabular-nums text-slate-900">
-                {formatCostUsd(sessionIndexCostUsd + sessionSearchCostUsd)}
+                {formatCostUsd(
+                  sessionIndexCostUsd + sessionSearchCostUsd + sessionAnswerCostUsd,
+                )}
               </div>
               <div className="mt-1 text-xs text-slate-600">
                 Index {formatCostUsd(sessionIndexCostUsd)} · Search{" "}
-                {formatCostUsd(sessionSearchCostUsd)}
+                {formatCostUsd(sessionSearchCostUsd)} · Answer{" "}
+                {formatCostUsd(sessionAnswerCostUsd)}
               </div>
             </div>
           </div>
@@ -775,8 +844,10 @@ export function ArchiveSearchClient() {
               {searching ? (
                 <>
                   <Spinner />
-                  Searching…
+                  {generateAnswer ? "Asking…" : "Searching…"}
                 </>
+              ) : generateAnswer ? (
+                "Ask"
               ) : (
                 "Search"
               )}
@@ -799,8 +870,18 @@ export function ArchiveSearchClient() {
               ))}
             </div>
 
-            <div className="flex items-center gap-1">
-              <span className="text-slate-500">Filter:</span>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-1.5 text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={generateAnswer}
+                  onChange={(e) => setGenerateAnswer(e.target.checked)}
+                  className="rounded border-slate-300 text-teal-800 focus:ring-teal-600"
+                />
+                Write an answer
+              </label>
+              <div className="flex items-center gap-1">
+                <span className="text-slate-500">Filter:</span>
               {(
                 [
                   ["all", "All"],
@@ -822,6 +903,7 @@ export function ArchiveSearchClient() {
                   {label}
                 </button>
               ))}
+            </div>
             </div>
           </div>
         </form>
@@ -853,12 +935,42 @@ export function ArchiveSearchClient() {
       {searchResults !== null && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
           <span className="text-xs font-semibold text-slate-600 uppercase">
-            Found {searchResults.length} matching excerpts
+            {generateAnswer
+              ? `Reranked pool · ${searchResults.length} unique files`
+              : `Found ${searchResults.length} matching excerpts`}
             {searchDurationMs !== null ? ` in ${searchDurationMs}ms` : ""}
+            {lastRewriteUsage ? (
+              <span className="ml-2 normal-case font-medium text-teal-800">
+                · Query rewrite {formatCostUsd(lastRewriteUsage.costUsd)} (
+                {formatTokenCount(
+                  lastRewriteUsage.inputTokens + lastRewriteUsage.outputTokens,
+                )}{" "}
+                tokens)
+              </span>
+            ) : null}
+            {lastRerankUsage ? (
+              <span className="ml-2 normal-case font-medium text-teal-800">
+                · Hit rerank {formatCostUsd(lastRerankUsage.costUsd)} (
+                {formatTokenCount(
+                  lastRerankUsage.inputTokens + lastRerankUsage.outputTokens,
+                )}{" "}
+                tokens)
+              </span>
+            ) : null}
             {lastSearchUsage ? (
               <span className="ml-2 normal-case font-medium text-teal-800">
                 · Query embed {formatCostUsd(lastSearchUsage.costUsd)} (
                 {formatTokenCount(lastSearchUsage.inputTokens)} tokens)
+              </span>
+            ) : null}
+            {groundedAnswer ? (
+              <span className="ml-2 normal-case font-medium text-teal-800">
+                · Answer {formatCostUsd(groundedAnswer.usage.costUsd)} (
+                {formatTokenCount(
+                  groundedAnswer.usage.inputTokens +
+                    groundedAnswer.usage.outputTokens,
+                )}{" "}
+                tokens)
               </span>
             ) : null}
             {searchResults.some((result) => (result.boost ?? 0) > 0) ? (
@@ -895,6 +1007,66 @@ export function ArchiveSearchClient() {
         </div>
       ) : null}
 
+      {answerError ? (
+        <div className="mb-4 rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-medium">Answer could not be generated</p>
+          <p className="mt-1">{answerError}</p>
+        </div>
+      ) : null}
+
+      {groundedAnswer ? (
+        <div
+          className={`mb-4 rounded-xl border p-4 shadow-xs ${
+            groundedAnswer.notInArchive
+              ? "border-amber-200 bg-amber-50/70"
+              : "border-teal-200 bg-teal-50/50"
+          }`}
+        >
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold tracking-wide text-teal-950 uppercase">
+              Answer
+            </h2>
+            <span className="text-xs font-medium text-slate-600">
+              {groundedAnswer.confidence} confidence
+              {groundedAnswer.notInArchive ? " · not found in archive" : ""}
+            </span>
+          </div>
+          <div>
+            {renderAnswerText(groundedAnswer.answer, searchResults ?? [], focusChunk)}
+          </div>
+          {groundedAnswer.citations.length > 0 ? (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-semibold text-slate-600">
+                Cited sources
+              </span>
+              {groundedAnswer.citations.map((citation) => {
+                const result = (searchResults ?? []).find(
+                  (row) => row.id === citation.chunkId,
+                );
+                const label =
+                  result?.metadata.filename ||
+                  result?.metadata.subject ||
+                  citation.chunkId;
+                return (
+                  <button
+                    key={citation.chunkId}
+                    type="button"
+                    onClick={() => focusChunk(citation.chunkId)}
+                    className="rounded-full border border-teal-200 bg-white px-2 py-0.5 text-xs font-medium text-teal-900 hover:bg-teal-100"
+                    title={citation.why || "Show supporting excerpt"}
+                  >
+                    {label}
+                    {result?.pageNo != null ? ` p.${result.pageNo}` : ""}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {lastPipeline ? <ArchivePipelineDebug pipeline={lastPipeline} /> : null}
+
       {/* Search Results List */}
       {searchResults !== null && (
         <div className="space-y-3">
@@ -913,6 +1085,7 @@ export function ArchiveSearchClient() {
               return (
                 <div
                   key={result.id}
+                  id={`corpus-chunk-${result.id}`}
                   className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs transition hover:border-slate-300"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
@@ -1050,6 +1223,66 @@ export function ArchiveSearchClient() {
       )}
     </div>
   );
+}
+
+/** Inline placeholders survive GFM parsing; `code` renderer turns them into cite chips. */
+const CITE_MARKER_RE = /\[S(\d+)\]/g;
+const CITE_PLACEHOLDER_RE = /^@cite:(\d+)@$/;
+
+function answerMarkdownWithCitePlaceholders(answer: string): string {
+  return answer.replace(CITE_MARKER_RE, (_, index) => `\`@cite:${index}@\``);
+}
+
+function renderAnswerText(
+  answer: string,
+  results: CorpusSearchResult[],
+  onCite: (chunkId: string) => void,
+) {
+  const packed = results.slice(0, MAX_ANSWER_CONTEXT_CHUNKS);
+  const markdown = answerMarkdownWithCitePlaceholders(answer);
+
+  const components: Components = {
+    code({ className, children, ...props }) {
+      const raw = String(children).trim();
+      const marker = CITE_PLACEHOLDER_RE.exec(raw);
+      if (marker) {
+        const label = `[S${marker[1]}]`;
+        const source = packed[Number(marker[1]) - 1];
+        if (!source) {
+          return <span className="font-mono text-xs text-slate-700">{label}</span>;
+        }
+        return (
+          <button
+            type="button"
+            onClick={() => onCite(source.id)}
+            className="not-prose mx-0.5 inline rounded bg-teal-100 px-1 py-0 text-xs font-semibold text-teal-900 hover:bg-teal-200"
+            title={source.metadata.filename || resultSubject(source)}
+          >
+            {label}
+          </button>
+        );
+      }
+      return (
+        <code className={className} {...props}>
+          {children}
+        </code>
+      );
+    },
+  };
+
+  return (
+    <div
+      className="prose prose-sm max-w-none prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-slate-900 prose-p:my-2 prose-p:text-slate-800 prose-li:my-0.5 prose-li:text-slate-800 prose-ul:my-2"
+    >
+      <Markdown remarkPlugins={[remarkGfm]} components={components}>
+        {markdown}
+      </Markdown>
+    </div>
+  );
+}
+
+function resultSubject(result: CorpusSearchResult): string {
+  return result.metadata.subject || "Source";
 }
 
 function registryKindLabel(kind: CorpusSearchEntityBadge["kind"]): string {

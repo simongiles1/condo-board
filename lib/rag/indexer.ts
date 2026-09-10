@@ -65,6 +65,7 @@ type AttachmentMetaRow = {
   filename: string | null;
   subject: string | null;
   receivedAt: string | null;
+  bodyExcerpt: string | null;
 };
 
 export type IndexSliceOptions = {
@@ -188,6 +189,8 @@ async function loadAttachmentMetaByHash(
       filename: emailAttachments.filename,
       subject: emails.subject,
       receivedAt: emails.receivedAt,
+      bodyTextUnique: emails.bodyTextUnique,
+      bodyText: emails.bodyText,
     })
     .from(emailAttachments)
     .leftJoin(emails, eq(emails.id, emailAttachments.emailId))
@@ -196,6 +199,7 @@ async function loadAttachmentMetaByHash(
   const map = new Map<string, AttachmentMetaRow>();
   for (const row of rows) {
     if (!row.contentHash || map.has(row.contentHash)) continue;
+    const excerptSource = row.bodyTextUnique?.trim() || row.bodyText?.trim() || "";
     map.set(row.contentHash, {
       contentHash: row.contentHash,
       attachmentId: row.attachmentId ?? null,
@@ -203,6 +207,7 @@ async function loadAttachmentMetaByHash(
       filename: row.filename ?? null,
       subject: row.subject ?? null,
       receivedAt: row.receivedAt ?? null,
+      bodyExcerpt: excerptSource || null,
     });
   }
   return map;
@@ -470,6 +475,7 @@ export async function runIncrementalIndexSlice(
             emailId: metaRow?.emailId ?? null,
             subject: metaRow?.subject ?? null,
             receivedAt: metaRow?.receivedAt ?? null,
+            bodyExcerpt: metaRow?.bodyExcerpt ?? null,
           };
 
           if (!markdown?.trim()) {
@@ -586,6 +592,7 @@ export async function runIncrementalIndexSlice(
             emailId: metaRow?.emailId ?? null,
             subject: metaRow?.subject ?? null,
             receivedAt: metaRow?.receivedAt ?? null,
+            bodyExcerpt: metaRow?.bodyExcerpt ?? null,
           };
 
           const sanitized = rawText?.trim()

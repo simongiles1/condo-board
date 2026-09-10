@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 
 import { formatGeminiApiErrorMessage } from "@/lib/gemini/client";
+import { buildCorpusAskPipeline } from "@/lib/rag/pipeline-debug";
 import { searchCorpus, type CorpusSearchOptions } from "@/lib/rag/search";
 
 export async function POST(request: Request) {
@@ -25,13 +26,22 @@ export async function POST(request: Request) {
       sourceKind: body.sourceKind,
     };
 
-    const { results, matchedEntities, usage } = await searchCorpus(options);
+    const { results, matchedEntities, usage, rewrite, rewriteUsage } =
+      await searchCorpus(options);
     return NextResponse.json({
       query,
       count: results.length,
       results,
       matchedEntities,
       usage,
+      rewrite,
+      rewriteUsage,
+      pipeline: buildCorpusAskPipeline({
+        query,
+        rewrite,
+        retrieval: results,
+        packedLimit: results.length,
+      }),
     });
   } catch (err) {
     console.error("[corpus-search] error:", err);

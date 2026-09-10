@@ -198,8 +198,8 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     remaining: [
       "Phase A shipped: schema, gemini-embedding-001 embedder, chunking engine, incremental indexer, search API, and /admin/analysis/archive-search dev UI.",
       "Phase B shipped: lexical match against projects / equipment / orgs, similarity boost when the source email has a resolved mention link, and entity badges on archive search.",
+      "Phase C in progress: grounded Gemini answers with citations on archive search. OKF entity wiki export and governance policy ingest stay later.",
       "Run incremental indexer across corpus as attachment vision backfill progresses.",
-      "Phase C: tie into OKF entity wiki and governance ask-AI — not a prerequisite for Phase B.",
       "Entity-register embeddings for Pass B resolution are a separate index — do not conflate with document_chunks.",
     ],
   },

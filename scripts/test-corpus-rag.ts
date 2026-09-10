@@ -48,6 +48,16 @@ import {
   scoreRegistryEntry,
   type RegistryCatalogEntry,
 } from "../lib/rag/registry-boost";
+import {
+  buildCorpusAnswerUserText,
+  emptyCorpusAnswer,
+  MAX_ANSWER_CHUNK_CHARS,
+  MAX_ANSWER_CONTEXT_CHUNKS,
+  packAnswerSources,
+  parseGroundedAnswerJson,
+  mergeAnswerCitations,
+  stripJsonFence,
+} from "../lib/rag/answer";
 import { extractExcerpt } from "../lib/rag/search";
 
 describe("Corpus RAG - Text Chunking", () => {
@@ -133,7 +143,263 @@ describe("Corpus RAG - Text Chunking", () => {
     const res = chunkAttachmentMarkdown(attachment, markdown);
     assert.equal(res.metadata.contentHash, "hash_abc123");
     assert.equal(res.metadata.filename, "Reserve_Fund_Study_2026.pdf");
-    assert.equal(res.chunks[0].chunkText, markdown);
+    assert.ok(res.chunks[0].chunkText.startsWith("File: Reserve_Fund_Study_2026.pdf"));
+    assert.ok(res.chunks[0].chunkText.includes("Email: Annual Reserve Study"));
+    assert.ok(res.chunks[0].chunkText.includes(markdown));
+  });
+});
+
+describe("Corpus RAG - Filename lexical match", () => {
+  it("extracts spaced PDF names and matches the RFS tables file", async () => {
+    const {
+      extractFileLikeNames,
+      filenameMatchesQuery,
+      filenameSearchNeedles,
+    } = await import("../lib/rag/filename-match");
+
+    const filename =
+      "199 Richmond St W (25.0626.5) Final RFS Tables-2026.04.13.pdf";
+    const query = `Where is ${filename}`;
+
+    assert.equal(extractFileLikeNames(query)[0], filename);
+    assert.equal(filenameMatchesQuery(filename, query), true);
+    assert.equal(
+      filenameMatchesQuery("TSCC 2517- NoFF 2026.04.13.pdf", query),
+      false,
+    );
+    assert.ok(
+      filenameSearchNeedles(query).some((needle) =>
+        filename.toLowerCase().includes(needle.toLowerCase()),
+      ),
+    );
+    assert.equal(
+      filenameMatchesQuery(filename, "where is the elevator quote?"),
+      false,
+    );
+  });
+
+  it("does not hardcode RFS from reserve fund study", async () => {
+    const { filenameSearchNeedles, filenameMatchesAlias } = await import(
+      "../lib/rag/filename-match"
+    );
+    const query =
+      "I need to find the file that has the reserve fund study. There was two of them done. One was by Trace and the other one was by EGIS.";
+    assert.equal(
+      filenameSearchNeedles(query).some((needle) => needle.toLowerCase() === "rfs"),
+      false,
+    );
+    assert.equal(
+      filenameMatchesAlias(
+        "199 Richmond St W (25.0626.5) Final RFS Tables-2026.04.13.pdf",
+        [],
+      ),
+      false,
+    );
+  });
+
+  it("uses rewrite needles to match acronym filenames and covering emails", async () => {
+    const {
+      coveringEmailQueryOverlap,
+      filenameMatchesAlias,
+      filenameSearchNeedles,
+      isFileSeekingQuery,
+    } = await import("../lib/rag/filename-match");
+
+    const query =
+      "I need to find the file that has the reserve fund study. There was two of them done. One was by Trace and the other one was by EGIS.";
+    const filename =
+      "199 Richmond St W (25.0626.5) Final RFS Tables-2026.04.13.pdf";
+    const extraNeedles = ["RFS", "Trace", "EGIS"];
+
+    assert.equal(isFileSeekingQuery(query), true);
+    assert.equal(filenameMatchesAlias(filename, extraNeedles), true);
+    assert.equal(
+      filenameMatchesAlias("Budget Approval Form (2026).pdf", extraNeedles),
+      false,
+    );
+    assert.ok(
+      filenameSearchNeedles(query, extraNeedles).some(
+        (needle) => needle.toLowerCase() === "rfs",
+      ),
+    );
+    assert.ok(
+      coveringEmailQueryOverlap(
+        query,
+        "Budget questions",
+        "It was great to hear from Trace and the Final RFS Tables are attached.",
+        extraNeedles,
+      ) >= 2,
+    );
+  });
+});
+
+describe("Corpus RAG - Hybrid filename quota", () => {
+  function hit(
+    id: string,
+    filename: string,
+    similarity: number,
+    lexical?: "match" | "alias",
+  ) {
+    return {
+      id,
+      sourceKind: "attachment_markdown" as const,
+      emailId: "email_1",
+      contentHash: id,
+      pageNo: null,
+      chunkIndex: 0,
+      chunkText: filename,
+      similarity,
+      excerpt: filename,
+      metadata: {
+        filename,
+        filenameMatch: lexical === "match",
+        filenameAlias: lexical === "alias",
+      },
+      sourceLink: `/api/email/attachments/${id}`,
+      emailLink: "/knowledge/emails/email_1?scope=message",
+      rawSimilarity: similarity,
+      boost: 0,
+      entities: [],
+    };
+  }
+
+  it("keeps a low-scoring filename hit inside the top-N cut", async () => {
+    const { selectHybridResults } = await import("../lib/rag/search");
+    const results = [
+      ...Array.from({ length: 20 }, (_, i) =>
+        hit(`vec_${i}`, `Discussion report ${i}.pdf`, 0.99 - i * 0.001),
+      ),
+      hit("named_a", "Project Report A.pdf", 0.78, "alias"),
+      hit("named_b", "Project Report B.pdf", 0.77, "alias"),
+    ];
+    const selected = selectHybridResults(results, 15);
+    assert.equal(selected.length, 15);
+    assert.ok(selected.some((row) => row.id === "named_a"));
+    assert.ok(selected.some((row) => row.id === "named_b"));
+    assert.equal(
+      selected.some((row) => row.id === "vec_19"),
+      false,
+    );
+  });
+
+  it("spreads filename hits so a later match is not dropped", async () => {
+    const { selectHybridResults, spreadTake } = await import("../lib/rag/search");
+    const items = Array.from({ length: 21 }, (_, i) => `file_${i}`);
+    const spread = spreadTake(items, 15);
+    assert.equal(spread[0], "file_0");
+    assert.equal(spread[spread.length - 1], "file_20");
+    assert.equal(spread.length, 15);
+
+    const results = [
+      ...Array.from({ length: 20 }, (_, i) =>
+        hit(`lex_${i}`, `Engineering Study Update ${i}.pdf`, 0.93, "match"),
+      ),
+      hit("named_tail", "Engineering Report.pdf", 0.77, "alias"),
+    ];
+    const selected = selectHybridResults(results, 15);
+    assert.ok(selected.some((row) => row.id === "named_tail"));
+    assert.equal(selected.length, 15);
+  });
+});
+
+describe("Corpus RAG - Ask pipeline debug", () => {
+  it("keeps retrieval order separate from packed citations", async () => {
+    const { buildCorpusAskPipeline } = await import("../lib/rag/pipeline-debug");
+    const hit = (id: string, filename: string, filenameAlias = false) => ({
+      id,
+      sourceKind: "attachment_markdown" as const,
+      emailId: "e1",
+      contentHash: id,
+      pageNo: null,
+      chunkIndex: 0,
+      chunkText: filename,
+      similarity: 0.8,
+      excerpt: filename,
+      metadata: { filename, filenameAlias },
+      sourceLink: null,
+      emailLink: null,
+      rawSimilarity: 0.8,
+      boost: 0,
+      entities: [],
+    });
+    const retrieval = [
+      hit("a", "Discussion.pdf"),
+      hit("b", "Report.pdf", true),
+    ];
+    const pipeline = buildCorpusAskPipeline({
+      query: "find the report",
+      rewrite: {
+        originalQuery: "find the report",
+        retrievalQuery: "report attachment",
+        lexicalNeedles: ["report"],
+        fileSeeking: true,
+      },
+      retrieval,
+      reranked: [retrieval[1], retrieval[0]],
+      selectedIds: ["b", "a"],
+      packedLimit: 1,
+      citedChunkIds: ["b"],
+    });
+    assert.equal(pipeline.rewrite.retrievalQuery, "report attachment");
+    assert.equal(pipeline.retrieval.hits[0].label, "Discussion.pdf");
+    assert.equal(pipeline.retrieval.filenameHits, 1);
+    assert.equal(pipeline.rerank?.hits[0].label, "Report.pdf");
+    assert.equal(pipeline.packed?.hits.length, 1);
+    assert.equal(pipeline.packed?.hits[0].chunkId, "b");
+    assert.deepEqual(pipeline.citedChunkIds, ["b"]);
+  });
+});
+
+describe("Corpus RAG - Query rewrite", () => {
+  it("parses an expanded retrieval query and lexical needles", async () => {
+    const { parseQueryRewriteJson } = await import("../lib/rag/query-rewrite");
+    const original =
+      "I need to find the file that has the reserve fund study. One was by Trace and the other by EGIS.";
+    const parsed = parseQueryRewriteJson(
+      original,
+      JSON.stringify({
+        retrievalQuery:
+          "reserve fund study RFS Trace EGIS attachment PDF",
+        lexicalNeedles: ["RFS", "Trace", "EGIS", "the"],
+        fileSeeking: true,
+      }),
+    );
+
+    assert.equal(parsed.originalQuery, original);
+    assert.match(parsed.retrievalQuery, /RFS/);
+    assert.equal(parsed.fileSeeking, true);
+    assert.ok(parsed.lexicalNeedles.some((needle) => needle.toLowerCase() === "rfs"));
+    assert.ok(parsed.lexicalNeedles.some((needle) => needle.toLowerCase() === "trace"));
+    assert.equal(
+      parsed.lexicalNeedles.some((needle) => needle.toLowerCase() === "the"),
+      false,
+    );
+  });
+
+  it("lifts all-caps acronyms from retrievalQuery into needles", async () => {
+    const { parseQueryRewriteJson, acronymNeedlesFromText } = await import(
+      "../lib/rag/query-rewrite"
+    );
+    assert.deepEqual(acronymNeedlesFromText("annual general meeting AGM minutes"), [
+      "AGM",
+    ]);
+    assert.deepEqual(acronymNeedlesFromText("property manager PM company"), [
+      "PM",
+    ]);
+    const parsed = parseQueryRewriteJson(
+      "where are the AGM minutes?",
+      '{"retrievalQuery":"annual general meeting AGM minutes","lexicalNeedles":[],"fileSeeking":false}',
+    );
+    assert.ok(parsed.lexicalNeedles.includes("AGM"));
+  });
+
+  it("falls back to the original query on invalid JSON", async () => {
+    const { parseQueryRewriteJson } = await import("../lib/rag/query-rewrite");
+    const original = "elevator modernization contract";
+    const parsed = parseQueryRewriteJson(original, "not json at all");
+    assert.equal(parsed.retrievalQuery, original);
+    assert.deepEqual(parsed.lexicalNeedles, []);
+    assert.equal(parsed.fileSeeking, false);
   });
 });
 
@@ -447,6 +713,278 @@ describe("Corpus RAG - Registry boost (Phase B)", () => {
   });
 });
 
+describe("Corpus RAG - Grounded answers (Phase C)", () => {
+  const sampleResult = {
+    id: "chunk_rfs",
+    sourceKind: "attachment_markdown" as const,
+    emailId: "email_1",
+    contentHash: "hash",
+    pageNo: 12,
+    chunkIndex: 3,
+    chunkText: `${"The Trace Consulting Group reserve fund study lists equipment replacements through 2045. ".repeat(80)}`,
+    similarity: 0.81,
+    excerpt: "The Trace Consulting Group reserve fund study lists equipment replacements.",
+    metadata: { filename: "TSCC 2517-RFS.pdf", subject: "RFS delivery" },
+    sourceLink: "/api/email/attachments/att_1",
+    emailLink: "/knowledge/emails/email_1?scope=message",
+    rawSimilarity: 0.81,
+    boost: 0,
+    entities: [],
+  };
+
+  it("packs only the top chunks and truncates long text", () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      ...sampleResult,
+      id: `chunk_${i}`,
+    }));
+    const packed = packAnswerSources(many);
+    assert.equal(packed.length, MAX_ANSWER_CONTEXT_CHUNKS);
+    assert.ok(packed[0].text.endsWith("…"));
+    assert.ok(packed[0].text.startsWith("File: TSCC 2517-RFS.pdf"));
+    assert.ok(packed[0].text.length <= MAX_ANSWER_CHUNK_CHARS + 1);
+    assert.equal(packed[0].label, "TSCC 2517-RFS.pdf");
+  });
+
+  it("includes query, registry hints, and chunk ids in the user prompt", () => {
+    const prompt = buildCorpusAnswerUserText({
+      query: "Where is the Trace reserve fund study?",
+      sources: packAnswerSources([sampleResult]),
+      matchedEntities: [
+        {
+          kind: "organization",
+          id: "org_tcg",
+          name: "Trace Consulting Group",
+          surface: "Trace Consulting Group",
+          strength: "phrase",
+        },
+      ],
+    });
+
+    assert.match(prompt, /Where is the Trace reserve fund study\?/);
+    assert.match(prompt, /FILE INDEX/);
+    assert.match(prompt, /\[S1\] TSCC 2517-RFS.pdf/);
+    assert.match(prompt, /organization: Trace Consulting Group/);
+    assert.match(prompt, /chunkId: chunk_rfs/);
+    assert.match(prompt, /\[S1\]/);
+  });
+
+  it("lists filenames in the file index without document-type tags", () => {
+    const prompt = buildCorpusAnswerUserText({
+      query: "find the file that has the agreement",
+      sources: packAnswerSources([
+        {
+          ...sampleResult,
+          id: "chunk_agreement",
+          chunkText: "Signature page.",
+          metadata: { filename: "Agreement Signed.pdf" },
+        },
+      ]),
+      matchedEntities: [],
+    });
+    assert.match(prompt, /\[S1\] Agreement Signed\.pdf/);
+    assert.equal(/\(signed\)/.test(prompt), false);
+    assert.equal(/role: signed/.test(prompt), false);
+  });
+
+  it("does not instruct the model to prefer signed or final files", async () => {
+    const { CORPUS_ANSWER_SYSTEM_PROMPT } = await import("../lib/rag/answer");
+    const { CORPUS_RERANK_SYSTEM_PROMPT } = await import("../lib/rag/rerank");
+    assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /Do not prefer a document type/);
+    assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /review must include every SOURCE chunkId/);
+    assert.match(CORPUS_RERANK_SYSTEM_PROMPT, /Do not prefer a document type/);
+    assert.equal(
+      /Prefer the actual deliverable/i.test(CORPUS_RERANK_SYSTEM_PROMPT),
+      false,
+    );
+  });
+
+  it("drops citations whose chunk ids were not in the packed sources", () => {
+    const parsed = parseGroundedAnswerJson(
+      JSON.stringify({
+        answer: "The RFS is TSCC 2517-RFS.pdf [S1].",
+        citations: [
+          { chunkId: "chunk_rfs", why: "names the study" },
+          { chunkId: "chunk_invented", why: "hallucinated" },
+        ],
+        confidence: "high",
+        notInArchive: false,
+      }),
+      new Set(["chunk_rfs"]),
+    );
+
+    assert.equal(parsed.citations.length, 1);
+    assert.equal(parsed.citations[0]?.chunkId, "chunk_rfs");
+    assert.equal(parsed.confidence, "high");
+    assert.equal(parsed.notInArchive, false);
+  });
+
+  it("cites packed filename hits on file-seeking questions even if the model skipped them", () => {
+    const sources = packAnswerSources([
+      {
+        ...sampleResult,
+        id: "chunk_discussed",
+        metadata: { filename: "Discussion.pdf" },
+      },
+      {
+        ...sampleResult,
+        id: "chunk_named",
+        metadata: {
+          filename: "Report.pdf",
+          filenameAlias: true,
+        },
+        chunkText: "Signature page.",
+      },
+    ]);
+    const merged = mergeAnswerCitations({
+      sources,
+      citations: [{ chunkId: "chunk_discussed", why: "discusses the report" }],
+      reviews: [],
+      fileSeeking: true,
+    });
+    assert.deepEqual(
+      merged.map((row) => row.chunkId),
+      ["chunk_discussed", "chunk_named"],
+    );
+    assert.equal(
+      mergeAnswerCitations({
+        sources,
+        citations: [{ chunkId: "chunk_discussed", why: "discusses the report" }],
+        reviews: [],
+        fileSeeking: false,
+      }).map((row) => row.chunkId).join(","),
+      "chunk_discussed",
+    );
+  });
+
+  it("strips fenced JSON and treats empty retrieval as not-in-archive", () => {
+    const fenced = stripJsonFence(
+      "```json\n{\"answer\":\"ok\",\"citations\":[],\"confidence\":\"low\",\"notInArchive\":true}\n```",
+    );
+    const parsed = parseGroundedAnswerJson(fenced, new Set());
+    assert.equal(parsed.notInArchive, true);
+    assert.equal(parsed.answer, "ok");
+
+    const empty = emptyCorpusAnswer("gemini-3.7-flash");
+    assert.equal(empty.notInArchive, true);
+    assert.equal(empty.usage.costUsd, 0);
+    assert.match(empty.answer, /No matching excerpts/);
+  });
+});
+
+describe("Corpus RAG - Hit rerank", () => {
+  function hit(
+    id: string,
+    filename: string,
+    excerpt: string,
+    similarity: number,
+  ) {
+    return {
+      id,
+      sourceKind: "attachment_markdown" as const,
+      emailId: "email_1",
+      contentHash: id,
+      pageNo: null,
+      chunkIndex: 0,
+      chunkText: excerpt,
+      similarity,
+      excerpt,
+      metadata: { filename },
+      sourceLink: `/api/email/attachments/${id}`,
+      emailLink: "/knowledge/emails/email_1?scope=message",
+      rawSimilarity: similarity,
+      boost: 0,
+      entities: [],
+    };
+  }
+
+  it("promotes selected lower-ranked hits without dropping the rest", async () => {
+    const { applyRerankOrder, parseRerankJson } = await import(
+      "../lib/rag/rerank"
+    );
+    const results = [
+      hit("proposal", "TCG fee proposal.pdf", "Fee proposal for a Class 1 study", 0.95),
+      hit("draft", "EGIS C2 RFS-Letter-2025-DRAFT.pdf", "Draft letter for Class 2", 0.94),
+      hit("update", "Class 2 Reserve Fund Study Update.pdf", "Class 2 update November 2025", 0.93),
+      hit("trace", "Final RFS Tables-2026.04.13.pdf", "Replacement cost summary tables", 0.9),
+      hit("egis", "RFS Signed.pdf", "Signed reserve fund study", 0.88),
+    ];
+    const selected = parseRerankJson(
+      JSON.stringify({
+        chunkIds: ["trace", "egis", "missing", "proposal"],
+      }),
+      results.map((row) => row.id),
+    );
+    assert.deepEqual(selected, ["trace", "egis", "proposal"]);
+    const ordered = applyRerankOrder(results, selected);
+    assert.deepEqual(
+      ordered.map((row) => row.id),
+      ["trace", "egis", "proposal", "draft", "update"],
+    );
+    const packed = packAnswerSources(ordered, 3);
+    assert.deepEqual(
+      packed.map((row) => row.label),
+      [
+        "Final RFS Tables-2026.04.13.pdf",
+        "RFS Signed.pdf",
+        "TCG fee proposal.pdf",
+      ],
+    );
+  });
+
+  it("falls back to retrieval order when rerank JSON is invalid", async () => {
+    const { applyRerankOrder, parseRerankJson } = await import(
+      "../lib/rag/rerank"
+    );
+    const results = [
+      hit("a", "A.pdf", "a", 0.9),
+      hit("b", "B.pdf", "b", 0.8),
+    ];
+    const selected = parseRerankJson("not json", ["a", "b"]);
+    assert.deepEqual(selected, []);
+    assert.deepEqual(
+      applyRerankOrder(results, selected).map((row) => row.id),
+      ["a", "b"],
+    );
+  });
+
+  it("collapses duplicate files and parses JSON wrapped in extra text", async () => {
+    const { uniqueResultsByFile, parseRerankJson } = await import(
+      "../lib/rag/rerank"
+    );
+    const duplicates = [
+      hit("trace-p1", "Final RFS Tables-2026.04.13.pdf", "table page 1", 0.9),
+      hit("trace-p2", "Final RFS Tables-2026.04.13.pdf", "table page 2", 0.89),
+    ];
+    duplicates[0].contentHash = "hash_tables";
+    duplicates[1].contentHash = "hash_tables";
+    const unique = uniqueResultsByFile(duplicates);
+    assert.equal(unique.length, 1);
+    assert.equal(unique[0].id, "trace-p1");
+
+    const wrapped = parseRerankJson(
+      'Thinking...\n{"chunkIds":["trace","egis"]}\nDone.',
+      ["proposal", "trace", "egis"],
+    );
+    assert.deepEqual(wrapped, ["trace", "egis"]);
+  });
+
+  it("lists every candidate id in the rerank prompt", async () => {
+    const { buildRerankUserText } = await import("../lib/rag/rerank");
+    const prompt = buildRerankUserText({
+      query: "find the reserve fund study files by Trace and EGIS",
+      results: [
+        hit("proposal", "TCG fee proposal.pdf", "Fee proposal", 0.95),
+        hit("trace", "Final RFS Tables-2026.04.13.pdf", "Tables", 0.9),
+      ],
+      limit: 8,
+    });
+    assert.match(prompt, /LIMIT\n8/);
+    assert.match(prompt, /chunkId: proposal/);
+    assert.match(prompt, /chunkId: trace/);
+    assert.match(prompt, /rank: 2/);
+  });
+});
+
 // Integration checks with Database & Gemini (if configured)
 describe("Corpus RAG - Database & API Integration", () => {
   after(async () => {
@@ -493,5 +1031,28 @@ describe("Corpus RAG - Database & API Integration", () => {
       assert.ok(Array.isArray(res.entities));
       console.log(`    • [${Math.round(res.similarity * 100)}%] (${res.sourceKind}) ${res.metadata.subject || res.metadata.filename}: ${res.excerpt.slice(0, 75)}...`);
     }
+  });
+
+  it("generates a grounded answer for 'where is the reserve fund study?'", async () => {
+    if (!fs.existsSync(".env.local") || !process.env.GEMINI_API_KEY) return;
+    const { answerCorpusQuestion } = await import("../lib/rag/answer");
+    const { results, answer, searchUsage } = await answerCorpusQuestion({
+      query: "Where is the reserve fund study?",
+      limit: 5,
+    });
+
+    assert.ok(Array.isArray(results));
+    assert.ok(typeof searchUsage.costUsd === "number");
+    assert.ok(answer.answer.length > 0);
+    assert.ok(["high", "medium", "low", "none"].includes(answer.confidence));
+    for (const citation of answer.citations) {
+      assert.ok(
+        results.some((result) => result.id === citation.chunkId),
+        `citation ${citation.chunkId} was not in retrieved results`,
+      );
+    }
+    console.log(
+      `\n  [answerCorpusQuestion] ${answer.confidence} · ${answer.citations.length} citations · ${answer.usage.costUsd} USD\n  ${answer.answer.slice(0, 240)}`,
+    );
   });
 });

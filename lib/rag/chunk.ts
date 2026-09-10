@@ -225,7 +225,36 @@ export type AttachmentForChunking = {
   emailId?: string | null;
   receivedAt?: string | null;
   subject?: string | null;
+  bodyExcerpt?: string | null;
 };
+
+const EMAIL_CONTEXT_EXCERPT_CHARS = 500;
+
+function emailContextExcerpt(text: string | null | undefined): string | null {
+  const normalized = text?.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  if (normalized.length <= EMAIL_CONTEXT_EXCERPT_CHARS) return normalized;
+  return `${normalized.slice(0, EMAIL_CONTEXT_EXCERPT_CHARS).trimEnd()}…`;
+}
+
+/** Prefix filename and parent-email context so vendor names in the covering email are searchable. */
+export function labeledAttachmentText(
+  filename: string | null | undefined,
+  body: string,
+  context?: { subject?: string | null; bodyExcerpt?: string | null },
+): string {
+  const name = filename?.trim() || "attachment";
+  const trimmed = body.replace(/\r\n/g, "\n").trim();
+  const headerLines = [`File: ${name}`];
+  const subject = context?.subject?.trim();
+  if (subject) headerLines.push(`Email: ${subject}`);
+  const excerpt = emailContextExcerpt(context?.bodyExcerpt);
+  if (excerpt) headerLines.push(excerpt);
+  const header = headerLines.join("\n");
+  if (!trimmed) return header;
+  if (trimmed.toLowerCase().startsWith(header.toLowerCase())) return trimmed;
+  return `${header}\n\n${trimmed}`;
+}
 
 /**
  * Prepares chunks and metadata for parsed attachment markdown.
@@ -248,7 +277,12 @@ export function chunkAttachmentMarkdown(
     receivedAt: attachment.receivedAt || null,
   };
 
-  const chunks = chunkText(markdownText);
+  const chunks = chunkText(
+    labeledAttachmentText(attachment.filename, markdownText, {
+      subject: attachment.subject,
+      bodyExcerpt: attachment.bodyExcerpt,
+    }),
+  );
   return { chunks, metadata };
 }
 
@@ -260,6 +294,7 @@ export type VisionPageForChunking = {
   emailId?: string | null;
   receivedAt?: string | null;
   subject?: string | null;
+  bodyExcerpt?: string | null;
 };
 
 /**
@@ -283,6 +318,11 @@ export function chunkVisionPage(
     receivedAt: page.receivedAt || null,
   };
 
-  const chunks = chunkText(pageMarkdown);
+  const chunks = chunkText(
+    labeledAttachmentText(page.filename, pageMarkdown, {
+      subject: page.subject,
+      bodyExcerpt: page.bodyExcerpt,
+    }),
+  );
   return { chunks, metadata };
 }

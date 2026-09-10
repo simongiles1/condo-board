@@ -144,8 +144,8 @@ export function AnalysisLabClient() {
           >
             Ask the archive (Corpus RAG)
           </Link>{" "}
-          — natural-language semantic search across emails and parsed
-          attachment documents with ranked excerpts.
+          — ask a question and get a cited answer from emails and parsed
+          attachments, with ranked excerpts underneath.
         </p>
         <p className="mt-1 text-sm">
           <Link

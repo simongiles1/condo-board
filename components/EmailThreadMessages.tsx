@@ -4,12 +4,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, 
 
 import { HarvestMarkedBody } from "@/components/HarvestMarkedBody";
 import { DeleteEmailButton } from "@/components/DeleteEmailButton";
+import { EmailAttachmentsBadge } from "@/components/EmailAttachmentsBadge";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { SourceQuoteDisplay } from "@/components/SourceQuoteDisplay";
 import {
   type EmailAttachmentSummary,
 } from "@/lib/email/attachment-display";
-import { filterVisibleAttachments } from "@/lib/email/attachment-visibility";
 import type { EmailBodyDisplay } from "@/lib/email/format-body-display";
 import {
   resolveUniqueHighlightSplit,
@@ -29,7 +29,6 @@ import {
 } from "@/lib/email-analysis/harvest-highlight-spans";
 import type { TodoExtractListItem } from "@/lib/email-analysis/todo-highlight-run-display";
 import { formatDateTime } from "@/lib/format/datetime";
-import { useAttachmentVisibilitySettings } from "@/lib/settings/attachment-visibility-settings";
 
 type Attachment = EmailAttachmentSummary;
 
@@ -355,7 +354,6 @@ export function EmailThreadMessages({
   scrollRootRef?: RefObject<HTMLElement | null> | null;
 }) {
   const scrolledForKeyRef = useRef<string | null>(null);
-  const visibilitySettings = useAttachmentVisibilitySettings();
   const [visibleMessages, setVisibleMessages] = useState(messages);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
     const initialId = focusEmailId ?? messages.at(0)?.id;
@@ -449,11 +447,6 @@ export function EmailThreadMessages({
     <div className="space-y-3">
       {visibleMessages.map((message) => {
         const expanded = expandedIds.has(message.id);
-        const visibleAttachments = filterVisibleAttachments(
-          message.attachments,
-          "emailDetail",
-          visibilitySettings,
-        );
         const uniqueText = message.bodyTextUnique?.trim() || "";
         const toLine = message.toAddresses.join(", ");
         const contactExtraction = contactExtractions?.[message.id] ?? null;
@@ -521,14 +514,22 @@ export function EmailThreadMessages({
                   ) : null}
                 </div>
               </button>
-              {expanded ? (
-                <DeleteEmailButton
-                  emailId={message.id}
-                  subject={message.subject}
-                  source={message.source}
-                  onDeleted={removeMessage}
-                />
-              ) : null}
+              <div className="flex shrink-0 flex-col items-end gap-2">
+                {!hideAttachments && !uniqueContentOnly ? (
+                  <EmailAttachmentsBadge
+                    attachments={message.attachments}
+                    surface="inbox"
+                  />
+                ) : null}
+                {expanded ? (
+                  <DeleteEmailButton
+                    emailId={message.id}
+                    subject={message.subject}
+                    source={message.source}
+                    onDeleted={removeMessage}
+                  />
+                ) : null}
+              </div>
             </div>
 
             {expanded ? (
@@ -571,16 +572,6 @@ export function EmailThreadMessages({
                     );
                   })()}
                 </div>
-
-                {!hideAttachments && !uniqueContentOnly && visibleAttachments.length > 0 ? (
-                  <ul className="mt-4 space-y-1 rounded-md border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700">
-                    {visibleAttachments.map((attachment) => (
-                      <li key={attachment.id}>
-                        {attachment.filename} ({attachment.mimeType})
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
               </div>
             ) : null}
           </article>

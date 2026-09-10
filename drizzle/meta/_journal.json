@@ -540,6 +540,20 @@
       "when": 1790000000000,
       "tag": "0076_meetings_v2_pipeline_segment_durations",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1790100000000,
+      "tag": "0077_file_cards",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1790200000000,
+      "tag": "0078_attachment_file_metadata",
+      "breakpoints": true
     }
   ]
 }

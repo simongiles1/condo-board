@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DoclingBackfillButton } from "@/components/DoclingBackfillButton";
+import { FileCardBackfillButton } from "@/components/FileCardBackfillModal";
 import { formatCostUsd, formatTokenCount } from "@/lib/gemini/usage";
 import {
   isVisionImageExt,
@@ -648,6 +649,7 @@ export function AttachmentExtractionLabClient() {
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <DoclingBackfillButton />
+            <FileCardBackfillButton />
             <Link
               href="/admin/analysis/page-vision"
               className="font-medium text-teal-800 underline hover:text-teal-950"

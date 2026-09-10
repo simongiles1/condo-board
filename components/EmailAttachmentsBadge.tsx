@@ -20,7 +20,10 @@ import {
   type EmailAttachmentSummary,
   type ThreadAttachmentGroup,
 } from "@/lib/email/attachment-display";
-import { filterVisibleAttachments } from "@/lib/email/attachment-visibility";
+import {
+  filterVisibleAttachments,
+  type AttachmentVisibilitySurface,
+} from "@/lib/email/attachment-visibility";
 import { formatDateTime } from "@/lib/format/datetime";
 import { useAttachmentVisibilitySettings } from "@/lib/settings/attachment-visibility-settings";
 import { renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
@@ -476,18 +479,20 @@ function PopoverPanel({
 export function EmailAttachmentsBadge({
   attachments,
   groups,
+  surface = "inbox",
 }: {
   attachments?: EmailAttachmentSummary[];
   groups?: ThreadAttachmentGroup[];
+  surface?: AttachmentVisibilitySurface;
 }) {
   const visibilitySettings = useAttachmentVisibilitySettings();
 
   const visibleAttachments = useMemo(
     () =>
       attachments
-        ? filterVisibleAttachments(attachments, "inbox", visibilitySettings)
+        ? filterVisibleAttachments(attachments, surface, visibilitySettings)
         : undefined,
-    [attachments, visibilitySettings],
+    [attachments, surface, visibilitySettings],
   );
 
   const visibleGroups = useMemo(
@@ -497,12 +502,12 @@ export function EmailAttachmentsBadge({
           ...group,
           attachments: filterVisibleAttachments(
             group.attachments,
-            "inbox",
+            surface,
             visibilitySettings,
           ),
         }))
         .filter((group) => group.attachments.length > 0),
-    [groups, visibilitySettings],
+    [groups, surface, visibilitySettings],
   );
 
   const count =

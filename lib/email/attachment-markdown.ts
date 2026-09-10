@@ -9,6 +9,7 @@ import { and, count, eq, isNull, or, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { attachmentDocuments, emailAttachments } from "@/lib/db/schema";
+import { ensureAttachmentFileMetadata } from "@/lib/email/attachment-file-metadata";
 import {
   ATTACHMENT_PARSE_BATCH_SIZE,
   ATTACHMENT_PARSE_MAX_ATTEMPTS,
@@ -363,6 +364,14 @@ export async function parseAttachmentDocument(
         `Cached attachment bytes missing for ${contentHash}${row.ext}`,
       );
     }
+
+    await ensureAttachmentFileMetadata({
+      contentHash,
+      mimeType: row.mimeType,
+      ext: row.ext,
+      bytes,
+      existingJson: row.fileMetadataJson,
+    });
 
     // Prefer a real filename from any email_attachments row for toMarkdown.
     const [attachmentMeta] = await db

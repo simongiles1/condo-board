@@ -224,7 +224,11 @@ export function AttachmentExtractionLabClient() {
   const [lastRun, setLastRun] = useState<ExtractionProcessResult | null>(null);
   const [costsOpen, setCostsOpen] = useState(false);
   const [viewOpen, setViewOpen] = useState(false);
+  const [viewDoc, setViewDoc] = useState<ExtractionDocSummary | null>(null);
   const [viewDetail, setViewDetail] = useState<PageVisionDocDetail | null>(null);
+  const [viewDetailLoading, setViewDetailLoading] = useState(false);
+  const [viewDetailError, setViewDetailError] = useState<string | null>(null);
+  const [previewWholeDoc, setPreviewWholeDoc] = useState(false);
   const [viewPageNo, setViewPageNo] = useState(1);
   const [viewIframeTick, setViewIframeTick] = useState(0);
   const [viewLoadingHash, setViewLoadingHash] = useState<string | null>(null);
@@ -253,8 +257,24 @@ export function AttachmentExtractionLabClient() {
     [lastRun],
   );
 
-  const viewPageCount = viewDetail ? pageCountForDetail(viewDetail) : 1;
+  const previewKind = viewDoc?.kind ?? (viewDetail ? classifyKindFromDetail(viewDetail) : "other");
+  const previewIsImage =
+    previewKind === "image" ||
+    isImageAttachment({
+      mimeType: viewDoc?.mimeType ?? viewDetail?.mimeType,
+      ext: viewDoc?.ext ?? viewDetail?.ext,
+      kind: previewKind,
+    });
+  const viewPageCount = Math.max(
+    viewDetail ? pageCountForDetail(viewDetail) : 0,
+    viewDoc?.pageCount ?? 0,
+    1,
+  );
   const viewPage = viewDetail?.pages.find((p) => p.pageNo === viewPageNo);
+  const previewContentHash =
+    viewDoc?.contentHash ?? viewDetail?.contentHash ?? "";
+  const previewFilename =
+    viewDoc?.filename ?? viewDetail?.filename ?? null;
   const labPane = viewDetail
     ? extractPaneForPage(viewDetail, viewPageNo, viewPage)
     : { body: "", source: null, nativeOnly: false };
@@ -315,10 +335,10 @@ export function AttachmentExtractionLabClient() {
     if (!viewOpen) return;
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setViewOpen(false);
+        closeExtractView();
         return;
       }
-      if (!viewDetail) return;
+      if (!viewDoc) return;
       if (event.key === "ArrowLeft") {
         event.preventDefault();
         goToViewPage(viewPageNo - 1);
@@ -329,7 +349,25 @@ export function AttachmentExtractionLabClient() {
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [viewOpen, viewDetail, viewPageNo, goToViewPage]);
+  }, [viewOpen, viewDoc, viewPageNo, goToViewPage]);
+
+  function closeExtractView() {
+    setViewOpen(false);
+    setViewDoc(null);
+    setViewDetail(null);
+    setViewDetailLoading(false);
+    setViewDetailError(null);
+    setPreviewWholeDoc(false);
+  }
+
+  function attachmentFilePreviewUrl(
+    contentHash: string,
+    options: { pageNo: number; wholeDocument: boolean; isImage: boolean },
+  ): string {
+    const base = `/api/analysis/page-vision/${contentHash}/file`;
+    if (options.isImage || options.wholeDocument) return base;
+    return `${base}?page=${options.pageNo}`;
+  }
 
   const loadList = useCallback(async () => {
     setLoadingList(true);
@@ -511,8 +549,8 @@ export function AttachmentExtractionLabClient() {
   }
 
   async function runDoclingExtract(options?: { force?: boolean }) {
-    if (!viewDetail) return;
-    const hash = viewDetail.contentHash;
+    const hash = viewDoc?.contentHash ?? viewDetail?.contentHash;
+    if (!hash) return;
     if (textRoutePages.length === 0) {
       setDoclingError(
         "No text-route pages on this document — Docling is for text pages only (vision stays on Gemini).",
@@ -565,13 +603,21 @@ export function AttachmentExtractionLabClient() {
     setDoclingSkippedPages([]);
     setDoclingMeta(null);
     setExtractSource("lab");
+    setViewDoc(doc);
+    setViewDetail(null);
+    setViewDetailLoading(true);
+    setViewDetailError(null);
+    setPreviewWholeDoc(false);
+    setViewPageNo(1);
+    setViewIframeTick((t) => t + 1);
+    setViewOpen(true);
     try {
       const res = await fetch(`/api/analysis/page-vision/${doc.contentHash}`, {
         cache: "no-store",
       });
       const data = (await res.json()) as PageVisionDocDetail & { error?: string };
       if (!res.ok) {
-        throw new Error(data.error ?? "Could not load document extract.");
+        throw new Error(data.error ?? "Could not load page profile or extract.");
       }
       const firstPage =
         data.pages.find((p) => p.visionStatus === "done")?.pageNo ??
@@ -580,14 +626,14 @@ export function AttachmentExtractionLabClient() {
       setViewDetail(data);
       setViewPageNo(firstPage);
       setViewIframeTick((t) => t + 1);
-      setViewOpen(true);
-      void loadCachedDocling(doc.contentHash);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not load document extract.",
+      setViewDetailError(
+        err instanceof Error ? err.message : "Could not load page profile.",
       );
     } finally {
+      setViewDetailLoading(false);
       setViewLoadingHash(null);
+      void loadCachedDocling(doc.contentHash);
     }
   }
 
@@ -1014,8 +1060,8 @@ export function AttachmentExtractionLabClient() {
                         onClick={() => void openExtractView(doc)}
                         disabled={viewLoadingHash === doc.contentHash}
                         className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
-                        title="Preview attachment and extract"
-                        aria-label="Preview attachment and extract"
+                        title="Preview cached source file (same bytes Docling receives), then extract"
+                        aria-label="Preview source file and extract"
                       >
                         <EyeIcon className="h-3.5 w-3.5" />
                       </button>
@@ -1060,12 +1106,12 @@ export function AttachmentExtractionLabClient() {
         </ul>
       </section>
 
-      {viewOpen && viewDetail ? (
+      {viewOpen && viewDoc ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <button
             type="button"
             className="absolute inset-0 bg-slate-900/40"
-            onClick={() => setViewOpen(false)}
+            onClick={closeExtractView}
             aria-label="Close preview"
           />
           <div
@@ -1080,10 +1126,10 @@ export function AttachmentExtractionLabClient() {
                   id="extraction-view-title"
                   className="truncate text-lg font-semibold text-slate-900"
                 >
-                  Extracted content
+                  Source file &amp; extract
                 </h2>
                 <p className="mt-0.5 truncate text-xs text-slate-500">
-                  {viewDetail.filename || shortHash(viewDetail.contentHash)}
+                  {previewFilename || shortHash(previewContentHash)}
                 </p>
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -1108,12 +1154,18 @@ export function AttachmentExtractionLabClient() {
                 </button>
                 <button
                   type="button"
-                  disabled={doclingLoading || textRoutePages.length === 0}
+                  disabled={
+                    doclingLoading ||
+                    viewDetailLoading ||
+                    textRoutePages.length === 0
+                  }
                   onClick={() => void runDoclingExtract()}
                   title={
-                    textRoutePages.length === 0
-                      ? "No text-route pages — Docling is for text pages only"
-                      : `Docling text pages: ${textRoutePages.join(", ")} (npm run docling:sidecar)`
+                    viewDetailLoading
+                      ? "Loading page profile…"
+                      : textRoutePages.length === 0
+                        ? "No text-route pages — Docling is for text pages only"
+                        : `Docling text pages: ${textRoutePages.join(", ")}`
                   }
                   className="rounded-md border border-teal-300 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-900 hover:bg-teal-100 disabled:opacity-40"
                 >
@@ -1136,7 +1188,7 @@ export function AttachmentExtractionLabClient() {
                 ) : null}
                 <button
                   type="button"
-                  onClick={() => setViewOpen(false)}
+                  onClick={closeExtractView}
                   className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                   aria-label="Close"
                 >
@@ -1145,7 +1197,7 @@ export function AttachmentExtractionLabClient() {
               </div>
             </div>
 
-            {viewDetail.pages.length > 0 ? (
+            {viewDetail && viewDetail.pages.length > 0 ? (
               <div className="flex shrink-0 flex-wrap gap-1 border-b border-slate-100 px-3 py-2">
                 {viewDetail.pages.map((p) => (
                   <button
@@ -1169,29 +1221,76 @@ export function AttachmentExtractionLabClient() {
 
             <div className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
               <section className="flex min-h-0 flex-col border-b border-slate-100 lg:border-b-0 lg:border-r">
-                <div className="shrink-0 border-b border-slate-100 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                  Attachment preview · page {viewPageNo}
+                <div className="shrink-0 space-y-1 border-b border-slate-100 px-3 py-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                    Source file (cached attachment)
+                  </p>
+                  <p className="text-xs leading-snug text-slate-600">
+                    Same bytes on disk that IBM Docling receives. Check the PDF
+                    here before running Docling — empty or corrupt files can
+                    yield zero-byte results even when the job reports success.
+                  </p>
+                  {!previewIsImage ? (
+                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPreviewWholeDoc(false);
+                          setViewIframeTick((t) => t + 1);
+                        }}
+                        className={`rounded border px-2 py-0.5 text-[11px] font-medium ${
+                          !previewWholeDoc
+                            ? "border-teal-400 bg-teal-50 text-teal-900"
+                            : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        Page {viewPageNo} only
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPreviewWholeDoc(true);
+                          setViewIframeTick((t) => t + 1);
+                        }}
+                        className={`rounded border px-2 py-0.5 text-[11px] font-medium ${
+                          previewWholeDoc
+                            ? "border-teal-400 bg-teal-50 text-teal-900"
+                            : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        Whole PDF
+                      </button>
+                      <span className="text-[11px] text-slate-500">
+                        Docling sends page ranges; use page view to match one
+                        text-route page.
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
-                {isImageAttachment({
-                  mimeType: viewDetail.mimeType,
-                  ext: viewDetail.ext,
-                  kind: classifyKindFromDetail(viewDetail),
-                }) ? (
+                {previewIsImage ? (
                   // eslint-disable-next-line @next/next/no-img-element -- lab preview of cached bytes
                   <img
-                    key={`${viewDetail.contentHash}-${viewIframeTick}`}
+                    key={`${previewContentHash}-${viewIframeTick}`}
                     alt={
-                      viewDetail.filename ||
-                      `Attachment ${shortHash(viewDetail.contentHash)}`
+                      previewFilename ||
+                      `Attachment ${shortHash(previewContentHash)}`
                     }
-                    src={`/api/analysis/page-vision/${viewDetail.contentHash}/file`}
+                    src={attachmentFilePreviewUrl(previewContentHash, {
+                      pageNo: viewPageNo,
+                      wholeDocument: true,
+                      isImage: true,
+                    })}
                     className="min-h-[40dvh] flex-1 w-full object-contain bg-slate-50 lg:min-h-0"
                   />
                 ) : (
                   <iframe
-                    key={`${viewDetail.contentHash}-${viewPageNo}-${viewIframeTick}`}
-                    title="Attachment preview"
-                    src={`/api/analysis/page-vision/${viewDetail.contentHash}/file?page=${viewPageNo}`}
+                    key={`${previewContentHash}-${viewPageNo}-${previewWholeDoc}-${viewIframeTick}`}
+                    title="Attachment source preview"
+                    src={attachmentFilePreviewUrl(previewContentHash, {
+                      pageNo: viewPageNo,
+                      wholeDocument: previewWholeDoc,
+                      isImage: false,
+                    })}
                     className="min-h-[40dvh] flex-1 w-full bg-slate-50 lg:min-h-0"
                   />
                 )}
@@ -1258,6 +1357,17 @@ export function AttachmentExtractionLabClient() {
                     markdown on text pages.
                   </p>
                 ) : null}
+                {viewDetailError ? (
+                  <p className="shrink-0 border-b border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                    Page profile could not load ({viewDetailError}). Source
+                    preview on the left still shows the cached file.
+                  </p>
+                ) : null}
+                {viewDetailLoading ? (
+                  <p className="shrink-0 border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    Loading page routes and prior extract…
+                  </p>
+                ) : null}
                 {doclingError ? (
                   <p className="shrink-0 border-b border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
                     {doclingError}
@@ -1269,7 +1379,9 @@ export function AttachmentExtractionLabClient() {
                   </p>
                 ) : null}
                 <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs text-slate-800">
-                  {viewPane.body}
+                  {viewDetailLoading && !viewDetail
+                    ? "Review the source file on the left, then wait for routes and extract to load — or run Extract with Docling when text-route pages appear above."
+                    : viewPane.body}
                 </pre>
               </section>
             </div>

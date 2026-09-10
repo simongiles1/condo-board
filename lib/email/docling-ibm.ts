@@ -1214,3 +1214,133 @@ export async function convertPagesWithIbmDocling(options: {
     costUsd: ibmDoclingCostUsd(uniquePages.length),
   };
 }
+
+export type IbmDoclingSlotProbeResult = {
+  slot: number;
+  configured: boolean;
+  urlHint: string | null;
+  healthChecks: Array<{ path: string; status: number; ok: boolean }>;
+  convert: {
+    ok: boolean;
+    elapsedMs: number;
+    taskId?: string;
+    markdownChars?: number;
+    markdownPreview?: string;
+    errorName?: string;
+    errorMessage?: string;
+    httpStatus?: number;
+  };
+};
+
+/**
+ * Live probe for one env slot — does not rotate keys or mark slots exhausted.
+ * Uses a tiny one-page PDF to exercise submit → poll → result.
+ */
+export async function probeIbmDoclingSlot(
+  slot: number,
+  pdfBytes: Buffer,
+): Promise<IbmDoclingSlotProbeResult> {
+  const cred = listIbmDoclingCredentials().find((c) => c.slot === slot);
+  const healthPaths = ["/health", "/v1/health", "/docs", "/openapi.json"];
+  const healthChecks: IbmDoclingSlotProbeResult["healthChecks"] = [];
+
+  if (!cred) {
+    return {
+      slot,
+      configured: false,
+      urlHint: null,
+      healthChecks,
+      convert: {
+        ok: false,
+        elapsedMs: 0,
+        errorMessage: `No DOCLING_IBM_API_KEY_${slot} (and URL) in environment.`,
+      },
+    };
+  }
+
+  let urlHint: string;
+  try {
+    const { hostname } = new URL(cred.url);
+    urlHint = hostname;
+  } catch {
+    urlHint = cred.url.slice(0, 48);
+  }
+
+  for (const path of healthPaths) {
+    try {
+      const response = await fetch(`${cred.url}${path}`, {
+        method: "GET",
+        headers: authHeaders(cred.apiKey),
+        signal: AbortSignal.timeout(8_000),
+      });
+      healthChecks.push({
+        path,
+        status: response.status,
+        ok: response.ok || response.status === 404,
+      });
+    } catch (error) {
+      healthChecks.push({
+        path,
+        status: 0,
+        ok: false,
+      });
+    }
+  }
+
+  const started = Date.now();
+  try {
+    const taskId = await submitConvertFile({
+      url: cred.url,
+      apiKey: cred.apiKey,
+      pdfBytes,
+      filename: "probe-one-page.pdf",
+      pageStart: 1,
+      pageEnd: 1,
+    });
+    await pollTask({ url: cred.url, apiKey: cred.apiKey, taskId });
+    const markdown = await fetchTaskResult({
+      url: cred.url,
+      apiKey: cred.apiKey,
+      taskId,
+    });
+    const trimmed = markdown.trim();
+    return {
+      slot,
+      configured: true,
+      urlHint,
+      healthChecks,
+      convert: {
+        ok: trimmed.length > 0,
+        elapsedMs: Date.now() - started,
+        taskId,
+        markdownChars: trimmed.length,
+        markdownPreview: trimmed.slice(0, 240),
+        errorMessage:
+          trimmed.length > 0 ? undefined : "IBM returned empty markdown.",
+        errorName:
+          trimmed.length > 0 ? undefined : "IbmDoclingEmptyResultError",
+      },
+    };
+  } catch (error) {
+    const httpStatus =
+      error instanceof IbmDoclingQuotaError ||
+      error instanceof IbmDoclingKeyRejectedError ||
+      error instanceof IbmDoclingRequestError
+        ? error.status
+        : undefined;
+    return {
+      slot,
+      configured: true,
+      urlHint,
+      healthChecks,
+      convert: {
+        ok: false,
+        elapsedMs: Date.now() - started,
+        errorName: error instanceof Error ? error.name : "Error",
+        errorMessage:
+          error instanceof Error ? error.message : String(error),
+        httpStatus,
+      },
+    };
+  }
+}

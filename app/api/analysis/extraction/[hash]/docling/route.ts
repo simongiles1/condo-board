@@ -4,12 +4,13 @@ import { NextResponse } from "next/server";
 
 import { isErrorResponse, requireSession } from "@/lib/auth/authorize";
 import {
-  checkDoclingSidecarHealth,
-  convertWithDoclingSidecar,
+  checkDoclingProviderHealth,
+  convertDoclingPages,
   listNonTextRoutePageNos,
   listTextRoutePageNos,
   readDoclingLabState,
 } from "@/lib/email/docling-lab";
+import { DEFAULT_DOCLING_PROVIDER } from "@/lib/email/docling-provider";
 
 type RouteContext = {
   params: Promise<{ hash: string }>;
@@ -97,23 +98,28 @@ export async function POST(request: Request, context: RouteContext) {
       // empty body is fine
     }
 
-    const health = await checkDoclingSidecarHealth();
+    const provider = DEFAULT_DOCLING_PROVIDER;
+    const health = await checkDoclingProviderHealth(provider);
     if (!health.ok) {
+      const hint =
+        provider === "ibm"
+          ? "Check DOCLING_IBM_URL / DOCLING_IBM_API_KEY in server env."
+          : `Run \`npm run docling:sidecar\` locally or set DOCLING_SIDECAR_URL.`;
       return NextResponse.json(
         {
           error:
-            `Docling sidecar not reachable at ${health.sidecarUrl}. ` +
-            `Run \`npm run docling:sidecar\` in another terminal.` +
+            `Docling (${provider}) not reachable at ${health.url || "—"}. ${hint}` +
             (health.detail ? ` (${health.detail})` : ""),
         },
         { status: 503 },
       );
     }
 
-    const result = await convertWithDoclingSidecar({
+    const result = await convertDoclingPages({
       contentHash,
       pages,
       force,
+      provider,
     });
     return NextResponse.json({
       contentHash: result.contentHash,
@@ -125,6 +131,8 @@ export async function POST(request: Request, context: RouteContext) {
       pageCount: result.pageCount,
       cached: result.cached,
       sidecarUrl: result.sidecarUrl,
+      provider: result.provider,
+      costUsd: result.costUsd,
     });
   } catch (error) {
     console.error("[analysis:extraction:docling:post]", error);

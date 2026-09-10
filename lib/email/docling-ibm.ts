@@ -6,6 +6,7 @@
 import { readFile } from "fs/promises";
 
 import { ibmDoclingCostUsd } from "@/lib/email/docling-provider";
+import { extractPdfPages } from "@/lib/pdf/extract-pages";
 
 function collapsePageRanges(pages: number[]): Array<[number, number]> {
   const unique = [...new Set(pages)].sort((a, b) => a - b);
@@ -33,7 +34,7 @@ export const IBM_TARGET_TYPE = "presigned_url";
 const ARTIFACT_DOWNLOAD_TIMEOUT_MS = 60_000;
 const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
 /** Hosted IBM often returns 0-byte markdown S3 objects; JSON carries md_content. */
-const ARTIFACT_TYPE_PREFERENCE = ["json", "markdown", "md", "text"] as const;
+const ARTIFACT_TYPE_PREFERENCE = ["markdown", "md", "json", "text"] as const;
 
 const POLL_MS = 2_000;
 const MAX_WAIT_MS = 10 * 60 * 1000;
@@ -388,6 +389,18 @@ function rethrowIfIbmConnectivity(
  * FastAPI `page_range: tuple[int, int]` must be two integer form fields.
  * A JSON array string (`"[1,20]"`) is parsed as one string → 422.
  */
+/** Filename for a page-sliced upload (matches manual Postman tests like `doc-p1.pdf`). */
+export function ibmScopedUploadFilename(
+  filename: string,
+  pageStart: number,
+  pageEnd: number,
+): string {
+  const base = filename.trim() || "document.pdf";
+  const stem = base.replace(/\.pdf$/i, "") || "document";
+  if (pageStart === pageEnd) return `${stem}-p${pageStart}.pdf`;
+  return `${stem}-p${pageStart}-p${pageEnd}.pdf`;
+}
+
 export function appendIbmConvertOptions(
   form: FormData,
   pageStart: number,
@@ -588,6 +601,15 @@ export function markdownFromIbmArtifactBytes(
   return text;
 }
 
+function isPresignedS3ArtifactUri(uri: string): boolean {
+  try {
+    const host = new URL(uri).hostname.toLowerCase();
+    return host.includes("amazonaws.com") || host.endsWith(".s3.amazonaws.com");
+  } catch {
+    return false;
+  }
+}
+
 async function downloadIbmArtifactMarkdown(
   artifact: IbmArtifactRef,
   apiKey?: string,
@@ -595,22 +617,25 @@ async function downloadIbmArtifactMarkdown(
   if (!/^https:\/\//i.test(artifact.uri)) {
     throw new Error("IBM Docling artifact URI is not https.");
   }
-  const headerSets: Array<Record<string, string> | undefined> = [
-    undefined,
-    apiKey ? { "X-Api-Key": apiKey } : undefined,
-  ];
+  const presigned = isPresignedS3ArtifactUri(artifact.uri);
+  const headerSets: Array<Record<string, string> | undefined> = presigned
+    ? [undefined]
+    : [undefined, apiKey ? { "X-Api-Key": apiKey } : undefined];
   let lastBytes = 0;
+  let lastStatus = 0;
   for (const headers of headerSets) {
     let response: Response;
     try {
       response = await fetch(artifact.uri, {
         method: "GET",
         headers,
+        redirect: "follow",
         signal: AbortSignal.timeout(ARTIFACT_DOWNLOAD_TIMEOUT_MS),
       });
     } catch (error) {
       rethrowIfIbmConnectivity(error, "downloading the result artifact");
     }
+    lastStatus = response.status;
     if (!response.ok) {
       continue;
     }
@@ -629,6 +654,7 @@ async function downloadIbmArtifactMarkdown(
   if (lastBytes === 0) {
     console.warn("[ibm-docling] artifact download returned 0 bytes", {
       artifactType: artifact.artifactType,
+      httpStatus: lastStatus,
       uri: artifact.uri.slice(0, 120),
     });
   }
@@ -875,13 +901,24 @@ async function submitConvertFile(options: {
   pageStart: number;
   pageEnd: number;
 }): Promise<string> {
+  const pageNos: number[] = [];
+  for (let page = options.pageStart; page <= options.pageEnd; page += 1) {
+    pageNos.push(page);
+  }
+  const sliced = Buffer.from(await extractPdfPages(options.pdfBytes, pageNos));
+  const uploadName = ibmScopedUploadFilename(
+    options.filename,
+    options.pageStart,
+    options.pageEnd,
+  );
+
   const form = new FormData();
   form.append(
     "files",
-    new Blob([new Uint8Array(options.pdfBytes)], { type: "application/pdf" }),
-    options.filename,
+    new Blob([new Uint8Array(sliced)], { type: "application/pdf" }),
+    uploadName,
   );
-  appendIbmConvertOptions(form, options.pageStart, options.pageEnd);
+  // Hosted IBM: upload a page-sliced PDF with defaults (same as Postman `files=@…` only).
 
   let response: Response;
   try {

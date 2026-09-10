@@ -245,8 +245,8 @@ describe("selectIbmMarkdownArtifact", () => {
       },
     });
     assert.deepEqual(selected, {
-      artifactType: "json",
-      uri: "https://download.example.org/a.json",
+      artifactType: "markdown",
+      uri: "https://download.example.org/a.md",
     });
   });
 
@@ -393,8 +393,8 @@ describe("isFatalIbmDoclingError", () => {
     };
     assert.equal(shouldRotateOnEmptyIbmResult(data), false);
     assert.deepEqual(listIbmMarkdownArtifacts(data).map((a) => a.artifactType), [
-      "json",
       "markdown",
+      "json",
     ]);
   });
 

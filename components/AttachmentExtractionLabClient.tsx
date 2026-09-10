@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DoclingBackfillButton } from "@/components/DoclingBackfillButton";
 import { FileCardBackfillButton } from "@/components/FileCardBackfillModal";
@@ -68,7 +68,7 @@ function extractDoclingPageFromMarkdown(
 }
 
 /** Keep in sync with EXTRACTION_PROCESS_MAX_HASHES in attachment-extraction-lab. */
-const EXTRACTION_PROCESS_MAX_HASHES = 20;
+const EXTRACTION_PROCESS_MAX_HASHES = 50;
 
 const FILTERS: { id: ExtractionListFilter; label: string }[] = [
   { id: "needs_work", label: "Needs work" },
@@ -101,7 +101,7 @@ function shortHash(hash: string): string {
 function pathLabel(path: ExtractionDocSummary["path"]): string {
   switch (path) {
     case "text":
-      return "Text (CF)";
+      return "Text (Docling)";
     case "vision":
       return "Vision";
     case "mixed":
@@ -378,6 +378,19 @@ export function AttachmentExtractionLabClient() {
     [documents, selected],
   );
 
+  const someVisibleSelected = useMemo(
+    () => documents.some((doc) => selected.has(doc.contentHash)),
+    [documents, selected],
+  );
+
+  const selectPageCheckboxRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const input = selectPageCheckboxRef.current;
+    if (!input) return;
+    input.indeterminate = someVisibleSelected && !allVisibleSelected;
+  }, [someVisibleSelected, allVisibleSelected]);
+
   function toggleHash(hash: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -587,7 +600,7 @@ export function AttachmentExtractionLabClient() {
     if (
       !window.confirm(
         `Process ${hashes.length} selected file${hashes.length === 1 ? "" : "s"}?\n` +
-          `Markdown (Cloudflare) runs when needed; Gemini vision only for routed pages/images.`,
+          `Docling runs on text-route PDF pages when needed; Gemini vision on routed vision/image pages.`,
       )
     ) {
       return;
@@ -610,10 +623,15 @@ export function AttachmentExtractionLabClient() {
       if (result) {
         const errs = result.files.filter((f) => f.error).length;
         setMessage(
-          `Processed ${result.processed}: markdown ${result.markdownRan}, vision ${result.visionRan}` +
+          `Processed ${result.processed}: docling ${result.doclingRan}, vision ${result.visionRan}` +
+            (result.doclingCostUsd > 0
+              ? ` · ${formatCostUsd(result.doclingCostUsd)} docling`
+              : "") +
             (result.visionCostUsd > 0
               ? ` · ${formatCostUsd(result.visionCostUsd)} vision`
-              : " · $0 vision") +
+              : result.doclingCostUsd > 0
+                ? ""
+                : " · $0 vision") +
             (errs > 0 ? ` · ${errs} error${errs === 1 ? "" : "s"}` : ""),
         );
       }
@@ -740,7 +758,10 @@ export function AttachmentExtractionLabClient() {
                   {f.filename || shortHash(f.contentHash)}
                 </span>
                 {" — "}
-                {f.markdownRan ? "markdown" : "no markdown"}
+                {f.doclingRan ? "docling" : "no docling"}
+                {f.doclingCostUsd > 0
+                  ? ` · ${formatCostUsd(f.doclingCostUsd)}`
+                  : ""}
                 {f.vision
                   ? ` · vision ${f.vision.done}d/${f.vision.failed}f`
                   : " · no vision"}
@@ -925,6 +946,7 @@ export function AttachmentExtractionLabClient() {
         <ul className="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto">
           <li className="flex items-center gap-3 bg-slate-50/80 px-3 py-2 text-xs text-slate-500">
             <input
+              ref={selectPageCheckboxRef}
               type="checkbox"
               checked={allVisibleSelected}
               onChange={toggleAllVisible}

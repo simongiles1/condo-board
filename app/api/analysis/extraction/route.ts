@@ -104,7 +104,9 @@ export async function POST(request: Request) {
     const message =
       error instanceof Error ? error.message : "Could not process extractions.";
     const missingConfig =
-      message.includes("CLOUDFLARE_") || message.includes("GEMINI_");
+      message.includes("DOCLING_IBM_") ||
+      message.includes("Docling sidecar") ||
+      message.includes("GEMINI_");
     return NextResponse.json(
       { error: message },
       { status: missingConfig ? 503 : 500 },

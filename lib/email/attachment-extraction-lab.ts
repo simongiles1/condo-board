@@ -2,15 +2,14 @@
  * Query + process helpers for the attachment extraction lab UI.
  *
  * Goal: drive every unique attachment_documents row to `parsed` via
- * Cloudflare toMarkdown (text) and/or Gemini page vision — with explicit
+ * Docling (text-route pages) and/or Gemini page vision — with explicit
  * select-N processing (no process-everything control).
  */
 
 import { sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
-import { parseAttachmentDocument } from "@/lib/email/attachment-markdown";
-import { isConvertibleMime } from "@/lib/email/attachment-markdown-shared";
+import { processLabDocumentWithDocling } from "@/lib/email/extraction-lab-docling-process";
 import { isVisionImageExt } from "@/lib/email/attachment-vision-image-shared";
 import {
   processVisionForDocument,
@@ -80,7 +79,8 @@ export type ExtractionProcessFileResult = {
   path: ExtractionPath;
   parseStatusBefore: string | null;
   parseStatusAfter: string | null;
-  markdownRan: boolean;
+  doclingRan: boolean;
+  doclingCostUsd: number;
   vision: PageVisionBatchResult | null;
   visionCostUsd: number;
   error: string | null;
@@ -88,7 +88,8 @@ export type ExtractionProcessFileResult = {
 
 export type ExtractionProcessResult = {
   processed: number;
-  markdownRan: number;
+  doclingRan: number;
+  doclingCostUsd: number;
   visionRan: number;
   visionCostUsd: number;
   files: ExtractionProcessFileResult[];
@@ -115,8 +116,8 @@ export const EXTRACTION_LIST_SORTS: ExtractionListSort[] = [
   "pages_desc",
 ];
 
-/** Hard cap so the UI cannot accidentally dump the full queue. */
-export const EXTRACTION_PROCESS_MAX_HASHES = 20;
+/** Hard cap per run — keep in sync with Extraction lab page size (50). */
+export const EXTRACTION_PROCESS_MAX_HASHES = 50;
 
 export function isExtractionListFilter(
   value: string,
@@ -643,20 +644,8 @@ export async function listExtractionDocuments(options?: {
   return { documents, total, totalVisionPages };
 }
 
-function shouldRunMarkdown(input: {
-  parseStatus: string;
-  mimeType: string;
-}): boolean {
-  if (!isConvertibleMime(input.mimeType)) return false;
-  return (
-    input.parseStatus === "pending" ||
-    input.parseStatus === "failed" ||
-    input.parseStatus === "parsing"
-  );
-}
-
 /**
- * Process an explicit set of content hashes (markdown then vision as needed).
+ * Process an explicit set of content hashes (Docling then vision as needed).
  * Caps at EXTRACTION_PROCESS_MAX_HASHES.
  */
 export async function processSelectedExtractionsions(
@@ -672,7 +661,8 @@ export async function processSelectedExtractionsions(
 
   const db = getDb();
   const files: ExtractionProcessFileResult[] = [];
-  let markdownRan = 0;
+  let doclingRan = 0;
+  let doclingCostUsd = 0;
   let visionRan = 0;
   let visionCostUsd = 0;
 
@@ -705,7 +695,8 @@ export async function processSelectedExtractionsions(
         path: "unknown",
         parseStatusBefore: null,
         parseStatusAfter: null,
-        markdownRan: false,
+        doclingRan: false,
+        doclingCostUsd: 0,
         vision: null,
         visionCostUsd: 0,
         error: "Document not found in attachment_documents.",
@@ -716,40 +707,24 @@ export async function processSelectedExtractionsions(
     const kind = classifyExtractionKind(doc.mime_type, doc.ext);
     const parseStatusBefore = doc.parse_status;
     let parseStatusAfter: string | null = parseStatusBefore;
-    let ranMarkdown = false;
+    let ranDocling = false;
+    let fileDoclingCost = 0;
     let vision: PageVisionBatchResult | null = null;
     let fileError: string | null = null;
     let fileVisionCost = 0;
 
     try {
-      if (
-        shouldRunMarkdown({
-          parseStatus: parseStatusBefore,
-          mimeType: doc.mime_type,
-        })
-      ) {
-        parseStatusAfter = await parseAttachmentDocument(contentHash);
-        ranMarkdown = true;
-        markdownRan += 1;
-      }
+      const outcome = await processLabDocumentWithDocling(contentHash);
+      ranDocling = outcome.doclingRan;
+      fileDoclingCost = outcome.doclingCostUsd;
+      if (outcome.doclingRan) doclingRan += 1;
+      doclingCostUsd += outcome.doclingCostUsd;
+      vision = outcome.vision;
+      fileVisionCost = outcome.visionCostUsd;
+      if (outcome.vision) visionRan += 1;
+      visionCostUsd += outcome.visionCostUsd;
 
-      const pendingPages = await db.execute<{ n: number }>(sql`
-        select count(*)::int as n
-        from attachment_document_pages
-        where content_hash = ${contentHash}
-          and vision_status in ('pending', 'failed')
-      `);
-      const pendingN = Number(pendingPages.rows?.[0]?.n ?? 0);
-
-      // Images + scanned PDFs: only Gemini pages incur $; text-only PDFs stop after CF.
-      if (pendingN > 0) {
-        vision = await processVisionForDocument({ contentHash });
-        visionRan += 1;
-        fileVisionCost = vision.costUsd;
-        visionCostUsd += vision.costUsd;
-      }
-
-      // Re-read status after optional vision merge.
+      // Re-read status after Docling + vision + promotion.
       const [after] = await db.execute<{
         parse_status: string;
         parse_error: string | null;
@@ -785,7 +760,7 @@ export async function processSelectedExtractionsions(
             after.parse_error.trim() &&
             parseStatusAfter !== "parsed"))
       ) {
-        fileError = after?.parse_error?.trim() || "Markdown conversion failed.";
+        fileError = after?.parse_error?.trim() || "Extraction failed.";
       }
 
       files.push({
@@ -800,7 +775,8 @@ export async function processSelectedExtractionsions(
         }),
         parseStatusBefore,
         parseStatusAfter,
-        markdownRan: ranMarkdown,
+        doclingRan: ranDocling,
+        doclingCostUsd: fileDoclingCost,
         vision,
         visionCostUsd: fileVisionCost,
         error: fileError,
@@ -815,7 +791,8 @@ export async function processSelectedExtractionsions(
         path: kind === "image" ? "vision" : "unknown",
         parseStatusBefore,
         parseStatusAfter,
-        markdownRan: ranMarkdown,
+        doclingRan: ranDocling,
+        doclingCostUsd: fileDoclingCost,
         vision,
         visionCostUsd: fileVisionCost,
         error: fileError,
@@ -825,7 +802,8 @@ export async function processSelectedExtractionsions(
 
   return {
     processed: files.length,
-    markdownRan,
+    doclingRan,
+    doclingCostUsd,
     visionRan,
     visionCostUsd,
     files,

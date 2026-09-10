@@ -10,6 +10,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **File card qualify list pagination** — The Qualify cards tab in the Attachment File Cards modal now loads 10 cards per page with Previous/Next controls and a total count, instead of one long scroll of up to 100 cards.
 
+### Changed
+
+- **Extraction lab Process selected uses Docling** — Batch processing now runs IBM/sidecar Docling on text-route pages, Gemini vision on routed pages, and promotion to `parsed` (same stack as Docling backfill), instead of Cloudflare toMarkdown. Per-run selection limit raised to 50 to match the list page size; the Select page checkbox shows an indeterminate state when only some rows are selected.
+
 ### Added
 
 - **File card modal corpus status** — The Attachment File Cards modal header shows how many file cards are complete versus parsed attachments, plus a hover guide for attachments still in pending parse status (with steps via the Extraction lab before running Pending corpus).

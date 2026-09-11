@@ -15,8 +15,10 @@ import {
 } from "@/lib/email/docling-provider";
 import {
   convertDoclingPages,
+  listTextRoutePageNos,
   listUncachedTextRoutePages,
 } from "@/lib/email/docling-lab";
+import type { PromoteParsedResult } from "@/lib/email/extraction-parse-promote";
 import { requeueFailedVisionPagesForHash } from "@/lib/email/extraction-backfill-plan";
 import { promoteParsedIfExtractionComplete } from "@/lib/email/extraction-parse-promote";
 import {
@@ -38,8 +40,12 @@ function chunkPages(pages: number[], size: number): number[][] {
 export type LabDoclingProcessOutcome = {
   doclingRan: boolean;
   doclingCostUsd: number;
+  /** Text-route pages that lacked Docling cache before this run. */
+  doclingUncachedBefore: number;
+  textRoutePageCount: number;
   vision: PageVisionBatchResult | null;
   visionCostUsd: number;
+  promote: PromoteParsedResult;
 };
 
 /** Drop legacy Cloudflare parse failures when page-profile extraction takes over. */
@@ -82,7 +88,9 @@ export async function processLabDocumentWithDocling(
 ): Promise<LabDoclingProcessOutcome> {
   await clearLegacyCloudflareParseFailure(contentHash);
 
+  const textRoutePageCount = (await listTextRoutePageNos(contentHash)).length;
   const uncached = await listUncachedTextRoutePages(contentHash);
+  const doclingUncachedBefore = uncached.length;
   let doclingRan = false;
   let doclingCostUsd = 0;
 
@@ -118,12 +126,15 @@ export async function processLabDocumentWithDocling(
     visionCostUsd = vision.costUsd;
   }
 
-  await promoteParsedIfExtractionComplete(contentHash);
+  const promote = await promoteParsedIfExtractionComplete(contentHash);
 
   return {
     doclingRan,
     doclingCostUsd,
+    doclingUncachedBefore,
+    textRoutePageCount,
     vision,
     visionCostUsd,
+    promote,
   };
 }

@@ -12,7 +12,11 @@ import { getDb } from "@/lib/db";
 import { processLabDocumentWithDocling } from "@/lib/email/extraction-lab-docling-process";
 import { isVisionImageExt } from "@/lib/email/attachment-vision-image-shared";
 import {
-  processVisionForDocument,
+  formatVisionErrorSummary,
+  listVisionErrorsForHashes,
+} from "@/lib/email/extraction-backfill-plan";
+import type { PromoteParsedReason } from "@/lib/email/extraction-parse-promote";
+import {
   reclaimStaleProcessingVisionPages,
   type PageVisionBatchResult,
 } from "@/lib/email/page-vision";
@@ -84,8 +88,80 @@ export type ExtractionProcessFileResult = {
   doclingCostUsd: number;
   vision: PageVisionBatchResult | null;
   visionCostUsd: number;
+  /** Plain-language outcome for the extraction lab “Last run” panel. */
+  summary: string;
   error: string | null;
 };
+
+const PROMOTE_REASON_LABEL: Record<PromoteParsedReason, string> = {
+  promoted: "Marked parsed after Docling/vision completed.",
+  already_parsed: "Already parsed.",
+  not_found: "Document row missing.",
+  vision_incomplete:
+    "Still has open or failed vision pages — cannot mark parsed yet.",
+  uncached_text: "Docling has not cached all text-route pages yet.",
+  empty_markdown: "No usable markdown after Docling/vision merge.",
+};
+
+export function summarizeExtractionProcessFile(input: {
+  parseStatusBefore: string | null;
+  parseStatusAfter: string | null;
+  doclingRan: boolean;
+  doclingUncachedBefore: number;
+  textRoutePageCount: number;
+  vision: PageVisionBatchResult | null;
+  promoteReason: PromoteParsedReason;
+  visionErrorLine: string | null;
+}): string {
+  const parts: string[] = [];
+
+  if (input.doclingRan) {
+    parts.push("Docling converted uncached text-route pages.");
+  } else if (input.textRoutePageCount === 0) {
+    parts.push("No text-route pages (vision-only or not profiled for Docling).");
+  } else if (input.doclingUncachedBefore === 0) {
+    parts.push(
+      `Docling skipped — all ${input.textRoutePageCount} text page(s) already cached.`,
+    );
+  } else {
+    parts.push("Docling did not run (unexpected — retry or check logs).");
+  }
+
+  if (input.vision) {
+    const { done, failed, processed, skipped, billingHalt } = input.vision;
+    const pendingish = Math.max(0, processed - done - failed - skipped);
+    let visionLine = `Vision: ${done} page(s) OK`;
+    if (failed > 0) visionLine += `, ${failed} failed`;
+    if (skipped > 0) visionLine += `, ${skipped} skipped`;
+    if (pendingish > 0) visionLine += `, ${pendingish} other`;
+    parts.push(visionLine);
+    if (billingHalt) {
+      parts.push(`Vision halted: ${billingHalt.error}`);
+    }
+  } else {
+    parts.push("Vision: no pending or failed pages to process.");
+  }
+
+  if (input.visionErrorLine) {
+    parts.push(input.visionErrorLine);
+  }
+
+  const before = input.parseStatusBefore ?? "unknown";
+  const after = input.parseStatusAfter ?? "unknown";
+  if (after === "parsed" && before !== "parsed") {
+    parts.push(`Parse status: ${before} → parsed.`);
+  } else if (after === "parsed") {
+    parts.push("Parse status: parsed.");
+  } else if (before === after) {
+    parts.push(
+      `Parse status unchanged (${after}). ${PROMOTE_REASON_LABEL[input.promoteReason]}`,
+    );
+  } else {
+    parts.push(`Parse status: ${before} → ${after}.`);
+  }
+
+  return parts.join(" ");
+}
 
 export type ExtractionProcessResult = {
   processed: number;
@@ -702,6 +778,7 @@ export async function processSelectedExtractionsions(
         doclingCostUsd: 0,
         vision: null,
         visionCostUsd: 0,
+        summary: "Document not found in attachment_documents.",
         error: "Document not found in attachment_documents.",
       });
       continue;
@@ -756,6 +833,20 @@ export async function processSelectedExtractionsions(
       `).then((r) => r.rows ?? []);
 
       parseStatusAfter = after?.parse_status ?? parseStatusAfter;
+
+      const visionErrors = await listVisionErrorsForHashes([contentHash]);
+      const visionErrorLine = formatVisionErrorSummary(
+        visionErrors.filter((e) => e.status === "failed"),
+      );
+
+      if (
+        !fileError &&
+        parseStatusAfter !== "parsed" &&
+        (vision?.failed ?? 0) > 0 &&
+        visionErrorLine
+      ) {
+        fileError = visionErrorLine;
+      }
       if (
         !fileError &&
         (parseStatusAfter === "failed" ||
@@ -765,6 +856,17 @@ export async function processSelectedExtractionsions(
       ) {
         fileError = after?.parse_error?.trim() || "Extraction failed.";
       }
+
+      const summary = summarizeExtractionProcessFile({
+        parseStatusBefore,
+        parseStatusAfter,
+        doclingRan: ranDocling,
+        doclingUncachedBefore: outcome.doclingUncachedBefore,
+        textRoutePageCount: outcome.textRoutePageCount,
+        vision,
+        promoteReason: outcome.promote.reason,
+        visionErrorLine,
+      });
 
       files.push({
         contentHash,
@@ -782,6 +884,7 @@ export async function processSelectedExtractionsions(
         doclingCostUsd: fileDoclingCost,
         vision,
         visionCostUsd: fileVisionCost,
+        summary,
         error: fileError,
       });
     } catch (error) {
@@ -798,6 +901,7 @@ export async function processSelectedExtractionsions(
         doclingCostUsd: fileDoclingCost,
         vision,
         visionCostUsd: fileVisionCost,
+        summary: fileError,
         error: fileError,
       });
     }

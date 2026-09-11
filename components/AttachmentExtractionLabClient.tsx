@@ -819,12 +819,12 @@ export function AttachmentExtractionLabClient() {
       ) : null}
 
       {lastRunErrors.length > 0 ? (
-        <div className="shrink-0 max-h-36 overflow-y-auto rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+        <div className="shrink-0 max-h-48 overflow-y-auto rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
           <p className="font-medium">
             {lastRunErrors.length} error
             {lastRunErrors.length === 1 ? "" : "s"} in last run
           </p>
-          <ul className="mt-1 space-y-1.5 text-xs">
+          <ul className="mt-1 space-y-2 text-xs">
             {lastRunErrors.map((f) => (
               <li key={f.contentHash}>
                 <span className="font-semibold text-red-950">
@@ -834,42 +834,40 @@ export function AttachmentExtractionLabClient() {
                   {" "}
                   ({shortHash(f.contentHash)})
                 </span>
-                <div className="mt-0.5 break-words font-mono text-[11px] text-red-700">
-                  {f.error}
-                </div>
+                {f.summary ? (
+                  <p className="mt-0.5 text-red-900">{f.summary}</p>
+                ) : null}
+                {f.error && f.error !== f.summary ? (
+                  <div className="mt-0.5 break-words font-mono text-[11px] text-red-700">
+                    {f.error}
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>
         </div>
       ) : null}
 
-      {lastRun && lastRun.files.length > 0 && lastRunErrors.length === 0 ? (
-        <details className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-sm">
+      {lastRun && lastRun.files.length > 0 ? (
+        <details
+          className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-sm"
+          open={lastRunErrors.length === 0}
+        >
           <summary className="cursor-pointer font-medium text-slate-800">
-            Last run ({lastRun.files.length} files ·{" "}
+            Last run ({lastRun.files.length} file
+            {lastRun.files.length === 1 ? "" : "s"} ·{" "}
             {formatCostUsd(lastRun.visionCostUsd)} vision)
           </summary>
-          <ul className="mt-2 max-h-28 space-y-1 overflow-y-auto text-slate-600">
+          <ul className="mt-2 max-h-40 space-y-2 overflow-y-auto text-slate-600">
             {lastRun.files.map((f) => (
               <li key={f.contentHash}>
-                <span className="font-medium text-slate-800">
+                <p className="font-medium text-slate-800">
                   {f.filename || shortHash(f.contentHash)}
-                </span>
-                {" — "}
-                {f.doclingRan ? "docling" : "no docling"}
-                {f.doclingCostUsd > 0
-                  ? ` · ${formatCostUsd(f.doclingCostUsd)}`
-                  : ""}
-                {f.vision
-                  ? ` · vision ${f.vision.done}d/${f.vision.failed}f`
-                  : " · no vision"}
-                {f.visionCostUsd > 0
-                  ? ` · ${formatCostUsd(f.visionCostUsd)}`
-                  : ""}
-                <span>
-                  {" "}
-                  · {f.parseStatusBefore} → {f.parseStatusAfter}
-                </span>
+                </p>
+                <p className="mt-0.5 leading-snug">
+                  {f.summary ||
+                    `${f.parseStatusBefore ?? "?"} → ${f.parseStatusAfter ?? "?"}`}
+                </p>
               </li>
             ))}
           </ul>

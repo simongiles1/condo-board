@@ -714,6 +714,29 @@ async function runStageE4(runId: string): Promise<void> {
   await completeRun(runId);
 }
 
+async function runIngestPipelineWork(runId: string): Promise<void> {
+  if (pipelineBusy) {
+    console.warn("[ingest] pipeline already busy; skipping work for", runId);
+    return;
+  }
+  pipelineBusy = true;
+  try {
+    await runCurrentStage(runId);
+  } catch (error) {
+    console.error("[ingest] pipeline work failed", runId, error);
+    await completeRun(
+      runId,
+      error instanceof Error ? error.message : String(error),
+    );
+  } finally {
+    pipelineBusy = false;
+  }
+}
+
+function scheduleIngestPipelineWork(runId: string): void {
+  void runIngestPipelineWork(runId);
+}
+
 async function runCurrentStage(runId: string): Promise<void> {
   const run = await getIngestRun(runId);
   if (!run) return;
@@ -756,6 +779,7 @@ async function runCurrentStage(runId: string): Promise<void> {
 
 export async function startIngestPipeline(
   trigger: SyncTrigger,
+  options?: { runInBackground?: boolean },
 ): Promise<IngestRunRecord> {
   const active = await getActiveIngestRun();
   if (active) {
@@ -797,14 +821,14 @@ export async function startIngestPipeline(
     finishedAt: null,
   });
 
-  try {
-    await runCurrentStage(id);
-  } finally {
-    pipelineBusy = false;
+  if (options?.runInBackground === false) {
+    await runIngestPipelineWork(id);
+  } else {
+    scheduleIngestPipelineWork(id);
   }
-  const finished = await getIngestRun(id);
-  if (!finished) throw new Error("Ingest run was created but could not be loaded.");
-  return finished;
+  const created = await getIngestRun(id);
+  if (!created) throw new Error("Ingest run was created but could not be loaded.");
+  return created;
 }
 
 export async function continueIngestRun(runId: string): Promise<IngestRunRecord> {
@@ -816,13 +840,8 @@ export async function continueIngestRun(runId: string): Promise<IngestRunRecord>
   if (pipelineBusy) {
     throw new Error("Pipeline is busy.");
   }
-  pipelineBusy = true;
-  try {
-    await patchRun(runId, { status: "running", waitKind: null });
-    await runCurrentStage(runId);
-  } finally {
-    pipelineBusy = false;
-  }
+  await patchRun(runId, { status: "running", waitKind: null });
+  scheduleIngestPipelineWork(runId);
   return (await getIngestRun(runId))!;
 }
 

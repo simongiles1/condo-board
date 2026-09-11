@@ -12,10 +12,14 @@ import {
   shouldRemindAllowlistTimeout,
 } from "../lib/email/ingest-candidates";
 import { shouldSendOauthRelinkRemind } from "../lib/email/ingest-oauth-remind";
-import { nextIngestStage } from "../lib/email/ingest-stages";
+import {
+  ingestStageMeterSegments,
+  nextIngestStage,
+} from "../lib/email/ingest-stages";
 import {
   appendCatchupAfterToQuery,
   gmailAfterDateInclusive,
+  resolveCatchupSinceIso,
 } from "../lib/gmail/queries";
 import {
   parseTelegramCallbackData,
@@ -28,6 +32,26 @@ describe("gmail catch-up query", () => {
     const q = appendCatchupAfterToQuery("(from:a@x.com)", "2026-08-23T15:00:00.000Z");
     assert.match(q, /after:2026\/08\/22/);
     assert.doesNotMatch(q, /newer_than:2d/);
+  });
+
+  it("fills a mailbox hole instead of using a reconnect lastSyncAt of now", () => {
+    const since = resolveCatchupSinceIso({
+      lastSyncAt: "2026-09-11T16:22:08.419Z",
+      lastCompletedSyncAt: "2026-09-11T16:22:08.506Z",
+      newestReceivedAt: "2026-09-10T19:38:44.000Z",
+      previousReceivedAt: "2026-08-21T19:00:22.227Z",
+    });
+    assert.equal(since, "2026-08-21T19:00:22.227Z");
+  });
+
+  it("does not use an in-progress sync as the catch-up origin", () => {
+    const since = resolveCatchupSinceIso({
+      lastSyncAt: null,
+      lastCompletedSyncAt: "2026-08-23T19:00:05.971Z",
+      newestReceivedAt: "2026-08-21T18:00:00.000Z",
+      previousReceivedAt: "2026-08-21T12:00:00.000Z",
+    });
+    assert.equal(since, "2026-08-23T19:00:05.971Z");
   });
 });
 
@@ -134,6 +158,22 @@ describe("ingest stages", () => {
     assert.equal(
       nextIngestStage("e3_embed", { harvestEnabled: true }),
       "e4_harvest",
+    );
+  });
+
+  it("marks prior stages done and the current stage active on the meter", () => {
+    const segments = ingestStageMeterSegments({
+      stage: "e1_docling",
+      status: "waiting_continue",
+    });
+    assert.equal(segments.filter((s) => s.state === "done").length, 4);
+    assert.equal(
+      segments.find((s) => s.stage === "e1_docling")?.state,
+      "active",
+    );
+    assert.equal(
+      segments.find((s) => s.stage === "e2_file_cards")?.state,
+      "pending",
     );
   });
 });

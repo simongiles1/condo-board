@@ -104,7 +104,7 @@ export function formatHarvestAfterSyncMessage(
 export async function runIngestThenHarvest(
   trigger: SyncTrigger,
 ): Promise<IngestThenHarvestResult> {
-  const run = await startIngestPipeline(trigger);
+  const run = await startIngestPipeline(trigger, { runInBackground: false });
   const sync: SyncResult = {
     syncRunId: run.id,
     messagesAdded:

@@ -79,7 +79,6 @@ export async function GET(req: Request) {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
       expiryDate: tokens.expiry_date,
-      historyId: profile.data.historyId ?? null,
     });
 
     settingsUrl.searchParams.set("connected", parsedState.accountType);

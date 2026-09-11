@@ -220,6 +220,7 @@ export function EmailSettingsClient(props: {
     useState(24);
   const [ingestRun, setIngestRun] = useState<IngestRunPublic | null>(null);
   const [ingestModalOpen, setIngestModalOpen] = useState(false);
+  const [ingestModalBooting, setIngestModalBooting] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [purgeTarget, setPurgeTarget] = useState<AllowlistCandidate | null>(
@@ -402,22 +403,31 @@ export function EmailSettingsClient(props: {
   }, [loadData]);
 
   useEffect(() => {
-    if (!ingestModalOpen || !ingestRun) return;
+    if (!ingestModalOpen) return;
+    const poll = () => {
+      const url = ingestRun
+        ? `/api/email/ingest/${ingestRun.id}`
+        : "/api/email/ingest";
+      void fetch(url)
+        .then((response) => response.json())
+        .then((body: { run?: IngestRunPublic | null }) => {
+          if (body.run) {
+            setIngestRun(body.run);
+            setIngestModalBooting(false);
+          }
+        })
+        .catch(() => undefined);
+    };
     if (
+      ingestRun &&
       ingestRun.status !== "running" &&
       ingestRun.status !== "waiting_allowlist" &&
       ingestRun.status !== "waiting_continue"
     ) {
       return;
     }
-    const timer = window.setInterval(() => {
-      void fetch(`/api/email/ingest/${ingestRun.id}`)
-        .then((response) => response.json())
-        .then((body: { run?: IngestRunPublic }) => {
-          if (body.run) setIngestRun(body.run);
-        })
-        .catch(() => undefined);
-    }, 2500);
+    poll();
+    const timer = window.setInterval(poll, 1500);
     return () => window.clearInterval(timer);
   }, [ingestModalOpen, ingestRun]);
 
@@ -803,8 +813,10 @@ export function EmailSettingsClient(props: {
   }
 
   async function runSync() {
-    setBusyAction("sync");
     setErrorMessage(null);
+    setIngestModalOpen(true);
+    setIngestModalBooting(true);
+    setIngestRun(null);
 
     try {
       const response = await fetch("/api/email/ingest", { method: "POST" });
@@ -815,19 +827,19 @@ export function EmailSettingsClient(props: {
       if (!response.ok) throw new Error(result.error ?? "Sync failed.");
       if (result.run) {
         setIngestRun(result.run);
-        setIngestModalOpen(true);
+        setIngestModalBooting(false);
         setStatusMessage(
           result.run.status === "completed"
             ? `Ingest complete: ${result.run.newEmailIds.length} new emails.`
             : "Ingest pipeline started. Confirm each stage in the dialog (and Telegram).",
         );
       }
-      await loadData({ silent: true });
+      void loadData({ silent: true });
       setPreviewRefreshNonce((current) => current + 1);
     } catch (error) {
+      setIngestModalOpen(false);
+      setIngestModalBooting(false);
       setErrorMessage(error instanceof Error ? error.message : "Sync failed.");
-    } finally {
-      setBusyAction(null);
     }
   }
 
@@ -1860,11 +1872,15 @@ export function EmailSettingsClient(props: {
         </div>
       ) : null}
 
-      {ingestModalOpen && ingestRun ? (
+      {ingestModalOpen ? (
         <EmailIngestPipelineModal
           run={ingestRun}
+          booting={ingestModalBooting}
           busy={busyAction === "ingest-step"}
-          onClose={() => setIngestModalOpen(false)}
+          onClose={() => {
+            setIngestModalOpen(false);
+            setIngestModalBooting(false);
+          }}
           onContinue={() => {
             void (async () => {
               setBusyAction("ingest-step");

@@ -71,7 +71,6 @@ export async function upsertGmailConnection(input: {
   accessToken: string;
   refreshToken: string;
   expiryDate?: number | null;
-  historyId?: string | null;
 }) {
   const db = getDb();
   const now = new Date().toISOString();
@@ -88,7 +87,9 @@ export async function upsertGmailConnection(input: {
       : null,
     connectedAt: now,
     lastSyncAt: null,
-    lastHistoryId: input.historyId ?? null,
+    // Do not stamp the live mailbox cursor on connect. That would make the
+    // next history.list start at "now" and skip mail arrived while disconnected.
+    lastHistoryId: null,
   };
 
   await db

@@ -72,6 +72,37 @@ export function appendCatchupAfterToQuery(query: string, sinceIso: string): stri
   return `${query} after:${gmailAfterDateInclusive(sinceIso)}`;
 }
 
+/** Gmail history is only retained ~7 days; a longer hole in stored mail is a missed catch-up. */
+export const CATCHUP_RECEIVED_GAP_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Pick the Gmail catch-up `after:` origin. Uses the oldest trustworthy stamp so a
+ * reconnect that stamps lastSyncAt/history to "now" cannot hide a mailbox hole.
+ */
+export function resolveCatchupSinceIso(input: {
+  lastSyncAt: string | null;
+  lastCompletedSyncAt: string | null;
+  newestReceivedAt: string | null;
+  previousReceivedAt: string | null;
+}): string | null {
+  const stamps: string[] = [];
+  if (input.lastCompletedSyncAt) stamps.push(input.lastCompletedSyncAt);
+  if (input.lastSyncAt) stamps.push(input.lastSyncAt);
+
+  if (input.newestReceivedAt && input.previousReceivedAt) {
+    const newest = new Date(input.newestReceivedAt).getTime();
+    const previous = new Date(input.previousReceivedAt).getTime();
+    if (Number.isFinite(newest) && Number.isFinite(previous) && newest - previous > CATCHUP_RECEIVED_GAP_MS) {
+      stamps.push(input.previousReceivedAt);
+    }
+  }
+
+  if (stamps.length === 0) return null;
+  return stamps.reduce((oldest, stamp) =>
+    new Date(stamp).getTime() < new Date(oldest).getTime() ? stamp : oldest,
+  );
+}
+
 /** Gmail `before:` is exclusive; use the UTC day after cutoff so same-day mail is searched. */
 export function gmailBeforeDateExclusive(cutoffAt: string): string {
   const cutoff = new Date(cutoffAt);

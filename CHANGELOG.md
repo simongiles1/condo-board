@@ -6,6 +6,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gmail catch-up after reconnect** — Incremental sync no longer treats the in-progress run or a freshly connected Gmail history cursor as “last successful import.” Catch-up searches from the older of the last finished sync and any stored-mail gap longer than seven days, so a three-week disconnect is filled instead of importing only mail that arrived after reconnect.
+
+### Changed
+
+- **Email ingest pipeline dialog** — Sync now opens the pipeline modal immediately with an in-dialog loading state while Gmail catch-up runs in the background. A segmented progress bar at the top shows which pipeline stage is active (catch-up through harvest).
+
 ### Added
 
 - **Gated email ingest pipeline** — Sync now and the daily cron share one multi-step pipeline: catch up Gmail since last successful import (not a 2-day window), confirm new From/To/CC senders one at a time in Telegram and the Email Settings dialog (Approve / Deny / Back), import full history for approved senders, then Docling/vision, file cards, embeddings, and harvest. Stages pause for Continue during testing; allowlist review always waits. Denied addresses are stored on a blocklist so they are not asked again. A Testing-token relink reminder is sent 6 days after OAuth connect. Allowlist reminder hours and the stage-pause toggle live on Automatic sync.

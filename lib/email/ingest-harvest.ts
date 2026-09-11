@@ -17,6 +17,8 @@ import type { IngestRunRecord } from "@/lib/email/ingest-pipeline";
 import { getEmailSyncSettings } from "@/lib/email/settings";
 import { type SyncResult, type SyncTrigger } from "@/lib/gmail/sync";
 
+export { formatHarvestAfterSyncMessage } from "@/lib/email/ingest-stages";
+
 export const HARVEST_AFTER_SYNC_KINDS: BulkExtractKind[] = [
   "contacts",
   "organizations",
@@ -66,39 +68,6 @@ export function defaultHarvestModelId(kind: BulkExtractKind): string {
     case "todos":
       return DEFAULT_TODO_HIGHLIGHT_MODEL;
   }
-}
-
-export function formatHarvestAfterSyncMessage(
-  harvest: HarvestAfterSyncResult,
-): string | null {
-  if (harvest.status === "disabled") return null;
-  if (harvest.status === "skipped_busy") {
-    return "Harvest skipped: a bulk extract is already running.";
-  }
-
-  const ran = harvest.kinds.filter(
-    (row) => row.status === "completed" && row.totalEmails > 0,
-  );
-  const failed = harvest.kinds.filter((row) => row.status === "failed");
-  const skippedBusy = harvest.kinds.filter(
-    (row) => row.status === "skipped_busy",
-  );
-
-  if (failed.length > 0) {
-    const names = failed.map((row) => row.kind).join(", ");
-    return `Harvest finished with errors (${names}).`;
-  }
-  if (skippedBusy.length > 0 && ran.length === 0) {
-    return "Harvest skipped: a bulk extract is already running.";
-  }
-  if (ran.length === 0) {
-    return "No missing harvests.";
-  }
-  const parts = ran.map(
-    (row) =>
-      `${row.kind} ${row.completedEmails}/${row.totalEmails}`,
-  );
-  return `Harvested missing ${parts.join("; ")}.`;
 }
 
 export async function runIngestThenHarvest(

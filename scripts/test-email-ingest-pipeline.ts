@@ -13,6 +13,8 @@ import {
 } from "../lib/email/ingest-candidates";
 import { shouldSendOauthRelinkRemind } from "../lib/email/ingest-oauth-remind";
 import {
+  formatHarvestAfterSyncMessage,
+  ingestRunSummaryRows,
   ingestStageMeterSegments,
   nextIngestStage,
   shouldResumeIdleIngestRun,
@@ -193,6 +195,81 @@ describe("ingest stages", () => {
     assert.equal(
       segments.find((s) => s.stage === "e2_file_cards")?.state,
       "pending",
+    );
+  });
+});
+
+describe("ingest completion summary", () => {
+  it("rewrites 38/46 as eight emails still needing extraction", () => {
+    const message = formatHarvestAfterSyncMessage({
+      status: "ran",
+      kinds: [
+        {
+          kind: "contacts",
+          status: "completed",
+          completedEmails: 38,
+          totalEmails: 46,
+          failedThreads: 0,
+        },
+        {
+          kind: "organizations",
+          status: "skipped_empty",
+          completedEmails: 0,
+          totalEmails: 0,
+          failedThreads: 0,
+        },
+      ],
+    });
+    assert.match(message ?? "", /38 of 46 emails/);
+    assert.match(message ?? "", /remaining 8 emails were not harvested/);
+    assert.match(message ?? "", /not an expected skip/);
+    assert.match(message ?? "", /organizations had no emails missing harvests/);
+  });
+
+  it("builds a summary from stored counts and a legacy harvest note", () => {
+    const rows = ingestRunSummaryRows({
+      id: "run-1",
+      trigger: "manual",
+      status: "completed",
+      stage: "done",
+      waitKind: null,
+      lastSuccessfulSyncAt: null,
+      newEmailIds: Array.from({ length: 44 }, (_, i) => `e${i}`),
+      counts: {
+        messagesAdded: 12,
+        expandAdded: 32,
+        approvedSenders: 7,
+        attachmentsDownloaded: 4,
+        extractionHashes: 3,
+        fileCards: 3,
+        embedChunks: 80,
+        embedSlices: 4,
+        harvest: "ran",
+        stageNote: "Harvested missing contacts 38/46.",
+      },
+      cursorIndex: 0,
+      reminderSentAt: null,
+      lastError: null,
+      startedAt: "2026-09-11T12:00:00.000Z",
+      updatedAt: "2026-09-11T12:30:00.000Z",
+      finishedAt: "2026-09-11T12:30:00.000Z",
+      senders: [
+        {
+          id: "s1",
+          email: "a@x.com",
+          status: "approved",
+          sortIndex: 0,
+          estimatedThreadCount: 1,
+          estimatedEmailCount: 2,
+        },
+      ],
+    });
+    const harvest = rows.find((row) => row.label === "Harvest");
+    assert.equal(harvest?.tone, "warn");
+    assert.match(harvest?.detail ?? "", /38 of 46 emails/);
+    assert.match(
+      rows.find((row) => row.label === "Emails in this run")?.detail ?? "",
+      /44 emails/,
     );
   });
 });

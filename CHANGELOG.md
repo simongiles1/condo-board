@@ -6,7 +6,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Email Settings sender allowlist** — Gmail filter copy uses a single icon menu: selected rows, saved allowlist only, or every discovered sender. Copy all filter now includes only saved allowlist addresses (bare emails). Sender rows normalize `Name <email>` duplicates into one mailbox. Row actions collapse into a trash menu (delete imported, import threads, remove from allowlist). Select-all is a header checkbox.
+
 ### Fixed
+
+- **Email Settings sender allowlist** — Copy all filter no longer mixes unsaved discovered senders with the saved allowlist.
 
 - **Email ingest catch-up never started** — Starting a pipeline set an in-memory busy flag and then skipped the worker because that same flag was already set, so the dialog stayed on Catch-up with 0 emails. Start no longer holds that lock; a `running` row with no worker is resumed on the next poll or Sync now.
 
@@ -14,7 +20,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Email ingest pipeline dialog** — Sync now opens the pipeline modal immediately with an in-dialog loading state while Gmail catch-up runs in the background. A segmented progress bar at the top shows which pipeline stage is active (catch-up through harvest).
+- **Email ingest pipeline dialog** — Sync now opens the pipeline modal immediately with an in-dialog loading state while Gmail catch-up runs in the background. A segmented progress bar at the top shows which pipeline stage is active (catch-up through harvest). When the run finishes, the dialog switches to a summary of each stage. Harvest copy spells out that `38 of 46` means eight emails were not harvested and still need extraction — not an expected skip.
 
 ### Added
 

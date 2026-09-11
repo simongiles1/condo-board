@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmailIngestPipelineModal } from "@/components/EmailIngestPipelineModal";
@@ -20,7 +20,10 @@ import {
 } from "@/lib/email/sync-schedule";
 import { formatDateTime } from "@/lib/format/datetime";
 import { formatGmailOrEmailList } from "@/lib/email/gmail-filter-format";
-import type { IngestRunPublic } from "@/lib/email/ingest-stages";
+import {
+  formatHarvestAfterSyncMessage,
+  type IngestRunPublic,
+} from "@/lib/email/ingest-stages";
 
 type AllowlistEntry = {
   id: string;
@@ -115,24 +118,9 @@ type PurgeImportedPreview = {
 function formatClientHarvestNote(
   harvest: HarvestAfterSyncResult | undefined,
 ): string {
-  if (!harvest || harvest.status === "disabled") return "";
-  if (harvest.status === "skipped_busy") {
-    return " Harvest skipped: a bulk extract is already running.";
-  }
-  const ran = harvest.kinds.filter(
-    (row) => row.status === "completed" && row.totalEmails > 0,
-  );
-  const failed = harvest.kinds.filter((row) => row.status === "failed");
-  if (failed.length > 0) {
-    return ` Harvest finished with errors (${failed.map((row) => row.kind).join(", ")}).`;
-  }
-  if (ran.length === 0) {
-    return " No missing harvests.";
-  }
-  const parts = ran.map(
-    (row) => `${row.kind} ${row.completedEmails}/${row.totalEmails}`,
-  );
-  return ` Harvested missing ${parts.join("; ")}.`;
+  if (!harvest) return "";
+  const message = formatHarvestAfterSyncMessage(harvest);
+  return message ? ` ${message}` : "";
 }
 
 function formatSyncTrigger(trigger: SyncHistoryRun["trigger"]): string {
@@ -230,6 +218,8 @@ export function EmailSettingsClient(props: {
     null,
   );
   const [purgeError, setPurgeError] = useState<string | null>(null);
+  const [senderActionsTarget, setSenderActionsTarget] =
+    useState<AllowlistCandidate | null>(null);
   const [addSenderOpen, setAddSenderOpen] = useState(false);
   const [addSenderError, setAddSenderError] = useState<string | null>(null);
   const [clearError, setClearError] = useState<string | null>(null);
@@ -292,12 +282,17 @@ export function EmailSettingsClient(props: {
     }
   }, [candidateSort, candidates]);
 
-  const gmailFilterText = useMemo(
+  const gmailFilterEverythingText = useMemo(
     () =>
       formatGmailOrEmailList(
         sortedCandidates.map((candidate) => candidate.email),
       ),
     [sortedCandidates],
+  );
+
+  const gmailFilterAllSavedText = useMemo(
+    () => formatGmailOrEmailList(savedAllowlistEmails),
+    [savedAllowlistEmails],
   );
 
   const selectedFilterText = useMemo(
@@ -308,6 +303,10 @@ export function EmailSettingsClient(props: {
   const allVisibleSelected =
     sortedCandidates.length > 0 &&
     sortedCandidates.every((candidate) => selectedEmails.has(candidate.email));
+
+  const someVisibleSelected = sortedCandidates.some((candidate) =>
+    selectedEmails.has(candidate.email),
+  );
 
   const schedulePreview = useMemo(() => {
     if (customCron) {
@@ -1465,42 +1464,16 @@ export function EmailSettingsClient(props: {
                   >
                     Add sender
                   </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      allVisibleSelected
-                        ? clearSelectedEmails()
-                        : selectAllVisibleEmails()
-                    }
-                    disabled={sortedCandidates.length === 0 || busyAction !== null}
-                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    {allVisibleSelected ? "Clear selection" : "Select all"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void copyToClipboard("gmail-filter-selected", selectedFilterText)
-                    }
-                    disabled={
-                      selectedEmails.size === 0 ||
-                      !selectedFilterText ||
-                      busyAction !== null
-                    }
-                    className="rounded-md border border-teal-300 bg-teal-50 px-3 py-1.5 text-sm font-medium text-teal-900 hover:bg-teal-100 disabled:opacity-50"
-                  >
-                    {copiedKey === "gmail-filter-selected"
-                      ? "Copied selection"
-                      : "Copy selected filter"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void copyToClipboard("gmail-filter", gmailFilterText)}
-                    disabled={!gmailFilterText || busyAction !== null}
-                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    {copiedKey === "gmail-filter" ? "Copied filter" : "Copy all filter"}
-                  </button>
+                  <AllowlistGmailFilterCopyMenu
+                    busy={busyAction !== null}
+                    copiedKey={copiedKey}
+                    selectedFilterText={selectedFilterText}
+                    allSavedFilterText={gmailFilterAllSavedText}
+                    everythingFilterText={gmailFilterEverythingText}
+                    selectedCount={selectedEmails.size}
+                    savedCount={savedAllowlistEmails.length}
+                    onCopy={(key, text) => void copyToClipboard(key, text)}
+                  />
                   <label className="flex items-center gap-2 text-sm text-slate-700">
                     <span className="font-medium text-slate-800">Sort by</span>
                     <select
@@ -1524,11 +1497,36 @@ export function EmailSettingsClient(props: {
                 <table className="w-full table-fixed text-sm">
                   <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-medium uppercase tracking-wide text-slate-600">
                     <tr className="border-b border-slate-100">
-                      <th className="w-10 px-4 py-2" aria-hidden="true" />
+                      <th className="w-10 px-4 py-2">
+                        <input
+                          type="checkbox"
+                          checked={allVisibleSelected}
+                          ref={(element) => {
+                            if (element) {
+                              element.indeterminate =
+                                someVisibleSelected && !allVisibleSelected;
+                            }
+                          }}
+                          onChange={() =>
+                            allVisibleSelected
+                              ? clearSelectedEmails()
+                              : selectAllVisibleEmails()
+                          }
+                          disabled={
+                            sortedCandidates.length === 0 || busyAction !== null
+                          }
+                          className="rounded border-slate-300 text-teal-700 focus:ring-teal-600 disabled:opacity-50"
+                          aria-label={
+                            allVisibleSelected
+                              ? "Clear selection"
+                              : "Select all visible senders"
+                          }
+                        />
+                      </th>
                       <th className="px-4 py-2 text-left">Sender</th>
                       <th className="w-32 px-4 py-2 text-right">In app</th>
                       <th className="w-32 px-4 py-2 text-right">Personal</th>
-                      <th className="w-80 px-4 py-2 text-right">Actions</th>
+                      <th className="w-36 px-4 py-2 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1632,45 +1630,18 @@ export function EmailSettingsClient(props: {
                                   <SaveIcon />
                                 )}
                               </button>
-                              {candidate.messageCount > 0 ? (
+                              {candidate.messageCount > 0 ||
+                              (candidate.saved && candidate.id) ? (
                                 <button
                                   type="button"
-                                  onClick={() => void openPurgeImported(candidate)}
+                                  onClick={() => setSenderActionsTarget(candidate)}
                                   disabled={busyAction !== null}
-                                  title={`Delete imported mail from ${candidate.email}`}
-                                  className="rounded-md border border-red-200 px-2.5 py-1.5 text-sm text-red-800 hover:bg-red-50 disabled:opacity-50"
+                                  aria-label={`Actions for ${candidate.email}`}
+                                  title="Delete, import, or remove…"
+                                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-50"
                                 >
-                                  {busyAction === `purge-preview-${candidate.email}`
-                                    ? "Checking…"
-                                    : "Delete imported"}
+                                  <TrashIcon />
                                 </button>
-                              ) : null}
-                              {candidate.saved && candidate.id ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => void importSenderThread(candidate.email)}
-                                    disabled={busyAction !== null}
-                                    title={`Import every message in threads from ${candidate.email}`}
-                                    className="rounded-md border border-slate-300 px-2.5 py-1.5 text-sm text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-                                  >
-                                    {busyAction === `import-thread-${candidate.email}`
-                                      ? "Importing…"
-                                      : "Import thread"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void removeSender(candidate.id!, candidate.email)
-                                    }
-                                    disabled={busyAction !== null}
-                                    aria-label={`Remove ${candidate.email} from allowlist`}
-                                    title="Remove from allowlist"
-                                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-50"
-                                  >
-                                    <TrashIcon />
-                                  </button>
-                                </>
                               ) : null}
                             </div>
                           </td>
@@ -1684,6 +1655,24 @@ export function EmailSettingsClient(props: {
           ) : null}
         </div>
       </div>
+
+      <SenderActionsDialog
+        candidate={senderActionsTarget}
+        busy={busyAction !== null}
+        onClose={() => setSenderActionsTarget(null)}
+        onDeleteImported={(target) => {
+          setSenderActionsTarget(null);
+          void openPurgeImported(target);
+        }}
+        onImportThread={(email) => {
+          setSenderActionsTarget(null);
+          void importSenderThread(email);
+        }}
+        onRemoveFromAllowlist={(id, email) => {
+          setSenderActionsTarget(null);
+          void removeSender(id, email);
+        }}
+      />
 
       <ConfirmDialog
         open={purgeTarget != null}
@@ -1939,6 +1928,222 @@ export function EmailSettingsClient(props: {
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+function AllowlistGmailFilterCopyMenu({
+  busy,
+  copiedKey,
+  selectedFilterText,
+  allSavedFilterText,
+  everythingFilterText,
+  selectedCount,
+  savedCount,
+  onCopy,
+}: {
+  busy: boolean;
+  copiedKey: string | null;
+  selectedFilterText: string;
+  allSavedFilterText: string;
+  everythingFilterText: string;
+  selectedCount: number;
+  savedCount: number;
+  onCopy: (key: string, text: string) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const copied =
+    copiedKey === "gmail-filter-selected" ||
+    copiedKey === "gmail-filter-saved" ||
+    copiedKey === "gmail-filter-everything";
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    function onPointerDown(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
+
+  function copyOption(key: string, text: string) {
+    onCopy(key, text);
+    setMenuOpen(false);
+  }
+
+  return (
+    <div ref={rootRef} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={() => setMenuOpen((open) => !open)}
+        disabled={busy}
+        aria-label={copied ? "Copied Gmail filter" : "Copy Gmail filter"}
+        aria-expanded={menuOpen}
+        aria-haspopup="menu"
+        title={copied ? "Copied" : "Copy Gmail filter"}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+      >
+        {copied ? <CheckIcon className="text-teal-700" /> : <CopyIcon />}
+      </button>
+
+      {menuOpen ? (
+        <div
+          role="menu"
+          aria-label="Copy Gmail filter"
+          className="absolute right-0 top-[calc(100%+0.375rem)] z-20 min-w-[14rem] overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            disabled={selectedCount === 0 || !selectedFilterText.trim()}
+            onClick={() => copyOption("gmail-filter-selected", selectedFilterText)}
+            className="flex w-full flex-col px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <span className="font-medium text-slate-900">Copy selected filter</span>
+            <span className="text-xs text-slate-500">Checked rows only</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={savedCount === 0 || !allSavedFilterText.trim()}
+            onClick={() => copyOption("gmail-filter-saved", allSavedFilterText)}
+            className="flex w-full flex-col px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <span className="font-medium text-slate-900">Copy all filter</span>
+            <span className="text-xs text-slate-500">Saved allowlist only</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!everythingFilterText.trim()}
+            onClick={() => copyOption("gmail-filter-everything", everythingFilterText)}
+            className="flex w-full flex-col px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <span className="font-medium text-slate-900">Copy everything</span>
+            <span className="text-xs text-slate-500">Every discovered sender</span>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SenderActionsDialog({
+  candidate,
+  busy,
+  onClose,
+  onDeleteImported,
+  onImportThread,
+  onRemoveFromAllowlist,
+}: {
+  candidate: AllowlistCandidate | null;
+  busy: boolean;
+  onClose: () => void;
+  onDeleteImported: (target: AllowlistCandidate) => void;
+  onImportThread: (email: string) => void;
+  onRemoveFromAllowlist: (id: string, email: string) => void;
+}) {
+  if (!candidate) return null;
+
+  const label = candidate.displayName
+    ? `${candidate.displayName} · ${candidate.email}`
+    : candidate.email;
+  const canDeleteImported = candidate.messageCount > 0;
+  const canImportThread = candidate.saved && Boolean(candidate.id);
+  const canRemoveFromAllowlist = candidate.saved && Boolean(candidate.id);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <button
+        type="button"
+        className="absolute inset-0 bg-slate-900/40"
+        onClick={onClose}
+        disabled={busy}
+        aria-label="Close dialog"
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sender-actions-title"
+        className="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl"
+      >
+        <h2
+          id="sender-actions-title"
+          className="text-lg font-semibold text-slate-900"
+        >
+          Sender actions
+        </h2>
+        <p className="mt-1 break-all text-sm text-slate-600">{label}</p>
+        <div className="mt-4 flex flex-col gap-2">
+          {canDeleteImported ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onDeleteImported(candidate)}
+              className="rounded-md border border-red-200 px-3 py-2 text-left text-sm font-medium text-red-800 hover:bg-red-50 disabled:opacity-50"
+            >
+              Delete imported mail…
+              <span className="mt-0.5 block text-xs font-normal text-red-700/80">
+                Removes app copies and extractions. Gmail is unchanged.
+              </span>
+            </button>
+          ) : null}
+          {canImportThread ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onImportThread(candidate.email)}
+              className="rounded-md border border-slate-300 px-3 py-2 text-left text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Import full threads
+              <span className="mt-0.5 block text-xs font-normal text-slate-600">
+                Pull every message in threads where this sender appears.
+              </span>
+            </button>
+          ) : null}
+          {canRemoveFromAllowlist ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                onRemoveFromAllowlist(candidate.id!, candidate.email)
+              }
+              className="rounded-md border border-slate-300 px-3 py-2 text-left text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Remove from allowlist
+              <span className="mt-0.5 block text-xs font-normal text-slate-600">
+                Keeps imported mail in the app unless you delete it separately.
+              </span>
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-6 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-300 disabled:opacity-60"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

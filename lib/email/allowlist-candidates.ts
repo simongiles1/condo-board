@@ -2,6 +2,7 @@ import { asc } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { emails, senderAllowlist } from "@/lib/db/schema";
+import { extractMailboxEmail } from "@/lib/email/address-display";
 
 export type AllowlistCandidate = {
   email: string;
@@ -21,8 +22,8 @@ export type AllowlistCandidate = {
 };
 
 function normalizeSenderEmail(raw: string): string | null {
-  const email = raw.trim().toLowerCase();
-  if (!email || !email.includes("@") || email === "unknown@unknown") {
+  const email = extractMailboxEmail(raw)?.trim().toLowerCase();
+  if (!email || email === "unknown@unknown") {
     return null;
   }
   return email;

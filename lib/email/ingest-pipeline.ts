@@ -23,6 +23,7 @@ import {
 } from "@/lib/email/ingest-candidates";
 import { shouldSendOauthRelinkRemind } from "@/lib/email/ingest-oauth-remind";
 import {
+  formatIngestRunSummaryText,
   ingestStageLabel,
   nextIngestStage,
   shouldResumeIdleIngestRun,
@@ -293,10 +294,7 @@ async function upsertTelegramMessage(runId: string): Promise<void> {
     const itemId = reviewId ?? randomUUID();
     replyMarkup = ingestContinueKeyboard(itemId);
   } else if (run.status === "completed" || run.status === "failed") {
-    text =
-      run.status === "completed"
-        ? `Email ingest pipeline complete.\n${run.newEmailIds.length.toLocaleString()} new emails processed.`
-        : `Email ingest pipeline failed.\n${run.lastError ?? "Unknown error."}`;
+    text = formatIngestRunSummaryText(run);
     replyMarkup = { inline_keyboard: [] };
   } else {
     return;
@@ -726,6 +724,7 @@ async function runStageE4(runId: string): Promise<void> {
     countsJson: JSON.stringify({
       ...(run?.counts ?? {}),
       harvest: harvest.status,
+      harvestKinds: harvest.kinds,
       stageNote: note ?? "Harvest complete.",
     }),
   });

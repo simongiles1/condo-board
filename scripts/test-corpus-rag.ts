@@ -56,6 +56,7 @@ import {
   packAnswerSources,
   parseGroundedAnswerJson,
   mergeAnswerCitations,
+  salvageGroundedAnswerFromText,
   stripJsonFence,
 } from "../lib/rag/answer";
 import { extractExcerpt } from "../lib/rag/search";
@@ -745,7 +746,7 @@ describe("Corpus RAG - Grounded answers (Phase C)", () => {
     assert.equal(packed[0].label, "TSCC 2517-RFS.pdf");
   });
 
-  it("includes query, registry hints, and chunk ids in the user prompt", () => {
+  it("includes query, registry hints, and numbered sources in the user prompt", () => {
     const prompt = buildCorpusAnswerUserText({
       query: "Where is the Trace reserve fund study?",
       sources: packAnswerSources([sampleResult]),
@@ -764,7 +765,7 @@ describe("Corpus RAG - Grounded answers (Phase C)", () => {
     assert.match(prompt, /FILE INDEX/);
     assert.match(prompt, /\[S1\] TSCC 2517-RFS.pdf/);
     assert.match(prompt, /organization: Trace Consulting Group/);
-    assert.match(prompt, /chunkId: chunk_rfs/);
+    assert.equal(/chunkId:/.test(prompt), false);
     assert.match(prompt, /\[S1\]/);
   });
 
@@ -790,7 +791,8 @@ describe("Corpus RAG - Grounded answers (Phase C)", () => {
     const { CORPUS_ANSWER_SYSTEM_PROMPT } = await import("../lib/rag/answer");
     const { CORPUS_RERANK_SYSTEM_PROMPT } = await import("../lib/rag/rerank");
     assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /Do not prefer a document type/);
-    assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /review must include every SOURCE chunkId/);
+    assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /review must include every source number/);
+    assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /Do not emit chunk ids/);
     assert.match(CORPUS_RERANK_SYSTEM_PROMPT, /Do not prefer a document type/);
     assert.equal(
       /Prefer the actual deliverable/i.test(CORPUS_RERANK_SYSTEM_PROMPT),
@@ -798,24 +800,43 @@ describe("Corpus RAG - Grounded answers (Phase C)", () => {
     );
   });
 
-  it("drops citations whose chunk ids were not in the packed sources", () => {
+  it("maps review source numbers to packed chunk ids", () => {
+    const sources = packAnswerSources([
+      { ...sampleResult, id: "chunk_rfs" },
+      { ...sampleResult, id: "chunk_other", metadata: { filename: "Other.pdf" } },
+    ]);
     const parsed = parseGroundedAnswerJson(
       JSON.stringify({
         answer: "The RFS is TSCC 2517-RFS.pdf [S1].",
-        citations: [
-          { chunkId: "chunk_rfs", why: "names the study" },
-          { chunkId: "chunk_invented", why: "hallucinated" },
+        review: [
+          { source: 1, relevant: true, why: "names the study" },
+          { source: 2, relevant: false, why: "unrelated" },
+          { source: 99, relevant: true, why: "hallucinated index" },
         ],
         confidence: "high",
         notInArchive: false,
       }),
-      new Set(["chunk_rfs"]),
+      sources,
     );
 
-    assert.equal(parsed.citations.length, 1);
-    assert.equal(parsed.citations[0]?.chunkId, "chunk_rfs");
+    assert.equal(parsed.reviews.length, 2);
+    assert.equal(parsed.reviews[0]?.chunkId, "chunk_rfs");
+    assert.equal(parsed.answer, "The RFS is TSCC 2517-RFS.pdf [S1].");
     assert.equal(parsed.confidence, "high");
-    assert.equal(parsed.notInArchive, false);
+  });
+
+  it("salvages prose from truncated answer JSON", () => {
+    const sources = packAnswerSources([{ ...sampleResult, id: "chunk_rfs" }]);
+    const truncated = `{
+  "answer": "Trace prepared the study [S1].",
+  "review": [{ "source": 1, "relevant": true, "why": "Trace RFS" }],
+  "confidence": "high",
+  "citations": [{ "chunkId": "att_md:incomplete`;
+    const salvaged = salvageGroundedAnswerFromText(truncated, sources);
+    assert.ok(salvaged);
+    assert.equal(salvaged!.answer, "Trace prepared the study [S1].");
+    assert.equal(salvaged!.reviews.length, 1);
+    assert.equal(salvaged!.reviews[0]?.chunkId, "chunk_rfs");
   });
 
   it("cites packed filename hits on file-seeking questions even if the model skipped them", () => {
@@ -860,7 +881,7 @@ describe("Corpus RAG - Grounded answers (Phase C)", () => {
     const fenced = stripJsonFence(
       "```json\n{\"answer\":\"ok\",\"citations\":[],\"confidence\":\"low\",\"notInArchive\":true}\n```",
     );
-    const parsed = parseGroundedAnswerJson(fenced, new Set());
+    const parsed = parseGroundedAnswerJson(fenced, []);
     assert.equal(parsed.notInArchive, true);
     assert.equal(parsed.answer, "ok");
 

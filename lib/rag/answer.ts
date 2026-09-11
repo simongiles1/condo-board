@@ -150,15 +150,14 @@ Registry entities are ranking hints, not facts, unless the same name appears in 
 Read EVERY numbered source before answering. Do not stop at the first few.
 FILE INDEX lists every source filename. When the question asks to find a file or document, treat that index as evidence alongside the excerpts. A filename can be sufficient evidence even when the excerpt is a table, signature page, or boilerplate. Decide from the question which files and emails actually answer it. Do not prefer a document type (draft, proposal, signed, final, update) unless the question asks for that. An excerpt that merely discusses a topic is weaker than a filename that is the document.
 If the question names several parties, name a file for each when the sources include them.
-Return JSON only with this shape:
+Return JSON only (no markdown fences) with this shape — put answer first:
 {
-  "review": [{ "chunkId": "<exact chunk id from sources>", "relevant": true, "why": "one short reason" }],
-  "answer": "prose answer. Mark supporting claims with [S1], [S2], …",
-  "citations": [{ "chunkId": "<exact chunk id from sources>", "why": "one short reason" }],
+  "answer": "prose answer. Mark supporting claims with [S1], [S2], … only",
+  "review": [{ "source": 1, "relevant": true, "why": "one short reason" }],
   "confidence": "high" | "medium" | "low" | "none",
   "notInArchive": boolean
 }
-review must include every SOURCE chunkId exactly once. citations must include every review row with relevant true. Use only chunk ids listed in SOURCES.`;
+Use source numbers 1..N matching [S1]..[SN] in SOURCES. review must include every source number exactly once. Keep why lines short. Do not emit chunk ids or a citations array.`;
 
 export function buildCorpusAnswerUserText(params: {
   query: string;
@@ -184,7 +183,6 @@ export function buildCorpusAnswerUserText(params: {
       const page = source.pageNo != null ? ` page ${source.pageNo}` : "";
       return [
         `[S${index + 1}]`,
-        `chunkId: ${source.chunkId}`,
         `kind: ${source.sourceKind}${page}`,
         `label: ${source.label}`,
         `similarity: ${Math.round(source.similarity * 100)}%`,
@@ -236,18 +234,48 @@ function parseConfidence(value: unknown): CorpusAnswerConfidence {
   return "medium";
 }
 
+function parseReviewSourceNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    return Number.parseInt(value.trim(), 10);
+  }
+  return null;
+}
+
+export function resolveReviewRowChunkId(
+  rec: Record<string, unknown>,
+  sources: PackedAnswerSource[],
+  allowedChunkIds: Set<string>,
+): string | null {
+  const sourceNum =
+    parseReviewSourceNumber(rec.source) ?? parseReviewSourceNumber(rec.s);
+  if (
+    sourceNum != null &&
+    sourceNum >= 1 &&
+    sourceNum <= sources.length
+  ) {
+    return sources[sourceNum - 1]!.chunkId;
+  }
+  const chunkId = typeof rec.chunkId === "string" ? rec.chunkId.trim() : "";
+  if (chunkId && allowedChunkIds.has(chunkId)) return chunkId;
+  return null;
+}
+
 export function parseSourceReviews(
   raw: unknown,
-  allowedChunkIds: Set<string>,
+  sources: PackedAnswerSource[],
 ): CorpusAnswerReview[] {
+  const allowedChunkIds = new Set(sources.map((source) => source.chunkId));
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const reviews: CorpusAnswerReview[] = [];
   for (const row of raw) {
     if (!row || typeof row !== "object") continue;
     const rec = row as Record<string, unknown>;
-    const chunkId = typeof rec.chunkId === "string" ? rec.chunkId.trim() : "";
-    if (!allowedChunkIds.has(chunkId) || seen.has(chunkId)) continue;
+    const chunkId = resolveReviewRowChunkId(rec, sources, allowedChunkIds);
+    if (!chunkId || seen.has(chunkId)) continue;
     seen.add(chunkId);
     reviews.push({
       chunkId,
@@ -256,6 +284,145 @@ export function parseSourceReviews(
     });
   }
   return reviews;
+}
+
+/** Normalize legacy @cite:N@ markers from the model into [SN] for the answer UI. */
+export function normalizeAnswerSourceMarkers(answer: string): string {
+  return answer.replace(/@cite:(\d+)@/g, (_, index) => `[S${index}]`);
+}
+
+function stripTrailingCommas(text: string): string {
+  return text.replace(/,\s*([\]}])/g, "$1");
+}
+
+/** Extract a JSON string field value even when the outer object is truncated. */
+export function extractJsonStringField(
+  text: string,
+  fieldName: string,
+): string | null {
+  const keyPattern = new RegExp(`"${fieldName}"\\s*:\\s*"`, "u");
+  const match = keyPattern.exec(text);
+  if (!match || match.index == null) return null;
+  let i = match.index + match[0].length;
+  let value = "";
+  let escape = false;
+  for (; i < text.length; i++) {
+    const ch = text[i]!;
+    if (escape) {
+      if (ch === "n") value += "\n";
+      else if (ch === "r") value += "\r";
+      else if (ch === "t") value += "\t";
+      else value += ch;
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') return value;
+    value += ch;
+  }
+  return value.length > 0 ? value : null;
+}
+
+function tryParseRepairedCorpusAnswerJson(
+  text: string,
+): Record<string, unknown> | null {
+  let candidate = stripTrailingCommas(text.trim());
+  const repairStack: string[] = [];
+  let inString = false;
+  let escape = false;
+  for (const char of candidate) {
+    if (inString) {
+      if (escape) escape = false;
+      else if (char === "\\") escape = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{") repairStack.push("}");
+    else if (char === "[") repairStack.push("]");
+    else if ((char === "}" || char === "]") && repairStack.at(-1) === char) {
+      repairStack.pop();
+    }
+  }
+  if (inString) candidate += '"';
+  candidate += repairStack.reverse().join("");
+  try {
+    const parsed = JSON.parse(candidate);
+    if (parsed && typeof parsed === "object") {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export function salvageGroundedAnswerFromText(
+  text: string,
+  sources: PackedAnswerSource[],
+): Pick<
+  CorpusGroundedAnswer,
+  "answer" | "citations" | "confidence" | "notInArchive"
+> & { reviews: CorpusAnswerReview[] } | null {
+  const stripped = stripJsonFence(text);
+  const repaired = tryParseRepairedCorpusAnswerJson(stripped);
+  if (repaired) {
+    return parseGroundedAnswerObject(repaired, sources);
+  }
+
+  const answerRaw = extractJsonStringField(stripped, "answer");
+  if (!answerRaw?.trim()) return null;
+
+  let reviewRows: unknown[] = [];
+  const reviewIdx = stripped.indexOf('"review"');
+  if (reviewIdx >= 0) {
+    const arrayStart = stripped.indexOf("[", reviewIdx);
+    if (arrayStart >= 0) {
+      const slice = stripped.slice(arrayStart);
+      const closed = tryParseRepairedCorpusAnswerJson(`{"review":${slice}`);
+      if (closed && Array.isArray(closed.review)) {
+        reviewRows = closed.review;
+      }
+    }
+  }
+
+  const reviews = parseSourceReviews(reviewRows, sources);
+  const confidenceMatch = /"confidence"\s*:\s*"(high|medium|low|none)"/u.exec(
+    stripped,
+  );
+  const notInArchive = /"notInArchive"\s*:\s*true/u.test(stripped);
+
+  return {
+    answer: normalizeAnswerSourceMarkers(answerRaw.trim()),
+    citations: [],
+    reviews,
+    confidence: parseConfidence(confidenceMatch?.[1]),
+    notInArchive,
+  };
+}
+
+function parseGroundedAnswerObject(
+  obj: Record<string, unknown>,
+  sources: PackedAnswerSource[],
+): Pick<
+  CorpusGroundedAnswer,
+  "answer" | "citations" | "confidence" | "notInArchive"
+> & { reviews: CorpusAnswerReview[] } {
+  const answerRaw =
+    typeof obj.answer === "string" && obj.answer.trim()
+      ? obj.answer.trim()
+      : "The model did not return an answer.";
+
+  return {
+    answer: normalizeAnswerSourceMarkers(answerRaw),
+    citations: [],
+    reviews: parseSourceReviews(obj.review, sources),
+    confidence: parseConfidence(obj.confidence),
+    notInArchive: obj.notInArchive === true,
+  };
 }
 
 /**
@@ -299,9 +466,12 @@ export function mergeAnswerCitations(params: {
     .map((source) => byId.get(source.chunkId)!);
 }
 
+const UNREADABLE_ANSWER_MESSAGE =
+  "The model returned an answer we could not read. Try the search again.";
+
 export function parseGroundedAnswerJson(
   text: string,
-  allowedChunkIds: Set<string>,
+  sources: PackedAnswerSource[],
 ): Pick<
   CorpusGroundedAnswer,
   "answer" | "citations" | "confidence" | "notInArchive"
@@ -311,8 +481,10 @@ export function parseGroundedAnswerJson(
   try {
     parsed = JSON.parse(stripped);
   } catch {
+    const salvaged = salvageGroundedAnswerFromText(text, sources);
+    if (salvaged) return salvaged;
     return {
-      answer: text.trim() || "The model returned an unreadable answer.",
+      answer: UNREADABLE_ANSWER_MESSAGE,
       citations: [],
       reviews: [],
       confidence: "low",
@@ -321,8 +493,10 @@ export function parseGroundedAnswerJson(
   }
 
   if (!parsed || typeof parsed !== "object") {
+    const salvaged = salvageGroundedAnswerFromText(text, sources);
+    if (salvaged) return salvaged;
     return {
-      answer: text.trim(),
+      answer: UNREADABLE_ANSWER_MESSAGE,
       citations: [],
       reviews: [],
       confidence: "low",
@@ -330,36 +504,7 @@ export function parseGroundedAnswerJson(
     };
   }
 
-  const obj = parsed as Record<string, unknown>;
-  const answer =
-    typeof obj.answer === "string" && obj.answer.trim()
-      ? obj.answer.trim()
-      : "The model did not return an answer.";
-
-  const citations = Array.isArray(obj.citations)
-    ? obj.citations
-        .flatMap((row) => {
-          if (!row || typeof row !== "object") return [];
-          const rec = row as Record<string, unknown>;
-          const chunkId =
-            typeof rec.chunkId === "string" ? rec.chunkId.trim() : "";
-          if (!allowedChunkIds.has(chunkId)) return [];
-          return [
-            {
-              chunkId,
-              why: typeof rec.why === "string" ? rec.why.trim() : "",
-            },
-          ];
-        })
-    : [];
-
-  return {
-    answer,
-    citations,
-    reviews: parseSourceReviews(obj.review, allowedChunkIds),
-    confidence: parseConfidence(obj.confidence),
-    notInArchive: obj.notInArchive === true,
-  };
+  return parseGroundedAnswerObject(parsed as Record<string, unknown>, sources);
 }
 
 export async function generateCorpusAnswer(params: {
@@ -397,7 +542,6 @@ export async function generateCorpusAnswer(params: {
     MAX_ANSWER_CONTEXT_CHUNKS,
     fileCards,
   );
-  const allowed = new Set(sources.map((source) => source.chunkId));
   const fileSeeking =
     params.fileSeeking === true || isFileSeekingQuery(params.query);
   const generated = await generateWithSystemPrompt({
@@ -411,10 +555,18 @@ export async function generateCorpusAnswer(params: {
     maxOutputTokens: Number(process.env.GEMINI_MAX_OUTPUT_TOKENS_CORPUS ?? 4096),
   });
 
-  const parsed = parseGroundedAnswerJson(generated.text, allowed);
+  if (generated.truncated) {
+    console.warn("[corpus-ask] answer output truncated", {
+      finishReason: generated.finishReason,
+      outputTokens: generated.usage.outputTokens,
+      modelName,
+    });
+  }
+
+  const parsed = parseGroundedAnswerJson(generated.text, sources);
   const citations = mergeAnswerCitations({
     sources,
-    citations: parsed.citations,
+    citations: [],
     reviews: parsed.reviews,
     fileSeeking,
   });

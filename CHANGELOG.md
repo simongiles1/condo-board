@@ -8,6 +8,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Archive ask answer JSON** — The grounded-answer step now asks Gemini for compact `source` indices (`1`…`N`, matching `[S1]`…`[SN]`) instead of repeating long internal chunk ids in `review`, drops the redundant `citations` array (citations are built server-side from `review`), puts prose `answer` first in the schema, salvages prose when JSON is truncated, logs `finishReason` when output hits the token cap, and never surfaces raw model JSON in the Answer panel.
+
+### Changed
+
 - **File card qualify list pagination** — The Qualify cards tab in the Attachment File Cards modal now loads 10 cards per page with Previous/Next controls and a total count, instead of one long scroll of up to 100 cards.
 
 ### Changed

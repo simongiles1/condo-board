@@ -269,6 +269,20 @@ function formatContinueMessage(run: IngestRunRecord): string {
   return lines.join("\n");
 }
 
+/** Restore ingest Telegram buttons after a failed callback or external refresh. */
+export async function refreshIngestTelegramMessage(
+  reviewItemId: string,
+): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select({ id: emailIngestRuns.id })
+    .from(emailIngestRuns)
+    .where(eq(emailIngestRuns.telegramReviewItemId, reviewItemId))
+    .limit(1);
+  if (!row) return;
+  await upsertTelegramMessage(row.id);
+}
+
 async function upsertTelegramMessage(runId: string): Promise<void> {
   const run = await getIngestRun(runId);
   if (!run) return;

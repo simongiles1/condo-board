@@ -7,9 +7,17 @@ import { renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
 
 type Props = {
   url: string;
+  /** Jump to this page after the PDF loads. */
+  initialPage?: number;
+  /** Tighter layout for split panes. */
+  compact?: boolean;
 };
 
-export function PdfAttachmentPreview({ url }: Props) {
+export function PdfAttachmentPreview({
+  url,
+  initialPage = 1,
+  compact = false,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
   const [page, setPage] = useState(1);
@@ -59,6 +67,11 @@ export function PdfAttachmentPreview({ url }: Props) {
   }, [url]);
 
   useEffect(() => {
+    if (!pdfData || pageCount < 1) return;
+    setPage(Math.min(Math.max(initialPage, 1), pageCount));
+  }, [pdfData, pageCount, initialPage]);
+
+  useEffect(() => {
     if (!pdfData || !canvasRef.current) return;
 
     let cancelled = false;
@@ -81,9 +94,12 @@ export function PdfAttachmentPreview({ url }: Props) {
     };
   }, [pdfData, page]);
 
+  const minHeight = compact ? "min-h-[12rem]" : "min-h-[50dvh]";
+  const canvasMax = compact ? "max-h-[min(28rem,calc(90dvh-14rem))]" : "max-h-[70dvh]";
+
   if (loadingPdf) {
     return (
-      <div className="flex min-h-[50dvh] flex-col items-center justify-center gap-3 text-sm text-slate-600">
+      <div className={`flex ${minHeight} flex-col items-center justify-center gap-3 text-sm text-slate-600`}>
         <div
           className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-teal-600"
           aria-hidden
@@ -102,7 +118,7 @@ export function PdfAttachmentPreview({ url }: Props) {
   }
 
   return (
-    <div className="flex min-h-[50dvh] flex-col items-center gap-3">
+    <div className={`flex ${minHeight} flex-col items-center gap-3`}>
       {pageCount > 1 ? (
         <div className="flex items-center gap-3 text-sm text-slate-700">
           <button
@@ -135,7 +151,7 @@ export function PdfAttachmentPreview({ url }: Props) {
             Rendering…
           </div>
         ) : null}
-        <canvas ref={canvasRef} className="max-h-[70dvh] max-w-full" />
+        <canvas ref={canvasRef} className={`${canvasMax} max-w-full`} />
       </div>
     </div>
   );

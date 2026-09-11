@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
+import { ArchiveChatLauncher } from "@/components/ArchiveChatLauncher";
 import { AuthNavActions } from "@/components/AuthNavActions";
 import { EntityProfileProvider } from "@/components/EntityProfileProvider";
 import { CloseIcon, MenuIcon } from "@/components/nav-icons";
@@ -191,6 +192,7 @@ export function AppShell({
           </aside>
         </>
       ) : null}
+      <ArchiveChatLauncher />
     </div>
     </EntityProfileProvider>
   );

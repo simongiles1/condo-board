@@ -302,6 +302,27 @@ describe("Corpus RAG - Hybrid filename quota", () => {
     assert.ok(selected.some((row) => row.id === "named_tail"));
     assert.equal(selected.length, 15);
   });
+
+  it("keeps a low-scoring email subject hit inside the packed cut", async () => {
+    const { selectHybridResults } = await import("../lib/rag/search");
+    const results = [
+      ...Array.from({ length: 20 }, (_, i) =>
+        hit(`vec_${i}`, `Discussion report ${i}.pdf`, 0.99 - i * 0.001),
+      ),
+      {
+        ...hit("email_haider", "unused.pdf", 0.4),
+        id: "email_haider",
+        sourceKind: "email_body" as const,
+        metadata: {
+          subject: "Haider Mukadam - Condominium Manager",
+          subjectMatch: true,
+        },
+      },
+    ];
+    const selected = selectHybridResults(results, 15);
+    assert.equal(selected.length, 15);
+    assert.ok(selected.some((row) => row.id === "email_haider"));
+  });
 });
 
 describe("Corpus RAG - Ask pipeline debug", () => {
@@ -352,6 +373,32 @@ describe("Corpus RAG - Ask pipeline debug", () => {
   });
 });
 
+describe("Corpus RAG - Email subject lexical match", () => {
+  it("extracts proper names and expands Hyder to Haider from the registry", async () => {
+    const {
+      emailSubjectSearchNeedles,
+      expandEmailNeedlesFromPersonNames,
+      namesAreRetrievalVariants,
+      properNameNeedles,
+    } = await import("../lib/rag/email-match");
+    const query =
+      "There were email chains regarding Hyder's promotion and when he would take over Bonnie's role.";
+    assert.deepEqual(properNameNeedles(query).sort(), ["Bonnie", "Hyder"].sort());
+    const needles = emailSubjectSearchNeedles(query, ["promotion"]);
+    assert.ok(needles.some((n) => n.toLowerCase() === "hyder"));
+    assert.equal(
+      needles.some((n) => n.toLowerCase() === "promotion"),
+      false,
+    );
+    assert.equal(namesAreRetrievalVariants("Hyder", "Haider"), true);
+    const expanded = expandEmailNeedlesFromPersonNames(needles, [
+      { firstName: "Haider", lastName: "Mukadam" },
+    ]);
+    assert.ok(expanded.some((n) => n.toLowerCase() === "haider"));
+    assert.ok(expanded.some((n) => /haider mukadam/i.test(n)));
+  });
+});
+
 describe("Corpus RAG - Query rewrite", () => {
   it("parses an expanded retrieval query and lexical needles", async () => {
     const { parseQueryRewriteJson } = await import("../lib/rag/query-rewrite");
@@ -376,6 +423,14 @@ describe("Corpus RAG - Query rewrite", () => {
       parsed.lexicalNeedles.some((needle) => needle.toLowerCase() === "the"),
       false,
     );
+  });
+
+  it("asks rewrite to add person-name spelling variants", async () => {
+    const { CORPUS_QUERY_REWRITE_SYSTEM_PROMPT } = await import(
+      "../lib/rag/query-rewrite"
+    );
+    assert.match(CORPUS_QUERY_REWRITE_SYSTEM_PROMPT, /alternate spellings/);
+    assert.match(CORPUS_QUERY_REWRITE_SYSTEM_PROMPT, /person names/);
   });
 
   it("lifts all-caps acronyms from retrievalQuery into needles", async () => {
@@ -747,6 +802,25 @@ describe("Corpus RAG - Grounded answers (Phase C)", () => {
     assert.equal(packed[0].label, "TSCC 2517-RFS.pdf");
   });
 
+  it("prefixes email subject and from onto packed email bodies", () => {
+    const packed = packAnswerSources([
+      {
+        ...sampleResult,
+        id: "email_haider",
+        sourceKind: "email_body",
+        chunkText: "Haider will oversee operations while Bonnie remains on the file.",
+        metadata: {
+          subject: "Haider Mukadam - Condominium Manager",
+          fromAddress: "board@condo.ca",
+        },
+      },
+    ]);
+    assert.match(packed[0].text, /^Email: Haider Mukadam - Condominium Manager/);
+    assert.match(packed[0].text, /From: board@condo\.ca/);
+    assert.match(packed[0].text, /oversee operations/);
+    assert.equal(packed[0].label, "Haider Mukadam - Condominium Manager");
+  });
+
   it("includes query, registry hints, and numbered sources in the user prompt", () => {
     const prompt = buildCorpusAnswerUserText({
       query: "Where is the Trace reserve fund study?",
@@ -795,6 +869,8 @@ describe("Corpus RAG - Grounded answers (Phase C)", () => {
     assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /review must include every source number/);
     assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /Related, not a name match/);
     assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /Do not emit chunk ids/);
+    assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /notInArchive to true only when no numbered source is on-topic/);
+    assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /Do not claim the archive has no emails/);
     assert.match(CORPUS_RERANK_SYSTEM_PROMPT, /Do not prefer a document type/);
     assert.match(CORPUS_RERANK_SYSTEM_PROMPT, /near miss/);
     assert.equal(

@@ -210,9 +210,10 @@ export function EntityProfileSidePanel({
 
   return (
     <>
+      {/* Above archive chat (z-[110]) so a highlighted name still opens this panel. */}
       <button
         type="button"
-        className="fixed inset-0 z-40 bg-slate-900/25"
+        className="fixed inset-0 z-[125] bg-slate-900/25"
         onClick={onClose}
         aria-label="Close profile panel"
       />
@@ -220,7 +221,7 @@ export function EntityProfileSidePanel({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col border-l border-slate-200 bg-white shadow-2xl"
+        className="fixed inset-y-0 right-0 z-[126] flex w-full max-w-xl flex-col border-l border-slate-200 bg-white shadow-2xl"
       >
         <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
           <div className="flex min-w-0 items-start gap-3">

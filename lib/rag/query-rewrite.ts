@@ -67,8 +67,9 @@ Return JSON only:
 Rules:
 - retrievalQuery keeps the user's meaning and adds synonyms, acronyms, and abbreviations that would appear in emails or filenames. Expand in BOTH directions when the question uses a full phrase or an acronym that commonly maps to the other form in business documents.
 - Keep every proper name, date, unit number, and filename the user mentioned.
+- For person names, add common alternate spellings and transliterations (one- or two-letter differences such as Hyder/Haider) to retrievalQuery and lexicalNeedles. Do not drop the user's spelling.
 - Do not invent vendors, files, dates, or amounts that are not implied by the question.
-- lexicalNeedles: 0-8 distinctive tokens for filename and email LIKE match (acronyms, vendor names, distinctive filename fragments). 3-40 characters. No stopwords.
+- lexicalNeedles: 0-8 distinctive tokens for filename and email LIKE match (acronyms, person names, vendor names, distinctive filename fragments). 3-40 characters. No stopwords.
 - fileSeeking is true when the user is looking for a file, PDF, or attachment rather than only asking a content question.
 - Do not answer the question.`;
 

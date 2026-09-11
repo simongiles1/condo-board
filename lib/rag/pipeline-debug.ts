@@ -5,6 +5,7 @@ import type { CorpusSearchResult } from "@/lib/rag/search";
 export type CorpusPipelineHowFound =
   | "filename"
   | "filename-needle"
+  | "subject"
   | "semantic";
 
 export type CorpusPipelineHit = {
@@ -47,6 +48,7 @@ export type CorpusAskPipeline = {
 function howFound(result: CorpusSearchResult): CorpusPipelineHowFound {
   if (result.metadata.filenameMatch === true) return "filename";
   if (result.metadata.filenameAlias === true) return "filename-needle";
+  if (result.metadata.subjectMatch === true) return "subject";
   return "semantic";
 }
 
@@ -82,6 +84,7 @@ export function buildCorpusAskPipeline(params: {
   reranked?: CorpusSearchResult[];
   selectedIds?: string[];
   packedLimit: number;
+  packedResults?: CorpusSearchResult[];
   citedChunkIds?: string[];
   fileCards?: Map<string, { documentType: string }>;
 }): CorpusAskPipeline {
@@ -92,12 +95,13 @@ export function buildCorpusAskPipeline(params: {
     fileSeeking: false,
   };
   const uniqueRetrieval = uniqueResultsByFile(params.retrieval);
-  const packedHits = params.reranked
-    ? params.reranked
-        .slice(0, params.packedLimit)
-        .map((result, index) =>
-          compactPipelineHit(result, index + 1, params.fileCards),
-        )
+  const packedSource =
+    params.packedResults ??
+    (params.reranked ? params.reranked.slice(0, params.packedLimit) : null);
+  const packedHits = packedSource
+    ? packedSource.map((result, index) =>
+        compactPipelineHit(result, index + 1, params.fileCards),
+      )
     : null;
 
   return {
@@ -113,7 +117,8 @@ export function buildCorpusAskPipeline(params: {
       filenameHits: params.retrieval.filter(
         (row) =>
           row.metadata.filenameMatch === true ||
-          row.metadata.filenameAlias === true,
+          row.metadata.filenameAlias === true ||
+          row.metadata.subjectMatch === true,
       ).length,
       hits: params.retrieval.map((result, index) =>
         compactPipelineHit(result, index + 1, params.fileCards),

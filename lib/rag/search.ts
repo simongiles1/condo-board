@@ -1,10 +1,23 @@
 import { and, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 
+import { parseNameAliasesJson } from "@/lib/contacts/person-name";
 import { getDb } from "@/lib/db";
-import { documentChunks, emailAttachments, emails } from "@/lib/db/schema";
+import {
+  contactPersons,
+  documentChunks,
+  emailAttachments,
+  emails,
+} from "@/lib/db/schema";
 import { emailMessageDetailHref } from "@/lib/email/thread-filters";
 import { summarizeEmbeddingUsage } from "@/lib/rag/cost";
 import { embedQuery } from "@/lib/rag/embed";
+import {
+  MAX_SUBJECT_EMAIL_HITS,
+  SUBJECT_MATCH_SIMILARITY,
+  emailHaystackMatchesNeedles,
+  emailSubjectSearchNeedles,
+  expandEmailNeedlesFromPersonNames,
+} from "@/lib/rag/email-match";
 import {
   FILENAME_ALIAS_SIMILARITY,
   FILENAME_MATCH_SIMILARITY,
@@ -33,6 +46,8 @@ import {
 
 export type { CorpusSearchFileCard };
 
+export type CorpusSearchPhase = "rewrite" | "retrieve";
+
 export type CorpusSearchOptions = {
   query: string;
   limit?: number;
@@ -40,6 +55,8 @@ export type CorpusSearchOptions = {
   sourceKind?: "email_body" | "attachment_markdown" | "attachment_vision_page" | "all";
   /** Default true: LLM expands the question before retrieval. */
   rewriteQuery?: boolean;
+  /** Ask UI progress: rewrite LLM, then lexical + embedding retrieval. */
+  onPhase?: (phase: CorpusSearchPhase) => void;
 };
 
 export type CorpusSearchResult = {
@@ -294,7 +311,8 @@ function mergeSearchResults(
 export function isLexicalFilenameHit(result: CorpusSearchResult): boolean {
   return (
     result.metadata.filenameMatch === true ||
-    result.metadata.filenameAlias === true
+    result.metadata.filenameAlias === true ||
+    result.metadata.subjectMatch === true
   );
 }
 
@@ -329,8 +347,9 @@ export function spreadTake<T>(items: T[], count: number): T[] {
 }
 
 /**
- * Keep filename hits in the candidate pool so dense retrieval cannot drop
- * files found by name. Does not prefer document types (signed, draft, …).
+ * Keep lexical filename and email-subject hits in the candidate pool so
+ * dense retrieval cannot drop a named person or file. Does not prefer
+ * document types (signed, draft, …).
  */
 export function selectHybridResults(
   results: CorpusSearchResult[],
@@ -352,6 +371,201 @@ export function selectHybridResults(
     ...fill.map((row) => row.id),
   ]);
   return results.filter((row) => chosen.has(row.id)).slice(0, limit);
+}
+
+async function loadContactNeedlePeople(): Promise<
+  Array<{ firstName: string | null; lastName: string | null; aliases: string[] }>
+> {
+  try {
+    const db = getDb();
+    const rows = await db
+      .select({
+        firstName: contactPersons.firstName,
+        lastName: contactPersons.lastName,
+        nameAliasesJson: contactPersons.nameAliasesJson,
+      })
+      .from(contactPersons)
+      .limit(500);
+    return rows.map((row) => ({
+      firstName: row.firstName,
+      lastName: row.lastName,
+      aliases: parseNameAliasesJson(row.nameAliasesJson),
+    }));
+  } catch (err) {
+    console.warn("[corpus-search] contact name expansion skipped:", err);
+    return [];
+  }
+}
+
+function syntheticSubjectEmailResult(params: {
+  query: string;
+  emailId: string;
+  subject: string;
+  fromAddress: string;
+  receivedAt: string;
+  threadId: string | null;
+  bodyText: string;
+}): CorpusSearchResult {
+  const header = [
+    params.subject ? `Email: ${params.subject}` : null,
+    params.fromAddress ? `From: ${params.fromAddress}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const body = params.bodyText.replace(/\s+/g, " ").trim().slice(0, 900);
+  const chunkText = [header, body].filter(Boolean).join("\n\n");
+  return {
+    id: `email_body:${params.emailId}:0`,
+    sourceKind: "email_body",
+    emailId: params.emailId,
+    contentHash: null,
+    pageNo: null,
+    chunkIndex: 0,
+    chunkText,
+    similarity: SUBJECT_MATCH_SIMILARITY,
+    excerpt: extractExcerpt(chunkText, params.query),
+    metadata: {
+      subject: params.subject,
+      fromAddress: params.fromAddress,
+      receivedAt: params.receivedAt,
+      threadId: params.threadId,
+      subjectMatch: true,
+    },
+    sourceLink: emailMessageDetailHref(params.emailId),
+    emailLink: emailMessageDetailHref(params.emailId),
+    rawSimilarity: SUBJECT_MATCH_SIMILARITY,
+    boost: 0,
+    entities: [],
+  };
+}
+
+async function loadSubjectMatchedEmailResults(
+  query: string,
+  sourceKind: NonNullable<CorpusSearchOptions["sourceKind"]>,
+  extraNeedles: string[] = [],
+): Promise<CorpusSearchResult[]> {
+  if (sourceKind === "attachment_markdown" || sourceKind === "attachment_vision_page") {
+    return [];
+  }
+
+  const baseNeedles = emailSubjectSearchNeedles(query, extraNeedles);
+  if (baseNeedles.length === 0) return [];
+
+  const people = await loadContactNeedlePeople();
+  const needles = expandEmailNeedlesFromPersonNames(baseNeedles, people);
+  if (needles.length === 0) return [];
+
+  const db = getDb();
+  const likeFilters = needles.flatMap((needle) => {
+    const pattern = `%${needle.toLowerCase()}%`;
+    return [
+      sql`lower(${emails.subject}) like ${pattern}`,
+      sql`lower(${emails.fromAddress}) like ${pattern}`,
+    ];
+  });
+
+  const emailRows = await db
+    .select({
+      id: emails.id,
+      subject: emails.subject,
+      fromAddress: emails.fromAddress,
+      receivedAt: emails.receivedAt,
+      threadId: emails.threadId,
+      bodyTextUnique: emails.bodyTextUnique,
+      bodyText: emails.bodyText,
+    })
+    .from(emails)
+    .where(or(...likeFilters))
+    .limit(80);
+
+  if (emailRows.length === 0) return [];
+
+  const emailIds = emailRows.map((row) => row.id);
+  const chunkRows = await db
+    .select({
+      id: documentChunks.id,
+      sourceKind: documentChunks.sourceKind,
+      emailId: documentChunks.emailId,
+      contentHash: documentChunks.contentHash,
+      pageNo: documentChunks.pageNo,
+      chunkIndex: documentChunks.chunkIndex,
+      chunkText: documentChunks.chunkText,
+      metadataJson: documentChunks.metadataJson,
+    })
+    .from(documentChunks)
+    .where(
+      and(
+        inArray(documentChunks.emailId, emailIds),
+        eq(documentChunks.sourceKind, "email_body"),
+      ),
+    );
+
+  const chunksByEmail = new Map<string, typeof chunkRows>();
+  for (const row of chunkRows) {
+    if (!row.emailId) continue;
+    const list = chunksByEmail.get(row.emailId) ?? [];
+    list.push(row);
+    chunksByEmail.set(row.emailId, list);
+  }
+
+  const scored = emailRows
+    .map((row) => {
+      const hay = `${row.subject} ${row.fromAddress}`;
+      const score = emailHaystackMatchesNeedles(hay, needles);
+      return { row, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  const results: CorpusSearchResult[] = [];
+  const seenEmails = new Set<string>();
+
+  for (const { row } of scored) {
+    if (results.length >= MAX_SUBJECT_EMAIL_HITS) break;
+    if (seenEmails.has(row.id)) continue;
+    seenEmails.add(row.id);
+
+    const chunks = chunksByEmail.get(row.id) ?? [];
+    const rankedChunks = [...chunks].sort((a, b) => {
+      const aHits = emailHaystackMatchesNeedles(a.chunkText, needles);
+      const bHits = emailHaystackMatchesNeedles(b.chunkText, needles);
+      if (bHits !== aHits) return bHits - aHits;
+      return a.chunkIndex - b.chunkIndex;
+    });
+    const chunk = rankedChunks[0];
+    if (chunk) {
+      const mapped = mapChunkRowToResult(
+        { ...chunk, similarity: SUBJECT_MATCH_SIMILARITY },
+        query,
+      );
+      mapped.similarity = SUBJECT_MATCH_SIMILARITY;
+      mapped.rawSimilarity = SUBJECT_MATCH_SIMILARITY;
+      mapped.metadata = {
+        ...mapped.metadata,
+        subject: row.subject,
+        fromAddress: row.fromAddress,
+        receivedAt: row.receivedAt,
+        threadId: row.threadId,
+        subjectMatch: true,
+      };
+      results.push(mapped);
+      continue;
+    }
+
+    results.push(
+      syntheticSubjectEmailResult({
+        query,
+        emailId: row.id,
+        subject: row.subject,
+        fromAddress: row.fromAddress,
+        receivedAt: row.receivedAt,
+        threadId: row.threadId,
+        bodyText: row.bodyTextUnique?.trim() || row.bodyText || "",
+      }),
+    );
+  }
+
+  return results;
 }
 
 async function loadFilenameMatchedResults(
@@ -769,6 +983,7 @@ export async function searchCorpus(
   let rewriteUsage: CorpusRewriteUsage | undefined;
 
   if (options.rewriteQuery !== false) {
+    options.onPhase?.("rewrite");
     try {
       const rewritten = await rewriteCorpusQuery(query);
       rewrite = rewritten.rewrite;
@@ -784,11 +999,18 @@ export async function searchCorpus(
     }
   }
 
+  options.onPhase?.("retrieve");
   const filenameHits = await loadFilenameMatchedResults(
     query,
     sourceKind,
     extraNeedles,
   );
+  const subjectHits = await loadSubjectMatchedEmailResults(
+    query,
+    sourceKind,
+    extraNeedles,
+  );
+  const lexicalHits = mergeSearchResults(filenameHits, subjectHits);
 
   let vectorHits: CorpusSearchResult[] = [];
   let usage: CorpusSearchUsage = EMPTY_SEARCH_USAGE;
@@ -831,16 +1053,16 @@ export async function searchCorpus(
 
     vectorHits = rows.map((row) => mapChunkRowToResult(row, query));
   } catch (err) {
-    if (filenameHits.length === 0) throw err;
+    if (lexicalHits.length === 0) throw err;
     console.error(
-      "[corpus-search] embedding search failed; returning filename matches:",
+      "[corpus-search] embedding search failed; returning lexical matches:",
       err,
     );
   }
 
   const mapped = applyFileSeekingAttachmentBoost(
     mergeSearchResults(
-      filenameHits,
+      lexicalHits,
       fileSeeking
         ? [
             ...vectorHits,

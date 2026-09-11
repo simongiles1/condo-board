@@ -1,7 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { createPortal } from "react-dom";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -39,6 +47,8 @@ import type { CorpusAskPipeline } from "@/lib/rag/pipeline-debug";
 import type { CorpusQueryRewrite, CorpusRewriteUsage } from "@/lib/rag/query-rewrite";
 import type { CorpusRerankUsage } from "@/lib/rag/rerank";
 import type { CorpusSearchResult, CorpusSearchUsage } from "@/lib/rag/search";
+import { closeActiveHoverPopover } from "@/lib/ui/hover-popover-group";
+import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 
 const EXAMPLE_QUERIES = [
   "where is the reserve fund study?",
@@ -48,6 +58,215 @@ const EXAMPLE_QUERIES = [
   "hvac chiller cooling tower",
   "window replacement warranty",
 ];
+
+const ASK_USAGE_POPOVER_MARGIN = 8;
+
+function computeAskUsagePopoverPosition(
+  triggerRect: DOMRect,
+  popoverWidth: number,
+  popoverHeight: number,
+): CSSProperties {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const spaceBelow = viewportHeight - triggerRect.bottom - ASK_USAGE_POPOVER_MARGIN;
+  const spaceAbove = triggerRect.top - ASK_USAGE_POPOVER_MARGIN;
+  const showBelow = spaceBelow >= popoverHeight || spaceBelow >= spaceAbove;
+  let top = showBelow
+    ? triggerRect.bottom + ASK_USAGE_POPOVER_MARGIN
+    : triggerRect.top - ASK_USAGE_POPOVER_MARGIN - popoverHeight;
+  top = Math.min(
+    Math.max(top, ASK_USAGE_POPOVER_MARGIN),
+    viewportHeight - popoverHeight - ASK_USAGE_POPOVER_MARGIN,
+  );
+  let left = triggerRect.left;
+  left = Math.min(
+    Math.max(left, ASK_USAGE_POPOVER_MARGIN),
+    viewportWidth - popoverWidth - ASK_USAGE_POPOVER_MARGIN,
+  );
+  return { position: "fixed", top, left, zIndex: 50 };
+}
+
+function AskUsageRow({
+  label,
+  costUsd,
+  tokens,
+}: {
+  label: string;
+  costUsd: number;
+  tokens: number;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-4">
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="text-right tabular-nums text-slate-800">
+        {formatCostUsd(costUsd)}
+        <span className="ml-1 font-normal text-slate-500">
+          ({formatTokenCount(tokens)} tokens)
+        </span>
+      </dd>
+    </div>
+  );
+}
+
+function AskUsagePopover({
+  generateAnswer,
+  resultCount,
+  durationMs,
+  rewriteUsage,
+  rerankUsage,
+  searchUsage,
+  answerUsage,
+  registryBoost,
+}: {
+  generateAnswer: boolean;
+  resultCount: number;
+  durationMs: number | null;
+  rewriteUsage: CorpusRewriteUsage | null;
+  rerankUsage: CorpusRerankUsage | null;
+  searchUsage: CorpusSearchUsage | null;
+  answerUsage: CorpusGroundedAnswer["usage"] | null;
+  registryBoost: boolean;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const hover = useHoverPopover({ group: false });
+  const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
+    position: "fixed",
+    visibility: "hidden",
+    zIndex: 50,
+  });
+
+  useLayoutEffect(() => {
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
+    const triggerRect = rootRef.current.getBoundingClientRect();
+    const popoverRect = popoverRef.current.getBoundingClientRect();
+    setPopoverStyle(
+      computeAskUsagePopoverPosition(
+        triggerRect,
+        popoverRect.width,
+        popoverRect.height,
+      ),
+    );
+  }, [hover.open, resultCount, durationMs, rewriteUsage, rerankUsage, searchUsage, answerUsage]);
+
+  const summary = generateAnswer
+    ? `${resultCount} unique files`
+    : `${resultCount} excerpts`;
+
+  return (
+    <>
+      <div
+        ref={rootRef}
+        className="inline-flex"
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+        onFocus={hover.onTriggerFocus}
+        onBlur={hover.onTriggerBlur}
+      >
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 ring-1 ring-slate-200 hover:bg-slate-50 hover:text-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-600"
+          aria-label="Search cost and timing"
+          title="Search cost and timing"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") closeActiveHoverPopover();
+          }}
+        >
+          <svg
+            aria-hidden
+            viewBox="0 0 16 16"
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M3.5 2.75h9A1.5 1.5 0 0 1 14 4.25v9.5H5A1.5 1.5 0 0 1 3.5 12.25V2.75Z"
+            />
+            <path strokeLinecap="round" d="M5.5 5.25h5M5.5 7.75h5M5.5 10.25h3" />
+            <path
+              strokeLinecap="round"
+              d="M3.5 4.5h-1A.5.5 0 0 0 2 5v7.25A1.75 1.75 0 0 0 3.75 14"
+            />
+          </svg>
+        </button>
+      </div>
+      {hover.open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={popoverRef}
+              role="tooltip"
+              style={popoverStyle}
+              className="w-max min-w-[16rem] max-w-[min(22rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              {...hover.popoverProps}
+            >
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Ask usage
+              </p>
+              <dl className="space-y-1.5 text-xs">
+                <div className="flex items-baseline justify-between gap-4">
+                  <dt className="text-slate-500">
+                    {generateAnswer ? "Reranked pool" : "Matches"}
+                  </dt>
+                  <dd className="text-right text-slate-800">{summary}</dd>
+                </div>
+                {durationMs !== null ? (
+                  <div className="flex items-baseline justify-between gap-4">
+                    <dt className="text-slate-500">Time</dt>
+                    <dd className="text-right tabular-nums text-slate-800">
+                      {durationMs}ms
+                    </dd>
+                  </div>
+                ) : null}
+                {rewriteUsage ? (
+                  <AskUsageRow
+                    label="Query rewrite"
+                    costUsd={rewriteUsage.costUsd}
+                    tokens={rewriteUsage.inputTokens + rewriteUsage.outputTokens}
+                  />
+                ) : null}
+                {rerankUsage ? (
+                  <AskUsageRow
+                    label="Hit rerank"
+                    costUsd={rerankUsage.costUsd}
+                    tokens={rerankUsage.inputTokens + rerankUsage.outputTokens}
+                  />
+                ) : null}
+                {searchUsage ? (
+                  <AskUsageRow
+                    label="Query embed"
+                    costUsd={searchUsage.costUsd}
+                    tokens={searchUsage.inputTokens}
+                  />
+                ) : null}
+                {answerUsage ? (
+                  <AskUsageRow
+                    label="Answer"
+                    costUsd={answerUsage.costUsd}
+                    tokens={answerUsage.inputTokens + answerUsage.outputTokens}
+                  />
+                ) : null}
+                {registryBoost ? (
+                  <p className="pt-1 text-[11px] font-medium text-orange-800">
+                    Registry boost applied
+                  </p>
+                ) : null}
+              </dl>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
 
 export function ArchiveSearchClient() {
   // Index Status State
@@ -934,52 +1153,22 @@ export function ArchiveSearchClient() {
 
       {/* Results Header */}
       {searchResults !== null && (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
+        <div className="mb-3 flex flex-wrap items-center gap-2 px-1">
           <span className="text-xs font-semibold text-slate-600 uppercase">
             {generateAnswer
               ? `Reranked pool · ${searchResults.length} unique files`
               : `Found ${searchResults.length} matching excerpts`}
-            {searchDurationMs !== null ? ` in ${searchDurationMs}ms` : ""}
-            {lastRewriteUsage ? (
-              <span className="ml-2 normal-case font-medium text-teal-800">
-                · Query rewrite {formatCostUsd(lastRewriteUsage.costUsd)} (
-                {formatTokenCount(
-                  lastRewriteUsage.inputTokens + lastRewriteUsage.outputTokens,
-                )}{" "}
-                tokens)
-              </span>
-            ) : null}
-            {lastRerankUsage ? (
-              <span className="ml-2 normal-case font-medium text-teal-800">
-                · Hit rerank {formatCostUsd(lastRerankUsage.costUsd)} (
-                {formatTokenCount(
-                  lastRerankUsage.inputTokens + lastRerankUsage.outputTokens,
-                )}{" "}
-                tokens)
-              </span>
-            ) : null}
-            {lastSearchUsage ? (
-              <span className="ml-2 normal-case font-medium text-teal-800">
-                · Query embed {formatCostUsd(lastSearchUsage.costUsd)} (
-                {formatTokenCount(lastSearchUsage.inputTokens)} tokens)
-              </span>
-            ) : null}
-            {groundedAnswer ? (
-              <span className="ml-2 normal-case font-medium text-teal-800">
-                · Answer {formatCostUsd(groundedAnswer.usage.costUsd)} (
-                {formatTokenCount(
-                  groundedAnswer.usage.inputTokens +
-                    groundedAnswer.usage.outputTokens,
-                )}{" "}
-                tokens)
-              </span>
-            ) : null}
-            {searchResults.some((result) => (result.boost ?? 0) > 0) ? (
-              <span className="ml-2 normal-case font-medium text-orange-800">
-                · Registry boost applied
-              </span>
-            ) : null}
           </span>
+          <AskUsagePopover
+            generateAnswer={generateAnswer}
+            resultCount={searchResults.length}
+            durationMs={searchDurationMs}
+            rewriteUsage={lastRewriteUsage}
+            rerankUsage={lastRerankUsage}
+            searchUsage={lastSearchUsage}
+            answerUsage={groundedAnswer?.usage ?? null}
+            registryBoost={searchResults.some((result) => (result.boost ?? 0) > 0)}
+          />
         </div>
       )}
 

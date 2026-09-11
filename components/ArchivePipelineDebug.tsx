@@ -13,6 +13,7 @@ function kindLabel(kind: CorpusPipelineHit["sourceKind"]): string {
 function howFoundLabel(howFound: CorpusPipelineHit["howFound"]): string {
   if (howFound === "filename") return "Name match";
   if (howFound === "filename-needle") return "Name needle";
+  if (howFound === "subject") return "Subject match";
   return "Semantic";
 }
 

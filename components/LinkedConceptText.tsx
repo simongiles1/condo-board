@@ -141,7 +141,7 @@ function computePopoverPosition(
     position: "fixed",
     top,
     left,
-    zIndex: 70,
+    zIndex: 140,
   };
 }
 
@@ -272,7 +272,7 @@ function LinkedConceptMark({
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
-    zIndex: 70,
+    zIndex: 140,
   });
   const { openProfile } = useEntityProfile();
 

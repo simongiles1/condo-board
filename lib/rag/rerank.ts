@@ -166,10 +166,20 @@ export function buildRerankUserText(params: {
     const page = result.pageNo != null ? ` page ${result.pageNo}` : "";
     const card =
       result.contentHash ? params.fileCards?.get(result.contentHash) : undefined;
-    const excerpt =
+    const excerptRaw =
       card && card.status === "ready"
         ? formatFileCardRerankExcerpt(card)
         : result.excerpt.replace(/\s+/g, " ").trim();
+    const subject =
+      typeof result.metadata.subject === "string"
+        ? result.metadata.subject.trim()
+        : "";
+    const excerpt =
+      result.sourceKind === "email_body" &&
+      subject &&
+      !excerptRaw.toLowerCase().startsWith("email:")
+        ? `Email: ${subject}. ${excerptRaw}`
+        : excerptRaw;
 
     return [
       `${index + 1}. chunkId: ${result.id}`,
@@ -179,6 +189,7 @@ export function buildRerankUserText(params: {
       `   similarity: ${Math.round(result.similarity * 100)}%`,
       result.metadata.filenameMatch ? "   filenameMatch: yes" : null,
       result.metadata.filenameAlias ? "   filenameAlias: yes" : null,
+      result.metadata.subjectMatch ? "   subjectMatch: yes" : null,
       `   excerpt: ${excerpt}`,
     ]
       .filter((line): line is string => Boolean(line))

@@ -5,6 +5,7 @@ import type { MatchedRegistryEntity } from "@/lib/rag/registry-boost";
 import {
   ASK_RETRIEVAL_LIMIT,
   searchCorpus,
+  selectHybridResults,
   type CorpusSearchOptions,
   type CorpusSearchResult,
   type CorpusSearchUsage,
@@ -102,6 +103,25 @@ export function sourceLabel(result: CorpusSearchResult): string {
   );
 }
 
+function emailBodyPackHeader(result: CorpusSearchResult): string {
+  if (result.sourceKind !== "email_body") return "";
+  const subject =
+    typeof result.metadata.subject === "string" ? result.metadata.subject.trim() : "";
+  const from =
+    typeof result.metadata.fromAddress === "string"
+      ? result.metadata.fromAddress.trim()
+      : "";
+  const lowered = result.chunkText.toLowerCase();
+  const lines: string[] = [];
+  if (subject && !lowered.startsWith("email:")) {
+    lines.push(`Email: ${subject}`);
+  }
+  if (from && !lowered.includes(`from: ${from.toLowerCase()}`)) {
+    lines.push(`From: ${from}`);
+  }
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
+}
+
 export function packAnswerSources(
   results: CorpusSearchResult[],
   limit = MAX_ANSWER_CONTEXT_CHUNKS,
@@ -120,9 +140,11 @@ export function packAnswerSources(
     }
 
     const header =
-      filename && !result.chunkText.toLowerCase().startsWith("file:")
-        ? `File: ${filename}\n`
-        : "";
+      result.sourceKind === "email_body"
+        ? emailBodyPackHeader(result)
+        : filename && !result.chunkText.toLowerCase().startsWith("file:")
+          ? `File: ${filename}\n`
+          : "";
     const totalPrefix = `${header}${cardPrefix}`;
     const budget = Math.max(80, MAX_ANSWER_CHUNK_CHARS - totalPrefix.length);
     const body =
@@ -148,11 +170,12 @@ export function packAnswerSources(
 
 export const CORPUS_ANSWER_SYSTEM_PROMPT = `You are the condo board archive assistant.
 Answer ONLY from the numbered SOURCE excerpts. Do not use outside knowledge.
-If the excerpts do not contain the answer, say so clearly and set notInArchive to true.
+Answer every part of the question the excerpts support. If a specific detail is missing (a date, duration, or amount), say that detail is not in the excerpts after summarizing what is there. Do not claim the archive has no emails or files on the topic when a source discusses it.
+Set notInArchive to true only when no numbered source is on-topic. A close spelling of a person name (Hyder/Haider) in a source still counts as on-topic.
 Never invent filenames, dates, amounts, or vendors that are not in the excerpts.
 Registry entities are ranking hints, not facts, unless the same name appears in an excerpt.
 Read EVERY numbered source before answering. Do not stop at the first few.
-FILE INDEX lists every source filename. When the question asks to find a file or document, treat that index as evidence alongside the excerpts. A filename can be sufficient evidence even when the excerpt is a table, signature page, or boilerplate. Decide from the question which files and emails actually answer it. Do not prefer a document type (draft, proposal, signed, final, update) unless the question asks for that. An excerpt that merely discusses a topic is weaker than a filename that is the document.
+FILE INDEX lists every source filename. When the question asks to find a file or document, treat that index as evidence alongside the excerpts. A filename or email subject can be sufficient evidence even when the excerpt is a table, signature page, or boilerplate. Decide from the question which files and emails actually answer it. Do not prefer a document type (draft, proposal, signed, final, update) unless the question asks for that. An excerpt that merely discusses a topic is weaker than a filename that is the document.
 If the question names several parties, name a file for each when the sources include them.
 If the question names parties or a count of documents, treat a packed source as a near miss when it is the same kind of document (for example another reserve fund study) but the letterhead or parties do not match a named company. Do not claim that firm is the named company. After the named matches, add one short "Related, not a name match:" sentence citing those [SN] sources (at most 3). Prefer study, signed_report, and tables over sample or proposal for near matches. If there is no coverage gap, do not list extra similar files. Never use outside knowledge to equate company names.
 Return JSON only (no markdown fences) with this shape — put answer first:
@@ -662,9 +685,13 @@ export async function answerCorpusQuestion(
     limit: MAX_ANSWER_CONTEXT_CHUNKS,
     fileCards,
   });
+  const packedResults = selectHybridResults(
+    reranked.ordered,
+    MAX_ANSWER_CONTEXT_CHUNKS,
+  );
   const answer = await generateCorpusAnswer({
     query: options.query,
-    results: reranked.ordered,
+    results: packedResults,
     matchedEntities,
     fileSeeking: rewrite?.fileSeeking,
     fileCards,
@@ -684,6 +711,7 @@ export async function answerCorpusQuestion(
       reranked: reranked.ordered,
       selectedIds: reranked.selectedIds,
       packedLimit: MAX_ANSWER_CONTEXT_CHUNKS,
+      packedResults,
       citedChunkIds: answer.citations.map((citation) => citation.chunkId),
       fileCards,
     }),

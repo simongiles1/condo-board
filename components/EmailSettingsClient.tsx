@@ -1675,9 +1675,14 @@ export function EmailSettingsClient(props: {
                         </td>
                       </tr>
                     ) : (
-                      sortedCandidates.map((candidate) => (
+                      sortedCandidates.map((candidate) => {
+                        const notOnAllowlist = !candidate.saved;
+                        const mutedCell = notOnAllowlist
+                          ? " bg-slate-50/80 text-slate-400"
+                          : "";
+                        return (
                         <tr key={candidate.email} className="align-top">
-                          <td className="px-4 py-3">
+                          <td className={`px-4 py-3${mutedCell}`}>
                             <input
                               type="checkbox"
                               checked={selectedEmails.has(candidate.email)}
@@ -1686,26 +1691,44 @@ export function EmailSettingsClient(props: {
                               aria-label={`Select ${candidate.email}`}
                             />
                           </td>
-                          <td className="px-4 py-3">
+                          <td className={`px-4 py-3${mutedCell}`}>
                             <div className="min-w-0">
-                              <p className="break-all font-medium text-slate-900">
+                              <p
+                                className={`break-all font-medium${
+                                  notOnAllowlist ? " text-slate-500" : " text-slate-900"
+                                }`}
+                              >
                                 {candidate.displayName
                                   ? `${candidate.displayName} · `
                                   : ""}
                                 {candidate.email}
                               </p>
                               {candidate.notes ? (
-                                <p className="mt-1 text-slate-600">{candidate.notes}</p>
+                                <p
+                                  className={`mt-1${
+                                    notOnAllowlist ? " text-slate-400" : " text-slate-600"
+                                  }`}
+                                >
+                                  {candidate.notes}
+                                </p>
                               ) : null}
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+                          <td
+                            className={`px-4 py-3 text-right tabular-nums${
+                              notOnAllowlist ? mutedCell : " text-slate-700"
+                            }`}
+                          >
                             {formatEmailAndThreadCount(
                               candidate.messageCount,
                               candidate.threadCount,
                             )}
                           </td>
-                          <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+                          <td
+                            className={`px-4 py-3 text-right tabular-nums${
+                              notOnAllowlist ? mutedCell : " text-slate-700"
+                            }`}
+                          >
                             {candidate.personalFromCount == null
                               ? "—"
                               : formatEmailAndThreadCount(
@@ -1784,7 +1807,8 @@ export function EmailSettingsClient(props: {
                             </div>
                           </td>
                         </tr>
-                      ))
+                        );
+                      })
                     )}
                   </tbody>
                 </table>

@@ -69,7 +69,7 @@ function computePopoverPosition(
     top,
     left,
     transform,
-    zIndex: 50,
+    zIndex: 140,
   };
 }
 
@@ -144,7 +144,7 @@ export function FileCardSummaryBadge({ card }: { card: CorpusSearchFileCard }) {
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
-    zIndex: 50,
+    zIndex: 140,
   });
 
   const typeClass = documentTypeBadgeClass(card.documentType);

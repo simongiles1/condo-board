@@ -6,13 +6,23 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Global archive chat** — A chat button in the bottom-right corner opens a large conversation window on every signed-in page. Each question uses Ask the Archive, cited files open in a side preview (PDF pages, images, or the email excerpt), and people, organizations, equipment, and calendar names in the answer are highlighted like the rest of the app. While an answer is running, the waiting bubble steps through rewrite, retrieval, ranking, and writing. `[S1]` citations open the matching file. The composer grows with the question up to a short max height, then scrolls.
+
 ### Fixed
+
+- **Ask answers on named people** — Email subjects and From lines are now searched with person-name needles (including close spellings such as Hyder/Haider from the contact registry), those hits are reserved in the packed answer, and the answerer summarizes what the thread does say instead of claiming the archive has no correspondence when only a date or duration is missing.
 
 - **Catch-up import estimate** — Pending count uses the same Gmail message-id duplicate check as sync, not received-at since last sync. Fixes false “1 new email” when Gmail’s day-based `after:` still returns yesterday’s mail that is already in the archive.
 
 - **Display dates** — Month labels use three-letter uppercase form (e.g. SEP 10, 2026 at 3:38 p.m.) so thread rows do not truncate “p.m.”
 
 ### Changed
+
+- **Ask usage details** — Query rewrite, rerank, embed, and answer cost/token lines on Ask the Archive sit in a receipt icon popover instead of wrapping across the results header.
+
+- **Email Settings sender allowlist** — Rows for senders not yet saved to the allowlist use a muted background and lighter text; action buttons stay at full contrast.
 
 - **Email Settings sync estimates** — … **View** opens a modal listing Gmail messages in the catch-up search (query collapsed under “advanced”; scrollable message cards first).
 

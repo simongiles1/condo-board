@@ -8,13 +8,18 @@ import {
   type TelegramUpdate,
 } from "@/lib/telegram/api";
 import {
+  allowlistReviewLoadingKeyboard,
   formatResolvedMessage,
+  ingestContinueLoadingKeyboard,
   parseTelegramCallbackData,
 } from "@/lib/telegram/format";
 import { getTelegramReviewItem } from "@/lib/telegram/store";
 import { resolveTelegramReviewItem } from "@/lib/telegram/resolve";
 import { sendUnsentTelegramDigest } from "@/lib/telegram/digest";
-import { handleIngestTelegramCallback } from "@/lib/email/ingest-pipeline";
+import {
+  handleIngestTelegramCallback,
+  refreshIngestTelegramMessage,
+} from "@/lib/email/ingest-pipeline";
 
 function isChatIdCommand(text: string | undefined): boolean {
   const trimmed = text?.trim() ?? "";
@@ -57,15 +62,41 @@ export async function handleTelegramUpdate(
     return;
   }
 
+  if (parsed.action === "loading") {
+    await answerTelegramCallback({
+      callbackQueryId: query.id,
+      text: "Still working…",
+    });
+    return;
+  }
+
   const review = await getTelegramReviewItem(parsed.id);
   if (
     review &&
     (review.kind === "allowlist_sender" || review.kind === "ingest_stage")
   ) {
+    if (query.message && chatId) {
+      const loadingMarkup =
+        review.kind === "ingest_stage"
+          ? ingestContinueLoadingKeyboard(parsed.id)
+          : allowlistReviewLoadingKeyboard(parsed.id);
+      await editTelegramMessage({
+        chatId,
+        messageId: query.message.message_id,
+        text: query.message.text ?? "Email ingest pipeline",
+        replyMarkup: loadingMarkup,
+      }).catch(() => undefined);
+    }
+
     const result = await handleIngestTelegramCallback({
       reviewItemId: parsed.id,
       action: parsed.action,
     });
+
+    if (!result.ok) {
+      await refreshIngestTelegramMessage(parsed.id).catch(() => undefined);
+    }
+
     await answerTelegramCallback({
       callbackQueryId: query.id,
       text: result.ok

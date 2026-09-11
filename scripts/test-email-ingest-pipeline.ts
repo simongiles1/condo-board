@@ -103,6 +103,14 @@ describe("telegram ingest callbacks", () => {
       id,
       action: "continue",
     });
+    assert.deepEqual(parseTelegramCallbackData(`ld:${id}`), {
+      id,
+      action: "loading",
+    });
+    assert.deepEqual(
+      parseTelegramCallbackData(telegramCallbackData(id, "loading")),
+      { id, action: "loading" },
+    );
   });
 });
 

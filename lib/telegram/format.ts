@@ -12,7 +12,8 @@ export type TelegramCallbackAction =
   | "approved"
   | "denied"
   | "back"
-  | "continue";
+  | "continue"
+  | "loading";
 
 const UUID =
   "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -21,7 +22,9 @@ export function parseTelegramCallbackData(
   data: string | undefined,
 ): { id: string; action: TelegramCallbackAction } | null {
   if (!data) return null;
-  const match = new RegExp(`^(ok|no|bk|go):(${UUID})$`, "i").exec(data.trim());
+  const match = new RegExp(`^(ok|no|bk|go|ld):(${UUID})$`, "i").exec(
+    data.trim(),
+  );
   if (!match) return null;
   const prefix = match[1]!.toLowerCase();
   const action: TelegramCallbackAction =
@@ -31,7 +34,9 @@ export function parseTelegramCallbackData(
         ? "denied"
         : prefix === "bk"
           ? "back"
-          : "continue";
+          : prefix === "ld"
+            ? "loading"
+            : "continue";
   return {
     action,
     id: match[2]!.toLowerCase(),
@@ -49,8 +54,25 @@ export function telegramCallbackData(
         ? "no"
         : action === "back"
           ? "bk"
-          : "go";
+          : action === "loading"
+            ? "ld"
+            : "go";
   return `${prefix}:${id}`;
+}
+
+const TELEGRAM_LOADING_BUTTON_LABEL = "Working…";
+
+function telegramLoadingKeyboard(id: string): TelegramInlineKeyboard {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: TELEGRAM_LOADING_BUTTON_LABEL,
+          callback_data: telegramCallbackData(id, "loading"),
+        },
+      ],
+    ],
+  };
 }
 
 export function reviewItemKeyboard(id: string): TelegramInlineKeyboard {
@@ -84,6 +106,14 @@ export function ingestContinueKeyboard(id: string): TelegramInlineKeyboard {
       [{ text: "Continue", callback_data: telegramCallbackData(id, "continue") }],
     ],
   };
+}
+
+export function ingestContinueLoadingKeyboard(id: string): TelegramInlineKeyboard {
+  return telegramLoadingKeyboard(id);
+}
+
+export function allowlistReviewLoadingKeyboard(id: string): TelegramInlineKeyboard {
+  return telegramLoadingKeyboard(id);
 }
 
 const HOLD_REASON_LABEL: Record<string, string> = {

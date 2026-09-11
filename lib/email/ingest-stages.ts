@@ -142,3 +142,10 @@ export type IngestRunPublic = {
   finishedAt: string | null;
   senders: IngestSenderReviewPublic[];
 };
+
+export function shouldResumeIdleIngestRun(input: {
+  status: IngestRunPublic["status"];
+  pipelineBusy: boolean;
+}): boolean {
+  return input.status === "running" && !input.pipelineBusy;
+}

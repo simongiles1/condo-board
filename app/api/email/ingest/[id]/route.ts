@@ -10,7 +10,7 @@ export async function GET(
 ) {
   const { id } = await context.params;
   try {
-    const run = await getIngestRun(id);
+    const run = await getIngestRun(id, { resumeIfIdle: true });
     if (!run) {
       return NextResponse.json({ error: "Ingest run not found." }, { status: 404 });
     }

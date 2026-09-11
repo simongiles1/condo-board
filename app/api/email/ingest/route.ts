@@ -11,7 +11,7 @@ import { maybeSendOauthRelinkReminder } from "@/lib/email/ingest-pipeline";
 export async function GET() {
   try {
     await maybeSendOauthRelinkReminder().catch(() => undefined);
-    const run = await getActiveIngestRun();
+    const run = await getActiveIngestRun({ resumeIfIdle: true });
     return NextResponse.json({ run });
   } catch (error) {
     console.error("[email:ingest:get]", error);

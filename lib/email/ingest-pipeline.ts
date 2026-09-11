@@ -25,6 +25,7 @@ import { shouldSendOauthRelinkRemind } from "@/lib/email/ingest-oauth-remind";
 import {
   ingestStageLabel,
   nextIngestStage,
+  shouldResumeIdleIngestRun,
   type IngestStage,
   type IngestWaitKind,
 } from "@/lib/email/ingest-stages";
@@ -85,6 +86,14 @@ export type IngestRunRecord = {
 type RunRow = typeof emailIngestRuns.$inferSelect;
 
 let pipelineBusy = false;
+
+function resumeIdleIngestRun(run: IngestRunRecord): void {
+  if (!shouldResumeIdleIngestRun({ status: run.status, pipelineBusy })) {
+    return;
+  }
+  console.info("[ingest] resuming idle running pipeline", run.id);
+  scheduleIngestPipelineWork(run.id);
+}
 
 function parseJsonArray(raw: string | null | undefined): string[] {
   if (!raw?.trim()) return [];
@@ -153,7 +162,10 @@ async function loadSenders(runId: string): Promise<IngestSenderReview[]> {
   }));
 }
 
-export async function getIngestRun(id: string): Promise<IngestRunRecord | null> {
+export async function getIngestRun(
+  id: string,
+  options?: { resumeIfIdle?: boolean },
+): Promise<IngestRunRecord | null> {
   const db = getDb();
   const [row] = await db
     .select()
@@ -161,10 +173,14 @@ export async function getIngestRun(id: string): Promise<IngestRunRecord | null> 
     .where(eq(emailIngestRuns.id, id))
     .limit(1);
   if (!row) return null;
-  return mapRun(row, await loadSenders(id));
+  const run = mapRun(row, await loadSenders(id));
+  if (options?.resumeIfIdle) resumeIdleIngestRun(run);
+  return run;
 }
 
-export async function getActiveIngestRun(): Promise<IngestRunRecord | null> {
+export async function getActiveIngestRun(
+  options?: { resumeIfIdle?: boolean },
+): Promise<IngestRunRecord | null> {
   const db = getDb();
   const [row] = await db
     .select()
@@ -179,7 +195,9 @@ export async function getActiveIngestRun(): Promise<IngestRunRecord | null> {
     .orderBy(desc(emailIngestRuns.startedAt))
     .limit(1);
   if (!row) return null;
-  return mapRun(row, await loadSenders(row.id));
+  const run = mapRun(row, await loadSenders(row.id));
+  if (options?.resumeIfIdle) resumeIdleIngestRun(run);
+  return run;
 }
 
 async function patchRun(
@@ -783,6 +801,8 @@ export async function startIngestPipeline(
 ): Promise<IngestRunRecord> {
   const active = await getActiveIngestRun();
   if (active) {
+    // A crashed or lock-skipped start leaves status=running with no worker.
+    resumeIdleIngestRun(active);
     return active;
   }
   if (pipelineBusy) {
@@ -791,7 +811,6 @@ export async function startIngestPipeline(
     );
   }
 
-  pipelineBusy = true;
   const db = getDb();
   const now = new Date().toISOString();
   const id = randomUUID();

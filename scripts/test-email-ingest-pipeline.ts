@@ -15,6 +15,7 @@ import { shouldSendOauthRelinkRemind } from "../lib/email/ingest-oauth-remind";
 import {
   ingestStageMeterSegments,
   nextIngestStage,
+  shouldResumeIdleIngestRun,
 } from "../lib/email/ingest-stages";
 import {
   appendCatchupAfterToQuery,
@@ -158,6 +159,24 @@ describe("ingest stages", () => {
     assert.equal(
       nextIngestStage("e3_embed", { harvestEnabled: true }),
       "e4_harvest",
+    );
+  });
+
+  it("resumes a running ingest only when the in-memory worker is idle", () => {
+    assert.equal(
+      shouldResumeIdleIngestRun({ status: "running", pipelineBusy: true }),
+      false,
+    );
+    assert.equal(
+      shouldResumeIdleIngestRun({ status: "running", pipelineBusy: false }),
+      true,
+    );
+    assert.equal(
+      shouldResumeIdleIngestRun({
+        status: "waiting_continue",
+        pipelineBusy: false,
+      }),
+      false,
     );
   });
 

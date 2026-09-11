@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Email ingest catch-up never started** — Starting a pipeline set an in-memory busy flag and then skipped the worker because that same flag was already set, so the dialog stayed on Catch-up with 0 emails. Start no longer holds that lock; a `running` row with no worker is resumed on the next poll or Sync now.
+
 - **Gmail catch-up after reconnect** — Incremental sync no longer treats the in-progress run or a freshly connected Gmail history cursor as “last successful import.” Catch-up searches from the older of the last finished sync and any stored-mail gap longer than seven days, so a three-week disconnect is filled instead of importing only mail that arrived after reconnect.
 
 ### Changed

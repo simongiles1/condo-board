@@ -57,6 +57,7 @@ import {
   parseGroundedAnswerJson,
   mergeAnswerCitations,
   salvageGroundedAnswerFromText,
+  selectNearMisses,
   stripJsonFence,
 } from "../lib/rag/answer";
 import { extractExcerpt } from "../lib/rag/search";
@@ -792,8 +793,10 @@ describe("Corpus RAG - Grounded answers (Phase C)", () => {
     const { CORPUS_RERANK_SYSTEM_PROMPT } = await import("../lib/rag/rerank");
     assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /Do not prefer a document type/);
     assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /review must include every source number/);
+    assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /Related, not a name match/);
     assert.match(CORPUS_ANSWER_SYSTEM_PROMPT, /Do not emit chunk ids/);
     assert.match(CORPUS_RERANK_SYSTEM_PROMPT, /Do not prefer a document type/);
+    assert.match(CORPUS_RERANK_SYSTEM_PROMPT, /near miss/);
     assert.equal(
       /Prefer the actual deliverable/i.test(CORPUS_RERANK_SYSTEM_PROMPT),
       false,
@@ -821,8 +824,97 @@ describe("Corpus RAG - Grounded answers (Phase C)", () => {
 
     assert.equal(parsed.reviews.length, 2);
     assert.equal(parsed.reviews[0]?.chunkId, "chunk_rfs");
+    assert.equal(parsed.reviews[0]?.match, "direct");
+    assert.equal(parsed.reviews[1]?.match, "no");
     assert.equal(parsed.answer, "The RFS is TSCC 2517-RFS.pdf [S1].");
     assert.equal(parsed.confidence, "high");
+  });
+
+  it("keeps party-mismatched studies as near misses instead of dropping them", () => {
+    const sources = packAnswerSources(
+      [
+        {
+          ...sampleResult,
+          id: "chunk_trace",
+          contentHash: "hash_trace",
+          metadata: { filename: "Trace RFS tables.pdf" },
+        },
+        {
+          ...sampleResult,
+          id: "chunk_mp",
+          contentHash: "hash_mp",
+          metadata: { filename: "RFS Signed.pdf" },
+        },
+        {
+          ...sampleResult,
+          id: "chunk_sample",
+          contentHash: "hash_sample",
+          metadata: { filename: "Highrise Sample.pdf" },
+        },
+      ],
+      5,
+      new Map([
+        [
+          "hash_trace",
+          {
+            documentType: "tables",
+            summary: "Trace RFS tables.",
+            parties: ["Trace Consulting Group"],
+            status: "ready" as const,
+          },
+        ],
+        [
+          "hash_mp",
+          {
+            documentType: "signed_report",
+            summary: "McIntosh Perry Class 2 RFS.",
+            parties: ["McIntosh Perry"],
+            status: "ready" as const,
+          },
+        ],
+        [
+          "hash_sample",
+          {
+            documentType: "sample",
+            summary: "Sample RFS report.",
+            parties: ["McIntosh Perry"],
+            status: "ready" as const,
+          },
+        ],
+      ]),
+    );
+    const parsed = parseGroundedAnswerJson(
+      JSON.stringify({
+        answer:
+          "Trace tables [S1]. Related, not a name match: RFS Signed.pdf [S2].",
+        review: [
+          { source: 1, match: "direct", why: "Trace study" },
+          {
+            source: 2,
+            match: "near",
+            why: "Class 2 RFS by McIntosh Perry, not Egis",
+          },
+          { source: 3, match: "near", why: "sample report" },
+        ],
+        confidence: "medium",
+        notInArchive: false,
+      }),
+      sources,
+    );
+    const merged = mergeAnswerCitations({
+      sources,
+      citations: [],
+      reviews: parsed.reviews,
+      fileSeeking: true,
+    });
+    const near = selectNearMisses(parsed.reviews, sources, 1);
+
+    assert.deepEqual(
+      merged.map((row) => row.chunkId),
+      ["chunk_trace"],
+    );
+    assert.equal(near.length, 1);
+    assert.equal(near[0]?.chunkId, "chunk_mp");
   });
 
   it("salvages prose from truncated answer JSON", () => {
@@ -887,6 +979,7 @@ describe("Corpus RAG - Grounded answers (Phase C)", () => {
 
     const empty = emptyCorpusAnswer("gemini-3.7-flash");
     assert.equal(empty.notInArchive, true);
+    assert.equal(empty.nearMisses.length, 0);
     assert.equal(empty.usage.costUsd, 0);
     assert.match(empty.answer, /No matching excerpts/);
   });

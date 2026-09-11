@@ -35,7 +35,19 @@ export const MAX_EXTRACT_HEAD_CHARS = 8000;
 export const MAX_EXTRACT_TAIL_CHARS = 2000;
 export const MAX_EXTRACT_TOTAL_CHARS = 16000;
 export const EMAIL_SUMMARY_THRESHOLD_CHARS = 1200;
-export const FILE_CARD_PACK_VERSION = "file-card-pack-v2";
+export const FILE_CARD_PACK_VERSION = "file-card-pack-v3";
+export const MAX_ASK_SUMMARY_CHARS = 320;
+export const MAX_ASK_OUTLINE_CHARS = 240;
+export const MAX_OUTLINE_ENTRIES = 24;
+const PAGE_BREAK_PLACEHOLDER = "<!-- DOCLING_PAGE_BREAK -->";
+const PAGE_SAMPLE_CHARS = 280;
+const TITLE_HINT =
+  /\b(table|form|appendix|schedule|notice|reserve fund|class\s+[123]|signed|contribution|cash flow)\b/i;
+
+export type FileCardOutlineEntry = {
+  page: number | null;
+  title: string;
+};
 
 export const FILE_CARD_SYSTEM_PROMPT = `You analyze document attachments and their parent email context to produce a structured file card.
 
@@ -56,15 +68,128 @@ Rules:
 - parties MUST include every named organization and person who authored, prepared, branded, or issued the document. Use letterhead, headers, footers, stamps, signature blocks, and DOCUMENT FILE PROPERTIES (especially Author and page-1 header text). Covering-email senders alone are not sufficient — a reserve-fund tables PDF branded Trace Consulting Group must list that firm even when the email is from the property manager.
 - Include consulting / engineering firms printed in the header even when the body is only tables.
 - Omit generic software names (Microsoft Excel, Adobe Acrobat, and similar producers).
+- If DOCUMENT OUTLINE or middle page samples are present, the summary MUST mention interior components (notices, tables, signatures, later sections) even when they are not in the opening pages. A mixed packet is not only its cover page.
 - If email_summary is requested in the prompt, summarize the email body concisely. Otherwise set email_summary to null.`;
 
 export function hashPackedText(text: string): string {
   return crypto.createHash("sha256").update(text.trim()).digest("hex");
 }
 
+function collapseTitle(text: string, max = 120): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= max) return collapsed;
+  return `${collapsed.slice(0, max).trimEnd()}…`;
+}
+
+function isNoiseOutlineLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed.length < 4) return true;
+  if (/^[-*|:_=\s]+$/.test(trimmed)) return true;
+  if (/^\|[-:\s|]+\|$/.test(trimmed)) return true;
+  const digits = (trimmed.match(/\d/g) || []).length;
+  return digits > trimmed.length * 0.6 && trimmed.length > 20;
+}
+
+function titleFromPageMarkdown(pageMarkdown: string): string | null {
+  const lines = pageMarkdown.split("\n").map((line) => line.trim());
+  for (const line of lines) {
+    if (!line || isNoiseOutlineLine(line)) continue;
+    const heading = /^#{1,4}\s+(.+)$/.exec(line);
+    if (heading) return collapseTitle(heading[1]);
+    if (TITLE_HINT.test(line)) return collapseTitle(line);
+    if (/^[A-Z0-9][A-Z0-9 ,.'&/()-]{11,}$/.test(line) && /[A-Z]{3}/.test(line)) {
+      return collapseTitle(line);
+    }
+  }
+  const first = lines.find((line) => line && !isNoiseOutlineLine(line));
+  return first ? collapseTitle(first) : null;
+}
+
+/**
+ * Deterministic section inventory from Docling page breaks, headings, and
+ * title-like lines. Used for long mixed packets that lack a markdown TOC.
+ */
+export function extractDocumentOutline(
+  markdown: string | null | undefined,
+): FileCardOutlineEntry[] {
+  const normalized = (markdown || "").replace(/\r\n/g, "\n").trim();
+  if (!normalized) return [];
+
+  const entries: FileCardOutlineEntry[] = [];
+  const seen = new Set<string>();
+  const push = (page: number | null, title: string) => {
+    const cleaned = collapseTitle(title);
+    if (!cleaned) return;
+    const key = `${page ?? "x"}:${cleaned.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push({ page, title: cleaned });
+  };
+
+  if (normalized.includes(PAGE_BREAK_PLACEHOLDER)) {
+    const pages = normalized.split(PAGE_BREAK_PLACEHOLDER);
+    pages.forEach((pageMarkdown, index) => {
+      if (entries.length >= MAX_OUTLINE_ENTRIES) return;
+      const title = titleFromPageMarkdown(pageMarkdown);
+      if (title) push(index + 1, title);
+    });
+    return entries;
+  }
+
+  for (const line of normalized.split("\n")) {
+    if (entries.length >= MAX_OUTLINE_ENTRIES) break;
+    const trimmed = line.trim();
+    if (!trimmed || isNoiseOutlineLine(trimmed)) continue;
+    const heading = /^#{1,4}\s+(.+)$/.exec(trimmed);
+    if (heading) {
+      push(null, heading[1]);
+      continue;
+    }
+    if (TITLE_HINT.test(trimmed)) push(null, trimmed);
+  }
+  return entries;
+}
+
+function formatOutlineBlock(entries: FileCardOutlineEntry[]): string {
+  return entries
+    .map((entry) =>
+      entry.page != null ? `p.${entry.page} ${entry.title}` : entry.title,
+    )
+    .join("\n");
+}
+
+function middlePageSamples(markdown: string, headEnd: number, tailStart: number): string {
+  if (!markdown.includes(PAGE_BREAK_PLACEHOLDER)) {
+    const middle = markdown.slice(headEnd, tailStart);
+    if (middle.length < 800) return "";
+    const step = Math.max(2000, Math.floor(middle.length / 6));
+    const samples: string[] = [];
+    for (let offset = 0; offset < middle.length && samples.length < 6; offset += step) {
+      const slice = collapseTitle(middle.slice(offset, offset + PAGE_SAMPLE_CHARS), PAGE_SAMPLE_CHARS);
+      if (slice.length > 40) samples.push(slice);
+    }
+    return samples.join("\n\n");
+  }
+
+  let cursor = 0;
+  const samples: string[] = [];
+  const pages = markdown.split(PAGE_BREAK_PLACEHOLDER);
+  pages.forEach((pageMarkdown, index) => {
+    const start = cursor;
+    cursor += pageMarkdown.length + PAGE_BREAK_PLACEHOLDER.length;
+    if (start < headEnd || start >= tailStart) return;
+    const sample = collapseTitle(pageMarkdown, PAGE_SAMPLE_CHARS);
+    if (sample.length > 40) {
+      samples.push(`p.${index + 1}: ${sample}`);
+    }
+  });
+  return samples.slice(0, 8).join("\n\n");
+}
+
 /**
  * Extract representative markdown content within the 16k character budget.
- * Includes beginning, ending, and intermediate headings / TOC lines.
+ * Includes beginning, ending, an extractive outline, and page samples when
+ * markdown headings in the middle are sparse.
  */
 export function extractRepresentativeMarkdown(
   markdown: string | null | undefined,
@@ -75,35 +200,110 @@ export function extractRepresentativeMarkdown(
     return normalized;
   }
 
+  const outline = extractDocumentOutline(normalized);
   const head = normalized.slice(0, MAX_EXTRACT_HEAD_CHARS).trimEnd();
   const tail = normalized.slice(-MAX_EXTRACT_TAIL_CHARS).trimStart();
   const middleText = normalized.slice(
     MAX_EXTRACT_HEAD_CHARS,
-    normalized.length - MAX_EXTRACT_TAIL_CHARS,
+    Math.max(MAX_EXTRACT_HEAD_CHARS, normalized.length - MAX_EXTRACT_TAIL_CHARS),
   );
 
-  // Harvest markdown headings from middle text (TOC / structural signals)
   const middleHeadings = middleText
     .split("\n")
     .filter((line) => /^#{1,4}\s+\S+/.test(line.trim()))
-    .map((line) => line.trim())
-    .join("\n");
+    .map((line) => line.trim());
 
   const availableMiddleBudget = Math.max(
-    500,
-    totalCap - head.length - tail.length - 100,
+    800,
+    totalCap - head.length - tail.length - 200,
   );
-  const truncatedMiddle =
-    middleHeadings.length > availableMiddleBudget
-      ? `${middleHeadings.slice(0, availableMiddleBudget)}…`
-      : middleHeadings;
 
   const parts = [head];
-  if (truncatedMiddle) {
-    parts.push(`\n--- [MIDDLE SECTION HEADINGS] ---\n${truncatedMiddle}`);
+  if (outline.length > 0) {
+    const outlineBlock = formatOutlineBlock(outline);
+    const clipped =
+      outlineBlock.length > 1200
+        ? `${outlineBlock.slice(0, 1200).trimEnd()}…`
+        : outlineBlock;
+    parts.push(`\n--- [DOCUMENT OUTLINE] ---\n${clipped}`);
   }
+
+  let used = parts.join("\n").length + tail.length;
+  const remaining = Math.max(400, availableMiddleBudget - (used - head.length));
+
+  if (middleHeadings.length >= 3) {
+    const joined = middleHeadings.join("\n");
+    const truncated =
+      joined.length > remaining ? `${joined.slice(0, remaining)}…` : joined;
+    parts.push(`\n--- [MIDDLE SECTION HEADINGS] ---\n${truncated}`);
+  } else {
+    const samples = middlePageSamples(
+      normalized,
+      MAX_EXTRACT_HEAD_CHARS,
+      normalized.length - MAX_EXTRACT_TAIL_CHARS,
+    );
+    if (samples) {
+      const truncated =
+        samples.length > remaining ? `${samples.slice(0, remaining)}…` : samples;
+      parts.push(`\n--- [MIDDLE PAGE SAMPLES] ---\n${truncated}`);
+    }
+  }
+
   parts.push(`\n--- [DOCUMENT CONCLUSION / SIGNATURE AREA] ---\n${tail}`);
   return parts.join("\n");
+}
+
+export type FileCardAskFields = {
+  documentType: string;
+  summary: string;
+  coveringEmailContext?: string | null;
+  parties?: string[];
+  documentDate?: string | null;
+  sections?: FileCardOutlineEntry[];
+};
+
+function clipAskText(text: string, max: number): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= max) return collapsed;
+  return `${collapsed.slice(0, max).trimEnd()}…`;
+}
+
+/** Compact file-card fields for rerank excerpts and answer packing. */
+export function formatFileCardAskParts(card: FileCardAskFields): string[] {
+  const parts = [
+    `Document Type: ${card.documentType}`,
+    `Summary: ${clipAskText(card.summary, MAX_ASK_SUMMARY_CHARS)}`,
+  ];
+  if (card.parties && card.parties.length > 0) {
+    parts.push(`Parties: ${card.parties.slice(0, 8).join("; ")}`);
+  }
+  if (card.documentDate?.trim()) {
+    parts.push(`Date: ${card.documentDate.trim()}`);
+  }
+  if (card.coveringEmailContext?.trim()) {
+    parts.push(
+      `Covering Email Context: ${clipAskText(card.coveringEmailContext, 220)}`,
+    );
+  }
+  if (card.sections && card.sections.length > 0) {
+    const outline = card.sections
+      .slice(0, 8)
+      .map((entry) =>
+        entry.page != null ? `p.${entry.page} ${entry.title}` : entry.title,
+      )
+      .join("; ");
+    parts.push(`Outline: ${clipAskText(outline, MAX_ASK_OUTLINE_CHARS)}`);
+  }
+  return parts;
+}
+
+export function formatFileCardRerankExcerpt(card: FileCardAskFields): string {
+  const parties =
+    card.parties && card.parties.length > 0
+      ? ` parties: ${card.parties.slice(0, 6).join("; ")}`
+      : "";
+  const date = card.documentDate?.trim() ? ` date: ${card.documentDate.trim()}` : "";
+  return `[${card.documentType}] ${clipAskText(card.summary, MAX_ASK_SUMMARY_CHARS)}${parties}${date}`;
 }
 
 export type PackFileCardParams = {
@@ -132,6 +332,11 @@ export function packFileCardPrompt(params: PackFileCardParams): PackedFileCardRe
       : rawEmail;
 
   const contentText = extractRepresentativeMarkdown(params.markdown);
+  const outline = extractDocumentOutline(params.markdown);
+  const outlineBlock =
+    outline.length > 0
+      ? `DOCUMENT OUTLINE:\n${formatOutlineBlock(outline)}`
+      : "";
 
   const sections = [
     `PACK VERSION: ${FILE_CARD_PACK_VERSION}`,
@@ -139,8 +344,9 @@ export function packFileCardPrompt(params: PackFileCardParams): PackedFileCardRe
     `COVERING EMAIL SUBJECT: ${subject}`,
     formatPdfMetadataPromptBlock(params.fileMetadata),
     `COVERING EMAIL BODY:\n${emailExcerpt || "(empty)"}`,
+    outlineBlock,
     `EXTRACTED ATTACHMENT CONTENT:\n${contentText || "(empty)"}`,
-  ];
+  ].filter(Boolean);
 
   if (params.includeEmailSummaryPrompt) {
     sections.push(

@@ -1035,6 +1035,39 @@ export function ArchiveSearchClient() {
           <div>
             {renderAnswerText(groundedAnswer.answer, searchResults ?? [], focusChunk)}
           </div>
+          {groundedAnswer.nearMisses?.length ? (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/80 p-2.5">
+              <p className="text-xs font-semibold text-amber-950">
+                Related, not a name match
+              </p>
+              <p className="mt-0.5 text-[11px] text-amber-900/80">
+                Same kind of document, different company name than the question used.
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {groundedAnswer.nearMisses.map((citation) => {
+                  const result = (searchResults ?? []).find(
+                    (row) => row.id === citation.chunkId,
+                  );
+                  const label =
+                    result?.metadata.filename ||
+                    result?.metadata.subject ||
+                    citation.chunkId;
+                  return (
+                    <button
+                      key={`near-${citation.chunkId}`}
+                      type="button"
+                      onClick={() => focusChunk(citation.chunkId)}
+                      className="rounded-full border border-amber-300 bg-white px-2 py-0.5 text-xs font-medium text-amber-950 hover:bg-amber-100"
+                      title={citation.why || "Related file"}
+                    >
+                      {label}
+                      {result?.pageNo != null ? ` p.${result.pageNo}` : ""}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           {groundedAnswer.citations.length > 0 ? (
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
               <span className="text-xs font-semibold text-slate-600">

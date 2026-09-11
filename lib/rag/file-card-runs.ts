@@ -11,6 +11,7 @@ import {
 } from "@/lib/db/schema";
 import { parseStoredFileMetadata } from "@/lib/email/attachment-file-metadata";
 import type { PdfFileMetadata } from "@/lib/pdf/document-properties";
+import type { FileCardOutlineEntry } from "@/lib/rag/file-card-pack";
 import {
   deepSeekRatesAt,
   deepSeekRatesForTier,
@@ -514,6 +515,7 @@ export type FileCardDisplayItem = {
   coveringEmailContext: string;
   parties: string[];
   documentDate: string | null;
+  sections: FileCardOutlineEntry[];
   status: "ready" | "failed";
   costUsd: number;
   pricingTier: string;
@@ -652,6 +654,7 @@ function fileCardDisplayFromRow(row: {
     coveringEmailContext: row.card.coveringEmailContext,
     parties,
     documentDate: row.card.documentDate,
+    sections: parseFileCardSectionsJson(row.card.sectionsJson),
     status: row.card.status as "ready" | "failed",
     costUsd: Number(row.card.costUsd) || 0,
     pricingTier: row.card.pricingTier,
@@ -757,8 +760,36 @@ export type AttachmentFileCardLookup = {
   documentType: string;
   summary: string;
   coveringEmailContext?: string | null;
+  parties?: string[];
+  documentDate?: string | null;
+  sections?: FileCardOutlineEntry[];
   status: "ready" | "failed";
 };
+
+function parseFileCardSectionsJson(raw: string | null | undefined): FileCardOutlineEntry[] {
+  try {
+    const parsed = JSON.parse(raw || "[]");
+    if (!Array.isArray(parsed)) return [];
+    const entries: FileCardOutlineEntry[] = [];
+    for (const row of parsed) {
+      if (!row || typeof row !== "object") continue;
+      const title =
+        typeof (row as { title?: unknown }).title === "string"
+          ? (row as { title: string }).title.trim()
+          : "";
+      if (!title) continue;
+      const pageRaw = (row as { page?: unknown }).page;
+      const page =
+        typeof pageRaw === "number" && Number.isInteger(pageRaw) && pageRaw > 0
+          ? pageRaw
+          : null;
+      entries.push({ page, title });
+    }
+    return entries;
+  } catch {
+    return [];
+  }
+}
 
 function parseFileCardPartiesJson(raw: string): string[] {
   try {
@@ -778,6 +809,7 @@ export type CorpusSearchFileCard = {
   coveringEmailContext: string | null;
   parties: string[];
   documentDate: string | null;
+  sections: FileCardOutlineEntry[];
 };
 
 export async function loadCorpusSearchFileCards(
@@ -797,6 +829,7 @@ export async function loadCorpusSearchFileCards(
       coveringEmailContext: attachmentFileCards.coveringEmailContext,
       parties: attachmentFileCards.parties,
       documentDate: attachmentFileCards.documentDate,
+      sectionsJson: attachmentFileCards.sectionsJson,
       status: attachmentFileCards.status,
     })
     .from(attachmentFileCards)
@@ -811,6 +844,7 @@ export async function loadCorpusSearchFileCards(
       coveringEmailContext: row.coveringEmailContext,
       parties: parseFileCardPartiesJson(row.parties),
       documentDate: row.documentDate,
+      sections: parseFileCardSectionsJson(row.sectionsJson),
     });
   }
   return map;
@@ -831,6 +865,9 @@ export async function loadAttachmentFileCards(
       documentType: attachmentFileCards.documentType,
       summary: attachmentFileCards.summary,
       coveringEmailContext: attachmentFileCards.coveringEmailContext,
+      parties: attachmentFileCards.parties,
+      documentDate: attachmentFileCards.documentDate,
+      sectionsJson: attachmentFileCards.sectionsJson,
       status: attachmentFileCards.status,
     })
     .from(attachmentFileCards)
@@ -843,6 +880,9 @@ export async function loadAttachmentFileCards(
         documentType: row.documentType,
         summary: row.summary,
         coveringEmailContext: row.coveringEmailContext,
+        parties: parseFileCardPartiesJson(row.parties),
+        documentDate: row.documentDate,
+        sections: parseFileCardSectionsJson(row.sectionsJson),
         status: row.status as "ready" | "failed",
       });
     }

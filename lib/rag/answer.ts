@@ -13,6 +13,7 @@ import {
   buildCorpusAskPipeline,
   type CorpusAskPipeline,
 } from "@/lib/rag/pipeline-debug";
+import { formatFileCardAskParts } from "@/lib/rag/file-card-pack";
 import {
   loadAttachmentFileCards,
   type AttachmentFileCardLookup,
@@ -34,6 +35,13 @@ import {
   type CorpusAnswerUsage,
   type CorpusGroundedAnswer,
 } from "@/lib/rag/answer-shared";
+
+export const MAX_NEAR_MISS_CITATIONS = 3;
+const NEAR_MISS_PREFERRED_TYPES = new Set([
+  "study",
+  "tables",
+  "signed_report",
+]);
 
 export {
   DEFAULT_CORPUS_ANSWER_MODEL,
@@ -77,8 +85,11 @@ export type PackedAnswerSource = {
   documentType?: string;
 };
 
+export type CorpusAnswerMatch = "direct" | "near" | "no";
+
 export type CorpusAnswerReview = {
   chunkId: string;
+  match: CorpusAnswerMatch;
   relevant: boolean;
   why: string;
 };
@@ -105,14 +116,7 @@ export function packAnswerSources(
       result.contentHash ? fileCards?.get(result.contentHash) : undefined;
     let cardPrefix = "";
     if (card && card.status === "ready") {
-      const parts = [
-        `Document Type: ${card.documentType}`,
-        `Summary: ${card.summary}`,
-      ];
-      if (card.coveringEmailContext) {
-        parts.push(`Covering Email Context: ${card.coveringEmailContext}`);
-      }
-      cardPrefix = `[File Card: ${parts.join(" | ")}]\n`;
+      cardPrefix = `[File Card: ${formatFileCardAskParts(card).join(" | ")}]\n`;
     }
 
     const header =
@@ -150,10 +154,11 @@ Registry entities are ranking hints, not facts, unless the same name appears in 
 Read EVERY numbered source before answering. Do not stop at the first few.
 FILE INDEX lists every source filename. When the question asks to find a file or document, treat that index as evidence alongside the excerpts. A filename can be sufficient evidence even when the excerpt is a table, signature page, or boilerplate. Decide from the question which files and emails actually answer it. Do not prefer a document type (draft, proposal, signed, final, update) unless the question asks for that. An excerpt that merely discusses a topic is weaker than a filename that is the document.
 If the question names several parties, name a file for each when the sources include them.
+If the question names parties or a count of documents, treat a packed source as a near miss when it is the same kind of document (for example another reserve fund study) but the letterhead or parties do not match a named company. Do not claim that firm is the named company. After the named matches, add one short "Related, not a name match:" sentence citing those [SN] sources (at most 3). Prefer study, signed_report, and tables over sample or proposal for near matches. If there is no coverage gap, do not list extra similar files. Never use outside knowledge to equate company names.
 Return JSON only (no markdown fences) with this shape — put answer first:
 {
   "answer": "prose answer. Mark supporting claims with [S1], [S2], … only",
-  "review": [{ "source": 1, "relevant": true, "why": "one short reason" }],
+  "review": [{ "source": 1, "match": "direct" | "near" | "no", "why": "one short reason" }],
   "confidence": "high" | "medium" | "low" | "none",
   "notInArchive": boolean
 }
@@ -206,6 +211,7 @@ export function emptyCorpusAnswer(modelName: string): CorpusGroundedAnswer {
       "No matching excerpts were found in the indexed archive for this question.",
     citations: [],
     confidence: "none",
+    nearMisses: [],
     notInArchive: true,
     modelName,
     usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
@@ -263,6 +269,13 @@ export function resolveReviewRowChunkId(
   return null;
 }
 
+function parseReviewMatch(rec: Record<string, unknown>): CorpusAnswerMatch {
+  const raw = typeof rec.match === "string" ? rec.match.toLowerCase().trim() : "";
+  if (raw === "direct" || raw === "near" || raw === "no") return raw;
+  if (rec.relevant === true) return "direct";
+  return "no";
+}
+
 export function parseSourceReviews(
   raw: unknown,
   sources: PackedAnswerSource[],
@@ -277,13 +290,35 @@ export function parseSourceReviews(
     const chunkId = resolveReviewRowChunkId(rec, sources, allowedChunkIds);
     if (!chunkId || seen.has(chunkId)) continue;
     seen.add(chunkId);
+    const match = parseReviewMatch(rec);
     reviews.push({
       chunkId,
-      relevant: rec.relevant === true,
+      match,
+      relevant: match !== "no",
       why: typeof rec.why === "string" ? rec.why.trim() : "",
     });
   }
   return reviews;
+}
+
+export function selectNearMisses(
+  reviews: CorpusAnswerReview[],
+  sources: PackedAnswerSource[],
+  limit = MAX_NEAR_MISS_CITATIONS,
+): CorpusAnswerCitation[] {
+  const byId = new Map(sources.map((source) => [source.chunkId, source]));
+  const near = reviews.filter((review) => review.match === "near");
+  near.sort((a, b) => {
+    const aType = byId.get(a.chunkId)?.documentType || "";
+    const bType = byId.get(b.chunkId)?.documentType || "";
+    const aPref = NEAR_MISS_PREFERRED_TYPES.has(aType) ? 0 : 1;
+    const bPref = NEAR_MISS_PREFERRED_TYPES.has(bType) ? 0 : 1;
+    return aPref - bPref;
+  });
+  return near.slice(0, limit).map((review) => ({
+    chunkId: review.chunkId,
+    why: review.why || "Same document kind, different named party.",
+  }));
 }
 
 /** Normalize legacy @cite:N@ markers from the model into [SN] for the answer UI. */
@@ -443,7 +478,11 @@ export function mergeAnswerCitations(params: {
     byId.set(citation.chunkId, citation);
   }
   for (const review of params.reviews) {
-    if (!review.relevant || !allowed.has(review.chunkId) || byId.has(review.chunkId)) {
+    if (
+      review.match !== "direct" ||
+      !allowed.has(review.chunkId) ||
+      byId.has(review.chunkId)
+    ) {
       continue;
     }
     byId.set(review.chunkId, {
@@ -451,10 +490,16 @@ export function mergeAnswerCitations(params: {
       why: review.why || "Marked relevant in source review.",
     });
   }
+  const nearIds = new Set(
+    params.reviews
+      .filter((review) => review.match === "near")
+      .map((review) => review.chunkId),
+  );
   if (params.fileSeeking) {
     for (const source of params.sources) {
       if (source.sourceKind === "email_body") continue;
       if (!source.filenameHit || byId.has(source.chunkId)) continue;
+      if (nearIds.has(source.chunkId)) continue;
       byId.set(source.chunkId, {
         chunkId: source.chunkId,
         why: "Filename matched the question.",
@@ -570,9 +615,13 @@ export async function generateCorpusAnswer(params: {
     reviews: parsed.reviews,
     fileSeeking,
   });
+  const nearMisses = selectNearMisses(parsed.reviews, sources);
   return {
-    ...parsed,
+    answer: parsed.answer,
     citations,
+    nearMisses,
+    confidence: parsed.confidence,
+    notInArchive: parsed.notInArchive,
     modelName,
     usage: {
       inputTokens: generated.usage.inputTokens,

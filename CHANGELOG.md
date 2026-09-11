@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Ask-path file cards pack parties, dates, and outlines** — Rerank and grounded answers now receive stored file-card parties, document date, and an extractive section outline (not only document type and summary). Long summaries are clipped so they do not consume the 900-character chunk budget. Coverage-gap near misses (same document kind, different named company) are reviewed as `direct | near | no`; near files appear under **Related, not a name match** instead of being dropped. File-card packing (`file-card-pack-v3`) adds a deterministic outline from Docling page breaks and title-like lines, and samples middle pages when markdown headings are sparse.
+
 - **Archive ask answer JSON** — The grounded-answer step now asks Gemini for compact `source` indices (`1`…`N`, matching `[S1]`…`[SN]`) instead of repeating long internal chunk ids in `review`, drops the redundant `citations` array (citations are built server-side from `review`), puts prose `answer` first in the schema, salvages prose when JSON is truncated, logs `finishReason` when output hits the token cap, and never surfaces raw model JSON in the Answer panel.
 
 ### Changed

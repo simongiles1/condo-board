@@ -8,6 +8,9 @@ import { describe, it } from "node:test";
 
 import {
   canSkipCardGeneration,
+  extractDocumentOutline,
+  formatFileCardAskParts,
+  formatFileCardRerankExcerpt,
   hashPackedText,
   mergeFileCardParties,
   packFileCardPrompt,
@@ -47,7 +50,7 @@ describe("packFileCardPrompt", () => {
       includeEmailSummaryPrompt: false,
     });
 
-    assert.ok(packed.userPrompt.includes("PACK VERSION: file-card-pack-v2"));
+    assert.ok(packed.userPrompt.includes("PACK VERSION: file-card-pack-v3"));
     assert.ok(packed.userPrompt.includes("ATTACHMENT FILENAME: trace_rfs_2020.pdf"));
     assert.ok(packed.userPrompt.includes("COVERING EMAIL SUBJECT: Reserve Fund Study Final Report"));
     assert.ok(packed.userPrompt.includes("DOCUMENT FILE PROPERTIES:"));
@@ -112,7 +115,8 @@ describe("packFileCardPrompt", () => {
       includeEmailSummaryPrompt: false,
     });
 
-    assert.ok(packed.inputChars <= 18000, `packed chars ${packed.inputChars} should be under ~18k with prompt wrapping`);
+    assert.ok(packed.inputChars <= 20000, `packed chars ${packed.inputChars} should stay near the extract cap`);
+    assert.ok(packed.userPrompt.includes("DOCUMENT OUTLINE:"), "Should include extractive outline");
     assert.ok(packed.userPrompt.includes("Section 1: Overview"), "Should include TOC headings from middle");
     assert.ok(packed.userPrompt.includes("Section 2: Financial Tables"), "Should include TOC headings from middle");
     assert.ok(packed.userPrompt.includes("Conclusion: End of Report"), "Should include tail portion");
@@ -130,6 +134,44 @@ describe("packFileCardPrompt", () => {
 
     assert.ok(!packed.userPrompt.includes("E".repeat(2500)));
     assert.ok(packed.userPrompt.includes("E".repeat(2000)));
+  });
+
+  it("builds an extractive outline from Docling page breaks and title-like lines", () => {
+    const markdown = [
+      "Cover letter from ICC",
+      "<!-- DOCLING_PAGE_BREAK -->",
+      "NOTICE OF FUTURE FUNDING OF THE RESERVE FUND",
+      "Subsection 94(9)",
+      "<!-- DOCLING_PAGE_BREAK -->",
+      "Table 4B 30-Year Cash Flow",
+      "2024 contribution 125000",
+    ].join("\n");
+    const outline = extractDocumentOutline(markdown);
+    assert.equal(outline.length, 3);
+    assert.equal(outline[0]?.page, 1);
+    assert.match(outline[1]?.title || "", /NOTICE OF FUTURE FUNDING/i);
+    assert.match(outline[2]?.title || "", /Table 4B/i);
+  });
+
+  it("samples middle pages when a long packet has no markdown headings", () => {
+    const pages = Array.from({ length: 8 }, (_, index) => {
+      const body = `${index === 4 ? "Notice of Future Funding of the Reserve Fund\n" : ""}P${index}${"x".repeat(3500)}`;
+      return body;
+    });
+    const markdown = pages.join("\n<!-- DOCLING_PAGE_BREAK -->\n");
+    const packed = packFileCardPrompt({
+      filename: "RFS Signed.pdf",
+      subject: "Latest RFS",
+      coveringEmailText: "Copy of the latest reserve fund study.",
+      markdown,
+      includeEmailSummaryPrompt: false,
+    });
+    assert.ok(packed.userPrompt.includes("DOCUMENT OUTLINE:"));
+    assert.ok(packed.userPrompt.includes("Notice of Future Funding"));
+    assert.ok(
+      packed.userPrompt.includes("MIDDLE PAGE SAMPLES") ||
+        packed.userPrompt.includes("DOCUMENT OUTLINE:"),
+    );
   });
 });
 
@@ -371,6 +413,8 @@ describe("Phase 2: Rerank excerpt, packAnswerSources, and pipeline debug card in
         documentType: "study",
         summary: "Trace Engineering 2020 Reserve Fund Study signed final report.",
         coveringEmailContext: "Transmits signed final copy.",
+        parties: ["Trace Engineering"],
+        documentDate: "2020-04-15",
         status: "ready" as const,
       },
     ],
@@ -385,8 +429,8 @@ describe("Phase 2: Rerank excerpt, packAnswerSources, and pipeline debug card in
     });
 
     assert.ok(
-      userText.includes("excerpt: [study] Trace Engineering 2020 Reserve Fund Study signed final report."),
-      "Rerank excerpt should use the structured card summary and document type",
+      userText.includes("excerpt: [study] Trace Engineering 2020 Reserve Fund Study signed final report. parties: Trace Engineering date: 2020-04-15"),
+      "Rerank excerpt should use the structured card summary, parties, and date",
     );
     assert.ok(
       !userText.includes("280 char table slice"),
@@ -400,8 +444,8 @@ describe("Phase 2: Rerank excerpt, packAnswerSources, and pipeline debug card in
     const first = packed[0];
     assert.equal(first.documentType, "study");
     assert.ok(
-      first.text.includes("[File Card: Document Type: study | Summary: Trace Engineering 2020 Reserve Fund Study signed final report. | Covering Email Context: Transmits signed final copy.]"),
-      "Packed source text should prepend formatted file card",
+      first.text.includes("[File Card: Document Type: study | Summary: Trace Engineering 2020 Reserve Fund Study signed final report. | Parties: Trace Engineering | Date: 2020-04-15 | Covering Email Context: Transmits signed final copy.]"),
+      "Packed source text should prepend formatted file card with parties and date",
     );
     assert.ok(first.text.includes("Full body chunk text of the report."));
   });
@@ -409,6 +453,28 @@ describe("Phase 2: Rerank excerpt, packAnswerSources, and pipeline debug card in
   it("includes documentType in compactPipelineHit when card exists", () => {
     const pipelineHit = compactPipelineHit(dummyHit, 1, fileCards);
     assert.equal(pipelineHit.documentType, "study");
+  });
+
+  it("clips a long summary so parties still fit in the answer pack", () => {
+    const longSummary = "A".repeat(500);
+    const parts = formatFileCardAskParts({
+      documentType: "signed_report",
+      summary: longSummary,
+      parties: ["McIntosh Perry"],
+      documentDate: "2023-11-01",
+    });
+    const joined = parts.join(" | ");
+    assert.ok(joined.includes("Parties: McIntosh Perry"));
+    assert.ok(joined.includes("Date: 2023-11-01"));
+    assert.ok(joined.length < 700);
+    assert.equal(
+      formatFileCardRerankExcerpt({
+        documentType: "signed_report",
+        summary: longSummary,
+        parties: ["McIntosh Perry"],
+      }).includes("parties: McIntosh Perry"),
+      true,
+    );
   });
 });
 

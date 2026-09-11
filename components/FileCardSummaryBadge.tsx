@@ -118,6 +118,21 @@ function FileCardTooltipContent({ card }: { card: CorpusSearchFileCard }) {
           </div>
         </div>
       ) : null}
+      {card.sections && card.sections.length > 0 ? (
+        <div>
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Outline
+          </p>
+          <ul className="list-disc space-y-0.5 pl-4 text-[11px] text-slate-600">
+            {card.sections.slice(0, 8).map((entry, index) => (
+              <li key={`${entry.page ?? "x"}-${index}`}>
+                {entry.page != null ? `p.${entry.page} ` : ""}
+                {entry.title}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

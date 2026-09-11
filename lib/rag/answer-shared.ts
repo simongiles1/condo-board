@@ -21,6 +21,7 @@ export type CorpusAnswerUsage = {
 export type CorpusGroundedAnswer = {
   answer: string;
   citations: CorpusAnswerCitation[];
+  nearMisses: CorpusAnswerCitation[];
   confidence: CorpusAnswerConfidence;
   notInArchive: boolean;
   modelName: string;

@@ -14,6 +14,7 @@ import { readAttachmentMarkdown } from "@/lib/email/attachment-markdown";
 import {
   canSkipCardGeneration,
   EMAIL_SUMMARY_THRESHOLD_CHARS,
+  extractDocumentOutline,
   FILE_CARD_SYSTEM_PROMPT,
   mergeFileCardParties,
   packFileCardPrompt,
@@ -277,6 +278,7 @@ export async function runFileCardWorker(
 
       const parsed = parseFileCardJson(generated.text);
       const nowIso = new Date().toISOString();
+      const sectionsJson = JSON.stringify(extractDocumentOutline(markdown));
 
       if (!parsed) {
         failedDocs++;
@@ -289,6 +291,7 @@ export async function runFileCardWorker(
             coveringEmailContext: doc.subject ? `Subject: ${doc.subject}` : "",
             parties: "[]",
             documentDate: null,
+            sectionsJson: "[]",
             status: "failed",
             inputHash: packed.inputHash,
             inputChars: packed.inputChars,
@@ -328,6 +331,7 @@ export async function runFileCardWorker(
             coveringEmailContext: parsed.covering_email_context,
             parties: JSON.stringify(parties),
             documentDate: parsed.document_date,
+            sectionsJson,
             status: "ready",
             inputHash: packed.inputHash,
             inputChars: packed.inputChars,
@@ -350,6 +354,7 @@ export async function runFileCardWorker(
               coveringEmailContext: parsed.covering_email_context,
               parties: JSON.stringify(parties),
               documentDate: parsed.document_date,
+              sectionsJson,
               status: "ready",
               inputHash: packed.inputHash,
               inputChars: packed.inputChars,

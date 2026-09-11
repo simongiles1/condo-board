@@ -1,5 +1,6 @@
 import { generateWithSystemPrompt } from "@/lib/gemini/client";
 import { estimateCostUsd } from "@/lib/gemini/usage";
+import { formatFileCardRerankExcerpt } from "@/lib/rag/file-card-pack";
 import {
   loadAttachmentFileCards,
   type AttachmentFileCardLookup,
@@ -49,6 +50,7 @@ Rules:
 - Judge each candidate against the question. Use the filename/subject and the excerpt. Do not prefer a document type (draft, proposal, signed, final, update, tables) unless the question asks for that.
 - An excerpt that discusses a topic is weaker evidence than a filename that is the document.
 - If the question names several parties, put a matching source for each near the top when present.
+- A file that matches the asked document kind but not a named party should still stay in the ordered set so the answerer can mention it as a near miss. Do not rank it above a named-party match.
 - Do not invent ids. Do not answer the question.`;
 
 function stripJsonFence(text: string): string {
@@ -166,7 +168,7 @@ export function buildRerankUserText(params: {
       result.contentHash ? params.fileCards?.get(result.contentHash) : undefined;
     const excerpt =
       card && card.status === "ready"
-        ? `[${card.documentType}] ${card.summary}`
+        ? formatFileCardRerankExcerpt(card)
         : result.excerpt.replace(/\s+/g, " ").trim();
 
     return [

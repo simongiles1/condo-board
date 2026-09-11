@@ -962,6 +962,22 @@ export function FileCardBackfillButton() {
                                 </div>
                               ) : null}
 
+                              {card.sections && card.sections.length > 0 ? (
+                                <div className="pt-1">
+                                  <span className="font-semibold text-slate-700">Outline: </span>
+                                  <span className="text-slate-600">
+                                    {card.sections
+                                      .slice(0, 10)
+                                      .map((entry) =>
+                                        entry.page != null
+                                          ? `p.${entry.page} ${entry.title}`
+                                          : entry.title,
+                                      )
+                                      .join(" · ")}
+                                  </span>
+                                </div>
+                              ) : null}
+
                               {card.fileMetadata ? (
                                 <div className="pt-1 text-slate-600">
                                   <span className="font-semibold text-slate-700">

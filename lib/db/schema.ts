@@ -1340,6 +1340,7 @@ export const attachmentFileCards = pgTable(
     coveringEmailContext: text("covering_email_context").notNull(),
     parties: text("parties").notNull().default("[]"),
     documentDate: text("document_date"),
+    sectionsJson: text("sections_json").notNull().default("[]"),
     status: text("status", {
       enum: ["ready", "failed"],
     })

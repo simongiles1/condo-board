@@ -8,6 +8,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Email Settings sync estimates** — “Estimated next sync import” shows catch-up window delta (Gmail allowlist matches minus archive in that window), not total Gmail volume. Backfill column uses remaining unsynced counts. Sync history shows `new · already in archive`; hover for detail.
+
+### Fixed
+
+- **Email Settings allowlist preview** — Import estimate no longer labels full Gmail totals as “would be imported on the next sync.”
+
+### Changed
+
 - **Email Settings sender allowlist** — Gmail filter copy uses a single icon menu: selected rows, saved allowlist only, or every discovered sender. Copy all filter now includes only saved allowlist addresses (bare emails). Sender rows normalize `Name <email>` duplicates into one mailbox. Row actions collapse into a trash menu (delete imported, import threads, remove from allowlist). Select-all is a header checkbox.
 
 ### Fixed

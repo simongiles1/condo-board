@@ -24,6 +24,7 @@ import {
   formatHarvestAfterSyncMessage,
   type IngestRunPublic,
 } from "@/lib/email/ingest-stages";
+import { formatSyncImportResultLabel } from "@/lib/email/sync-run-label";
 
 type AllowlistEntry = {
   id: string;
@@ -105,6 +106,15 @@ type AllowlistImportPreview = {
   emailCount: number;
   importedThreadCount: number;
   importedEmailCount: number;
+  remainingThreadCount: number;
+  remainingEmailCount: number;
+  nextSync: {
+    sinceIso: string | null;
+    gmailEmailCount: number;
+    gmailThreadCount: number;
+    archivedEmailCount: number;
+    remainingEmailCount: number;
+  } | null;
 };
 
 type PurgeImportedPreview = {
@@ -146,11 +156,12 @@ function formatSyncRunResult(run: SyncHistoryRun): {
     if (interrupted) {
       return { kind: "interrupted", label: "Interrupted" };
     }
-    // If the run completed and processed some messages, show the count with a
-    // warning rather than "Failed" — individual 404s don't mean the whole sync failed.
     const didProcess = run.messagesAdded > 0 || run.messagesSkipped > 0;
     if (didProcess && run.finishedAt) {
-      const count = `${run.messagesAdded.toLocaleString()} email${run.messagesAdded === 1 ? "" : "s"}`;
+      const count = formatSyncImportResultLabel(
+        run.messagesAdded,
+        run.messagesSkipped,
+      );
       return { kind: "partial", label: `${count} (with errors)` };
     }
     return { kind: "failed", label: "Failed" };
@@ -158,8 +169,10 @@ function formatSyncRunResult(run: SyncHistoryRun): {
   if (!run.finishedAt) {
     return { kind: "running", label: "Running…" };
   }
-  const count = `${run.messagesAdded.toLocaleString()} email${run.messagesAdded === 1 ? "" : "s"}`;
-  return { kind: "success", label: count };
+  return {
+    kind: "success",
+    label: formatSyncImportResultLabel(run.messagesAdded, run.messagesSkipped),
+  };
 }
 
 type EmailSettingsTab = "connections" | "sync" | "allowlist";
@@ -247,8 +260,6 @@ export function EmailSettingsClient(props: {
   }, [savedAllowlistEmails, selectedEmails]);
 
   const previewEmailsKey = useMemo(() => previewEmails.join("\0"), [previewEmails]);
-  const [backfillRemainingPreview, setBackfillRemainingPreview] =
-    useState<AllowlistImportPreview | null>(null);
   const [previewRefreshNonce, setPreviewRefreshNonce] = useState(0);
 
   const sortedCandidates = useMemo(() => {
@@ -444,17 +455,13 @@ export function EmailSettingsClient(props: {
 
     async function fetchImportPreview(
       emails: string[],
-      options?: { remaining?: boolean },
     ): Promise<AllowlistImportPreview | "unavailable" | null> {
       if (emails.length === 0) return null;
 
       const response = await fetch("/api/email/allowlist/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          emails,
-          remaining: options?.remaining ?? false,
-        }),
+        body: JSON.stringify({ emails }),
         signal: controller.signal,
       });
 
@@ -467,15 +474,8 @@ export function EmailSettingsClient(props: {
       setImportPreviewLoading(true);
       setImportPreviewUnavailable(false);
 
-      const shouldLoadBackfillRemaining = savedAllowlistEmails.length > 0;
-
       try {
-        const [mainPreview, remainingPreview] = await Promise.all([
-          fetchImportPreview(previewEmails),
-          shouldLoadBackfillRemaining
-            ? fetchImportPreview(savedAllowlistEmails, { remaining: true })
-            : Promise.resolve(null),
-        ]);
+        const mainPreview = await fetchImportPreview(previewEmails);
 
         if (cancelled) return;
 
@@ -485,20 +485,11 @@ export function EmailSettingsClient(props: {
         } else {
           setImportPreview(mainPreview);
         }
-
-        if (shouldLoadBackfillRemaining) {
-          setBackfillRemainingPreview(
-            remainingPreview === "unavailable" ? null : remainingPreview,
-          );
-        } else {
-          setBackfillRemainingPreview(null);
-        }
       } catch (error) {
         if (cancelled || (error instanceof DOMException && error.name === "AbortError")) {
           return;
         }
         setImportPreview(null);
-        setBackfillRemainingPreview(null);
       } finally {
         if (!cancelled) {
           setImportPreviewLoading(false);
@@ -1294,6 +1285,8 @@ export function EmailSettingsClient(props: {
                                     kind={result.kind}
                                     label={result.label}
                                     errors={run.errors}
+                                    messagesAdded={run.messagesAdded}
+                                    messagesSkipped={run.messagesSkipped}
                                   />
                                 );
                               })()}
@@ -1349,6 +1342,10 @@ export function EmailSettingsClient(props: {
                 <div className="grid gap-4 sm:grid-cols-2 sm:gap-6">
                   <div className="min-w-0">
                     <p className="font-medium text-slate-900">Estimated next sync import</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Incremental catch-up (not a full backfill). Counts are
+                      approximate; hover sync history for new vs skipped.
+                    </p>
                     <p className="mt-1 text-slate-600">
                       {selectedEmails.size > 0
                         ? `Based on ${selectedEmails.size.toLocaleString()} selected sender${selectedEmails.size === 1 ? "" : "s"}.`
@@ -1364,29 +1361,60 @@ export function EmailSettingsClient(props: {
                       </p>
                     ) : importPreview && previewEmails.length > 0 ? (
                       <>
+                        {importPreview.nextSync ? (
+                          <>
+                            <p className="mt-2 tabular-nums text-slate-800">
+                              <span className="font-medium text-teal-900">
+                                Up to{" "}
+                                {importPreview.nextSync.remainingEmailCount.toLocaleString()}{" "}
+                                new email
+                                {importPreview.nextSync.remainingEmailCount === 1
+                                  ? ""
+                                  : "s"}
+                              </span>
+                              {" in the catch-up window"}
+                              {importPreview.nextSync.sinceIso ? (
+                                <>
+                                  {" "}
+                                  (since{" "}
+                                  {formatSettingsDate(importPreview.nextSync.sinceIso)})
+                                </>
+                              ) : (
+                                " (last 2 days)"
+                              )}
+                              .
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              Gmail shows{" "}
+                              {importPreview.nextSync.gmailEmailCount.toLocaleString()}{" "}
+                              allowlist message
+                              {importPreview.nextSync.gmailEmailCount === 1 ? "" : "s"}{" "}
+                              in that window;{" "}
+                              {importPreview.nextSync.archivedEmailCount.toLocaleString()}{" "}
+                              already in the archive. Sync now also checks Gmail
+                              history and may pull full threads (including older
+                              replies).
+                            </p>
+                          </>
+                        ) : null}
                         <p className="mt-2 tabular-nums text-slate-800">
                           <span className="font-medium text-teal-900">
-                            {importPreview.threadCount.toLocaleString()} thread
-                            {importPreview.threadCount === 1 ? "" : "s"}
+                            {importPreview.remainingThreadCount.toLocaleString()} thread
+                            {importPreview.remainingThreadCount === 1 ? "" : "s"}
                           </span>
                           {" · "}
                           <span className="font-medium text-teal-900">
-                            {importPreview.emailCount.toLocaleString()} email
-                            {importPreview.emailCount === 1 ? "" : "s"}
+                            {importPreview.remainingEmailCount.toLocaleString()} email
+                            {importPreview.remainingEmailCount === 1 ? "" : "s"}
                           </span>
-                          {" would be imported on the next sync."}
+                          {" still missing from a full allowlist backfill."}
                         </p>
-                        <p className="mt-2 tabular-nums text-slate-800">
-                          <span className="font-medium text-teal-900">
-                            {importPreview.importedThreadCount.toLocaleString()} thread
-                            {importPreview.importedThreadCount === 1 ? "" : "s"}
-                          </span>
-                          {" · "}
-                          <span className="font-medium text-teal-900">
-                            {importPreview.importedEmailCount.toLocaleString()} email
-                            {importPreview.importedEmailCount === 1 ? "" : "s"}
-                          </span>
-                          {" already in the system."}
+                        <p className="mt-1 text-xs text-slate-500">
+                          {importPreview.importedEmailCount.toLocaleString()} of{" "}
+                          {importPreview.emailCount.toLocaleString()} matching Gmail
+                          messages already imported (
+                          {importPreview.importedThreadCount.toLocaleString()} of{" "}
+                          {importPreview.threadCount.toLocaleString()} threads).
                         </p>
                       </>
                     ) : null}
@@ -1401,21 +1429,24 @@ export function EmailSettingsClient(props: {
                           ? "Connect personal Gmail to backfill historical mail."
                           : importPreviewLoading
                             ? "Calculating remaining import…"
-                            : backfillRemainingPreview
+                            : importPreview && importPreview.remainingEmailCount > 0
                               ? `Re-runs are safe: already-imported messages are skipped, and incomplete threads (e.g. missing non-allowlist replies) get filled in. Searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"}. Approximately `
-                              : `Searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"} and imports full threads (every message when any allowlisted participant is present). Already-imported messages are skipped.`}
-                      {backfillRemainingPreview &&
+                              : importPreview && importPreview.remainingEmailCount === 0
+                                ? `Full allowlist backfill looks complete for personal Gmail (${importPreview.importedEmailCount.toLocaleString()} messages in the archive). Re-run only fills gaps. `
+                                : `Searches personal Gmail for all ${savedAllowlistEmails.length.toLocaleString()} saved sender${savedAllowlistEmails.length === 1 ? "" : "s"} and imports full threads (every message when any allowlisted participant is present). Already-imported messages are skipped.`}
+                      {importPreview &&
+                      importPreview.remainingEmailCount > 0 &&
                       !importPreviewLoading &&
                       !importPreviewUnavailable ? (
                         <>
                           <span className="font-medium tabular-nums text-teal-900">
-                            {backfillRemainingPreview.threadCount.toLocaleString()} thread
-                            {backfillRemainingPreview.threadCount === 1 ? "" : "s"}
+                            {importPreview.remainingThreadCount.toLocaleString()} thread
+                            {importPreview.remainingThreadCount === 1 ? "" : "s"}
                           </span>
                           {" · "}
                           <span className="font-medium tabular-nums text-teal-900">
-                            {backfillRemainingPreview.emailCount.toLocaleString()} email
-                            {backfillRemainingPreview.emailCount === 1 ? "" : "s"}
+                            {importPreview.remainingEmailCount.toLocaleString()} email
+                            {importPreview.remainingEmailCount === 1 ? "" : "s"}
                           </span>
                           {" remain unsynced."}
                         </>

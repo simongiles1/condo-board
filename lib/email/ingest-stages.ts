@@ -337,10 +337,15 @@ export function ingestRunSummaryRows(run: IngestRunPublic): IngestSummaryRow[] {
   });
 
   const messagesAdded = asCount(counts, "messagesAdded");
+  const messagesSkipped = asCount(counts, "messagesSkipped");
   if (messagesAdded != null) {
+    const skipped =
+      messagesSkipped != null && messagesSkipped > 0
+        ? ` ${messagesSkipped.toLocaleString()} already in the archive.`
+        : "";
     rows.push({
       label: "Catch-up",
-      detail: `Imported ${countNoun(messagesAdded, "email")} since the last successful sync.`,
+      detail: `Gmail import: ${messagesAdded.toLocaleString()} new.${skipped}`.trim(),
       tone: "ok",
     });
   }

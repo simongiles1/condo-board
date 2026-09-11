@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import { useHoverPopover } from "@/lib/ui/use-hover-popover";
+import { formatSyncImportResultDetail } from "@/lib/email/sync-run-label";
 
 const VIEWPORT_MARGIN = 8;
 const POPOVER_WIDTH_PX = 320;
@@ -25,6 +26,8 @@ type Props = {
   kind: SyncRunResultKind;
   label: string;
   errors: string | null;
+  messagesAdded?: number;
+  messagesSkipped?: number;
 };
 
 function computePopoverPosition(
@@ -111,13 +114,26 @@ function classifyErrorLine(line: string): string {
   return "General";
 }
 
-export function SyncRunResultBadge({ kind, label, errors }: Props) {
+export function SyncRunResultBadge({
+  kind,
+  label,
+  errors,
+  messagesAdded = 0,
+  messagesSkipped = 0,
+}: Props) {
   const rootRef = useRef<HTMLSpanElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const errorLines = parseErrorLines(errors);
+  const successDetail =
+    kind === "success" && (messagesAdded > 0 || messagesSkipped > 0)
+      ? formatSyncImportResultDetail(messagesAdded, messagesSkipped)
+      : null;
   const canShowPopover =
     errorLines.length > 0 && kind !== "success" && kind !== "running";
-  const hover = useHoverPopover({ enabled: canShowPopover });
+  const canShowSuccessPopover = Boolean(successDetail);
+  const hover = useHoverPopover({
+    enabled: canShowPopover || canShowSuccessPopover,
+  });
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
     position: "fixed",
     visibility: "hidden",
@@ -136,6 +152,44 @@ export function SyncRunResultBadge({ kind, label, errors }: Props) {
   }, [hover.open, errorLines.length]);
 
   if (kind === "success" || kind === "clear_all") {
+    if (kind === "success" && canShowSuccessPopover) {
+      return (
+        <>
+          <span
+            ref={rootRef}
+            className="inline-flex cursor-help items-center text-slate-600 underline decoration-dotted decoration-slate-400 underline-offset-2"
+            onMouseEnter={hover.onTriggerEnter}
+            onMouseLeave={hover.onTriggerLeave}
+            onFocus={hover.onTriggerFocus}
+            onBlur={hover.onTriggerBlur}
+            tabIndex={0}
+            role="button"
+            aria-label={`${label}. Hover for import details.`}
+          >
+            {label}
+          </span>
+          {hover.open && typeof document !== "undefined"
+            ? createPortal(
+                <div
+                  ref={popoverRef}
+                  style={popoverStyle}
+                  className="rounded-lg border border-slate-200 bg-white p-3 text-left shadow-lg"
+                  {...hover.popoverProps}
+                >
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Import details
+                  </p>
+                  <p className="mt-2 text-sm leading-snug text-slate-800">
+                    {successDetail}
+                  </p>
+                </div>,
+                document.body,
+              )
+            : null}
+        </>
+      );
+    }
+
     return (
       <span className={kind === "clear_all" ? "text-red-800" : "text-slate-600"}>
         {label}

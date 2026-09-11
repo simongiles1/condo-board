@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 
-import { and, count, desc, eq, isNotNull, isNull, ne } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import type { gmail_v1 } from "googleapis";
 
 import { getDb } from "@/lib/db";
@@ -18,10 +18,10 @@ import {
 } from "./backfill";
 import { getGmailClient } from "./client";
 import { parseGmailMessage } from "./messages";
+import { getPersonalCatchupSinceIso } from "./catchup-since";
 import {
   appendCatchupAfterToQuery,
   buildAllowlistQuery,
-  resolveCatchupSinceIso,
   DEDICATED_INITIAL_SYNC_QUERY,
   getAllowlistEmails,
   parsedMessageMatchesAllowlist,
@@ -43,61 +43,6 @@ export type SyncResult = {
 
 let personalSyncInProgress = false;
 let dedicatedSyncInProgress = false;
-
-async function lastCompletedPersonalSyncAt(
-  excludeSyncRunId: string,
-): Promise<string | null> {
-  const db = getDb();
-  const [row] = await db
-    .select({
-      startedAt: syncRuns.startedAt,
-      finishedAt: syncRuns.finishedAt,
-    })
-    .from(syncRuns)
-    .where(
-      and(
-        eq(syncRuns.accountType, "personal_backfill"),
-        isNull(syncRuns.errors),
-        isNotNull(syncRuns.finishedAt),
-        ne(syncRuns.id, excludeSyncRunId),
-      ),
-    )
-    .orderBy(desc(syncRuns.finishedAt))
-    .limit(1);
-  return row?.finishedAt ?? row?.startedAt ?? null;
-}
-
-async function recentPersonalReceivedAt(): Promise<{
-  newestReceivedAt: string | null;
-  previousReceivedAt: string | null;
-}> {
-  const db = getDb();
-  const rows = await db
-    .select({ receivedAt: emails.receivedAt })
-    .from(emails)
-    .where(eq(emails.source, "personal_backfill"))
-    .orderBy(desc(emails.receivedAt))
-    .limit(2);
-  return {
-    newestReceivedAt: rows[0]?.receivedAt ?? null,
-    previousReceivedAt: rows[1]?.receivedAt ?? null,
-  };
-}
-
-async function catchupSinceForPersonalSync(
-  lastSyncAt: string | null,
-  excludeSyncRunId: string,
-): Promise<string | null> {
-  const [lastCompletedSyncAt, recent] = await Promise.all([
-    lastCompletedPersonalSyncAt(excludeSyncRunId),
-    recentPersonalReceivedAt(),
-  ]);
-  return resolveCatchupSinceIso({
-    lastSyncAt,
-    lastCompletedSyncAt,
-    ...recent,
-  });
-}
 
 async function countEmailsBySource(source: EmailSource): Promise<number> {
   const db = getDb();
@@ -463,7 +408,7 @@ export async function syncPersonalAccount(
           gmail,
           allowlistEmails,
           syncRunId,
-          await catchupSinceForPersonalSync(connection.lastSyncAt, syncRunId),
+          await getPersonalCatchupSinceIso({ excludeSyncRunId: syncRunId }),
         );
         messagesAdded += catchup.added;
         errors.push(...catchup.errors);
@@ -511,7 +456,7 @@ export async function syncPersonalAccount(
         gmail,
         allowlistEmails,
         syncRunId,
-        await catchupSinceForPersonalSync(connection.lastSyncAt, syncRunId),
+        await getPersonalCatchupSinceIso({ excludeSyncRunId: syncRunId }),
       );
       messagesAdded += safetyResult.added;
       errors.push(...safetyResult.errors);

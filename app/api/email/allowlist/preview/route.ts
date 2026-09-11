@@ -3,16 +3,26 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 
 import {
-  getAllowlistBackfillPreview,
   getAllowlistImportPreview,
 } from "@/lib/gmail/allowlist-preview";
 import { getAllowlistEmails } from "@/lib/gmail/queries";
+import { getNextSyncCatchupPreview } from "@/lib/gmail/sync-import-preview";
+
+export type AllowlistPreviewResponse = {
+  threadCount: number;
+  emailCount: number;
+  importedThreadCount: number;
+  importedEmailCount: number;
+  remainingThreadCount: number;
+  remainingEmailCount: number;
+  nextSync: Awaited<ReturnType<typeof getNextSyncCatchupPreview>>;
+};
 
 export async function POST(req: Request) {
   try {
-    let body: { emails?: string[]; remaining?: boolean } = {};
+    let body: { emails?: string[] } = {};
     try {
-      body = (await req.json()) as { emails?: string[]; remaining?: boolean };
+      body = (await req.json()) as { emails?: string[] };
     } catch {
       body = {};
     }
@@ -22,18 +32,32 @@ export async function POST(req: Request) {
         ? body.emails
         : await getAllowlistEmails();
 
-    const preview = body.remaining
-      ? await getAllowlistBackfillPreview(emails)
-      : await getAllowlistImportPreview(emails);
+    const [importPreview, nextSync] = await Promise.all([
+      getAllowlistImportPreview(emails),
+      getNextSyncCatchupPreview(emails),
+    ]);
 
-    if (!preview) {
+    if (!importPreview) {
       return NextResponse.json(
         { error: "Personal Gmail is not connected." },
         { status: 503 },
       );
     }
 
-    return NextResponse.json(preview);
+    const response: AllowlistPreviewResponse = {
+      ...importPreview,
+      remainingThreadCount: Math.max(
+        0,
+        importPreview.threadCount - importPreview.importedThreadCount,
+      ),
+      remainingEmailCount: Math.max(
+        0,
+        importPreview.emailCount - importPreview.importedEmailCount,
+      ),
+      nextSync,
+    };
+
+    return NextResponse.json(response);
   } catch (error) {
     console.error("[email:allowlist:preview]", error);
     return NextResponse.json(

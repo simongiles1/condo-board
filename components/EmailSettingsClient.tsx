@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { EmailIngestPipelineModal } from "@/components/EmailIngestPipelineModal";
 import {
   SyncRunResultBadge,
   type SyncRunResultKind,
@@ -19,6 +20,7 @@ import {
 } from "@/lib/email/sync-schedule";
 import { formatDateTime } from "@/lib/format/datetime";
 import { formatGmailOrEmailList } from "@/lib/email/gmail-filter-format";
+import type { IngestRunPublic } from "@/lib/email/ingest-stages";
 
 type AllowlistEntry = {
   id: string;
@@ -62,6 +64,9 @@ type SyncSettings = {
   syncCron: string;
   schedulerEnabled: boolean;
   harvestAfterSyncEnabled: boolean;
+  oauthRelinkRemindAfterDays: number;
+  allowlistReviewTimeoutHours: number;
+  pauseBetweenPipelineStages: boolean;
   updatedAt: string;
 };
 
@@ -209,6 +214,12 @@ export function EmailSettingsClient(props: {
   const [customCron, setCustomCron] = useState<string | null>(null);
   const [schedulerEnabled, setSchedulerEnabled] = useState(true);
   const [harvestAfterSyncEnabled, setHarvestAfterSyncEnabled] = useState(false);
+  const [pauseBetweenPipelineStages, setPauseBetweenPipelineStages] =
+    useState(true);
+  const [allowlistReviewTimeoutHours, setAllowlistReviewTimeoutHours] =
+    useState(24);
+  const [ingestRun, setIngestRun] = useState<IngestRunPublic | null>(null);
+  const [ingestModalOpen, setIngestModalOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [purgeTarget, setPurgeTarget] = useState<AllowlistCandidate | null>(
@@ -354,7 +365,27 @@ export function EmailSettingsClient(props: {
       }
       setSchedulerEnabled(settingsData.schedulerEnabled);
       setHarvestAfterSyncEnabled(settingsData.harvestAfterSyncEnabled);
+      setPauseBetweenPipelineStages(
+        settingsData.pauseBetweenPipelineStages ?? true,
+      );
+      setAllowlistReviewTimeoutHours(
+        settingsData.allowlistReviewTimeoutHours ?? 24,
+      );
       setSyncHistory(syncHistoryData.runs);
+      const ingestRes = await fetch("/api/email/ingest");
+      if (ingestRes.ok) {
+        const ingestData = (await ingestRes.json()) as { run: IngestRunPublic | null };
+        if (ingestData.run) {
+          setIngestRun(ingestData.run);
+          if (
+            ingestData.run.status === "waiting_allowlist" ||
+            ingestData.run.status === "waiting_continue" ||
+            ingestData.run.status === "running"
+          ) {
+            setIngestModalOpen(true);
+          }
+        }
+      }
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Could not load settings.",
@@ -369,6 +400,26 @@ export function EmailSettingsClient(props: {
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!ingestModalOpen || !ingestRun) return;
+    if (
+      ingestRun.status !== "running" &&
+      ingestRun.status !== "waiting_allowlist" &&
+      ingestRun.status !== "waiting_continue"
+    ) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void fetch(`/api/email/ingest/${ingestRun.id}`)
+        .then((response) => response.json())
+        .then((body: { run?: IngestRunPublic }) => {
+          if (body.run) setIngestRun(body.run);
+        })
+        .catch(() => undefined);
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [ingestModalOpen, ingestRun]);
 
   useEffect(() => {
     if (props.initialConnected) {
@@ -731,6 +782,8 @@ export function EmailSettingsClient(props: {
           syncCron,
           schedulerEnabled,
           harvestAfterSyncEnabled,
+          pauseBetweenPipelineStages,
+          allowlistReviewTimeoutHours,
         }),
       });
 
@@ -754,35 +807,25 @@ export function EmailSettingsClient(props: {
     setErrorMessage(null);
 
     try {
-      const controller = new AbortController();
-      const timeoutMs = harvestAfterSyncEnabled ? 600_000 : 120_000;
-      const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
-      const response = await fetch("/api/email/sync", {
-        method: "POST",
-        signal: controller.signal,
-      });
-      window.clearTimeout(timeout);
-      const result = (await response.json()) as SyncResult & { error?: string };
+      const response = await fetch("/api/email/ingest", { method: "POST" });
+      const result = (await response.json()) as {
+        run?: IngestRunPublic;
+        error?: string;
+      };
       if (!response.ok) throw new Error(result.error ?? "Sync failed.");
-      const harvestNote = formatClientHarvestNote(result.harvest);
-      setStatusMessage(
-        result.messagesAdded > 0
-          ? `Personal Gmail sync complete: ${result.messagesAdded} added, ${result.messagesSkipped} skipped.${harvestNote}`
-          : `Personal Gmail sync complete: no new allowlist messages (${result.messagesSkipped} skipped).${harvestNote || " Open Emails to view your inbox."}`,
-      );
-      if (result.errors?.length) {
-        setErrorMessage(result.errors.join("\n"));
+      if (result.run) {
+        setIngestRun(result.run);
+        setIngestModalOpen(true);
+        setStatusMessage(
+          result.run.status === "completed"
+            ? `Ingest complete: ${result.run.newEmailIds.length} new emails.`
+            : "Ingest pipeline started. Confirm each stage in the dialog (and Telegram).",
+        );
       }
       await loadData({ silent: true });
       setPreviewRefreshNonce((current) => current + 1);
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        setErrorMessage(
-          "Sync is taking longer than expected. The first sync can take several minutes while allowlist mail is imported.",
-        );
-      } else {
-        setErrorMessage(error instanceof Error ? error.message : "Sync failed.");
-      }
+      setErrorMessage(error instanceof Error ? error.message : "Sync failed.");
     } finally {
       setBusyAction(null);
     }
@@ -1048,11 +1091,50 @@ export function EmailSettingsClient(props: {
                   <span>
                     Harvest after sync
                     <span className="mt-1 block font-normal text-slate-600">
-                      After ingest (cron or Sync now), extract contacts, organizations,
-                      events, and to-dos on emails that do not already have that
-                      concept. Leave off until the historical to-do bulk is done.
-                      Safe when no new mail arrives — it retries leftover gaps.
+                    Harvest as the last ingest stage (contacts, organizations,
+                      events, and to-dos) after Docling, file cards, and embeddings.
+                      Leave off to skip harvest.
                     </span>
+                  </span>
+                </label>
+
+                <label className="mt-4 flex items-start gap-2 text-sm font-medium text-slate-800">
+                  <input
+                    type="checkbox"
+                    checked={pauseBetweenPipelineStages}
+                    onChange={(event) =>
+                      setPauseBetweenPipelineStages(event.target.checked)
+                    }
+                    className="mt-0.5 rounded border-slate-300"
+                  />
+                  <span>
+                    Pause between pipeline stages
+                    <span className="mt-1 block font-normal text-slate-600">
+                      Require Continue (dialog or Telegram) after ingest, expansion,
+                      Docling, file cards, embeddings, and harvest. Allowlist
+                      confirmation always waits. Turn off later so cron runs those
+                      stages by itself.
+                    </span>
+                  </span>
+                </label>
+
+                <label className="mt-4 block text-sm font-medium text-slate-800">
+                  Allowlist review reminder (hours)
+                  <input
+                    type="number"
+                    min={1}
+                    max={168}
+                    value={allowlistReviewTimeoutHours}
+                    onChange={(event) =>
+                      setAllowlistReviewTimeoutHours(
+                        Number(event.target.value) || 24,
+                      )
+                    }
+                    className="mt-1 w-28 rounded-md border border-slate-300 bg-white px-3 py-2"
+                  />
+                  <span className="mt-1 block font-normal text-slate-600">
+                    If a new sender is still pending, send one Telegram reminder
+                    after this many hours. Nothing is auto-approved.
                   </span>
                 </label>
 
@@ -1776,6 +1858,70 @@ export function EmailSettingsClient(props: {
             </form>
           </div>
         </div>
+      ) : null}
+
+      {ingestModalOpen && ingestRun ? (
+        <EmailIngestPipelineModal
+          run={ingestRun}
+          busy={busyAction === "ingest-step"}
+          onClose={() => setIngestModalOpen(false)}
+          onContinue={() => {
+            void (async () => {
+              setBusyAction("ingest-step");
+              try {
+                const response = await fetch(
+                  `/api/email/ingest/${ingestRun.id}/continue`,
+                  { method: "POST" },
+                );
+                const body = (await response.json()) as {
+                  run?: IngestRunPublic;
+                  error?: string;
+                };
+                if (!response.ok) {
+                  throw new Error(body.error ?? "Could not continue.");
+                }
+                if (body.run) setIngestRun(body.run);
+              } catch (error) {
+                setErrorMessage(
+                  error instanceof Error ? error.message : "Could not continue.",
+                );
+              } finally {
+                setBusyAction(null);
+              }
+            })();
+          }}
+          onAllowlist={(action) => {
+            void (async () => {
+              setBusyAction("ingest-step");
+              try {
+                const response = await fetch(
+                  `/api/email/ingest/${ingestRun.id}/allowlist`,
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action }),
+                  },
+                );
+                const body = (await response.json()) as {
+                  run?: IngestRunPublic;
+                  error?: string;
+                };
+                if (!response.ok) {
+                  throw new Error(body.error ?? "Could not apply decision.");
+                }
+                if (body.run) setIngestRun(body.run);
+              } catch (error) {
+                setErrorMessage(
+                  error instanceof Error
+                    ? error.message
+                    : "Could not apply decision.",
+                );
+              } finally {
+                setBusyAction(null);
+              }
+            })();
+          }}
+        />
       ) : null}
     </div>
   );

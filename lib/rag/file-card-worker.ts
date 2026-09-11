@@ -36,7 +36,15 @@ export function kickFileCardWorker(
   runId: string,
   options?: { forceOverwrite?: boolean },
 ): void {
-  if (activeWorkers.has(runId)) return;
+  void waitForFileCardWorker(runId, options);
+}
+
+export function waitForFileCardWorker(
+  runId: string,
+  options?: { forceOverwrite?: boolean },
+): Promise<void> {
+  const existing = activeWorkers.get(runId);
+  if (existing) return existing;
 
   const promise = (async () => {
     try {
@@ -58,6 +66,7 @@ export function kickFileCardWorker(
   })();
 
   activeWorkers.set(runId, promise);
+  return promise;
 }
 
 async function isRunStillActive(runId: string): Promise<boolean> {

@@ -1,6 +1,10 @@
 import cron, { type ScheduledTask } from "node-cron";
 
 import { runIngestThenHarvest } from "@/lib/email/ingest-harvest";
+import {
+  maybeSendOauthRelinkReminder,
+  remindStaleAllowlistReviews,
+} from "@/lib/email/ingest-pipeline";
 
 import { getEmailSyncSettings } from "./settings";
 
@@ -9,6 +13,12 @@ let currentExpression: string | null = null;
 
 export async function runScheduledSync() {
   console.info("[email-scheduler] Running personal Gmail sync");
+  await maybeSendOauthRelinkReminder().catch((error) => {
+    console.error("[email-scheduler] OAuth relink reminder failed", error);
+  });
+  await remindStaleAllowlistReviews().catch((error) => {
+    console.error("[email-scheduler] Allowlist reminder failed", error);
+  });
   const result = await runIngestThenHarvest("cron");
   console.info(
     `[email-scheduler] Added ${result.messagesAdded}, skipped ${result.messagesSkipped}`,
@@ -62,5 +72,8 @@ export function getSchedulerStatus() {
 export function startEmailScheduler() {
   void refreshEmailScheduler().catch((error) => {
     console.error("[email-scheduler] Failed to start:", error);
+  });
+  void maybeSendOauthRelinkReminder().catch((error) => {
+    console.error("[email-scheduler] OAuth relink reminder failed", error);
   });
 }

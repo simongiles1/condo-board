@@ -6,6 +6,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Gated email ingest pipeline** — Sync now and the daily cron share one multi-step pipeline: catch up Gmail since last successful import (not a 2-day window), confirm new From/To/CC senders one at a time in Telegram and the Email Settings dialog (Approve / Deny / Back), import full history for approved senders, then Docling/vision, file cards, embeddings, and harvest. Stages pause for Continue during testing; allowlist review always waits. Denied addresses are stored on a blocklist so they are not asked again. A Testing-token relink reminder is sent 6 days after OAuth connect. Allowlist reminder hours and the stage-pause toggle live on Automatic sync.
+
 ### Changed
 
 - **Ask-path file cards pack parties, dates, and outlines** — Rerank and grounded answers now receive stored file-card parties, document date, and an extractive section outline (not only document type and summary). Long summaries are clipped so they do not consume the 900-character chunk budget. Coverage-gap near misses (same document kind, different named company) are reviewed as `direct | near | no`; near files appear under **Related, not a name match** instead of being dropped. File-card packing (`file-card-pack-v3`) adds a deterministic outline from Docling page breaks and title-like lines, and samples middle pages when markdown headings are sparse.

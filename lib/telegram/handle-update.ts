@@ -14,6 +14,7 @@ import {
 import { getTelegramReviewItem } from "@/lib/telegram/store";
 import { resolveTelegramReviewItem } from "@/lib/telegram/resolve";
 import { sendUnsentTelegramDigest } from "@/lib/telegram/digest";
+import { handleIngestTelegramCallback } from "@/lib/email/ingest-pipeline";
 
 function isChatIdCommand(text: string | undefined): boolean {
   const trimmed = text?.trim() ?? "";
@@ -49,6 +50,38 @@ export async function handleTelegramUpdate(
 
   const parsed = parseTelegramCallbackData(query.data);
   if (!parsed) {
+    await answerTelegramCallback({
+      callbackQueryId: query.id,
+      text: "Unknown button.",
+    });
+    return;
+  }
+
+  const review = await getTelegramReviewItem(parsed.id);
+  if (
+    review &&
+    (review.kind === "allowlist_sender" || review.kind === "ingest_stage")
+  ) {
+    const result = await handleIngestTelegramCallback({
+      reviewItemId: parsed.id,
+      action: parsed.action,
+    });
+    await answerTelegramCallback({
+      callbackQueryId: query.id,
+      text: result.ok
+        ? parsed.action === "continue"
+          ? "Continuing."
+          : parsed.action === "back"
+            ? "Went back."
+            : parsed.action === "approved"
+              ? "Approved."
+              : "Denied."
+        : result.error,
+    });
+    return;
+  }
+
+  if (parsed.action === "back" || parsed.action === "continue") {
     await answerTelegramCallback({
       callbackQueryId: query.id,
       text: "Unknown button.",

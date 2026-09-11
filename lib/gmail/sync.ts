@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 
-import { count, eq } from "drizzle-orm";
+import { and, count, desc, eq, isNull } from "drizzle-orm";
 import type { gmail_v1 } from "googleapis";
 
 import { getDb } from "@/lib/db";
@@ -19,6 +19,7 @@ import {
 import { getGmailClient } from "./client";
 import { parseGmailMessage } from "./messages";
 import {
+  appendCatchupAfterToQuery,
   buildAllowlistQuery,
   DEDICATED_INITIAL_SYNC_QUERY,
   getAllowlistEmails,
@@ -41,6 +42,28 @@ export type SyncResult = {
 
 let personalSyncInProgress = false;
 let dedicatedSyncInProgress = false;
+
+async function lastSuccessfulPersonalSyncAt(
+  fallback: string | null,
+): Promise<string | null> {
+  if (fallback) return fallback;
+  const db = getDb();
+  const [row] = await db
+    .select({
+      startedAt: syncRuns.startedAt,
+      finishedAt: syncRuns.finishedAt,
+    })
+    .from(syncRuns)
+    .where(
+      and(
+        eq(syncRuns.accountType, "personal_backfill"),
+        isNull(syncRuns.errors),
+      ),
+    )
+    .orderBy(desc(syncRuns.finishedAt))
+    .limit(1);
+  return row?.finishedAt ?? row?.startedAt ?? null;
+}
 
 async function countEmailsBySource(source: EmailSource): Promise<number> {
   const db = getDb();
@@ -271,15 +294,19 @@ async function syncDedicatedViaHistory(
 }
 
 /**
- * Direct Gmail search for threads with allowlist mail in the last 48 hours.
+ * Direct Gmail search for allowlist mail since last successful import.
  * Expands each hit to the full thread so non-allowlist replies are included.
  */
 async function runSafetyWindowSearch(
   gmail: gmail_v1.Gmail,
   allowlistEmails: string[],
   syncRunId: string,
+  sinceIso: string | null,
 ): Promise<{ added: number; errors: string[] }> {
-  const safetyQuery = `${buildAllowlistQuery(allowlistEmails)} newer_than:2d`;
+  const base = buildAllowlistQuery(allowlistEmails);
+  const safetyQuery = sinceIso
+    ? appendCatchupAfterToQuery(base, sinceIso)
+    : `${base} newer_than:2d`;
   const result = await importThreadsMatchingQuery(
     gmail,
     safetyQuery,
@@ -336,14 +363,6 @@ export async function syncPersonalAccount(
     );
   }
 
-  const verification = await assertPersonalConnectionValid();
-  const allowlistEmails = await getAllowlistEmails();
-  if (allowlistEmails.length === 0) {
-    throw new Error(
-      "No senders on the allowlist. Save at least one sender before syncing.",
-    );
-  }
-
   personalSyncInProgress = true;
 
   const db = getDb();
@@ -367,6 +386,14 @@ export async function syncPersonalAccount(
   let messagesSkipped = 0;
 
   try {
+    const verification = await assertPersonalConnectionValid();
+    const allowlistEmails = await getAllowlistEmails();
+    if (allowlistEmails.length === 0) {
+      throw new Error(
+        "No senders on the allowlist. Save at least one sender before syncing.",
+      );
+    }
+
     const { gmail } = verification;
     const { connection } = await getGmailClient("personal_backfill");
 
@@ -397,6 +424,14 @@ export async function syncPersonalAccount(
           pendingHistoryId = profile.data.historyId;
         }
       } else if (profile.data.historyId) {
+        const catchup = await runSafetyWindowSearch(
+          gmail,
+          allowlistEmails,
+          syncRunId,
+          await lastSuccessfulPersonalSyncAt(connection.lastSyncAt),
+        );
+        messagesAdded += catchup.added;
+        errors.push(...catchup.errors);
         pendingHistoryId = profile.data.historyId;
       }
 
@@ -433,17 +468,15 @@ export async function syncPersonalAccount(
 
         historyExpired = true;
         errors.push(
-          `Gmail history cursor expired (${historyError instanceof Error ? historyError.message : String(historyError)}). Cursor was not advanced; running safety-window catch-up instead.`,
+          `Gmail history cursor expired (${historyError instanceof Error ? historyError.message : String(historyError)}). Cursor was not advanced; running catch-up search instead.`,
         );
       }
 
-      // Safety net: catches anything the history API missed due to eventual
-      // consistency delays. Runs regardless of whether history succeeded or
-      // expired. Already-synced messages are silently deduplicated.
       const safetyResult = await runSafetyWindowSearch(
         gmail,
         allowlistEmails,
         syncRunId,
+        await lastSuccessfulPersonalSyncAt(connection.lastSyncAt),
       );
       messagesAdded += safetyResult.added;
       errors.push(...safetyResult.errors);

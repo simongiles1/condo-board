@@ -8,7 +8,11 @@ import {
 import type { ShortlistHit } from "@/lib/contacts/registry-shortlist";
 import type { ContactEntityCard } from "@/lib/email-analysis/contact-highlight-shared";
 
-export type TelegramReviewKind = "contact_identity" | "affiliation";
+export type TelegramReviewKind =
+  | "contact_identity"
+  | "affiliation"
+  | "allowlist_sender"
+  | "ingest_stage";
 export type TelegramReviewStatus = "pending" | "approved" | "denied";
 
 export type ContactReviewCandidate = {

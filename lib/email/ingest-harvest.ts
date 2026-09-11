@@ -12,12 +12,10 @@ import {
 } from "@/lib/email-analysis/bulk-extract-runs";
 import { listMissingExtractTargets } from "@/lib/email-analysis/bulk-extract-targets";
 import { runBulkExtractWorker } from "@/lib/email-analysis/bulk-extract-worker";
+import { startIngestPipeline } from "@/lib/email/ingest-pipeline";
+import type { IngestRunRecord } from "@/lib/email/ingest-pipeline";
 import { getEmailSyncSettings } from "@/lib/email/settings";
-import {
-  syncPersonalAccount,
-  type SyncResult,
-  type SyncTrigger,
-} from "@/lib/gmail/sync";
+import { type SyncResult, type SyncTrigger } from "@/lib/gmail/sync";
 
 export const HARVEST_AFTER_SYNC_KINDS: BulkExtractKind[] = [
   "contacts",
@@ -43,9 +41,8 @@ export type HarvestAfterSyncResult = {
 
 export type IngestThenHarvestResult = SyncResult & {
   harvest: HarvestAfterSyncResult;
+  ingest: IngestRunRecord;
 };
-
-let pipelineInProgress = false;
 
 export function shouldSkipHarvestAfterSync(input: {
   enabled: boolean;
@@ -107,37 +104,29 @@ export function formatHarvestAfterSyncMessage(
 export async function runIngestThenHarvest(
   trigger: SyncTrigger,
 ): Promise<IngestThenHarvestResult> {
-  if (pipelineInProgress) {
-    throw new Error(
-      "A personal Gmail sync is already running. Wait for it to finish before starting another.",
-    );
-  }
-
-  pipelineInProgress = true;
-  try {
-    const sync = await syncPersonalAccount(trigger);
-    const startedAt = new Date().toISOString();
-    const harvest = await runHarvestMissingAfterSync();
-    if (harvest.status === "ran") {
-      try {
-        const { runTelegramHitlAfterHarvest } = await import(
-          "@/lib/telegram/after-harvest"
-        );
-        const digest = await runTelegramHitlAfterHarvest({
-          startedAt,
-          harvest,
-        });
-        if (digest.sent > 0 || digest.error) {
-          console.info("[telegram] Harvest digest", digest);
-        }
-      } catch (error) {
-        console.error("[telegram] Harvest digest failed", error);
-      }
-    }
-    return { ...sync, harvest };
-  } finally {
-    pipelineInProgress = false;
-  }
+  const run = await startIngestPipeline(trigger);
+  const sync: SyncResult = {
+    syncRunId: run.id,
+    messagesAdded:
+      typeof run.counts.messagesAdded === "number" ? run.counts.messagesAdded : 0,
+    messagesSkipped:
+      typeof run.counts.messagesSkipped === "number"
+        ? run.counts.messagesSkipped
+        : 0,
+    errors:
+      typeof run.counts.ingestErrors === "string"
+        ? [run.counts.ingestErrors]
+        : Array.isArray(run.counts.ingestErrors)
+          ? (run.counts.ingestErrors as string[])
+          : run.lastError
+            ? [run.lastError]
+            : [],
+  };
+  return {
+    ...sync,
+    harvest: { status: "disabled", kinds: [] },
+    ingest: run,
+  };
 }
 
 export async function runHarvestMissingAfterSync(): Promise<HarvestAfterSyncResult> {

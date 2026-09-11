@@ -2,7 +2,7 @@
 
 import { randomUUID } from "crypto";
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { telegramReviewItems } from "@/lib/db/schema";
@@ -34,7 +34,10 @@ export type TelegramReviewRow = {
 };
 
 function asKind(value: string): TelegramReviewKind {
-  return value === "affiliation" ? "affiliation" : "contact_identity";
+  if (value === "affiliation") return "affiliation";
+  if (value === "allowlist_sender") return "allowlist_sender";
+  if (value === "ingest_stage") return "ingest_stage";
+  return "contact_identity";
 }
 
 function asStatus(value: string): TelegramReviewStatus {
@@ -188,6 +191,55 @@ export async function insertAffiliationReviewItem(input: {
   return row ? mapRow(row) : null;
 }
 
+export async function insertIngestReviewItem(input: {
+  kind: "allowlist_sender" | "ingest_stage";
+  holdReason: string;
+  payload: Record<string, unknown>;
+}): Promise<TelegramReviewRow> {
+  const db = getDb();
+  const id = randomUUID();
+  const createdAt = new Date().toISOString();
+  await db.insert(telegramReviewItems).values({
+    id,
+    kind: input.kind,
+    status: "pending",
+    holdReason: input.holdReason,
+    payloadJson: JSON.stringify(input.payload),
+    affiliationId: null,
+    fingerprintMergeId: null,
+    telegramChatId: null,
+    telegramMessageId: null,
+    createdAt,
+    reviewedAt: null,
+    reviewedVia: null,
+  });
+  const [row] = await db
+    .select()
+    .from(telegramReviewItems)
+    .where(eq(telegramReviewItems.id, id))
+    .limit(1);
+  return mapRow(row!);
+}
+
+export async function updateTelegramReviewPayload(input: {
+  id: string;
+  kind?: "allowlist_sender" | "ingest_stage";
+  holdReason?: string;
+  payload: Record<string, unknown>;
+  status?: TelegramReviewStatus;
+}): Promise<void> {
+  const db = getDb();
+  await db
+    .update(telegramReviewItems)
+    .set({
+      ...(input.kind ? { kind: input.kind } : {}),
+      ...(input.holdReason ? { holdReason: input.holdReason } : {}),
+      payloadJson: JSON.stringify(input.payload),
+      ...(input.status ? { status: input.status } : {}),
+    })
+    .where(eq(telegramReviewItems.id, input.id));
+}
+
 export async function listUnsentPendingReviewItems(): Promise<
   TelegramReviewRow[]
 > {
@@ -197,6 +249,7 @@ export async function listUnsentPendingReviewItems(): Promise<
     .from(telegramReviewItems)
     .where(
       and(
+        inArray(telegramReviewItems.kind, ["contact_identity", "affiliation"]),
         eq(telegramReviewItems.status, "pending"),
         isNull(telegramReviewItems.telegramMessageId),
       ),

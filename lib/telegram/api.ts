@@ -72,6 +72,7 @@ export async function editTelegramMessage(input: {
   chatId: string;
   messageId: number;
   text: string;
+  replyMarkup?: TelegramInlineKeyboard;
 }): Promise<void> {
   try {
     await telegramCall("editMessageText", {
@@ -79,7 +80,7 @@ export async function editTelegramMessage(input: {
       message_id: input.messageId,
       text: input.text,
       disable_web_page_preview: true,
-      reply_markup: { inline_keyboard: [] },
+      reply_markup: input.replyMarkup ?? { inline_keyboard: [] },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

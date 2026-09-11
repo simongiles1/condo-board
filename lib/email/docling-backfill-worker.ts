@@ -633,7 +633,12 @@ export function withWorkerAlive<T extends { id: string; status: string }>(
 }
 
 export function kickDoclingBackfillWorker(runId: string): void {
-  if (activeWorkers.has(runId)) return;
+  void waitForDoclingBackfillWorker(runId);
+}
+
+export function waitForDoclingBackfillWorker(runId: string): Promise<void> {
+  const existing = activeWorkers.get(runId);
+  if (existing) return existing;
 
   console.info("[extraction-backfill-worker] Kick", { runId });
   const promise = executeDoclingBackfillRun(runId)
@@ -662,6 +667,7 @@ export function kickDoclingBackfillWorker(runId: string): void {
     });
 
   activeWorkers.set(runId, promise);
+  return promise;
 }
 
 export async function resumeDoclingBackfillWorkersOnStartup(): Promise<void> {

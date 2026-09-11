@@ -73,6 +73,8 @@ export type IndexSliceOptions = {
   batchSize?: number;
   /** Whether to prioritize emails first, attachments, or all. Default "balanced" */
   mode?: "all" | "emails" | "attachments" | "vision";
+  /** When set, only index bodies/attachments/vision pages for these emails. */
+  emailIds?: string[];
   /**
    * Remaining unindexed counts from the prior slice. When set, avoids a full
    * corpus status query at the end of the slice (saves a DB round-trip during
@@ -270,6 +272,29 @@ export async function runIncrementalIndexSlice(
   const db = getDb();
   const batchSize = Math.max(1, Math.min(100, options?.batchSize ?? 25));
   const mode = options?.mode ?? "all";
+  const emailIds = [
+    ...new Set((options?.emailIds ?? []).map((id) => id.trim()).filter(Boolean)),
+  ];
+  const scopedHashes =
+    emailIds.length > 0
+      ? [
+          ...new Set(
+            (
+              await db
+                .select({ contentHash: emailAttachments.contentHash })
+                .from(emailAttachments)
+                .where(
+                  and(
+                    inArray(emailAttachments.emailId, emailIds),
+                    isNotNull(emailAttachments.contentHash),
+                  ),
+                )
+            )
+              .map((row) => row.contentHash)
+              .filter((hash): hash is string => Boolean(hash)),
+          ),
+        ]
+      : null;
 
   const result: IndexSliceResult = {
     emailsProcessed: 0,
@@ -376,11 +401,14 @@ export async function runIncrementalIndexSlice(
       })
       .from(emails)
       .where(
-        sql`not exists (
+        and(
+          ...(emailIds.length > 0 ? [inArray(emails.id, emailIds)] : []),
+          sql`not exists (
           select 1 from document_chunks dc
           where dc.email_id = ${emails.id}
             and dc.source_kind = 'email_body'
         )`,
+        ),
       )
       .orderBy(
         sql`case when ${emailHasIndexableBodySql} then 0 else 1 end`,
@@ -443,6 +471,11 @@ export async function runIncrementalIndexSlice(
         and(
           eq(attachmentDocuments.parseStatus, "parsed"),
           isNotNull(attachmentDocuments.markdownPath),
+          ...(scopedHashes
+            ? scopedHashes.length > 0
+              ? [inArray(attachmentDocuments.contentHash, scopedHashes)]
+              : [sql`false`]
+            : []),
           sql`not exists (
             select 1 from document_chunks dc
             where dc.content_hash = ${attachmentDocuments.contentHash}
@@ -556,6 +589,11 @@ export async function runIncrementalIndexSlice(
         and(
           eq(attachmentDocumentPages.visionStatus, "done"),
           isNotNull(attachmentDocumentPages.artifactPath),
+          ...(scopedHashes
+            ? scopedHashes.length > 0
+              ? [inArray(attachmentDocumentPages.contentHash, scopedHashes)]
+              : [sql`false`]
+            : []),
           sql`not exists (
             select 1 from document_chunks dc
             where dc.content_hash = ${attachmentDocumentPages.contentHash}

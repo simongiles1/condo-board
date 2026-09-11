@@ -8,18 +8,32 @@ import type {
 } from "@/lib/telegram/types";
 import { incomingCardLabel } from "@/lib/telegram/types";
 
-export type TelegramCallbackAction = "approved" | "denied";
+export type TelegramCallbackAction =
+  | "approved"
+  | "denied"
+  | "back"
+  | "continue";
+
+const UUID =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
 export function parseTelegramCallbackData(
   data: string | undefined,
 ): { id: string; action: TelegramCallbackAction } | null {
   if (!data) return null;
-  const match = /^(ok|no):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(
-    data.trim(),
-  );
+  const match = new RegExp(`^(ok|no|bk|go):(${UUID})$`, "i").exec(data.trim());
   if (!match) return null;
+  const prefix = match[1]!.toLowerCase();
+  const action: TelegramCallbackAction =
+    prefix === "ok"
+      ? "approved"
+      : prefix === "no"
+        ? "denied"
+        : prefix === "bk"
+          ? "back"
+          : "continue";
   return {
-    action: match[1] === "ok" ? "approved" : "denied",
+    action,
     id: match[2]!.toLowerCase(),
   };
 }
@@ -28,7 +42,15 @@ export function telegramCallbackData(
   id: string,
   action: TelegramCallbackAction,
 ): string {
-  return `${action === "approved" ? "ok" : "no"}:${id}`;
+  const prefix =
+    action === "approved"
+      ? "ok"
+      : action === "denied"
+        ? "no"
+        : action === "back"
+          ? "bk"
+          : "go";
+  return `${prefix}:${id}`;
 }
 
 export function reviewItemKeyboard(id: string): TelegramInlineKeyboard {
@@ -38,6 +60,28 @@ export function reviewItemKeyboard(id: string): TelegramInlineKeyboard {
         { text: "Approve", callback_data: telegramCallbackData(id, "approved") },
         { text: "Deny", callback_data: telegramCallbackData(id, "denied") },
       ],
+    ],
+  };
+}
+
+export function allowlistReviewKeyboard(
+  id: string,
+  options: { showBack: boolean },
+): TelegramInlineKeyboard {
+  const row: Array<{ text: string; callback_data: string }> = [
+    { text: "Approve", callback_data: telegramCallbackData(id, "approved") },
+    { text: "Deny", callback_data: telegramCallbackData(id, "denied") },
+  ];
+  if (options.showBack) {
+    row.push({ text: "Back", callback_data: telegramCallbackData(id, "back") });
+  }
+  return { inline_keyboard: [row] };
+}
+
+export function ingestContinueKeyboard(id: string): TelegramInlineKeyboard {
+  return {
+    inline_keyboard: [
+      [{ text: "Continue", callback_data: telegramCallbackData(id, "continue") }],
     ],
   };
 }
@@ -55,6 +99,20 @@ function holdReasonLabel(reason: string): string {
 }
 
 export function formatReviewItemMessage(row: TelegramReviewRow): string {
+  if (row.kind === "allowlist_sender" || row.kind === "ingest_stage") {
+    try {
+      const payload = JSON.parse(row.payloadJson) as { text?: string };
+      if (typeof payload.text === "string" && payload.text.trim()) {
+        return payload.text;
+      }
+    } catch {
+      /* fall through */
+    }
+    return row.kind === "allowlist_sender"
+      ? "Allowlist review pending."
+      : "Ingest pipeline waiting to continue.";
+  }
+
   if (row.kind === "affiliation") {
     let payload: AffiliationReviewPayload;
     try {
@@ -114,8 +172,19 @@ export function formatResolvedMessage(
   action: TelegramCallbackAction,
 ): string {
   const suffix =
-    action === "approved" ? "Approved in Telegram." : "Denied in Telegram.";
-  if (original.includes("Approved in Telegram") || original.includes("Denied in Telegram")) {
+    action === "approved"
+      ? "Approved in Telegram."
+      : action === "denied"
+        ? "Denied in Telegram."
+        : action === "back"
+          ? "Went back in Telegram."
+          : "Continued in Telegram.";
+  if (
+    original.includes("Approved in Telegram") ||
+    original.includes("Denied in Telegram") ||
+    original.includes("Went back in Telegram") ||
+    original.includes("Continued in Telegram")
+  ) {
     return original;
   }
   return `${original}\n\n${suffix}`;

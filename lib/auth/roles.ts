@@ -29,6 +29,7 @@ export const SUPER_ADMIN_ONLY_PREFIXES = [
   "/api/email/backfill",
   "/api/email/forward",
   "/api/email/sync",
+  "/api/email/ingest",
 ] as const;
 
 /**

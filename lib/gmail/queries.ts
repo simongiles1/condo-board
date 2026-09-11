@@ -52,6 +52,26 @@ export function parsedMessageMatchesAllowlist(
   return participants.some((email) => allowSet.has(email));
 }
 
+/** Gmail `after:` is exclusive of that calendar day; use the UTC day before so same-day mail is searched. */
+export function gmailAfterDateInclusive(sinceIso: string): string {
+  const since = new Date(sinceIso);
+  const dayBefore = new Date(
+    Date.UTC(
+      since.getUTCFullYear(),
+      since.getUTCMonth(),
+      since.getUTCDate() - 1,
+    ),
+  );
+  const y = dayBefore.getUTCFullYear();
+  const m = String(dayBefore.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(dayBefore.getUTCDate()).padStart(2, "0");
+  return `${y}/${m}/${d}`;
+}
+
+export function appendCatchupAfterToQuery(query: string, sinceIso: string): string {
+  return `${query} after:${gmailAfterDateInclusive(sinceIso)}`;
+}
+
 /** Gmail `before:` is exclusive; use the UTC day after cutoff so same-day mail is searched. */
 export function gmailBeforeDateExclusive(cutoffAt: string): string {
   const cutoff = new Date(cutoffAt);

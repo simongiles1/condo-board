@@ -125,10 +125,91 @@ export const emailSyncSettings = pgTable("email_sync_settings", {
   harvestAfterSyncEnabled: boolean("harvest_after_sync_enabled")
     .notNull()
     .default(false),
+  /** Days after OAuth connect to Telegram-remind a Testing-token relink. */
+  oauthRelinkRemindAfterDays: integer("oauth_relink_remind_after_days")
+    .notNull()
+    .default(6),
+  /** Hours to wait on pending allowlist HITL before one reminder. */
+  allowlistReviewTimeoutHours: integer("allowlist_review_timeout_hours")
+    .notNull()
+    .default(24),
+  /**
+   * When true, D and E wait for Continue (Telegram/modal) between stages.
+   * Allowlist (C) always waits regardless.
+   */
+  pauseBetweenPipelineStages: boolean("pause_between_pipeline_stages")
+    .notNull()
+    .default(true),
+  lastOauthRelinkRemindedAt: text("last_oauth_relink_reminded_at"),
   /** Deprecated: manual backfill cutoff; computed from dedicated sync instead. */
   backfillCutoffDate: text("backfill_cutoff_date"),
   updatedAt: text("updated_at").notNull(),
 });
+
+/** Addresses denied at ingest HITL; never re-proposed for the allowlist. */
+export const senderBlocklist = pgTable("sender_blocklist", {
+  email: text("email").primaryKey(),
+  blockedAt: text("blocked_at").notNull(),
+  ingestRunId: text("ingest_run_id"),
+});
+
+export const emailIngestRuns = pgTable("email_ingest_runs", {
+  id: text("id").primaryKey(),
+  trigger: text("trigger", {
+    enum: ["cron", "manual"],
+  }).notNull(),
+  status: text("status", {
+    enum: [
+      "running",
+      "waiting_allowlist",
+      "waiting_continue",
+      "completed",
+      "failed",
+    ],
+  }).notNull(),
+  stage: text("stage").notNull(),
+  waitKind: text("wait_kind"),
+  lastSuccessfulSyncAt: text("last_successful_sync_at"),
+  newEmailIdsJson: text("new_email_ids_json").notNull().default("[]"),
+  countsJson: text("counts_json").notNull().default("{}"),
+  cursorIndex: integer("cursor_index").notNull().default(0),
+  reminderSentAt: text("reminder_sent_at"),
+  telegramChatId: text("telegram_chat_id"),
+  telegramMessageId: integer("telegram_message_id"),
+  telegramReviewItemId: text("telegram_review_item_id"),
+  lastError: text("last_error"),
+  startedAt: text("started_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  finishedAt: text("finished_at"),
+});
+
+export const emailIngestSenderReviews = pgTable(
+  "email_ingest_sender_reviews",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => emailIngestRuns.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    status: text("status", {
+      enum: ["pending", "approved", "denied"],
+    }).notNull(),
+    sortIndex: integer("sort_index").notNull(),
+    estimatedThreadCount: integer("estimated_thread_count"),
+    estimatedEmailCount: integer("estimated_email_count"),
+    decidedAt: text("decided_at"),
+  },
+  (table) => ({
+    runEmailUnique: uniqueIndex("email_ingest_sender_reviews_run_email_idx").on(
+      table.runId,
+      table.email,
+    ),
+    runSortIdx: index("email_ingest_sender_reviews_run_sort_idx").on(
+      table.runId,
+      table.sortIndex,
+    ),
+  }),
+);
 
 export const gmailConnections = pgTable("gmail_connections", {
   id: text("id").primaryKey(),
@@ -1698,7 +1779,12 @@ export const telegramReviewItems = pgTable(
   {
     id: text("id").primaryKey(),
     kind: text("kind", {
-      enum: ["contact_identity", "affiliation"],
+      enum: [
+        "contact_identity",
+        "affiliation",
+        "allowlist_sender",
+        "ingest_stage",
+      ],
     }).notNull(),
     status: text("status", {
       enum: ["pending", "approved", "denied"],

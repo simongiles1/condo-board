@@ -27,7 +27,7 @@
     "test:person-anchored": "npx tsx --test scripts/test-person-anchored-highlight.ts",
     "test:person-name": "npx tsx --test scripts/test-person-name.ts",
     "test:merge-search": "npx tsx --test scripts/test-merge-search.ts",
-    "test:purge-allowlist-sender": "npx tsx --test scripts/test-purge-allowlist-sender.ts",
+    "test:email-ingest-pipeline": "npx tsx --test scripts/test-email-ingest-pipeline.ts",
     "test:duplicate-groups": "npx tsx --test scripts/test-duplicate-groups.ts",
     "test:org-duplicate-groups": "npx tsx --test scripts/test-org-duplicate-groups.ts",
     "test:org-field-move": "npx tsx --test scripts/test-org-field-move.ts",

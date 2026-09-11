@@ -35,6 +35,9 @@ export async function PATCH(req: Request) {
     syncCron?: string;
     schedulerEnabled?: boolean;
     harvestAfterSyncEnabled?: boolean;
+    oauthRelinkRemindAfterDays?: number;
+    allowlistReviewTimeoutHours?: number;
+    pauseBetweenPipelineStages?: boolean;
   };
 
   try {
@@ -63,6 +66,18 @@ export async function PATCH(req: Request) {
       harvestAfterSyncEnabled:
         typeof body.harvestAfterSyncEnabled === "boolean"
           ? body.harvestAfterSyncEnabled
+          : undefined,
+      oauthRelinkRemindAfterDays:
+        typeof body.oauthRelinkRemindAfterDays === "number"
+          ? Math.max(1, Math.min(30, Math.round(body.oauthRelinkRemindAfterDays)))
+          : undefined,
+      allowlistReviewTimeoutHours:
+        typeof body.allowlistReviewTimeoutHours === "number"
+          ? Math.max(1, Math.min(168, Math.round(body.allowlistReviewTimeoutHours)))
+          : undefined,
+      pauseBetweenPipelineStages:
+        typeof body.pauseBetweenPipelineStages === "boolean"
+          ? body.pauseBetweenPipelineStages
           : undefined,
     });
 

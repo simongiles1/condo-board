@@ -10,6 +10,10 @@ export type EmailSyncSettings = {
   syncCron: string;
   schedulerEnabled: boolean;
   harvestAfterSyncEnabled: boolean;
+  oauthRelinkRemindAfterDays: number;
+  allowlistReviewTimeoutHours: number;
+  pauseBetweenPipelineStages: boolean;
+  lastOauthRelinkRemindedAt: string | null;
   updatedAt: string;
 };
 
@@ -27,6 +31,10 @@ export async function getEmailSyncSettings(): Promise<EmailSyncSettings> {
       syncCron: DEFAULT_SYNC_CRON,
       schedulerEnabled: true,
       harvestAfterSyncEnabled: false,
+      oauthRelinkRemindAfterDays: 6,
+      allowlistReviewTimeoutHours: 24,
+      pauseBetweenPipelineStages: true,
+      lastOauthRelinkRemindedAt: null as string | null,
       backfillCutoffDate: null,
       updatedAt: now,
     };
@@ -35,6 +43,10 @@ export async function getEmailSyncSettings(): Promise<EmailSyncSettings> {
       syncCron: defaults.syncCron,
       schedulerEnabled: defaults.schedulerEnabled,
       harvestAfterSyncEnabled: defaults.harvestAfterSyncEnabled,
+      oauthRelinkRemindAfterDays: defaults.oauthRelinkRemindAfterDays,
+      allowlistReviewTimeoutHours: defaults.allowlistReviewTimeoutHours,
+      pauseBetweenPipelineStages: defaults.pauseBetweenPipelineStages,
+      lastOauthRelinkRemindedAt: defaults.lastOauthRelinkRemindedAt,
       updatedAt: defaults.updatedAt,
     };
   }
@@ -43,6 +55,10 @@ export async function getEmailSyncSettings(): Promise<EmailSyncSettings> {
     syncCron: row.syncCron,
     schedulerEnabled: row.schedulerEnabled,
     harvestAfterSyncEnabled: row.harvestAfterSyncEnabled,
+    oauthRelinkRemindAfterDays: row.oauthRelinkRemindAfterDays ?? 6,
+    allowlistReviewTimeoutHours: row.allowlistReviewTimeoutHours ?? 24,
+    pauseBetweenPipelineStages: row.pauseBetweenPipelineStages ?? true,
+    lastOauthRelinkRemindedAt: row.lastOauthRelinkRemindedAt ?? null,
     updatedAt: row.updatedAt,
   };
 }
@@ -51,7 +67,13 @@ export async function updateEmailSyncSettings(
   input: Partial<
     Pick<
       EmailSyncSettings,
-      "syncCron" | "schedulerEnabled" | "harvestAfterSyncEnabled"
+      | "syncCron"
+      | "schedulerEnabled"
+      | "harvestAfterSyncEnabled"
+      | "oauthRelinkRemindAfterDays"
+      | "allowlistReviewTimeoutHours"
+      | "pauseBetweenPipelineStages"
+      | "lastOauthRelinkRemindedAt"
     >
   >,
 ): Promise<EmailSyncSettings> {
@@ -62,6 +84,16 @@ export async function updateEmailSyncSettings(
     schedulerEnabled: input.schedulerEnabled ?? current.schedulerEnabled,
     harvestAfterSyncEnabled:
       input.harvestAfterSyncEnabled ?? current.harvestAfterSyncEnabled,
+    oauthRelinkRemindAfterDays:
+      input.oauthRelinkRemindAfterDays ?? current.oauthRelinkRemindAfterDays,
+    allowlistReviewTimeoutHours:
+      input.allowlistReviewTimeoutHours ?? current.allowlistReviewTimeoutHours,
+    pauseBetweenPipelineStages:
+      input.pauseBetweenPipelineStages ?? current.pauseBetweenPipelineStages,
+    lastOauthRelinkRemindedAt:
+      input.lastOauthRelinkRemindedAt === undefined
+        ? current.lastOauthRelinkRemindedAt
+        : input.lastOauthRelinkRemindedAt,
     updatedAt: new Date().toISOString(),
   };
 

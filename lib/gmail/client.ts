@@ -102,8 +102,13 @@ export async function upsertGmailConnection(input: {
         encryptedRefreshToken: row.encryptedRefreshToken,
         tokenExpiry: row.tokenExpiry,
         connectedAt: row.connectedAt,
-        lastHistoryId: input.historyId ?? null,
-        lastSyncAt: null,
       },
     });
+
+  try {
+    const { updateEmailSyncSettings } = await import("@/lib/email/settings");
+    await updateEmailSyncSettings({ lastOauthRelinkRemindedAt: null });
+  } catch (error) {
+    console.warn("[gmail:oauth] Could not clear relink reminder", error);
+  }
 }

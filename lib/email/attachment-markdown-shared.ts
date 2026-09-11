@@ -104,7 +104,9 @@ export function canMarkExtractionParsed(input: {
   return (
     input.parseStatus === "pending" ||
     input.parseStatus === "parsing" ||
-    input.parseStatus === "needs_ocr"
+    input.parseStatus === "needs_ocr" ||
+    // Legacy whole-doc Cloudflare toMarkdown failures; Docling/vision may be done.
+    input.parseStatus === "failed"
   );
 }
 

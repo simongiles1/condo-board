@@ -2,9 +2,13 @@
  * Docling + vision path for Extraction lab "Process selected" (replaces Cloudflare toMarkdown).
  */
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
+import {
+  attachmentDocumentPages,
+  attachmentDocuments,
+} from "@/lib/db/schema";
 import {
   DEFAULT_DOCLING_PROVIDER,
   type DoclingProvider,
@@ -38,10 +42,46 @@ export type LabDoclingProcessOutcome = {
   visionCostUsd: number;
 };
 
+/** Drop legacy Cloudflare parse failures when page-profile extraction takes over. */
+async function clearLegacyCloudflareParseFailure(
+  contentHash: string,
+): Promise<void> {
+  const db = getDb();
+  const [doc] = await db
+    .select({
+      parseStatus: attachmentDocuments.parseStatus,
+      parseError: attachmentDocuments.parseError,
+    })
+    .from(attachmentDocuments)
+    .where(eq(attachmentDocuments.contentHash, contentHash))
+    .limit(1);
+  if (doc?.parseStatus !== "failed") return;
+
+  const [pageRow] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(attachmentDocumentPages)
+    .where(eq(attachmentDocumentPages.contentHash, contentHash));
+  if (Number(pageRow?.n) === 0) return;
+
+  const err = doc.parseError?.trim() ?? "";
+  const legacyCf =
+    /CLOUDFLARE_/i.test(err) ||
+    /toMarkdown/i.test(err) ||
+    err.includes("attachment Markdown conversion");
+  if (!legacyCf && err) return;
+
+  await db
+    .update(attachmentDocuments)
+    .set({ parseStatus: "pending", parseError: null })
+    .where(eq(attachmentDocuments.contentHash, contentHash));
+}
+
 export async function processLabDocumentWithDocling(
   contentHash: string,
   provider: DoclingProvider = DEFAULT_DOCLING_PROVIDER,
 ): Promise<LabDoclingProcessOutcome> {
+  await clearLegacyCloudflareParseFailure(contentHash);
+
   const uncached = await listUncachedTextRoutePages(contentHash);
   let doclingRan = false;
   let doclingCostUsd = 0;

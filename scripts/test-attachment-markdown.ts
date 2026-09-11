@@ -114,6 +114,10 @@ describe("canMarkExtractionParsed", () => {
       canMarkExtractionParsed({ ...ready, parseStatus: "needs_ocr" }),
       true,
     );
+    assert.equal(
+      canMarkExtractionParsed({ ...ready, parseStatus: "failed" }),
+      true,
+    );
   });
 
   it("does not promote when vision failed or text pages are still uncached", () => {

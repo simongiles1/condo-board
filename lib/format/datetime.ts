@@ -29,12 +29,28 @@ export function formatDisplayDate(value: string | null | undefined): string {
   const date = parseInstant(value);
   if (!date) return value;
 
-  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
-    year: "numeric",
-    month: "long",
+  const month = shortDisplayMonth(date);
+  const day = new Intl.DateTimeFormat(DISPLAY_LOCALE, {
     day: "numeric",
     timeZone: DISPLAY_TIME_ZONE,
   }).format(date);
+  const year = new Intl.DateTimeFormat(DISPLAY_LOCALE, {
+    year: "numeric",
+    timeZone: DISPLAY_TIME_ZONE,
+  }).format(date);
+
+  return `${month} ${day}, ${year}`;
+}
+
+function shortDisplayMonth(date: Date): string {
+  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
+    month: "short",
+    timeZone: DISPLAY_TIME_ZONE,
+  })
+    .format(date)
+    .replace(/\./g, "")
+    .slice(0, 3)
+    .toUpperCase();
 }
 
 /** Stable date/time formatting for SSR (avoids hydration mismatches). */
@@ -43,14 +59,22 @@ export function formatDateTime(value: string | null | undefined): string {
   const date = parseInstant(value);
   if (!date) return value;
 
-  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
-    year: "numeric",
-    month: "long",
+  const month = shortDisplayMonth(date);
+  const day = new Intl.DateTimeFormat(DISPLAY_LOCALE, {
     day: "numeric",
+    timeZone: DISPLAY_TIME_ZONE,
+  }).format(date);
+  const year = new Intl.DateTimeFormat(DISPLAY_LOCALE, {
+    year: "numeric",
+    timeZone: DISPLAY_TIME_ZONE,
+  }).format(date);
+  const time = new Intl.DateTimeFormat(DISPLAY_LOCALE, {
     hour: "numeric",
     minute: "2-digit",
     timeZone: DISPLAY_TIME_ZONE,
   }).format(date);
+
+  return `${month} ${day}, ${year} at ${time}`;
 }
 
 /** Stable time-only formatting for SSR (avoids hydration mismatches). */

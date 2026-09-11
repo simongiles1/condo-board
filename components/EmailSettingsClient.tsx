@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import {
+  CatchupPreviewModal,
+  type CatchupPreviewMessageRow,
+} from "@/components/CatchupPreviewModal";
 import { EmailIngestPipelineModal } from "@/components/EmailIngestPipelineModal";
 import {
   SyncRunResultBadge,
@@ -261,6 +265,21 @@ export function EmailSettingsClient(props: {
 
   const previewEmailsKey = useMemo(() => previewEmails.join("\0"), [previewEmails]);
   const [previewRefreshNonce, setPreviewRefreshNonce] = useState(0);
+  const [catchupPreviewOpen, setCatchupPreviewOpen] = useState(false);
+  const [catchupPreviewLoading, setCatchupPreviewLoading] = useState(false);
+  const [catchupPreviewError, setCatchupPreviewError] = useState<string | null>(
+    null,
+  );
+  const [catchupPreviewQuery, setCatchupPreviewQuery] = useState<string | null>(
+    null,
+  );
+  const [catchupPreviewSinceIso, setCatchupPreviewSinceIso] = useState<
+    string | null
+  >(null);
+  const [catchupPreviewMessages, setCatchupPreviewMessages] = useState<
+    CatchupPreviewMessageRow[]
+  >([]);
+  const [catchupPreviewTruncated, setCatchupPreviewTruncated] = useState(false);
 
   const sortedCandidates = useMemo(() => {
     const next = [...candidates];
@@ -799,6 +818,46 @@ export function EmailSettingsClient(props: {
       );
     } finally {
       setBusyAction(null);
+    }
+  }
+
+  async function openCatchupPreview() {
+    if (previewEmails.length === 0) return;
+
+    setCatchupPreviewOpen(true);
+    setCatchupPreviewLoading(true);
+    setCatchupPreviewError(null);
+    setCatchupPreviewQuery(null);
+    setCatchupPreviewSinceIso(null);
+    setCatchupPreviewMessages([]);
+    setCatchupPreviewTruncated(false);
+
+    try {
+      const response = await fetch("/api/email/sync/catchup-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emails: previewEmails }),
+      });
+      const body = (await response.json()) as {
+        error?: string;
+        query?: string;
+        sinceIso?: string | null;
+        messages?: CatchupPreviewMessageRow[];
+        truncated?: boolean;
+      };
+      if (!response.ok) {
+        throw new Error(body.error ?? "Could not load catch-up messages.");
+      }
+      setCatchupPreviewQuery(body.query ?? null);
+      setCatchupPreviewSinceIso(body.sinceIso ?? null);
+      setCatchupPreviewMessages(body.messages ?? []);
+      setCatchupPreviewTruncated(Boolean(body.truncated));
+    } catch (error) {
+      setCatchupPreviewError(
+        error instanceof Error ? error.message : "Could not load catch-up messages.",
+      );
+    } finally {
+      setCatchupPreviewLoading(false);
     }
   }
 
@@ -1343,8 +1402,11 @@ export function EmailSettingsClient(props: {
                   <div className="min-w-0">
                     <p className="font-medium text-slate-900">Estimated next sync import</p>
                     <p className="mt-0.5 text-xs text-slate-500">
-                      Incremental catch-up (not a full backfill). Counts are
-                      approximate; hover sync history for new vs skipped.
+                      Incremental catch-up (not a full backfill). Pending count
+                      ignores mail already in the archive. Gmail&apos;s{" "}
+                      <code className="text-[11px]">after:</code> filter uses
+                      whole days, so older mail can appear in View — hover sync
+                      history for new vs skipped.
                     </p>
                     <p className="mt-1 text-slate-600">
                       {selectedEmails.size > 0
@@ -1363,37 +1425,70 @@ export function EmailSettingsClient(props: {
                       <>
                         {importPreview.nextSync ? (
                           <>
-                            <p className="mt-2 tabular-nums text-slate-800">
-                              <span className="font-medium text-teal-900">
-                                Up to{" "}
-                                {importPreview.nextSync.remainingEmailCount.toLocaleString()}{" "}
-                                new email
-                                {importPreview.nextSync.remainingEmailCount === 1
-                                  ? ""
-                                  : "s"}
+                            <p className="mt-2 flex flex-wrap items-center gap-2 tabular-nums text-slate-800">
+                              <span>
+                                <span className="font-medium text-teal-900">
+                                  {importPreview.nextSync.remainingEmailCount === 0
+                                    ? "No new emails"
+                                    : `Up to ${importPreview.nextSync.remainingEmailCount.toLocaleString()} new email${importPreview.nextSync.remainingEmailCount === 1 ? "" : "s"}`}
+                                </span>
+                                {" in the catch-up window"}
+                                {importPreview.nextSync.sinceIso ? (
+                                  <>
+                                    {" "}
+                                    (since{" "}
+                                    {formatSettingsDate(importPreview.nextSync.sinceIso)})
+                                  </>
+                                ) : (
+                                  " (last 2 days)"
+                                )}
+                                .
                               </span>
-                              {" in the catch-up window"}
-                              {importPreview.nextSync.sinceIso ? (
-                                <>
-                                  {" "}
-                                  (since{" "}
-                                  {formatSettingsDate(importPreview.nextSync.sinceIso)})
-                                </>
-                              ) : (
-                                " (last 2 days)"
-                              )}
-                              .
+                              <button
+                                type="button"
+                                onClick={() => void openCatchupPreview()}
+                                disabled={importPreviewLoading || importPreviewUnavailable}
+                                className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                title="View Gmail messages in this catch-up window"
+                                aria-label="View Gmail messages in this catch-up window"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden
+                                >
+                                  <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+                                  <circle cx="12" cy="12" r="3" />
+                                </svg>
+                                View
+                              </button>
                             </p>
                             <p className="mt-1 text-xs text-slate-500">
                               Gmail shows{" "}
                               {importPreview.nextSync.gmailEmailCount.toLocaleString()}{" "}
                               allowlist message
                               {importPreview.nextSync.gmailEmailCount === 1 ? "" : "s"}{" "}
-                              in that window;{" "}
+                              in that search;{" "}
                               {importPreview.nextSync.archivedEmailCount.toLocaleString()}{" "}
-                              already in the archive. Sync now also checks Gmail
-                              history and may pull full threads (including older
-                              replies).
+                              already in the archive
+                              {importPreview.nextSync.gmailEmailCount >
+                                importPreview.nextSync.archivedEmailCount &&
+                              importPreview.nextSync.sinceIso ? (
+                                <>
+                                  {" "}
+                                  (some may be from before your last sync because
+                                  Gmail&apos;s date filter is by day, not clock
+                                  time)
+                                </>
+                              ) : null}
+                              . Sync now also checks Gmail history and may pull full
+                              threads.
                             </p>
                           </>
                         ) : null}
@@ -1410,11 +1505,23 @@ export function EmailSettingsClient(props: {
                           {" still missing from a full allowlist backfill."}
                         </p>
                         <p className="mt-1 text-xs text-slate-500">
-                          {importPreview.importedEmailCount.toLocaleString()} of{" "}
-                          {importPreview.emailCount.toLocaleString()} matching Gmail
-                          messages already imported (
-                          {importPreview.importedThreadCount.toLocaleString()} of{" "}
-                          {importPreview.threadCount.toLocaleString()} threads).
+                          {Math.min(
+                            importPreview.importedEmailCount,
+                            importPreview.emailCount,
+                          ).toLocaleString()}
+                          {importPreview.importedEmailCount > importPreview.emailCount
+                            ? "+"
+                            : ""}{" "}
+                          of {importPreview.emailCount.toLocaleString()} matching Gmail
+                          messages in the archive (
+                          {Math.min(
+                            importPreview.importedThreadCount,
+                            importPreview.threadCount,
+                          ).toLocaleString()}
+                          {importPreview.importedThreadCount > importPreview.threadCount
+                            ? "+"
+                            : ""}{" "}
+                          of {importPreview.threadCount.toLocaleString()} threads).
                         </p>
                       </>
                     ) : null}
@@ -1686,6 +1793,17 @@ export function EmailSettingsClient(props: {
           ) : null}
         </div>
       </div>
+
+      <CatchupPreviewModal
+        open={catchupPreviewOpen}
+        loading={catchupPreviewLoading}
+        error={catchupPreviewError}
+        query={catchupPreviewQuery}
+        sinceIso={catchupPreviewSinceIso}
+        messages={catchupPreviewMessages}
+        truncated={catchupPreviewTruncated}
+        onClose={() => setCatchupPreviewOpen(false)}
+      />
 
       <SenderActionsDialog
         candidate={senderActionsTarget}

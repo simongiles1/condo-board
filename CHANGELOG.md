@@ -6,9 +6,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Catch-up import estimate** — Pending count uses the same Gmail message-id duplicate check as sync, not received-at since last sync. Fixes false “1 new email” when Gmail’s day-based `after:` still returns yesterday’s mail that is already in the archive.
+
+- **Display dates** — Month labels use three-letter uppercase form (e.g. SEP 10, 2026 at 3:38 p.m.) so thread rows do not truncate “p.m.”
+
 ### Changed
 
-- **Email Settings sync estimates** — “Estimated next sync import” shows catch-up window delta (Gmail allowlist matches minus archive in that window), not total Gmail volume. Backfill column uses remaining unsynced counts. Sync history shows `new · already in archive`; hover for detail.
+- **Email Settings sync estimates** — … **View** opens a modal listing Gmail messages in the catch-up search (query collapsed under “advanced”; scrollable message cards first).
 
 ### Fixed
 

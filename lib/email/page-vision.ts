@@ -20,7 +20,9 @@ import {
   resolveAttachmentStoragePath,
 } from "@/lib/email/attachment-markdown-shared";
 import {
+  PAGE_VISION_RECITATION_ADDENDUM,
   PAGE_VISION_SYSTEM_PROMPT,
+  pageVisionRecitationFallbackUserText,
   pageVisionUserText,
 } from "@/lib/email/page-vision-prompt";
 import {
@@ -29,6 +31,8 @@ import {
   geminiBillingHaltMessage,
   isDegeneratePageVisionMarkdown,
   isFatalGeminiVisionError,
+  isGeminiRecitationError,
+  humanizeVisionErrorMessage,
   pageVisionArtifactRelativeKey,
   pageVisionBatchSizeFromEnv,
   pageVisionMaxAttemptsFromEnv,
@@ -459,20 +463,37 @@ async function processClaimedPage(
         }
       : resolvePageVisionFilePart(page, bytes, pagePdf);
 
-    const result = await generatePageVision({
-      systemInstruction: PAGE_VISION_SYSTEM_PROMPT,
-      userText: pageVisionUserText(page.pageNo, nativeText, {
-        kind: filePart.kind,
-        fullDocument: useFullPdfFallback,
-      }),
-      fileParts: [
-        {
-          mimeType: filePart.mimeType,
-          data: filePart.data,
-          label: filePart.label,
-        },
-      ],
-    });
+    const runVision = (recitationFallback: boolean) =>
+      generatePageVision({
+        systemInstruction: recitationFallback
+          ? `${PAGE_VISION_SYSTEM_PROMPT}\n\n${PAGE_VISION_RECITATION_ADDENDUM}`
+          : PAGE_VISION_SYSTEM_PROMPT,
+        userText: recitationFallback
+          ? pageVisionRecitationFallbackUserText(page.pageNo)
+          : pageVisionUserText(page.pageNo, nativeText, {
+              kind: filePart.kind,
+              fullDocument: useFullPdfFallback,
+            }),
+        fileParts: [
+          {
+            mimeType: filePart.mimeType,
+            data: filePart.data,
+            label: filePart.label,
+          },
+        ],
+      });
+
+    let result;
+    try {
+      result = await runVision(false);
+    } catch (firstError) {
+      const firstMessage =
+        firstError instanceof Error ? firstError.message : String(firstError);
+      if (!isGeminiRecitationError(firstMessage)) {
+        throw firstError;
+      }
+      result = await runVision(true);
+    }
 
     const costUsd = estimateCostUsd(result.modelName, result.usage);
     const usagePatch = {
@@ -547,6 +568,7 @@ async function processClaimedPage(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Page vision failed.";
+    const displayMessage = humanizeVisionErrorMessage(message);
     const http = classifyGeminiHttpError(message);
     const quota = http?.fatal === true || isFatalGeminiVisionError(error);
 
@@ -558,7 +580,7 @@ async function processClaimedPage(
         .set({
           visionStatus: "pending",
           visionAttempts: Math.max(0, page.visionAttempts - 1),
-          visionError: message,
+          visionError: displayMessage,
           visionedAt: nowIso(),
         })
         .where(
@@ -572,7 +594,7 @@ async function processClaimedPage(
         pageNo: page.pageNo,
         status: quota ? "quota" : "rate_limit",
         costUsd: 0,
-        error: message,
+        error: displayMessage,
       };
     }
 
@@ -582,7 +604,7 @@ async function processClaimedPage(
       .update(attachmentDocumentPages)
       .set({
         visionStatus: giveUp ? "failed" : "pending",
-        visionError: message,
+        visionError: displayMessage,
         visionedAt: nowIso(),
       })
       .where(
@@ -597,7 +619,7 @@ async function processClaimedPage(
       pageNo: page.pageNo,
       status: giveUp ? "failed" : "requeued",
       costUsd: 0,
-      error: message,
+      error: displayMessage,
     };
   }
 }

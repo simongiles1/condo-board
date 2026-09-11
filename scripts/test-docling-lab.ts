@@ -506,8 +506,8 @@ describe("formatVisionErrorSummary", () => {
     ]);
     assert.match(summary ?? "", /2 vision pages failed/);
     assert.match(summary ?? "", /Vision output truncated/);
-    assert.match(summary ?? "", /p107/);
-    assert.match(summary ?? "", /p18/);
+    assert.match(summary ?? "", /107/);
+    assert.match(summary ?? "", /18/);
     assert.doesNotMatch(summary ?? "", /still retrying/);
   });
 

@@ -179,6 +179,7 @@ export type VisionErrorKind =
   | "degenerate"
   | "stale"
   | "pdf_corrupt"
+  | "recitation"
   | "other";
 
 export const GEMINI_HTTP_ERROR_KINDS: VisionErrorKind[] = [
@@ -242,6 +243,30 @@ export function isGeminiBillingHaltKind(
   return kind === "gemini_spend_cap" || kind === "gemini_credits";
 }
 
+export function isGeminiRecitationError(message: string): boolean {
+  return /RECITATION/i.test(message.trim());
+}
+
+/** Short, UI-friendly text — not raw SDK dumps. */
+export function humanizeVisionErrorMessage(message: string): string {
+  const m = message.trim() || "Page vision failed.";
+  if (isGeminiRecitationError(m)) {
+    return "Gemini blocked the transcription (recitation safety filter). A paraphrase retry runs automatically on the next attempt.";
+  }
+  const { label } = classifyVisionError(m);
+  if (label.length <= 120 && !/GoogleGenerativeAI/i.test(label)) {
+    return label;
+  }
+  const http = classifyGeminiHttpError(m);
+  if (http) return http.label;
+  if (/GoogleGenerativeAI Error/i.test(m)) {
+    const inner = m.replace(/^.*GoogleGenerativeAI Error\]:\s*/i, "").trim();
+    if (inner.length > 0 && inner.length <= 200) return inner;
+    return "Gemini API error during page vision.";
+  }
+  return m.length > 200 ? `${m.slice(0, 197)}…` : m;
+}
+
 export function classifyVisionError(message: string): {
   kind: VisionErrorKind;
   label: string;
@@ -250,6 +275,12 @@ export function classifyVisionError(message: string): {
   const http = classifyGeminiHttpError(m);
   if (http) {
     return { kind: http.kind, label: http.label };
+  }
+  if (isGeminiRecitationError(m)) {
+    return {
+      kind: "recitation",
+      label: "Gemini recitation block (safety filter)",
+    };
   }
   if (/GoogleGenerativeAI/i.test(m) && /fetch failed/i.test(m)) {
     return { kind: "gemini_fetch", label: "Gemini fetch failed" };

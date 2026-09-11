@@ -13,7 +13,18 @@ Rules:
   1. Keep any printed caption/label exactly.
   2. Add a short visual description of what the image shows (setting, objects, condition, notable defects).
 - If the page or image is blank or illegible, say so in one short sentence.
-- Output Markdown only. No JSON wrapper, no preamble, no closing commentary.`;
+- Output Markdown only. No JSON wrapper, no preamble, no closing commentary.
+- Paraphrase long boilerplate and standard legal clauses; do not copy multi-sentence passages verbatim.`;
+
+export const PAGE_VISION_RECITATION_ADDENDUM = `A prior attempt was blocked for recitation. Use concise paraphrase and bullet facts. Do not reproduce long passages verbatim. Preserve exact names, dates, dollar amounts, and signature lines.`;
+
+export function pageVisionRecitationFallbackUserText(pageNo: number): string {
+  return [
+    `Page ${pageNo}: produce Markdown with headings and bullet points.`,
+    "Paraphrase narrative and legal boilerplate; no long verbatim blocks.",
+    "Use tables only when needed. Describe photos in one short line each.",
+  ].join(" ");
+}
 
 export function pageVisionUserText(
   pageNo: number,

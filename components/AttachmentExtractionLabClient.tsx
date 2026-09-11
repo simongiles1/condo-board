@@ -819,28 +819,31 @@ export function AttachmentExtractionLabClient() {
       ) : null}
 
       {lastRunErrors.length > 0 ? (
-        <div className="shrink-0 max-h-48 overflow-y-auto rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+        <div className="shrink-0 max-h-56 overflow-y-auto rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
           <p className="font-medium">
             {lastRunErrors.length} error
             {lastRunErrors.length === 1 ? "" : "s"} in last run
           </p>
-          <ul className="mt-1 space-y-2 text-xs">
+          <ul className="mt-2 space-y-3 text-xs">
             {lastRunErrors.map((f) => (
-              <li key={f.contentHash}>
-                <span className="font-semibold text-red-950">
+              <li key={f.contentHash} className="space-y-1">
+                <p className="font-semibold text-red-950">
                   {f.filename || shortHash(f.contentHash)}
-                </span>
-                <span className="text-red-700/80">
-                  {" "}
-                  ({shortHash(f.contentHash)})
-                </span>
-                {f.summary ? (
-                  <p className="mt-0.5 text-red-900">{f.summary}</p>
+                </p>
+                {f.error ? (
+                  <p className="font-medium text-red-900">{f.error}</p>
                 ) : null}
-                {f.error && f.error !== f.summary ? (
-                  <div className="mt-0.5 break-words font-mono text-[11px] text-red-700">
-                    {f.error}
-                  </div>
+                {f.summary ? (
+                  <p className="whitespace-pre-line leading-snug text-red-900/90">
+                    {f.summary}
+                  </p>
+                ) : null}
+                {f.visionIssueBullets && f.visionIssueBullets.length > 0 ? (
+                  <ul className="list-disc space-y-0.5 pl-4 text-red-900">
+                    {f.visionIssueBullets.map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
                 ) : null}
               </li>
             ))}
@@ -860,14 +863,21 @@ export function AttachmentExtractionLabClient() {
           </summary>
           <ul className="mt-2 max-h-40 space-y-2 overflow-y-auto text-slate-600">
             {lastRun.files.map((f) => (
-              <li key={f.contentHash}>
+              <li key={f.contentHash} className="space-y-1">
                 <p className="font-medium text-slate-800">
                   {f.filename || shortHash(f.contentHash)}
                 </p>
-                <p className="mt-0.5 leading-snug">
+                <p className="whitespace-pre-line leading-snug">
                   {f.summary ||
                     `${f.parseStatusBefore ?? "?"} → ${f.parseStatusAfter ?? "?"}`}
                 </p>
+                {f.visionIssueBullets && f.visionIssueBullets.length > 0 ? (
+                  <ul className="list-disc space-y-0.5 pl-4 text-slate-500">
+                    {f.visionIssueBullets.map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </li>
             ))}
           </ul>

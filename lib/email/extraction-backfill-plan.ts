@@ -118,19 +118,35 @@ export function formatVisionErrorSummary(
   return formatErrorGroupSummary(groupVisionErrors(errors));
 }
 
+/** One bullet per failed vision page — for extraction lab UI. */
+export function formatDocumentVisionIssueBullets(
+  errors: ExtractionBackfillPageError[],
+): string[] {
+  const failed = errors.filter((item) => item.status === "failed");
+  return failed.map((item) => {
+    const { label } = classifyVisionError(item.message);
+    return `Page ${item.pageNo}: ${label}`;
+  });
+}
+
 export function formatErrorGroupSummary(
   groups: ExtractionErrorGroup[],
 ): string | null {
   if (groups.length === 0) return null;
   const total = groups.reduce((n, group) => n + group.pages, 0);
   const parts = groups.map((group) => {
+    const pageList = [
+      ...new Set(group.samples.map((item) => item.pageNo)),
+    ].sort((a, b) => a - b);
     const sample =
-      group.pages <= 3
-        ? ` (${group.samples
-            .map((item) => `${shortHash(item.contentHash)} p${item.pageNo}`)
-            .join(", ")})`
-        : "";
-    return `${group.pages} ${group.label}${sample}`;
+      pageList.length > 0 && pageList.length <= 8
+        ? ` (pages ${pageList.join(", ")})`
+        : group.pages <= 3
+          ? ` (${group.samples
+              .map((item) => `p${item.pageNo}`)
+              .join(", ")})`
+          : "";
+    return `${group.pages}× ${group.label}${sample}`;
   });
   return `${total} vision page${total === 1 ? "" : "s"} failed · ${parts.join(" · ")}`;
 }

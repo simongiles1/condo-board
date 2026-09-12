@@ -281,53 +281,80 @@ function FindingSignificanceBadge({ finding }: { finding: ValidationFinding }) {
   );
 }
 
-function ColumnMetaRow({
+function AlignmentKindBadge({
+  alignment,
+  compact,
+}: {
+  alignment: CompareAlignment;
+  compact?: boolean;
+}) {
+  return (
+    <span
+      className={`inline-flex shrink-0 rounded-full font-semibold ${alignmentChip(alignment.kind)} ${
+        compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[10px]"
+      }`}
+      title={alignmentKindTitle(alignment.kind)}
+    >
+      {alignmentKindLabel(alignment.kind)}
+    </span>
+  );
+}
+
+function ConceptTitle({
+  alignment,
+  className = "",
+}: {
+  alignment: CompareAlignment;
+  className?: string;
+}) {
+  const inlineKind =
+    alignment.kind === "ai_only" || alignment.kind === "gold_only";
+  return (
+    <span className={`inline-flex min-w-0 max-w-full items-center gap-1.5 ${className}`}>
+      <span className="truncate">{alignment.label}</span>
+      {inlineKind ? <AlignmentKindBadge alignment={alignment} compact /> : null}
+    </span>
+  );
+}
+
+function ConceptMatchCluster({
   alignment,
   findings,
-  column,
+  pairScore,
+  compact,
 }: {
   alignment: CompareAlignment;
   findings: ValidationFinding[];
-  column: "gold" | "ai";
+  pairScore: number | null;
+  compact?: boolean;
 }) {
-  const columnFindings = findingsForAlignmentColumn(alignment, findings, column);
-  const showGoldOnly = column === "gold" && alignment.kind === "gold_only";
-  const showAiOnly = column === "ai" && alignment.kind === "ai_only";
-  const justify =
-    column === "gold" ? "justify-end" : "justify-between";
-
-  if (!showGoldOnly && !showAiOnly && columnFindings.length === 0) {
-    return <div className="min-h-[1.75rem]" aria-hidden />;
-  }
+  const goldFindings = findingsForAlignmentColumn(alignment, findings, "gold");
+  const aiFindings = findingsForAlignmentColumn(alignment, findings, "ai");
+  const showKind =
+    alignment.kind !== "ai_only" && alignment.kind !== "gold_only";
+  const scoreClass = compact
+    ? "min-w-[2.25rem] text-[10px]"
+    : "min-w-[2.5rem] text-xs";
 
   return (
-    <div
-      className={`flex min-h-[1.75rem] items-center gap-2 ${justify} ${
-        column === "gold" ? "border-r border-slate-100 pr-4" : "pl-4"
-      }`}
-    >
-      {showAiOnly ? (
-        <span
-          className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${alignmentChip(alignment.kind)}`}
-          title={alignmentKindTitle(alignment.kind)}
-        >
-          {alignmentKindLabel(alignment.kind)}
-        </span>
-      ) : null}
-      {column === "ai" && !showAiOnly ? <span className="flex-1" /> : null}
-      <div className="flex flex-wrap items-center justify-end gap-1.5">
-        {columnFindings.map((finding) => (
+    <div className="flex shrink-0 items-center gap-1">
+      {showKind ? <AlignmentKindBadge alignment={alignment} compact /> : null}
+      <div className="flex items-center justify-end gap-1">
+        {goldFindings.map((finding) => (
           <FindingSignificanceBadge key={finding.id} finding={finding} />
         ))}
       </div>
-      {showGoldOnly ? (
-        <span
-          className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${alignmentChip(alignment.kind)}`}
-          title={alignmentKindTitle(alignment.kind)}
-        >
-          {alignmentKindLabel(alignment.kind)}
-        </span>
-      ) : null}
+      <span
+        className={`font-mono tabular-nums text-center font-semibold text-slate-600 ${scoreClass}`}
+        title="How closely this pair's wording and facts agree (0–100)."
+      >
+        {pairScore != null ? `${pairScore}%` : "—"}
+      </span>
+      <div className="flex items-center justify-start gap-1">
+        {aiFindings.map((finding) => (
+          <FindingSignificanceBadge key={finding.id} finding={finding} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -570,14 +597,21 @@ export function GoldStandardValidationSidePanel({
             {compare ? ` · ${compare.alignments.length} concepts` : ""}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-          aria-label="Close"
-        >
-          ✕
-        </button>
+        <div className="flex shrink-0 items-start gap-3">
+          {compare ? (
+            <div className="max-w-[min(28rem,42vw)] pt-0.5">
+              <CompareLegend />
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
       </header>
 
       {compare ? (
@@ -616,23 +650,18 @@ export function GoldStandardValidationSidePanel({
                           : "hover:bg-white/70"
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="truncate text-xs font-semibold text-slate-900">
-                          {alignment.label}
-                        </span>
-                        <span
-                          className="font-mono text-[10px] text-slate-500"
-                          title="How closely this pair's wording and facts agree (0–100)."
-                        >
-                          {pair ? `${pair.pairScore}%` : "—"}
-                        </span>
+                      <div className="flex items-center gap-2">
+                        <ConceptTitle
+                          alignment={alignment}
+                          className="min-w-0 flex-1 text-xs font-semibold text-slate-900"
+                        />
+                        <ConceptMatchCluster
+                          alignment={alignment}
+                          findings={pair?.findings ?? []}
+                          pairScore={pair?.pairScore ?? null}
+                          compact
+                        />
                       </div>
-                      <span
-                        className={`mt-1 inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${alignmentChip(alignment.kind)}`}
-                        title={alignmentKindTitle(alignment.kind)}
-                      >
-                        {alignmentKindLabel(alignment.kind)}
-                      </span>
                     </button>
                   </li>
                 );
@@ -651,9 +680,6 @@ export function GoldStandardValidationSidePanel({
                 </div>
                 <div className="px-4 py-2">AI minutes</div>
               </div>
-              <div className="border-t border-slate-100 px-4 py-2">
-                <CompareLegend />
-              </div>
             </div>
             {visibleAlignments.map((alignment) => {
               const pair = pairByAlignmentId.get(alignment.id);
@@ -662,40 +688,21 @@ export function GoldStandardValidationSidePanel({
                 <section
                   key={alignment.id}
                   data-alignment-id={alignment.id}
-                  className={`scroll-mt-[4.5rem] border-t border-slate-200 ${
+                  className={`scroll-mt-9 border-t border-slate-200 ${
                     alignment.id === activeAlignmentId ? "bg-teal-50/30" : ""
                   }`}
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-2">
-                    <h3 className="text-sm font-semibold text-slate-900">
-                      {alignment.label}
+                  <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-2">
+                    <h3 className="min-w-0 flex-1 text-sm font-semibold text-slate-900">
+                      <ConceptTitle alignment={alignment} />
                     </h3>
-                    {pair ? (
-                      <span
-                        className="font-mono text-xs text-slate-500"
-                        title="How closely this pair's wording and facts agree (0–100)."
-                      >
-                        {pair.pairScore}%
-                      </span>
-                    ) : null}
+                    <ConceptMatchCluster
+                      alignment={alignment}
+                      findings={findings}
+                      pairScore={pair?.pairScore ?? null}
+                    />
                   </div>
-                  <div className="grid grid-cols-2 items-start">
-                    <div className="px-4 pt-2">
-                      <ColumnMetaRow
-                        alignment={alignment}
-                        findings={findings}
-                        column="gold"
-                      />
-                    </div>
-                    <div className="px-4 pt-2">
-                      <ColumnMetaRow
-                        alignment={alignment}
-                        findings={findings}
-                        column="ai"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 items-start pb-3">
+                  <div className="grid grid-cols-2 items-start pb-3 pt-2">
                     <div className="border-r border-slate-100 px-4 pb-1 pt-1">
                       <HighlightedProse segments={pair?.goldSegments ?? []} />
                     </div>

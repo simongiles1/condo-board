@@ -530,14 +530,127 @@ export function displaySegmentMark(
   return "changed";
 }
 
+export type CompareCoverage = {
+  coveragePct: number;
+  missingPct: number;
+  extraPct: number;
+  goldMass: number;
+  aiMass: number;
+  overlapMass: number;
+  missingMass: number;
+  extraMass: number;
+};
+
+function segmentMass(text: string): number {
+  return text.replace(/\s+/g, "").length;
+}
+
+function pctOf(part: number, whole: number): number {
+  if (whole <= 0) return 0;
+  return Math.min(100, Math.max(0, Math.round((100 * part) / whole)));
+}
+
+function coverageFromMasses(options: {
+  overlapMass: number;
+  missingMass: number;
+  extraMass: number;
+  fallbackPct?: number;
+}): CompareCoverage {
+  const goldMass = options.overlapMass + options.missingMass;
+  const aiMass = options.overlapMass + options.extraMass;
+  if (goldMass <= 0 && aiMass <= 0) {
+    const fallback = Math.min(100, Math.max(0, Math.round(options.fallbackPct ?? 100)));
+    return {
+      coveragePct: fallback,
+      missingPct: 0,
+      extraPct: 0,
+      goldMass: 0,
+      aiMass: 0,
+      overlapMass: 0,
+      missingMass: 0,
+      extraMass: 0,
+    };
+  }
+  const coveragePct = goldMass <= 0 ? 100 : pctOf(options.overlapMass, goldMass);
+  return {
+    coveragePct,
+    missingPct: goldMass <= 0 ? 0 : 100 - coveragePct,
+    extraPct: pctOf(options.extraMass, aiMass),
+    goldMass,
+    aiMass,
+    overlapMass: options.overlapMass,
+    missingMass: options.missingMass,
+    extraMass: options.extraMass,
+  };
+}
+
+function accumulateSegmentMass(
+  segments: CompareTextSegment[],
+  column: "gold" | "ai",
+): { overlap: number; missing: number; extra: number } {
+  let overlap = 0;
+  let missing = 0;
+  let extra = 0;
+  for (const segment of segments) {
+    const mass = segmentMass(segment.text);
+    if (mass <= 0) continue;
+    const mark = displaySegmentMark(segment.mark, segment.text);
+    if (mark === "same") {
+      overlap += mass;
+      continue;
+    }
+    if (column === "gold") {
+      missing += mass;
+    } else {
+      extra += mass;
+    }
+  }
+  return { overlap, missing, extra };
+}
+
+export function computePairCoverage(pair: ComparePair): CompareCoverage {
+  const gold = accumulateSegmentMass(pair.goldSegments, "gold");
+  const ai = accumulateSegmentMass(pair.aiSegments, "ai");
+  return coverageFromMasses({
+    overlapMass: gold.overlap,
+    missingMass: gold.missing,
+    extraMass: ai.extra,
+    fallbackPct: pair.pairScore,
+  });
+}
+
+export function computeCompareCoverage(
+  compare: GoldStandardCompareDocument,
+): CompareCoverage {
+  let overlapMass = 0;
+  let missingMass = 0;
+  let extraMass = 0;
+  let fallbackSum = 0;
+  for (const pair of compare.pairs) {
+    const row = computePairCoverage(pair);
+    overlapMass += row.overlapMass;
+    missingMass += row.missingMass;
+    extraMass += row.extraMass;
+    fallbackSum += pair.pairScore;
+  }
+  return coverageFromMasses({
+    overlapMass,
+    missingMass,
+    extraMass,
+    fallbackPct:
+      compare.pairs.length > 0 ? fallbackSum / compare.pairs.length : 50,
+  });
+}
+
 export function scoreCompareDocument(
   compare: GoldStandardCompareDocument,
-): { validationScore: number; scoreRationale: string } {
-  const pairScores = compare.pairs.map((pair) => pair.pairScore);
-  const mean =
-    pairScores.length > 0
-      ? pairScores.reduce((sum, score) => sum + score, 0) / pairScores.length
-      : 50;
+): {
+  validationScore: number;
+  missingPct: number;
+  extraPct: number;
+  scoreRationale: string;
+} {
+  const coverage = computeCompareCoverage(compare);
   const unmatchedGold = compare.alignments.filter((row) => row.kind === "gold_only").length;
   const unmatchedAi = compare.alignments.filter((row) => row.kind === "ai_only").length;
   const critical = compare.pairs.reduce(
@@ -545,17 +658,29 @@ export function scoreCompareDocument(
       count + pair.findings.filter((finding) => finding.significance === "critical").length,
     0,
   );
-  const validationScore = Math.min(100, Math.max(0, Math.round(mean)));
   const matched = compare.alignments.filter(
     (row) => row.kind === "1:1" || row.kind === "1:n" || row.kind === "n:1",
   ).length;
+  const extras: string[] = [];
+  if (coverage.missingPct > 0) {
+    extras.push(`${coverage.missingPct}% of official wording is missing from the AI minutes`);
+  }
+  if (coverage.extraPct > 0) {
+    extras.push(`${coverage.extraPct}% of the AI minutes is extra versus official`);
+  }
   const scoreRationale = [
-    `Average agreement across ${compare.alignments.length} concepts is ${validationScore}% (${matched} paired, ${unmatchedGold} gold-only, ${unmatchedAi} AI-only).`,
+    `The AI minutes cover ${coverage.coveragePct}% of official wording across ${compare.alignments.length} concepts (${matched} paired, ${unmatchedGold} gold-only, ${unmatchedAi} AI-only).`,
+    extras.length > 0 ? extras.join("; ") + "." : "No extra or missing wording was recorded.",
     critical > 0
-      ? `${critical} critical fact, motion, or amount difference${critical === 1 ? "" : "s"} ${critical === 1 ? "is" : "are"} listed in the notes — they do not stack extra penalties on top of the per-concept scores.`
+      ? `${critical} critical fact, motion, or amount difference${critical === 1 ? "" : "s"} ${critical === 1 ? "is" : "are"} listed in the notes.`
       : "No critical fact, motion, or amount mismatches were recorded.",
   ].join(" ");
-  return { validationScore, scoreRationale };
+  return {
+    validationScore: coverage.coveragePct,
+    missingPct: coverage.missingPct,
+    extraPct: coverage.extraPct,
+    scoreRationale,
+  };
 }
 
 export function headlineValidationScore(

@@ -17,10 +17,13 @@ import {
   parseStoredAiUsage,
 } from "@/lib/gemini/usage";
 import {
+  computeCompareCoverage,
+  computePairCoverage,
   displaySegmentMark,
   findingsForAlignmentColumn,
   repairCompareSegmentBoundaries,
   scoreCompareDocument,
+  type CompareCoverage,
 } from "@/lib/minutes/gold-standard-compare";
 import { HOVER_POPOVER_ATTR } from "@/lib/ui/hover-popover-group";
 import { useHoverPopover } from "@/lib/ui/use-hover-popover";
@@ -321,14 +324,61 @@ function ConceptTitle({
   );
 }
 
+function CoverageBadges({
+  coverage,
+  size = "md",
+}: {
+  coverage: CompareCoverage | null;
+  size?: "sm" | "md";
+}) {
+  if (!coverage) {
+    return (
+      <span className="font-mono text-xs tabular-nums text-slate-400">—</span>
+    );
+  }
+  const compact = size === "sm";
+  return (
+    <span className="inline-flex flex-wrap items-center justify-center gap-1">
+      <span
+        className={`inline-flex rounded-full font-semibold ring-1 ${validationScoreBadgeClasses(coverage.coveragePct)} ${
+          compact ? "px-1.5 py-0 text-[10px]" : "px-2.5 py-0.5 text-xs"
+        }`}
+        title="Share of official minutes also present in the AI minutes"
+      >
+        {coverage.coveragePct}%
+      </span>
+      {coverage.missingPct > 0 ? (
+        <span
+          className={`inline-flex rounded-full bg-rose-100 font-semibold text-rose-900 ring-1 ring-rose-200 ${
+            compact ? "px-1.5 py-0 text-[10px]" : "px-2 py-0.5 text-xs"
+          }`}
+          title="Share of official minutes missing from the AI minutes"
+        >
+          −{coverage.missingPct}%
+        </span>
+      ) : null}
+      {coverage.extraPct > 0 ? (
+        <span
+          className={`inline-flex rounded-full bg-emerald-100 font-semibold text-emerald-900 ring-1 ring-emerald-200 ${
+            compact ? "px-1.5 py-0 text-[10px]" : "px-2 py-0.5 text-xs"
+          }`}
+          title="Share of AI minutes that is extra versus the official minutes"
+        >
+          +{coverage.extraPct}%
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function ConceptMatchCluster({
   alignment,
   findings,
-  pairScore,
+  coverage,
 }: {
   alignment: CompareAlignment;
   findings: ValidationFinding[];
-  pairScore: number | null;
+  coverage: CompareCoverage | null;
 }) {
   const goldFindings = findingsForAlignmentColumn(alignment, findings, "gold");
   const aiFindings = findingsForAlignmentColumn(alignment, findings, "ai");
@@ -340,12 +390,7 @@ function ConceptMatchCluster({
           <FindingSignificanceBadge key={finding.id} finding={finding} />
         ))}
       </div>
-      <span
-        className="min-w-[2.5rem] font-mono text-xs tabular-nums text-center font-semibold text-slate-600"
-        title="How closely this pair's wording and facts agree (0–100)."
-      >
-        {pairScore != null ? `${pairScore}%` : "—"}
-      </span>
+      <CoverageBadges coverage={coverage} />
       <div className="flex items-center justify-start gap-1">
         {aiFindings.map((finding) => (
           <FindingSignificanceBadge key={finding.id} finding={finding} />
@@ -358,11 +403,11 @@ function ConceptMatchCluster({
 function ConceptSectionHeader({
   alignment,
   findings,
-  pairScore,
+  coverage,
 }: {
   alignment: CompareAlignment;
   findings: ValidationFinding[];
-  pairScore: number | null;
+  coverage: CompareCoverage | null;
 }) {
   return (
     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-slate-100 px-4 py-2">
@@ -372,7 +417,7 @@ function ConceptSectionHeader({
       <ConceptMatchCluster
         alignment={alignment}
         findings={findings}
-        pairScore={pairScore}
+        coverage={coverage}
       />
       <div aria-hidden className="min-w-0" />
     </div>
@@ -567,6 +612,10 @@ export function GoldStandardValidationSidePanel({
     if (!compare) return null;
     return scoreCompareDocument(compare);
   }, [compare]);
+  const documentCoverage = useMemo(() => {
+    if (!compare) return null;
+    return computeCompareCoverage(compare);
+  }, [compare]);
 
   const costRun = useMemo(() => {
     if (!meeting?.aiUsageJson) return null;
@@ -588,12 +637,16 @@ export function GoldStandardValidationSidePanel({
             <h2 className="min-w-0 text-lg font-semibold text-slate-900">
               Gold standard compare
             </h2>
-            <span
-              className={`inline-flex rounded-full px-3 py-1 text-sm font-semibold ring-1 ${validationScoreBadgeClasses(displayedScore)}`}
-              title="Average of the per-concept agreement scores in the list"
-            >
-              {validationScoreLabel(displayedScore)}
-            </span>
+            {documentCoverage ? (
+              <CoverageBadges coverage={documentCoverage} />
+            ) : (
+              <span
+                className={`inline-flex rounded-full px-3 py-1 text-sm font-semibold ring-1 ${validationScoreBadgeClasses(displayedScore)}`}
+                title="Share of official minutes also present in the AI minutes"
+              >
+                {validationScoreLabel(displayedScore)}
+              </span>
+            )}
             {compare ? (
               <>
                 <span
@@ -675,12 +728,10 @@ export function GoldStandardValidationSidePanel({
                           alignment={alignment}
                           className="min-w-0 flex-1 text-xs font-semibold text-slate-900"
                         />
-                        <span
-                          className="shrink-0 font-mono text-[10px] text-slate-500"
-                          title="How closely this pair's wording and facts agree (0–100)."
-                        >
-                          {pair ? `${pair.pairScore}%` : "—"}
-                        </span>
+                        <CoverageBadges
+                          coverage={pair ? computePairCoverage(pair) : null}
+                          size="sm"
+                        />
                       </div>
                       {alignment.kind !== "ai_only" &&
                       alignment.kind !== "gold_only" ? (
@@ -723,7 +774,7 @@ export function GoldStandardValidationSidePanel({
                   <ConceptSectionHeader
                     alignment={alignment}
                     findings={findings}
-                    pairScore={pair?.pairScore ?? null}
+                    coverage={pair ? computePairCoverage(pair) : null}
                   />
                   <div className="grid grid-cols-2 items-start pb-3 pt-2">
                     <div className="border-r border-slate-100 px-4 pb-1 pt-1">

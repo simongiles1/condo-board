@@ -9,6 +9,7 @@ import { describe, it } from "node:test";
 import { buildAiMinutesConcepts } from "../lib/minutes/gold-standard-ai-concepts";
 import {
   completeAlignments,
+  computePairCoverage,
   deriveBidirectionalFindings,
   displaySegmentMark,
   findingColumn,
@@ -340,7 +341,7 @@ describe("compare_v2 persistence", () => {
 });
 
 describe("scoreCompareDocument", () => {
-  it("averages pair scores without stacking a critical-finding penalty", () => {
+  it("scores coverage from gold overlap and extra/missing from highlight spans", () => {
     const scored = scoreCompareDocument({
       goldConcepts: [],
       aiConcepts: [],
@@ -366,8 +367,14 @@ describe("scoreCompareDocument", () => {
         {
           alignmentId: "a",
           pairScore: 90,
-          goldSegments: [],
-          aiSegments: [],
+          goldSegments: [
+            { text: "aaaa", mark: "same" },
+            { text: "bbbb", mark: "omitted" },
+          ],
+          aiSegments: [
+            { text: "aaaa", mark: "same" },
+            { text: "cccc", mark: "added" },
+          ],
           findings: [
             {
               id: "c1",
@@ -380,13 +387,51 @@ describe("scoreCompareDocument", () => {
         {
           alignmentId: "b",
           pairScore: 35,
-          goldSegments: [],
+          goldSegments: [{ text: "dddddddd", mark: "omitted" }],
           aiSegments: [],
           findings: [],
         },
       ],
     });
-    assert.equal(scored.validationScore, 63);
+    // gold masses: 4 same + 4 omitted + 8 omitted = 16; overlap 4 -> 25%
+    assert.equal(scored.validationScore, 25);
+    assert.equal(scored.missingPct, 75);
+    // AI extra 4 of 8 chars -> 50%
+    assert.equal(scored.extraPct, 50);
+  });
+});
+
+describe("computePairCoverage", () => {
+  it("is 100% with a green extra when AI includes all gold wording plus more", () => {
+    const coverage = computePairCoverage({
+      alignmentId: "a",
+      pairScore: 70,
+      goldSegments: [{ text: "Official motion carried.", mark: "same" }],
+      aiSegments: [
+        { text: "Official motion carried.", mark: "same" },
+        { text: " Staff will post the notice.", mark: "added" },
+      ],
+      findings: [],
+    });
+    assert.equal(coverage.coveragePct, 100);
+    assert.equal(coverage.missingPct, 0);
+    assert.ok(coverage.extraPct > 0);
+  });
+
+  it("drops below 100% with a red missing share when gold wording is absent", () => {
+    const coverage = computePairCoverage({
+      alignmentId: "a",
+      pairScore: 70,
+      goldSegments: [
+        { text: "aaaa", mark: "same" },
+        { text: "bbbb", mark: "omitted" },
+      ],
+      aiSegments: [{ text: "aaaa", mark: "same" }],
+      findings: [],
+    });
+    assert.equal(coverage.coveragePct, 50);
+    assert.equal(coverage.missingPct, 50);
+    assert.equal(coverage.extraPct, 0);
   });
 });
 

@@ -56,9 +56,9 @@ export function GoldStandardValidationBadge({
         onClick();
       }}
       className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium ring-1 transition hover:ring-2 hover:ring-teal-300/80 ${badgeCls}`}
-      title={
+        title={
         validated
-          ? "View gold standard validation results"
+          ? "Share of official minutes covered by the AI minutes. Open the compare view for missing and extra amounts."
           : "Compare against gold standard minutes"
       }
       aria-label={

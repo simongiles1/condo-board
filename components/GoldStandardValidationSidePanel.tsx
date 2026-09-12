@@ -183,7 +183,7 @@ function HighlightedProse({
   }
   const displaySegments = repairCompareSegmentBoundaries(segments);
   return (
-    <p className="whitespace-pre-wrap text-sm leading-relaxed">
+    <p className="break-words whitespace-pre-wrap text-sm leading-relaxed">
       {displaySegments.map((segment, index) => {
         const mark = displaySegmentMark(segment.mark, segment.text);
         return (
@@ -352,7 +352,7 @@ function CoverageBadges({
 
   return (
     <span
-      className={`inline-flex items-end justify-center ${compact ? "gap-1" : "gap-2"}`}
+      className={`inline-flex max-w-full flex-wrap items-end justify-center ${compact ? "gap-1" : "gap-2"}`}
       role="group"
       aria-label={`Overlap ${coverage.coveragePct} percent. Gold missing ${coverage.missingPct} percent. AI extra ${coverage.extraPct} percent.`}
     >
@@ -420,7 +420,7 @@ function ConceptMatchCluster({
   const aiFindings = findingsForAlignmentColumn(alignment, findings, "ai");
 
   return (
-    <div className="flex items-center justify-center gap-1.5">
+    <div className="flex max-w-full flex-wrap items-center justify-center gap-1 sm:gap-1.5">
       <div className="flex items-center justify-end gap-1">
         {goldFindings.map((finding) => (
           <FindingSignificanceBadge key={finding.id} finding={finding} />
@@ -446,16 +446,18 @@ function ConceptSectionHeader({
   coverage: CompareCoverage | null;
 }) {
   return (
-    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-slate-100 px-4 py-2">
+    <div className="flex flex-col gap-2 border-b border-slate-100 px-2 py-2 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-center sm:gap-2 sm:px-4">
       <h3 className="min-w-0 text-left text-sm font-semibold text-slate-900">
         <ConceptTitle alignment={alignment} />
       </h3>
-      <ConceptMatchCluster
-        alignment={alignment}
-        findings={findings}
-        coverage={coverage}
-      />
-      <div aria-hidden className="min-w-0" />
+      <div className="max-w-full sm:justify-self-center">
+        <ConceptMatchCluster
+          alignment={alignment}
+          findings={findings}
+          coverage={coverage}
+        />
+      </div>
+      <div aria-hidden className="hidden min-w-0 sm:block" />
     </div>
   );
 }
@@ -483,6 +485,88 @@ function FindingsList({ findings }: { findings: ValidationFinding[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function CompareHeaderMoreMenu({
+  meetingTitle,
+  comparedAtLabel,
+  conceptCount,
+  showLegend,
+}: {
+  meetingTitle: string;
+  comparedAtLabel: string;
+  conceptCount?: number;
+  showLegend: boolean;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuOpen]);
+
+  return (
+    <div className="relative shrink-0" ref={containerRef}>
+      <button
+        type="button"
+        onClick={() => setMenuOpen((open) => !open)}
+        aria-expanded={menuOpen}
+        aria-haspopup="menu"
+        aria-label="Compare details and legend"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+      >
+        <span aria-hidden className="text-lg leading-none">
+          ⋮
+        </span>
+      </button>
+      {menuOpen ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-50 mt-1 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-slate-200 bg-white py-2 shadow-lg"
+        >
+          <div className="border-b border-slate-100 px-3 pb-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              Meeting
+            </p>
+            <p className="mt-0.5 text-sm font-medium text-slate-900">{meetingTitle}</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Compared {comparedAtLabel}
+              {conceptCount != null ? ` · ${conceptCount} concepts` : ""}
+            </p>
+          </div>
+          {showLegend ? (
+            <div className="px-3 pt-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                Highlight legend
+              </p>
+              <div className="mt-1.5">
+                <CompareLegend />
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -666,15 +750,15 @@ export function GoldStandardValidationSidePanel({
   const displayedScore = compareScore?.validationScore ?? validation.validationScore;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white">
-      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-3">
+    <div className="fixed inset-0 z-50 flex flex-col overflow-x-hidden bg-white">
+      <header className="flex shrink-0 items-start justify-between gap-2 border-b border-slate-200 px-3 py-3 sm:px-5">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="min-w-0 text-lg font-semibold text-slate-900">
+            <h2 className="min-w-0 text-base font-semibold text-slate-900 sm:text-lg">
               Gold standard compare
             </h2>
             {documentCoverage ? (
-              <CoverageBadges coverage={documentCoverage} />
+              <CoverageBadges coverage={documentCoverage} size="sm" />
             ) : (
               <span
                 className={`inline-flex rounded-full px-3 py-1 text-sm font-semibold ring-1 ${validationScoreBadgeClasses(displayedScore)}`}
@@ -700,18 +784,14 @@ export function GoldStandardValidationSidePanel({
               </>
             ) : null}
           </div>
-          <p className="mt-1 text-sm font-medium text-slate-800">{meeting.title}</p>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Compared {formatAnalyzedAt(validation.analyzedAt)}
-            {compare ? ` · ${compare.alignments.length} concepts` : ""}
-          </p>
         </div>
-        <div className="flex shrink-0 items-start gap-3">
-          {compare ? (
-            <div className="max-w-[min(28rem,42vw)] pt-0.5">
-              <CompareLegend />
-            </div>
-          ) : null}
+        <div className="flex shrink-0 items-start gap-1 sm:gap-2">
+          <CompareHeaderMoreMenu
+            meetingTitle={meeting.title}
+            comparedAtLabel={formatAnalyzedAt(validation.analyzedAt)}
+            conceptCount={compare ? compare.alignments.length : undefined}
+            showLegend={Boolean(compare)}
+          />
           <button
             type="button"
             onClick={onClose}
@@ -724,7 +804,7 @@ export function GoldStandardValidationSidePanel({
       </header>
 
       {compare ? (
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <nav
             ref={navRef}
             className="hidden w-72 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50 lg:block"
@@ -784,16 +864,19 @@ export function GoldStandardValidationSidePanel({
             </ul>
           </nav>
 
-          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+          <div
+            ref={scrollRef}
+            className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden"
+          >
             <div
               data-compare-sticky-header
               className="sticky top-0 z-10 border-b border-slate-200 bg-white shadow-sm"
             >
-              <div className="grid grid-cols-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <div className="border-r border-slate-200 px-4 py-2">
+              <div className="grid min-w-0 grid-cols-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <div className="min-w-0 border-r border-slate-200 px-2 py-2 sm:px-4">
                   Gold standard
                 </div>
-                <div className="px-4 py-2">AI minutes</div>
+                <div className="min-w-0 px-2 py-2 sm:px-4">AI minutes</div>
               </div>
             </div>
             {visibleAlignments.map((alignment) => {
@@ -812,11 +895,11 @@ export function GoldStandardValidationSidePanel({
                     findings={findings}
                     coverage={pair ? computePairCoverage(pair) : null}
                   />
-                  <div className="grid grid-cols-2 items-start pb-3 pt-2">
-                    <div className="border-r border-slate-100 px-4 pb-1 pt-1">
+                  <div className="grid min-w-0 grid-cols-2 items-start pb-3 pt-2">
+                    <div className="min-w-0 overflow-hidden border-r border-slate-100 px-2 pb-1 pt-1 sm:px-4">
                       <HighlightedProse segments={pair?.goldSegments ?? []} />
                     </div>
-                    <div className="px-4 pb-1 pt-1">
+                    <div className="min-w-0 overflow-hidden px-2 pb-1 pt-1 sm:px-4">
                       <HighlightedProse segments={pair?.aiSegments ?? []} />
                     </div>
                   </div>

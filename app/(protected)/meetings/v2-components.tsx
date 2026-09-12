@@ -1066,43 +1066,25 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         </span>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="-mx-4 border-y border-slate-200 bg-white shadow-sm sm:mx-0 sm:rounded-2xl sm:border">
         <div
-          className={`border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-4 py-4 text-white rounded-t-2xl ${
-            hasSuccessfulRun ? "" : "rounded-b-2xl border-b-0"
+          className={`border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-4 py-4 text-white sm:rounded-t-2xl ${
+            hasSuccessfulRun ? "" : "sm:rounded-b-2xl border-b-0"
           }`}
         >
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="shrink-0 space-y-2">
-              <div>
-                <h1 className="text-xl font-semibold tracking-tight">
-                  {status?.meeting.title ?? "Loading meeting"}
-                </h1>
-                <p className="mt-0.5 text-sm text-white/65">
-                  {status
-                    ? formatMeetingDate(status.meeting.meetingDate)
-                    : "Loading date"}
-                </p>
-              </div>
-              <div className="flex flex-col gap-0.5 pt-1">
-                <label htmlFor="temp-slider" className="text-[10px] font-semibold uppercase tracking-wider text-white/70">
-                  AI Autonomy: {autonomyTemperature.toFixed(1)}
-                </label>
-                <input
-                  id="temp-slider"
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.1"
-                  value={autonomyTemperature}
-                  onChange={(e) => setAutonomyTemperature(parseFloat(e.target.value))}
-                  className="w-28 accent-teal-400"
-                  title="0 = Always ask user | 1 = Fully autonomous"
-                />
-              </div>
+          <div className="grid gap-3 max-xl:relative xl:grid-cols-[minmax(0,16rem)_1fr_auto] xl:items-center">
+            <div className="min-w-0 max-xl:pr-10">
+              <h1 className="text-xl font-semibold tracking-tight">
+                {status?.meeting.title ?? "Loading meeting"}
+              </h1>
+              <p className="mt-0.5 text-sm text-white/65">
+                {status
+                  ? formatMeetingDate(status.meeting.meetingDate)
+                  : "Loading date"}
+              </p>
             </div>
 
-            <div className="w-full min-w-0 rounded-xl border border-white/10 bg-black/15 p-3 xl:mx-4 xl:flex-1">
+            <div className="w-full min-w-0 rounded-xl border border-white/10 bg-black/15 p-3 xl:mx-2">
               <div className="flex items-start justify-between gap-3">
                 <span className="text-sm font-medium text-white/80">Current Progress</span>
                 <span
@@ -1155,7 +1137,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               ) : null}
             </div>
 
-            <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
+            <div className="max-xl:absolute max-xl:right-0 max-xl:top-0 max-xl:z-10 xl:justify-self-end">
               <MeetingWorkspaceMoreMenu
                 hasMeetingDocuments={hasMeetingDocuments}
                 validationScore={validationScore}
@@ -1167,25 +1149,23 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 onOpenUsage={() => setUsageDialogOpen(true)}
                 onOpenPdfTemplate={() => setPdfTemplateDialogOpen(true)}
                 onSourcesPulled={() => void refreshStatus()}
+                autonomyTemperature={autonomyTemperature}
+                onAutonomyChange={setAutonomyTemperature}
+                hasDraftPdf={Boolean(status?.latestDraft)}
+                pipelineSlot={
+                  <PipelineActionButton
+                    runBusy={runBusy}
+                    pipelineNotStarted={pipelineNotStarted}
+                    pipelineValidated={pipelineValidated}
+                    pipelineActivelyRunning={pipelineRunning}
+                    disabled={!pipelineSourcesReady || pipelineRunning}
+                    disabledReason={pipelineDisabledReason}
+                    onRun={handleRunPipeline}
+                    onRestart={handleRestartPipeline}
+                    presentation="menu"
+                  />
+                }
               />
-              <PipelineActionButton
-                runBusy={runBusy}
-                pipelineNotStarted={pipelineNotStarted}
-                pipelineValidated={pipelineValidated}
-                pipelineActivelyRunning={pipelineRunning}
-                disabled={!pipelineSourcesReady || pipelineRunning}
-                disabledReason={pipelineDisabledReason}
-                onRun={handleRunPipeline}
-                onRestart={handleRestartPipeline}
-              />
-              {status?.latestDraft ? (
-                <a
-                  href={`/api/v2/meetings/${meetingId}/draft/file?download=1`}
-                  className="inline-flex items-center justify-center rounded-lg border border-white/15 bg-white px-3 py-2 text-sm font-semibold text-slate-900 transition hover:bg-slate-100"
-                >
-                  Download PDF
-                </a>
-              ) : null}
             </div>
           </div>
         </div>
@@ -1385,6 +1365,10 @@ function MeetingWorkspaceMoreMenu({
   onOpenUsage,
   onOpenPdfTemplate,
   onSourcesPulled,
+  autonomyTemperature,
+  onAutonomyChange,
+  hasDraftPdf,
+  pipelineSlot,
 }: {
   hasMeetingDocuments: boolean;
   validationScore: number | null;
@@ -1396,6 +1380,10 @@ function MeetingWorkspaceMoreMenu({
   onOpenUsage: () => void;
   onOpenPdfTemplate: () => void;
   onSourcesPulled: () => void;
+  autonomyTemperature: number;
+  onAutonomyChange: (value: number) => void;
+  hasDraftPdf: boolean;
+  pipelineSlot: ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1452,6 +1440,40 @@ function MeetingWorkspaceMoreMenu({
           role="menu"
           className="absolute right-0 top-full z-50 mt-1 w-72 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
+          <div className="border-b border-slate-100 px-3 py-2.5">
+            <label
+              htmlFor="meeting-autonomy-slider"
+              className="text-[10px] font-semibold uppercase tracking-wider text-slate-500"
+            >
+              AI Autonomy: {autonomyTemperature.toFixed(1)}
+            </label>
+            <input
+              id="meeting-autonomy-slider"
+              type="range"
+              min="0"
+              max="1"
+              step="0.1"
+              value={autonomyTemperature}
+              onChange={(event) => onAutonomyChange(parseFloat(event.target.value))}
+              className="mt-1.5 w-full accent-teal-600"
+              title="0 = Always ask user | 1 = Fully autonomous"
+            />
+          </div>
+          <div className="border-b border-slate-100 px-3 py-2.5">{pipelineSlot}</div>
+          {hasDraftPdf ? (
+            <a
+              role="menuitem"
+              href={`/api/v2/meetings/${meetingId}/draft/file?download=1`}
+              onClick={closeMenu}
+              className="flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+            >
+              <PdfTemplateMenuIcon className="h-5 w-5 shrink-0 text-slate-500" />
+              <span>
+                <span className="block font-medium text-slate-900">Download PDF</span>
+                <span className="block text-xs text-slate-500">Latest generated minutes draft</span>
+              </span>
+            </a>
+          ) : null}
           <button
             role="menuitem"
             type="button"
@@ -1614,6 +1636,7 @@ function PipelineActionButton({
   disabledReason,
   onRun,
   onRestart,
+  presentation = "header",
 }: {
   runBusy: boolean;
   pipelineNotStarted: boolean;
@@ -1623,6 +1646,7 @@ function PipelineActionButton({
   disabledReason?: string | null;
   onRun: () => void | Promise<void>;
   onRestart: () => void | Promise<void>;
+  presentation?: "header" | "menu";
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -1688,12 +1712,17 @@ function PipelineActionButton({
 
   const title = isDisabled && disabledReason ? disabledReason : undefined;
   const showDropdown = pipelineValidated || !pipelineNotStarted;
+  const inMenu = presentation === "menu";
 
   return (
-    <div className="relative" ref={containerRef} title={title}>
-      <div className="inline-flex overflow-hidden rounded-lg shadow-md">
+    <div className={`relative ${inMenu ? "w-full" : ""}`} ref={containerRef} title={title}>
+      <div
+        className={`overflow-hidden rounded-lg shadow-md ${inMenu ? "flex w-full" : "inline-flex"}`}
+      >
         <button
-          className="inline-flex items-center bg-teal-500 px-3 py-2 text-sm font-semibold text-slate-950 transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
+          className={`inline-flex items-center bg-teal-500 text-sm font-semibold text-slate-950 transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50 ${
+            inMenu ? "min-w-0 flex-1 justify-center px-3 py-2" : "px-3 py-2"
+          }`}
           disabled={isDisabled}
           onClick={() => openConfirm(resolvePrimaryAction())}
           type="button"

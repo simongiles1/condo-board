@@ -1,4 +1,8 @@
-import type { ValidationFinding } from "@/lib/minutes/gold-standard-schema";
+import type {
+  GoldStandardCompareDocument,
+  GoldStandardValidationResult,
+  ValidationFinding,
+} from "@/lib/minutes/gold-standard-schema";
 
 export type GoldStandardAgendaItemRef = {
   id: string;
@@ -65,7 +69,7 @@ function longestSharedTokenRun(left: string[], rightJoined: string): number {
   return bestRun;
 }
 
-function pairMatchScore(leftText: string, rightText: string): number {
+export function pairMatchScore(leftText: string, rightText: string): number {
   const left = normalizeMatchText(leftText);
   const right = normalizeMatchText(rightText);
   if (!left || !right) return 0;
@@ -169,11 +173,90 @@ function assignFindingsToBestItem<T extends GoldStandardAgendaItemRef>(
   return map;
 }
 
+function findingsFromCompareDocument(
+  compare: GoldStandardCompareDocument,
+  items: GoldStandardAgendaItemRef[],
+): Map<string, ItemGoldStandardFindings> {
+  const result = new Map<string, ItemGoldStandardFindings>();
+  const aiById = new Map(compare.aiConcepts.map((row) => [row.id, row]));
+  const goldById = new Map(compare.goldConcepts.map((row) => [row.id, row]));
+  const alignmentById = new Map(compare.alignments.map((row) => [row.id, row]));
+
+  function add(
+    itemId: string,
+    finding: ValidationFinding,
+    bucket: "generatedOnly" | "goldOnly",
+  ) {
+    const current = result.get(itemId) ?? { generatedOnly: [], goldOnly: [] };
+    current[bucket].push(finding);
+    result.set(itemId, current);
+  }
+
+  function bestItemId(heading: string): string | null {
+    let bestId: string | null = null;
+    let bestScore = 0;
+    for (const item of items) {
+      const score = pairMatchScore(heading, item.title);
+      if (score > bestScore) {
+        bestScore = score;
+        bestId = item.id;
+      }
+    }
+    return bestScore >= MATCH_SCORE_THRESHOLD ? bestId : null;
+  }
+
+  for (const pair of compare.pairs) {
+    const alignment = alignmentById.get(pair.alignmentId);
+    if (!alignment) continue;
+    const agendaIds = new Set<string>();
+    for (const aiId of alignment.aiConceptIds) {
+      for (const itemId of aiById.get(aiId)?.agendaItemIds ?? []) {
+        agendaIds.add(itemId);
+      }
+    }
+    if (agendaIds.size === 0) {
+      const heading =
+        goldById.get(alignment.goldConceptIds[0] ?? "")?.heading ||
+        alignment.label;
+      const fallbackId = bestItemId(heading);
+      if (fallbackId) agendaIds.add(fallbackId);
+    }
+    for (const finding of pair.findings) {
+      const bucket: "generatedOnly" | "goldOnly" =
+        alignment.kind === "gold_only" ? "goldOnly" : "generatedOnly";
+      for (const itemId of agendaIds) {
+        add(itemId, finding, bucket);
+      }
+    }
+  }
+
+  return result;
+}
+
 export function buildGoldStandardFindingsByItemId<T extends GoldStandardAgendaItemRef>(
   items: T[],
   generatedOnly: ValidationFinding[],
   goldOnly: ValidationFinding[],
+  compare?: GoldStandardCompareDocument | GoldStandardValidationResult | null,
 ): Map<string, ItemGoldStandardFindings> {
+  const compareDoc =
+    compare && "goldConcepts" in compare
+      ? compare
+      : compare && "compare" in compare
+        ? compare.compare
+        : null;
+  if (compareDoc) {
+    const mapped = findingsFromCompareDocument(compareDoc, items);
+    const result = new Map<string, ItemGoldStandardFindings>();
+    for (const [itemId, findings] of mapped) {
+      if (findings.generatedOnly.length === 0 && findings.goldOnly.length === 0) {
+        continue;
+      }
+      result.set(itemId, findings);
+    }
+    if (result.size > 0) return result;
+  }
+
   const generatedByItem = assignFindingsToBestItem(generatedOnly, items);
   const goldByItem = assignFindingsToBestItem(goldOnly, items);
   const result = new Map<string, ItemGoldStandardFindings>();

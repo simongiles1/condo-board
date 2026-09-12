@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 
@@ -9,101 +10,24 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { meetings } from "@/lib/db/schema";
-import { meetingsV2, meetingsV2MinutesDrafts } from "@/lib/db/schema-v2";
-import { generateOmissionsAnalysis, formatGeminiApiErrorMessage } from "@/lib/gemini/client";
-import { parseGoldStandardValidationResponse } from "@/lib/gemini/parse-output";
-import { GOLD_STANDARD_VALIDATION_SYSTEM_PROMPT } from "@/lib/gemini/prompts";
 import {
-  inputTruncationWarning,
-  PROMPT_INPUT_LIMITS,
-  sliceForPrompt,
-} from "@/lib/gemini/prompt-input-limits";
+  meetingsV2,
+  meetingsV2AgendaItems,
+  meetingsV2MinutesDrafts,
+} from "@/lib/db/schema";
+import { formatGeminiApiErrorMessage } from "@/lib/gemini/client";
 import {
   appendAiUsageRun,
   buildGoldStandardValidationRun,
 } from "@/lib/gemini/usage";
 import { serializeGoldStandardValidation } from "@/lib/minutes/gold-standard-schema";
-import { extractPdfText } from "@/lib/parsers/pdf";
+import { buildAiMinutesConcepts } from "@/lib/minutes/gold-standard-ai-concepts";
+import {
+  extractGoldStandardMinutesText,
+  runGoldStandardComparePipeline,
+} from "@/lib/minutes/gold-standard-compare-pipeline";
 import { saveMeetingV2GoldStandardArtifact } from "@/lib/meeting-v2/service";
 import type { MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
-
-function buildGoldStandardValidationPrompt(
-  title: string,
-  meetingDate: string,
-  minutesJson: string,
-  goldStandardText: string,
-): string {
-  return `Meeting: ${title}
-Meeting date: ${meetingDate}
-
-AI-GENERATED MINUTES JSON (compare against this)
-<<<
-${minutesJson}
->>>
-
-GOLD STANDARD MINUTES TEXT (from approved PDF)
-<<<
-${goldStandardText}
->>>`;
-}
-
-function buildValidationJsonRetryPrompt(basePrompt: string): string {
-  return `${basePrompt}
-
-CRITICAL RETRY — YOUR PREVIOUS RESPONSE WAS NOT VALID JSON:
-Re-emit ONLY a single bare JSON object matching the validation_v1 schema (no markdown fences, no commentary).
-Required keys: schema_version, analyzed_at, validation_score, score_rationale, generated_only (array), gold_only (array).
-Each finding needs id, topic, detail, and significance (critical | moderate | minor).`;
-}
-
-async function runGoldStandardValidation(options: {
-  systemInstruction: string;
-  userText: string;
-  modelName?: string;
-}) {
-  const maxAttempts = 2;
-  let userText = options.userText;
-  let lastGeneration: Awaited<ReturnType<typeof generateOmissionsAnalysis>> | null =
-    null;
-  let lastParse: ReturnType<typeof parseGoldStandardValidationResponse> | null =
-    null;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const generation = await generateOmissionsAnalysis({
-      systemInstruction: options.systemInstruction,
-      userText,
-      modelName: options.modelName,
-    });
-    const parsed = parseGoldStandardValidationResponse(generation.text);
-
-    lastGeneration = generation;
-    lastParse = parsed;
-
-    if (parsed.validation) {
-      return { generation, parsed };
-    }
-
-    console.error("[meetings:compare-gold-standard:parse-failure]", {
-      attempt,
-      errors: parsed.errors,
-      warnings: parsed.warnings,
-      truncated: generation.truncated,
-      finishReason: generation.finishReason,
-      retryCount: generation.retryCount,
-      rawTextLength: generation.text.length,
-      rawTextPreview: generation.text.slice(0, 2000),
-    });
-
-    if (attempt < maxAttempts - 1) {
-      userText = buildValidationJsonRetryPrompt(options.userText);
-    }
-  }
-
-  return {
-    generation: lastGeneration!,
-    parsed: lastParse!,
-  };
-}
 
 export async function POST(
   req: Request,
@@ -114,13 +38,9 @@ export async function POST(
   try {
     const formData = await req.formData();
     const goldStandardFile = formData.get("goldStandardPdf");
-
-    if (!(goldStandardFile instanceof File) || goldStandardFile.size === 0) {
-      return NextResponse.json(
-        { error: "A gold standard PDF file is required." },
-        { status: 400 },
-      );
-    }
+    const reuseStored =
+      formData.get("reuseStored") === "1" ||
+      formData.get("reuseStored") === "true";
 
     const db = getDb();
 
@@ -148,14 +68,7 @@ export async function POST(
         .limit(1);
 
       if (v2Draft?.summaryJson) {
-        try {
-          const parsed = JSON.parse(v2Draft.summaryJson);
-          const actualDoc =
-            parsed.minutesV2?.data || parsed.minutesV2 || parsed.data || parsed;
-          minutesJsonToCompare = JSON.stringify(actualDoc, null, 2);
-        } catch {
-          minutesJsonToCompare = v2Draft.summaryJson;
-        }
+        minutesJsonToCompare = v2Draft.summaryJson;
       } else if (v2Draft?.contentMarkdown) {
         minutesJsonToCompare = v2Draft.contentMarkdown;
       }
@@ -171,104 +84,90 @@ export async function POST(
       );
     }
 
-    const uploadRoot = path.resolve(process.cwd(), "uploads", id);
-    await mkdir(uploadRoot, { recursive: true });
+    const existingSettings = (v2Meeting?.settings as MeetingV2Settings) || {};
+    const storedGoldPath =
+      existingSettings.goldStandardFilePath ??
+      meeting?.goldStandardFilePath ??
+      null;
 
-    const goldStandardAbsolute = path.join(uploadRoot, "gold-standard.pdf");
-    const pdfBuffer = Buffer.from(await goldStandardFile.arrayBuffer());
-    await writeFile(goldStandardAbsolute, pdfBuffer);
+    let goldStandardFilePath = storedGoldPath;
+    let pdfBuffer: Buffer | null = null;
+    let originalFilename = "gold-standard.pdf";
+    let mimeType = "application/pdf";
 
-    const goldStandardFilePath = path
-      .relative(process.cwd(), goldStandardAbsolute)
-      .replace(/\\/g, "/");
+    if (goldStandardFile instanceof File && goldStandardFile.size > 0) {
+      const uploadRoot = path.resolve(process.cwd(), "uploads", id);
+      await mkdir(uploadRoot, { recursive: true });
+      const goldStandardAbsolute = path.join(uploadRoot, "gold-standard.pdf");
+      pdfBuffer = Buffer.from(await goldStandardFile.arrayBuffer());
+      await writeFile(goldStandardAbsolute, pdfBuffer);
+      goldStandardFilePath = path
+        .relative(process.cwd(), goldStandardAbsolute)
+        .replace(/\\/g, "/");
+      originalFilename = goldStandardFile.name || originalFilename;
+      mimeType = goldStandardFile.type || mimeType;
+    } else if (reuseStored && storedGoldPath) {
+      const absolute = path.resolve(process.cwd(), storedGoldPath);
+      pdfBuffer = await readFile(absolute);
+      goldStandardFilePath = storedGoldPath;
+    } else {
+      return NextResponse.json(
+        { error: "A gold standard PDF file is required." },
+        { status: 400 },
+      );
+    }
 
-    const extractedGoldStandard = await extractPdfText(pdfBuffer);
-    if (!extractedGoldStandard.trim()) {
+    const goldStandardAbsolute = path.resolve(
+      process.cwd(),
+      goldStandardFilePath,
+    );
+    const extractedGold = await extractGoldStandardMinutesText({
+      buffer: pdfBuffer,
+      pdfPath: goldStandardAbsolute,
+    });
+    if (!extractedGold.text.trim()) {
       return NextResponse.json(
         {
           error:
-            "Gold standard PDF yielded no selectable text. Upload a text-based PDF.",
+            "Gold standard PDF yielded no text. Upload a text-based or Docling-readable PDF.",
         },
         { status: 400 },
       );
     }
 
-    const minutesJsonInput = sliceForPrompt(
-      minutesJsonToCompare,
-      PROMPT_INPUT_LIMITS.minutesJson,
-    );
-    const goldStandardInput = sliceForPrompt(
-      extractedGoldStandard,
-      PROMPT_INPUT_LIMITS.goldStandardPdf,
-    );
+    const agendaItems = v2Meeting
+      ? await db
+          .select({
+            id: meetingsV2AgendaItems.id,
+            title: meetingsV2AgendaItems.title,
+            itemNumber: meetingsV2AgendaItems.itemNumber,
+            sectionLabel: meetingsV2AgendaItems.sectionLabel,
+          })
+          .from(meetingsV2AgendaItems)
+          .where(eq(meetingsV2AgendaItems.meetingV2Id, id))
+      : [];
 
-    const promptInputWarnings: string[] = [];
-
-    if (minutesJsonInput.truncated) {
-      promptInputWarnings.push(
-        inputTruncationWarning(
-          "AI minutes JSON",
-          minutesJsonInput,
-          PROMPT_INPUT_LIMITS.minutesJson,
-        ),
-      );
-    }
-
-    if (goldStandardInput.truncated) {
-      promptInputWarnings.push(
-        inputTruncationWarning(
-          "Gold standard PDF text",
-          goldStandardInput,
-          PROMPT_INPUT_LIMITS.goldStandardPdf,
-        ),
-      );
-    }
-
+    const aiConcepts = buildAiMinutesConcepts(minutesJsonToCompare, agendaItems);
     const meetingTitle = meeting?.title || v2Meeting?.title || "Board Meeting";
     const meetingDate = meeting?.meetingDate || v2Meeting?.meetingDate || "";
 
-    const userText = buildGoldStandardValidationPrompt(
+    const pipeline = await runGoldStandardComparePipeline({
+      goldText: extractedGold.text,
+      aiConcepts,
       meetingTitle,
       meetingDate,
-      minutesJsonInput.text,
-      goldStandardInput.text,
-    );
-
-    const { generation, parsed } = await runGoldStandardValidation({
-      systemInstruction: GOLD_STANDARD_VALIDATION_SYSTEM_PROMPT,
-      userText,
     });
 
-    if (!parsed.validation) {
-      return NextResponse.json(
-        {
-          error: "Gold standard validation failed.",
-          details: parsed.errors,
-          warnings: parsed.warnings,
-        },
-        { status: 422 },
-      );
-    }
-
-    const analyzedAt = new Date().toISOString();
-    const validationWithTimestamp = {
-      ...parsed.validation,
-      analyzedAt: parsed.validation.analyzedAt || analyzedAt,
-    };
-
-    const serialized = serializeGoldStandardValidation(validationWithTimestamp);
+    const serialized = serializeGoldStandardValidation(pipeline.validation);
     const baseUsageJson = meeting?.aiUsageJson ?? null;
     const validationUsageRun = buildGoldStandardValidationRun({
       id: randomUUID(),
-      ranAt: validationWithTimestamp.analyzedAt,
-      modelName: generation.modelName,
-      usage: generation.usage,
+      ranAt: pipeline.validation.analyzedAt,
+      modelName: pipeline.modelName,
+      usage: pipeline.usage,
       existingJson: baseUsageJson,
     });
-    const aiUsageJson = appendAiUsageRun(
-      baseUsageJson,
-      validationUsageRun,
-    );
+    const aiUsageJson = appendAiUsageRun(baseUsageJson, validationUsageRun);
 
     if (meeting) {
       await db
@@ -282,8 +181,6 @@ export async function POST(
     }
 
     if (v2Meeting) {
-      const existingSettings =
-        (v2Meeting.settings as MeetingV2Settings) || {};
       const nextSettings: MeetingV2Settings = {
         ...existingSettings,
         goldStandardFilePath,
@@ -313,8 +210,8 @@ export async function POST(
         await saveMeetingV2GoldStandardArtifact(
           id,
           goldStandardFilePath,
-          goldStandardFile.name || "gold-standard.pdf",
-          goldStandardFile.type || "application/pdf",
+          originalFilename,
+          mimeType,
           null,
         );
       } catch (artifactErr) {
@@ -325,20 +222,25 @@ export async function POST(
       }
     }
 
-    const warnings = [...parsed.warnings, ...promptInputWarnings];
-    if (generation.truncated) {
+    const warnings = [...pipeline.warnings];
+    if (extractedGold.doclingPageCount === 0) {
       warnings.push(
-        "Validation output may be truncated. Re-run if results look incomplete.",
+        "IBM Docling was unavailable; gold minutes were extracted with local PDF text.",
       );
     }
-    if (generation.retryCount > 0) {
+    if (pipeline.truncated) {
       warnings.push(
-        `Validation output was continued with ${generation.retryCount} extra call(s) after hitting the token limit.`,
+        "A compare stage may be truncated. Re-run if a concept looks incomplete.",
+      );
+    }
+    if (pipeline.retryCount > 0) {
+      warnings.push(
+        `Compare output was continued with ${pipeline.retryCount} extra call(s) after hitting the token limit.`,
       );
     }
 
     return NextResponse.json({
-      validation: validationWithTimestamp,
+      validation: pipeline.validation,
       warnings: warnings.length ? warnings : undefined,
       aiUsageJson,
     });
@@ -348,7 +250,13 @@ export async function POST(
     const billingBlocked =
       friendly?.includes("credits") || friendly?.includes("spending cap");
     return NextResponse.json(
-      { error: friendly ?? "Could not compare against gold standard." },
+      {
+        error:
+          friendly ??
+          (error instanceof Error
+            ? error.message
+            : "Could not compare against gold standard."),
+      },
       { status: billingBlocked ? 402 : 500 },
     );
   }

@@ -27,6 +27,14 @@ import {
   type LinkedConcept,
 } from "@/lib/entities/concept-links";
 import { formatDateTime } from "@/lib/format/datetime";
+import { formatCostUsd } from "@/lib/gemini/usage";
+import {
+  archiveChatSessionTitle,
+  corpusAskTurnCostUsd,
+  readArchiveChatHistory,
+  type ArchiveChatSession,
+  upsertArchiveChatSession,
+} from "@/lib/rag/archive-chat-history";
 import type { CorpusGroundedAnswer } from "@/lib/rag/answer-shared";
 import type { MatchedRegistryEntity } from "@/lib/rag/registry-boost";
 import type { CorpusSearchResult } from "@/lib/rag/search";
@@ -61,6 +69,9 @@ type AskResponsePayload = {
   answerError?: string;
   results?: CorpusSearchResult[];
   matchedEntities?: MatchedRegistryEntity[];
+  searchUsage?: { costUsd?: number } | null;
+  rewriteUsage?: { costUsd?: number } | null;
+  rerankUsage?: { costUsd?: number } | null;
 };
 
 async function readCorpusAskResponse(
@@ -115,6 +126,15 @@ type ChatMessage =
   | { id: string; role: "user"; text: string }
   | { id: string; role: "assistant"; text: string; payload: AssistantPayload };
 
+function dedupeChatMessages(messages: ChatMessage[]): ChatMessage[] {
+  const seen = new Set<string>();
+  return messages.filter((message) => {
+    if (seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  });
+}
+
 function sourceKey(result: CorpusSearchResult): string {
   const attachmentId = result.metadata.attachmentId;
   if (typeof attachmentId === "string" && attachmentId) {
@@ -166,7 +186,71 @@ function previewKind(result: CorpusSearchResult): "pdf" | "image" | "email" | "o
 }
 
 function newId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+function formatSourceMarkdownLine(source: ChatSource): string {
+  const label = sourceLabel(source.result);
+  const page =
+    source.result.pageNo != null ? ` (p.${source.result.pageNo})` : "";
+  const card = source.result.fileCard;
+  if (card) {
+    return `- **${label}**${page} — *${card.documentType}*: ${card.summary}`;
+  }
+  return `- **${label}**${page}`;
+}
+
+function assistantSources(payload: AssistantPayload): ChatSource[] {
+  const citedIds = new Set(
+    (payload.answer?.citations ?? []).map((citation) => citation.chunkId),
+  );
+  const nearIds = new Set(
+    (payload.answer?.nearMisses ?? []).map((citation) => citation.chunkId),
+  );
+  return uniqueSources(payload.results, citedIds, nearIds);
+}
+
+function assistantMessageMarkdown(
+  message: Extract<ChatMessage, { role: "assistant" }>,
+): string {
+  const { payload } = message;
+  let body =
+    payload.answer?.answer?.trim() || payload.answerError?.trim() || message.text.trim();
+  const sources = assistantSources(payload);
+  const cited = sources.filter((row) => row.cited);
+  const related = sources.filter((row) => !row.cited);
+  if (cited.length > 0) {
+    body += `\n\n### Files used\n\n${cited.map(formatSourceMarkdownLine).join("\n")}`;
+  }
+  if (related.length > 0) {
+    body += `\n\n### Also retrieved\n\n${related.map(formatSourceMarkdownLine).join("\n")}`;
+  }
+  return body;
+}
+
+function conversationMarkdown(messages: ChatMessage[]): string {
+  const sections = ["# Ask the board archive\n"];
+  for (const message of messages) {
+    if (message.role === "user") {
+      sections.push(`## User\n\n${message.text.trim()}\n`);
+    } else {
+      sections.push(`## Assistant\n\n${assistantMessageMarkdown(message)}\n`);
+    }
+  }
+  return sections.join("\n");
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text.trim()) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function ArchiveChatLauncher() {
@@ -177,11 +261,21 @@ export function ArchiveChatLauncher() {
   const [busy, setBusy] = useState(false);
   const [askPhase, setAskPhase] = useState("Understanding the question…");
   const [concepts, setConcepts] = useState<LinkedConcept[]>([]);
-  const [preview, setPreview] = useState<ChatSource | null>(null);
+  const [activePreview, setActivePreview] = useState<ChatSource | null>(null);
+  const [conversationCopied, setConversationCopied] = useState(false);
+  const [chatHistory, setChatHistory] = useState<ArchiveChatSession[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [sessionId, setSessionId] = useState(() => newId());
+  const [sessionCostUsd, setSessionCostUsd] = useState(0);
   const [mobilePane, setMobilePane] = useState<"chat" | "files">("chat");
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const historyMenuRef = useRef<HTMLDivElement>(null);
+  /** Guards Strict Mode double-invocation and duplicate async completion per user turn. */
+  const completedAskTurnRef = useRef<string | null>(null);
+  const appendedAssistantIdRef = useRef<string | null>(null);
+  const costAppliedAssistantIdRef = useRef<string | null>(null);
 
   const resizeComposer = useCallback(() => {
     const el = composerRef.current;
@@ -195,6 +289,28 @@ export function ArchiveChatLauncher() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  const refreshChatHistory = useCallback(() => {
+    setChatHistory(readArchiveChatHistory());
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    refreshChatHistory();
+  }, [open, refreshChatHistory]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    function onPointerDown(event: MouseEvent) {
+      if (!historyMenuRef.current?.contains(event.target as Node)) {
+        setHistoryOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [historyOpen]);
 
   useEffect(() => {
     if (!open) return;
@@ -218,14 +334,19 @@ export function ArchiveChatLauncher() {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !busy) setOpen(false);
+      if (event.key !== "Escape" || busy) return;
+      if (historyOpen) {
+        setHistoryOpen(false);
+        return;
+      }
+      setOpen(false);
     }
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open, busy]);
+  }, [open, busy, historyOpen]);
 
   useEffect(() => {
     const el = scrollerRef.current;
@@ -237,6 +358,71 @@ export function ArchiveChatLauncher() {
     resizeComposer();
   }, [query, open, resizeComposer]);
 
+  const persistCurrentSession = useCallback(
+    (
+      snapshot: {
+        id: string;
+        messages: ChatMessage[];
+        costUsd: number;
+      },
+    ) => {
+      if (snapshot.messages.length === 0) return;
+      const stored = upsertArchiveChatSession({
+        id: snapshot.id,
+        messages: dedupeChatMessages(snapshot.messages),
+        costUsd: snapshot.costUsd,
+      });
+      setChatHistory(stored);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (messages.length === 0) return;
+    persistCurrentSession({ id: sessionId, messages, costUsd: sessionCostUsd });
+  }, [messages, sessionCostUsd, sessionId, persistCurrentSession]);
+
+  function previewFromMessages(nextMessages: ChatMessage[]) {
+    for (let i = nextMessages.length - 1; i >= 0; i -= 1) {
+      const row = nextMessages[i];
+      if (row.role !== "assistant") continue;
+      const { payload } = row;
+      const citedIds = new Set(
+        (payload.answer?.citations ?? []).map((citation) => citation.chunkId),
+      );
+      const nearIds = new Set(
+        (payload.answer?.nearMisses ?? []).map((citation) => citation.chunkId),
+      );
+      const sources = uniqueSources(payload.results, citedIds, nearIds);
+      const firstCited =
+        sources.find((source) => source.cited) ?? sources[0] ?? null;
+      if (firstCited) {
+        setActivePreview(firstCited);
+      } else {
+        setActivePreview(null);
+      }
+      return;
+    }
+    setActivePreview(null);
+  }
+
+  function loadHistorySession(session: ArchiveChatSession) {
+    abortRef.current?.abort();
+    setBusy(false);
+    if (messages.length > 0) {
+      persistCurrentSession({ id: sessionId, messages, costUsd: sessionCostUsd });
+    }
+    setSessionId(session.id);
+    setSessionCostUsd(session.costUsd);
+    setMessages(dedupeChatMessages(session.messages as ChatMessage[]));
+    previewFromMessages(
+      dedupeChatMessages(session.messages as ChatMessage[]),
+    );
+    setQuery("");
+    setMobilePane("chat");
+    setHistoryOpen(false);
+  }
+
   const ask = useCallback(async (raw: string) => {
     const text = raw.trim();
     if (!text || busy) return;
@@ -246,6 +432,10 @@ export function ArchiveChatLauncher() {
     abortRef.current = controller;
 
     const userMessage: ChatMessage = { id: newId(), role: "user", text };
+    const turnId = userMessage.id;
+    completedAskTurnRef.current = null;
+    appendedAssistantIdRef.current = null;
+    costAppliedAssistantIdRef.current = null;
     setMessages((current) => [...current, userMessage]);
     setQuery("");
     setBusy(true);
@@ -278,10 +468,30 @@ export function ArchiveChatLauncher() {
         data.answer?.answer?.trim() ||
         data.answerError ||
         "No grounded answer was returned.";
-      setMessages((current) => [
-        ...current,
-        { id: newId(), role: "assistant", text: assistantText, payload },
-      ]);
+      const turnCostUsd = corpusAskTurnCostUsd(data);
+      const assistantMessage: ChatMessage = {
+        id: newId(),
+        role: "assistant",
+        text: assistantText,
+        payload,
+      };
+      if (completedAskTurnRef.current !== turnId) {
+        completedAskTurnRef.current = turnId;
+        setMessages((currentMessages) => {
+          if (appendedAssistantIdRef.current === assistantMessage.id) {
+            return currentMessages;
+          }
+          appendedAssistantIdRef.current = assistantMessage.id;
+          return [...currentMessages, assistantMessage];
+        });
+        setSessionCostUsd((currentCost) => {
+          if (costAppliedAssistantIdRef.current === assistantMessage.id) {
+            return currentCost;
+          }
+          costAppliedAssistantIdRef.current = assistantMessage.id;
+          return currentCost + turnCostUsd;
+        });
+      }
 
       const citedIds = new Set(
         (data.answer?.citations ?? []).map((citation) => citation.chunkId),
@@ -291,32 +501,41 @@ export function ArchiveChatLauncher() {
       );
       const sources = uniqueSources(results, citedIds, nearIds);
       const firstCited = sources.find((row) => row.cited) ?? sources[0] ?? null;
-      setPreview(firstCited);
+      if (firstCited) {
+        setActivePreview(firstCited);
+      }
     } catch (error) {
       if (controller.signal.aborted) return;
       const message =
         error instanceof Error ? error.message : "Ask failed";
-      setMessages((current) => [
-        ...current,
-        {
-          id: newId(),
-          role: "assistant",
-          text: message,
-          payload: {
-            answer: null,
-            answerError: message,
-            results: [],
-            matchedEntities: [],
-          },
+      const errorMessage: ChatMessage = {
+        id: newId(),
+        role: "assistant",
+        text: message,
+        payload: {
+          answer: null,
+          answerError: message,
+          results: [],
+          matchedEntities: [],
         },
-      ]);
+      };
+      if (completedAskTurnRef.current !== turnId) {
+        completedAskTurnRef.current = turnId;
+        setMessages((currentMessages) => {
+          if (appendedAssistantIdRef.current === errorMessage.id) {
+            return currentMessages;
+          }
+          appendedAssistantIdRef.current = errorMessage.id;
+          return [...currentMessages, errorMessage];
+        });
+      }
     } finally {
       if (abortRef.current === controller) {
         abortRef.current = null;
         setBusy(false);
       }
     }
-  }, [busy]);
+  }, [busy, sessionId]);
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -325,11 +544,22 @@ export function ArchiveChatLauncher() {
 
   function clearConversation() {
     abortRef.current?.abort();
+    persistCurrentSession({ id: sessionId, messages, costUsd: sessionCostUsd });
     setMessages([]);
-    setPreview(null);
+    setActivePreview(null);
     setQuery("");
     setBusy(false);
     setMobilePane("chat");
+    setSessionId(newId());
+    setSessionCostUsd(0);
+    completedAskTurnRef.current = null;
+    appendedAssistantIdRef.current = null;
+    costAppliedAssistantIdRef.current = null;
+  }
+
+  function showPreview(source: ChatSource) {
+    setActivePreview(source);
+    setMobilePane("files");
   }
 
   function openChunk(results: CorpusSearchResult[], chunkId: string) {
@@ -343,9 +573,17 @@ export function ArchiveChatLauncher() {
       cited: true,
       nearMiss: false,
     };
-    setPreview(match);
-    setMobilePane("files");
+    showPreview(match);
   }
+
+  async function copyConversation() {
+    const ok = await copyTextToClipboard(conversationMarkdown(messages));
+    if (!ok) return;
+    setConversationCopied(true);
+    window.setTimeout(() => setConversationCopied(false), 2000);
+  }
+
+  const activePreviewKey = activePreview?.key ?? null;
 
   if (!mounted) return null;
 
@@ -407,14 +645,56 @@ export function ArchiveChatLauncher() {
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    {messages.length > 0 ? (
+                    <div ref={historyMenuRef} className="relative">
                       <button
                         type="button"
-                        onClick={clearConversation}
-                        className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                        onClick={() => {
+                          refreshChatHistory();
+                          setHistoryOpen((open) => !open);
+                        }}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-700 hover:bg-slate-50"
+                        aria-label="Previous archive chats"
+                        aria-expanded={historyOpen}
+                        aria-haspopup="menu"
+                        title="Previous chats"
                       >
-                        New chat
+                        <HistoryIcon />
                       </button>
+                      {historyOpen ? (
+                        <ArchiveChatHistoryPopover
+                          sessions={chatHistory}
+                          activeSessionId={sessionId}
+                          onSelect={loadHistorySession}
+                        />
+                      ) : null}
+                    </div>
+                    {messages.length > 0 ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void copyConversation()}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                          title={
+                            conversationCopied
+                              ? "Conversation copied"
+                              : "Copy conversation as Markdown"
+                          }
+                        >
+                          {conversationCopied ? (
+                            <CheckIcon className="text-emerald-600" />
+                          ) : (
+                            <CopyIcon />
+                          )}
+                          {conversationCopied ? "Copied" : "Copy chat"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearConversation}
+                          className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          New chat
+                        </button>
+                      </>
                     ) : null}
                     <button
                       type="button"
@@ -487,24 +767,18 @@ export function ArchiveChatLauncher() {
                           </div>
                         ) : null}
 
-                        {messages.map((message) =>
+                        {dedupeChatMessages(messages).map((message) =>
                           message.role === "user" ? (
-                            <div key={message.id} className="flex justify-end">
-                              <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-teal-700 px-3.5 py-2 text-sm text-white">
-                                {message.text}
-                              </div>
-                            </div>
+                            <UserMessageBubble key={message.id} text={message.text} />
                           ) : (
                             <AssistantBubble
                               key={message.id}
                               message={message}
+                              activePreviewKey={activePreviewKey}
                               onCite={(chunkId) =>
                                 openChunk(message.payload.results, chunkId)
                               }
-                              onOpenSource={(source) => {
-                                setPreview(source);
-                                setMobilePane("files");
-                              }}
+                              onOpenSource={showPreview}
                             />
                           ),
                         )}
@@ -561,8 +835,8 @@ export function ArchiveChatLauncher() {
                       }`}
                     >
                       <SourcePreviewPane
-                        preview={preview}
-                        onClear={() => setPreview(null)}
+                        preview={activePreview}
+                        onHide={() => setActivePreview(null)}
                       />
                     </aside>
                   </div>
@@ -576,30 +850,49 @@ export function ArchiveChatLauncher() {
   );
 }
 
+const MESSAGE_BUBBLE_RADIUS_CLASS = "rounded-2xl";
+const MESSAGE_COPY_OUTSIDE_CLASS =
+  "shrink-0 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100";
+
+function UserMessageBubble({ text }: { text: string }) {
+  return (
+    <div className="group flex items-start justify-end gap-1.5">
+      <MessageCopyButton
+        markdown={`## User\n\n${text.trim()}`}
+        className={MESSAGE_COPY_OUTSIDE_CLASS}
+        label="Copy message as Markdown"
+      />
+      <div
+        className={`max-w-[85%] ${MESSAGE_BUBBLE_RADIUS_CLASS} rounded-br-sm bg-teal-700 px-3.5 py-2 text-sm text-white`}
+      >
+        {text}
+      </div>
+    </div>
+  );
+}
+
 function AssistantBubble({
   message,
+  activePreviewKey,
   onCite,
   onOpenSource,
 }: {
   message: Extract<ChatMessage, { role: "assistant" }>;
+  activePreviewKey: string | null;
   onCite: (chunkId: string) => void;
   onOpenSource: (source: ChatSource) => void;
 }) {
   const { openProfile } = useEntityProfile();
   const { payload } = message;
-  const citedIds = new Set(
-    (payload.answer?.citations ?? []).map((citation) => citation.chunkId),
-  );
-  const nearIds = new Set(
-    (payload.answer?.nearMisses ?? []).map((citation) => citation.chunkId),
-  );
-  const sources = uniqueSources(payload.results, citedIds, nearIds);
+  const sources = assistantSources(payload);
   const cited = sources.filter((row) => row.cited);
   const related = sources.filter((row) => !row.cited);
 
   return (
-    <div className="flex justify-start">
-      <div className="max-w-[95%] rounded-2xl rounded-bl-sm border border-slate-200 bg-white px-3.5 py-2.5 shadow-xs">
+    <div className="group flex items-start justify-start gap-1.5">
+      <div
+        className={`max-w-[95%] ${MESSAGE_BUBBLE_RADIUS_CLASS} rounded-bl-sm border border-slate-200 bg-white px-3.5 py-2.5 shadow-xs`}
+      >
         {payload.answerError && !payload.answer ? (
           <p className="text-sm text-amber-900">{payload.answerError}</p>
         ) : payload.answer ? (
@@ -643,6 +936,7 @@ function AssistantBubble({
                 <SourceChip
                   key={source.key}
                   source={source}
+                  selected={activePreviewKey === source.key}
                   onOpen={() => onOpenSource(source)}
                 />
               ))}
@@ -660,6 +954,7 @@ function AssistantBubble({
                 <SourceChip
                   key={source.key}
                   source={source}
+                  selected={activePreviewKey === source.key}
                   onOpen={() => onOpenSource(source)}
                 />
               ))}
@@ -667,15 +962,22 @@ function AssistantBubble({
           </details>
         ) : null}
       </div>
+      <MessageCopyButton
+        markdown={assistantMessageMarkdown(message)}
+        className={MESSAGE_COPY_OUTSIDE_CLASS}
+        label="Copy message as Markdown"
+      />
     </div>
   );
 }
 
 function SourceChip({
   source,
+  selected,
   onOpen,
 }: {
   source: ChatSource;
+  selected: boolean;
   onOpen: () => void;
 }) {
   const result = source.result;
@@ -683,7 +985,12 @@ function SourceChip({
     <button
       type="button"
       onClick={onOpen}
-      className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-left hover:border-teal-300 hover:bg-teal-50"
+      aria-current={selected ? "true" : undefined}
+      className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left transition ${
+        selected
+          ? "border-teal-500 bg-teal-50 ring-2 ring-teal-200/80 hover:bg-teal-100"
+          : "border-slate-200 bg-slate-50 hover:border-teal-300 hover:bg-teal-50"
+      }`}
     >
       <span className="min-w-0 truncate text-xs font-medium text-slate-800">
         {sourceLabel(result)}
@@ -694,12 +1001,47 @@ function SourceChip({
   );
 }
 
+function MessageCopyButton({
+  markdown,
+  label,
+  className,
+}: {
+  markdown: string;
+  label: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  async function onCopy() {
+    const ok = await copyTextToClipboard(markdown);
+    if (!ok) return;
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void onCopy()}
+      aria-label={copied ? "Copied" : label}
+      title={copied ? "Copied" : label}
+      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-xs hover:border-slate-300 hover:text-slate-900 ${className ?? ""}`}
+    >
+      {copied ? (
+        <CheckIcon className="text-emerald-600" />
+      ) : (
+        <CopyIcon className="h-3.5 w-3.5" />
+      )}
+    </button>
+  );
+}
+
 function SourcePreviewPane({
   preview,
-  onClear,
+  onHide,
 }: {
   preview: ChatSource | null;
-  onClear: () => void;
+  onHide: () => void;
 }) {
   if (!preview) {
     return (
@@ -738,7 +1080,7 @@ function SourcePreviewPane({
         </div>
         <button
           type="button"
-          onClick={onClear}
+          onClick={onHide}
           className="shrink-0 text-xs font-medium text-slate-500 hover:text-slate-800"
         >
           Hide
@@ -791,5 +1133,120 @@ function SourcePreviewPane({
         )}
       </div>
     </div>
+  );
+}
+
+function ArchiveChatHistoryPopover({
+  sessions,
+  activeSessionId,
+  onSelect,
+}: {
+  sessions: ArchiveChatSession[];
+  activeSessionId: string;
+  onSelect: (session: ArchiveChatSession) => void;
+}) {
+  return (
+    <div
+      role="menu"
+      aria-label="Previous archive chats"
+      className="absolute right-0 top-[calc(100%+0.375rem)] z-30 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg"
+    >
+      <div className="border-b border-slate-100 px-3 py-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Previous chats
+        </p>
+      </div>
+      <div className="max-h-72 overflow-y-auto py-1">
+        {sessions.length === 0 ? (
+          <p className="px-3 py-4 text-sm text-slate-500">
+            Completed chats on this browser appear here with estimated AI cost.
+          </p>
+        ) : (
+          sessions.map((session) => {
+            const active = session.id === activeSessionId;
+            return (
+              <button
+                key={session.id}
+                type="button"
+                role="menuitem"
+                onClick={() => onSelect(session)}
+                className={`flex w-full flex-col gap-0.5 px-3 py-2.5 text-left transition hover:bg-slate-50 ${
+                  active ? "bg-teal-50/80" : ""
+                }`}
+              >
+                <span className="line-clamp-2 text-sm font-medium text-slate-900">
+                  {archiveChatSessionTitle(session.messages)}
+                </span>
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
+                  <span>{formatDateTime(session.updatedAt)}</span>
+                  <span aria-hidden>·</span>
+                  <span className="font-medium text-slate-700">
+                    {formatCostUsd(session.costUsd)}
+                  </span>
+                  {active ? (
+                    <span className="rounded-full bg-teal-100 px-1.5 py-0 text-[10px] font-semibold uppercase tracking-wide text-teal-900">
+                      Current
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HistoryIcon() {
+  return (
+    <svg
+      aria-hidden
+      className="h-4 w-4"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.75}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+      />
+    </svg>
+  );
+}
+
+function CopyIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden
+      className={`h-4 w-4 ${className ?? ""}`}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.75}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+      />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden
+      className={`h-4 w-4 ${className ?? ""}`}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
   );
 }

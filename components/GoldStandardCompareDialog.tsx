@@ -128,9 +128,9 @@ export function GoldStandardCompareDialog({
           <p className="mt-1 text-sm text-slate-600">{meetingTitle}</p>
         ) : null}
         <p className="mt-3 text-sm text-slate-600">
-          Upload the board-approved official minutes PDF. The AI-generated
-          minutes for this meeting are already on file — no transcript or other
-          files are needed.
+          Upload the board-approved official minutes PDF. The AI minutes are
+          split into agenda concepts and compared side by side with the gold
+          document — this can take a minute.
         </p>
 
         <form key={formKey} className="mt-5 space-y-4" onSubmit={submit}>
@@ -161,7 +161,7 @@ export function GoldStandardCompareDialog({
               disabled={loading}
               className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {loading ? "Comparing…" : "Compare"}
+              {loading ? "Comparing concepts…" : "Compare"}
             </button>
           </div>
         </form>

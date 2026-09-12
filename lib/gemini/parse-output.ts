@@ -23,7 +23,11 @@ import {
   type DecisionFlag,
 } from "@/lib/minutes/verification-schema";
 import {
+  normalizeCompareDocument,
   validateGoldStandardValidation,
+  type CompareAlignment,
+  type ComparePair,
+  type GoldStandardConcept,
   type GoldStandardValidationResult,
 } from "@/lib/minutes/gold-standard-schema";
 
@@ -461,5 +465,103 @@ export function parseGoldStandardValidationResponse(
     validation: validated.value,
     warnings: allWarnings,
     errors: [],
+  };
+}
+
+function parseJsonObject(raw: string): {
+  value: Record<string, unknown> | null;
+  warnings: string[];
+  errors: string[];
+} {
+  const { jsonText, warnings } = extractBestEffortJson(raw);
+  try {
+    const parsed = JSON.parse(jsonText) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {
+        value: null,
+        warnings,
+        errors: ["Model output was not a JSON object."],
+      };
+    }
+    return { value: parsed as Record<string, unknown>, warnings, errors: [] };
+  } catch {
+    return {
+      value: null,
+      warnings,
+      errors: [jsonParseFailureDetail(jsonText)],
+    };
+  }
+}
+
+export function parseGoldStandardConceptsResponse(raw: string): {
+  concepts: GoldStandardConcept[];
+  warnings: string[];
+  errors: string[];
+} {
+  const parsed = parseJsonObject(raw);
+  if (!parsed.value) {
+    return { concepts: [], warnings: parsed.warnings, errors: parsed.errors };
+  }
+  const errors: string[] = [...parsed.errors];
+  const compare = normalizeCompareDocument(
+    { gold_concepts: parsed.value.concepts, ai_concepts: [], alignments: [], pairs: [] },
+    errors,
+  );
+  const concepts = compare?.goldConcepts ?? [];
+  if (concepts.length === 0) {
+    errors.push("Gold concept segmentation returned no concepts.");
+  }
+  return { concepts, warnings: parsed.warnings, errors };
+}
+
+export function parseGoldStandardAlignmentsResponse(raw: string): {
+  alignments: CompareAlignment[];
+  warnings: string[];
+  errors: string[];
+} {
+  const parsed = parseJsonObject(raw);
+  if (!parsed.value) {
+    return { alignments: [], warnings: parsed.warnings, errors: parsed.errors };
+  }
+  const errors: string[] = [...parsed.errors];
+  const compare = normalizeCompareDocument(
+    {
+      gold_concepts: [{ id: "_", heading: "x", body: "x", kind: "other", sortOrder: 0 }],
+      ai_concepts: [{ id: "_", heading: "x", body: "x", kind: "other", sortOrder: 0, agendaItemIds: [] }],
+      alignments: parsed.value.alignments,
+      pairs: [],
+    },
+    errors,
+  );
+  return {
+    alignments: compare?.alignments ?? [],
+    warnings: parsed.warnings,
+    errors,
+  };
+}
+
+export function parseGoldStandardPairDiffResponse(raw: string): {
+  pairs: ComparePair[];
+  warnings: string[];
+  errors: string[];
+} {
+  const parsed = parseJsonObject(raw);
+  if (!parsed.value) {
+    return { pairs: [], warnings: parsed.warnings, errors: parsed.errors };
+  }
+  const errors: string[] = [...parsed.errors];
+  const compare = normalizeCompareDocument(
+    {
+      gold_concepts: [{ id: "_", heading: "x", body: "x", kind: "other", sortOrder: 0 }],
+      ai_concepts: [{ id: "_", heading: "x", body: "x", kind: "other", sortOrder: 0, agendaItemIds: [] }],
+      alignments: [],
+      pairs: parsed.value.pairs,
+    },
+    errors,
+  );
+  return {
+    pairs: compare?.pairs ?? [],
+    warnings: parsed.warnings,
+    errors,
   };
 }

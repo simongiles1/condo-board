@@ -1,0 +1,317 @@
+import { pairMatchScore } from "@/lib/minutes/gold-standard-item-match";
+import {
+  newFindingId,
+  type AiMinutesConcept,
+  type CompareAlignment,
+  type CompareAlignmentKind,
+  type ComparePair,
+  type GoldStandardCompareDocument,
+  type GoldStandardConcept,
+  type ValidationFinding,
+} from "@/lib/minutes/gold-standard-schema";
+
+function newId(prefix: string): string {
+  return `${prefix}-${newFindingId()}`;
+}
+
+export function fallbackSegmentGoldText(text: string): GoldStandardConcept[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  const chunks = trimmed.split(
+    /\n(?=#{1,3}\s+\S|\d+\.\s+[A-Z]|[A-Z][A-Z0-9 .,'()/&-]{12,}\s*$)/m,
+  );
+  const concepts: GoldStandardConcept[] = [];
+  chunks.forEach((chunk, index) => {
+    const lines = chunk.trim().split(/\r?\n/);
+    const heading = (lines[0] ?? "")
+      .replace(/^#{1,3}\s+/, "")
+      .trim();
+    const body = lines.slice(1).join("\n").trim() || heading;
+    if (!heading && !body) return;
+    concepts.push({
+      id: `gold-fallback-${index + 1}`,
+      heading: heading || `Gold concept ${index + 1}`,
+      body,
+      kind: /attendance|present/i.test(heading)
+        ? "attendance"
+        : /call to order/i.test(heading)
+          ? "call_to_order"
+          : /previous minutes/i.test(heading)
+            ? "previous_minutes"
+            : /adjourn|terminat/i.test(heading)
+              ? "termination"
+              : /next meeting/i.test(heading)
+                ? "next_meeting"
+                : /financial/i.test(heading)
+                  ? "financial"
+                  : "agenda_item",
+      sortOrder: concepts.length,
+    });
+  });
+  return concepts.length > 0
+    ? concepts
+    : [
+        {
+          id: "gold-fallback-1",
+          heading: "Official minutes",
+          body: trimmed,
+          kind: "other",
+          sortOrder: 0,
+        },
+      ];
+}
+
+function alignmentKindFor(
+  goldCount: number,
+  aiCount: number,
+): CompareAlignmentKind {
+  if (goldCount === 0) return "ai_only";
+  if (aiCount === 0) return "gold_only";
+  if (goldCount > 1 && aiCount === 1) return "n:1";
+  if (goldCount === 1 && aiCount > 1) return "1:n";
+  return "1:1";
+}
+
+function conceptLabel(
+  gold: GoldStandardConcept[],
+  ai: AiMinutesConcept[],
+): string {
+  return gold[0]?.heading || ai[0]?.heading || "Concept";
+}
+
+export function completeAlignments(
+  goldConcepts: GoldStandardConcept[],
+  aiConcepts: AiMinutesConcept[],
+  rawAlignments: CompareAlignment[],
+): CompareAlignment[] {
+  const goldById = new Map(goldConcepts.map((row) => [row.id, row]));
+  const aiById = new Map(aiConcepts.map((row) => [row.id, row]));
+  const usedGold = new Set<string>();
+  const usedAi = new Set<string>();
+  const completed: CompareAlignment[] = [];
+
+  for (const alignment of rawAlignments) {
+    const goldConceptIds = alignment.goldConceptIds.filter(
+      (id) => goldById.has(id) && !usedGold.has(id),
+    );
+    const aiConceptIds = alignment.aiConceptIds.filter(
+      (id) => aiById.has(id) && !usedAi.has(id),
+    );
+    if (goldConceptIds.length === 0 && aiConceptIds.length === 0) continue;
+    goldConceptIds.forEach((id) => usedGold.add(id));
+    aiConceptIds.forEach((id) => usedAi.add(id));
+    const goldRows = goldConceptIds.map((id) => goldById.get(id)!);
+    const aiRows = aiConceptIds.map((id) => aiById.get(id)!);
+    completed.push({
+      ...alignment,
+      goldConceptIds,
+      aiConceptIds,
+      kind: alignmentKindFor(goldConceptIds.length, aiConceptIds.length),
+      label: alignment.label || conceptLabel(goldRows, aiRows),
+    });
+  }
+
+  for (const gold of goldConcepts) {
+    if (usedGold.has(gold.id)) continue;
+    let bestAi: AiMinutesConcept | null = null;
+    let bestScore = 0;
+    for (const ai of aiConcepts) {
+      if (usedAi.has(ai.id)) continue;
+      const score = pairMatchScore(gold.heading, ai.heading);
+      if (score > bestScore) {
+        bestScore = score;
+        bestAi = ai;
+      }
+    }
+    if (bestAi && bestScore >= 40) {
+      usedGold.add(gold.id);
+      usedAi.add(bestAi.id);
+      completed.push({
+        id: newId("align"),
+        kind: "1:1",
+        goldConceptIds: [gold.id],
+        aiConceptIds: [bestAi.id],
+        confidence: bestScore >= 70 ? "high" : "medium",
+        label: gold.heading,
+      });
+      continue;
+    }
+    usedGold.add(gold.id);
+    completed.push({
+      id: newId("align"),
+      kind: "gold_only",
+      goldConceptIds: [gold.id],
+      aiConceptIds: [],
+      confidence: "high",
+      label: gold.heading,
+    });
+  }
+
+  for (const ai of aiConcepts) {
+    if (usedAi.has(ai.id)) continue;
+    completed.push({
+      id: newId("align"),
+      kind: "ai_only",
+      goldConceptIds: [],
+      aiConceptIds: [ai.id],
+      confidence: "high",
+      label: ai.heading,
+    });
+  }
+
+  return completed;
+}
+
+export function joinConceptText(
+  concepts: Array<{ heading: string; body: string }>,
+): string {
+  return concepts
+    .map((row) => {
+      const heading = row.heading.trim();
+      const body = row.body.trim();
+      if (heading && body && body.startsWith(heading)) return body;
+      return [heading, body].filter(Boolean).join("\n\n");
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function unmatchedPair(
+  alignment: CompareAlignment,
+  goldConcepts: GoldStandardConcept[],
+  aiConcepts: AiMinutesConcept[],
+): ComparePair {
+  const goldText = joinConceptText(goldConcepts);
+  const aiText = joinConceptText(aiConcepts);
+  if (alignment.kind === "gold_only") {
+    return {
+      alignmentId: alignment.id,
+      pairScore: 35,
+      goldSegments: goldText ? [{ text: goldText, mark: "omitted" }] : [],
+      aiSegments: [],
+      findings: [
+        {
+          id: newFindingId(),
+          topic: alignment.label,
+          detail:
+            "Present in the gold-standard minutes with no matching AI minutes concept.",
+          section: alignment.label,
+          significance: "moderate",
+        },
+      ],
+    };
+  }
+  return {
+    alignmentId: alignment.id,
+    pairScore: 45,
+    goldSegments: [],
+    aiSegments: aiText ? [{ text: aiText, mark: "added" }] : [],
+    findings: [
+      {
+        id: newFindingId(),
+        topic: alignment.label,
+        detail:
+          "Present in the AI minutes with no matching gold-standard concept.",
+        section: alignment.label,
+        significance: "moderate",
+      },
+    ],
+  };
+}
+
+export function fallbackMatchedPair(
+  alignment: CompareAlignment,
+  goldConcepts: GoldStandardConcept[],
+  aiConcepts: AiMinutesConcept[],
+): ComparePair {
+  const goldText = joinConceptText(goldConcepts);
+  const aiText = joinConceptText(aiConcepts);
+  return {
+    alignmentId: alignment.id,
+    pairScore: 70,
+    goldSegments: goldText ? [{ text: goldText, mark: "same" }] : [],
+    aiSegments: aiText ? [{ text: aiText, mark: "same" }] : [],
+    findings: [],
+  };
+}
+
+export function deriveBidirectionalFindings(
+  compare: GoldStandardCompareDocument,
+): { generatedOnly: ValidationFinding[]; goldOnly: ValidationFinding[] } {
+  const generatedOnly: ValidationFinding[] = [];
+  const goldOnly: ValidationFinding[] = [];
+  const alignmentById = new Map(
+    compare.alignments.map((row) => [row.id, row]),
+  );
+
+  for (const pair of compare.pairs) {
+    const alignment = alignmentById.get(pair.alignmentId);
+    if (alignment?.kind === "ai_only") {
+      goldOnly.push(
+        ...pair.findings.filter((finding) =>
+          /gold/i.test(finding.detail) ? false : true,
+        ),
+      );
+      generatedOnly.push(...pair.findings);
+      continue;
+    }
+    if (alignment?.kind === "gold_only") {
+      goldOnly.push(...pair.findings);
+      continue;
+    }
+    for (const finding of pair.findings) {
+      const inAi = pair.aiSegments.some(
+        (segment) => segment.mark === "added" || segment.mark === "changed",
+      );
+      const inGold = pair.goldSegments.some(
+        (segment) => segment.mark === "omitted" || segment.mark === "changed",
+      );
+      if (/missing from gold|not in the gold|AI minutes include/i.test(finding.detail) || (inAi && !inGold)) {
+        generatedOnly.push(finding);
+      } else if (
+        /missing from AI|not in the AI|gold standard includes/i.test(finding.detail) ||
+        (inGold && !inAi)
+      ) {
+        goldOnly.push(finding);
+      } else if (inAi) {
+        generatedOnly.push(finding);
+      } else {
+        goldOnly.push(finding);
+      }
+    }
+  }
+
+  return { generatedOnly, goldOnly };
+}
+
+export function scoreCompareDocument(
+  compare: GoldStandardCompareDocument,
+): { validationScore: number; scoreRationale: string } {
+  const pairScores = compare.pairs.map((pair) => pair.pairScore);
+  const mean =
+    pairScores.length > 0
+      ? pairScores.reduce((sum, score) => sum + score, 0) / pairScores.length
+      : 50;
+  const unmatchedGold = compare.alignments.filter((row) => row.kind === "gold_only").length;
+  const unmatchedAi = compare.alignments.filter((row) => row.kind === "ai_only").length;
+  const critical = compare.pairs.reduce(
+    (count, pair) =>
+      count + pair.findings.filter((finding) => finding.significance === "critical").length,
+    0,
+  );
+  const validationScore = Math.min(
+    100,
+    Math.max(0, Math.round(mean - critical * 4)),
+  );
+  const matched = compare.alignments.filter(
+    (row) => row.kind === "1:1" || row.kind === "1:n" || row.kind === "n:1",
+  ).length;
+  const scoreRationale = [
+    `Compared ${compare.alignments.length} concepts (${matched} matched, ${unmatchedGold} gold-only, ${unmatchedAi} AI-only).`,
+    critical > 0
+      ? `${critical} critical fact, motion, or amount difference${critical === 1 ? "" : "s"} reduced the score.`
+      : "No critical fact, motion, or amount mismatches were recorded.",
+  ].join(" ");
+  return { validationScore, scoreRationale };
+}

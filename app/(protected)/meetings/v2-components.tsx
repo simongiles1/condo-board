@@ -89,6 +89,10 @@ import {
   filterRedundantAddToAgendaDiscrepancies,
   resolveTranscriptDiscrepancyKind,
 } from "@/lib/meeting-v2/transcript-discrepancies";
+import {
+  formatMeetingDate,
+  meetingDateSortKey,
+} from "@/lib/format-meeting-date";
 
 type MeetingCard = MeetingV2DashboardCard;
 
@@ -248,17 +252,6 @@ function shouldShowExtractionShapeComparison(issueCode: string): boolean {
   );
 }
 
-function formatDate(value: string): string {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime())
-    ? value
-    : parsed.toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      });
-}
-
 function formatDateTime(value: string): string {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime())
@@ -358,9 +351,12 @@ function AgendaReviewViewToggle({
   );
 }
 
+type MeetingDateSort = "asc" | "desc";
+
 export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
   const [panelMeetingId, setPanelMeetingId] = useState<string | null>(null);
   const [compareDialogMeetingId, setCompareDialogMeetingId] = useState<string | null>(null);
+  const [meetingDateSort, setMeetingDateSort] = useState<MeetingDateSort>("desc");
   const [liveValidationByMeetingId, setLiveValidationByMeetingId] = useState<
     Record<string, GoldStandardValidationResult>
   >({});
@@ -373,7 +369,12 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
     if (!meeting) return null;
     const aiUsageJson =
       liveAiUsageByMeetingId[meeting.id] ?? meeting.aiUsageJson ?? null;
-    return { title: meeting.title, meetingDate: meeting.meetingDate, aiUsageJson };
+    return {
+      id: meeting.id,
+      title: meeting.title,
+      meetingDate: meeting.meetingDate,
+      aiUsageJson,
+    };
   }, [meetings, panelMeetingId, liveAiUsageByMeetingId]);
 
   const compareDialogMeeting = useMemo(
@@ -427,6 +428,22 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
     setPanelMeetingId(targetMeetingId);
   }
 
+  const sortedMeetings = useMemo(() => {
+    const rows = [...meetings];
+    rows.sort((left, right) => {
+      const delta = meetingDateSortKey(left.meetingDate) - meetingDateSortKey(right.meetingDate);
+      if (delta !== 0) {
+        return meetingDateSort === "asc" ? delta : -delta;
+      }
+      const titleCmp = left.title.localeCompare(right.title, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+      return meetingDateSort === "asc" ? titleCmp : -titleCmp;
+    });
+    return rows;
+  }, [meetings, meetingDateSort]);
+
   if (meetings.length === 0) {
     return (
       <div className="mt-4 rounded-3xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
@@ -437,59 +454,88 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
 
   return (
     <>
-      <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {meetings.map((meeting) => (
-          <Link
-            key={meeting.id}
-            href={`/operations/meetings/v2/${meeting.id}`}
-            className="group overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
-          >
-            <div className="border-b border-slate-100 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-700 px-6 py-5 text-white">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/70">Meeting V2</p>
-              <h3 className="mt-2 line-clamp-2 text-lg font-semibold">{meeting.title}</h3>
-            </div>
-            <div className="space-y-4 px-6 py-5">
-              <div className="flex items-center justify-between text-sm text-slate-600">
-                <span>{formatDate(meeting.meetingDate)}</span>
-                <div className="flex items-center gap-2">
-                  <div
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
+      <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+        <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+          <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-600">
+            <tr>
+              <th scope="col" className="whitespace-nowrap px-3 py-2.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMeetingDateSort((current) => (current === "asc" ? "desc" : "asc"))
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left uppercase tracking-wide transition hover:bg-slate-200/80 hover:text-slate-900"
+                  aria-sort={meetingDateSort === "asc" ? "ascending" : "descending"}
+                >
+                  Meeting date
+                  <span className="font-normal normal-case tracking-normal text-slate-500" aria-hidden>
+                    {meetingDateSort === "asc" ? "↑" : "↓"}
+                  </span>
+                </button>
+              </th>
+              <th scope="col" className="px-3 py-2.5">Title</th>
+              <th scope="col" className="px-3 py-2.5">Pipeline</th>
+              <th scope="col" className="px-3 py-2.5">Validation</th>
+              <th scope="col" className="px-3 py-2.5">Stage</th>
+              <th scope="col" className="min-w-[12rem] px-3 py-2.5">Note</th>
+              <th scope="col" className="px-3 py-2.5 text-right"> </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {sortedMeetings.map((meeting) => (
+              <tr key={meeting.id} className="hover:bg-slate-50/80">
+                <td className="whitespace-nowrap px-3 py-2.5 tabular-nums text-slate-700">
+                  <time dateTime={meeting.meetingDate}>
+                    {formatMeetingDate(meeting.meetingDate)}
+                  </time>
+                </td>
+                <td className="px-3 py-2.5 font-medium text-slate-900">
+                  <Link
+                    href={`/operations/meetings/v2/${meeting.id}`}
+                    className="hover:text-teal-700"
                   >
-                    <GoldStandardValidationBadge
-                      validationScore={getValidationScore(meeting)}
-                      onClick={() => handleValidationBadgeClick(meeting)}
-                    />
-                  </div>
+                    {meeting.title}
+                  </Link>
+                </td>
+                <td className="px-3 py-2.5">
                   <span
-                    className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${statusTone(meeting.pipelineState)}`}
+                    className={`inline-flex whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] ${statusTone(meeting.pipelineState)}`}
                     title={getMeetingV2PipelineStateDescription(meeting.pipelineState)}
                   >
                     {startCase(meeting.pipelineState)}
                   </span>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <span
-                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${stageTone(meeting.progressStatus)}`}
-                >
-                  <span>{meeting.progressLabel}</span>
-                  <span className="rounded-full border border-current/20 px-2 py-0.5 text-[10px] font-bold tabular-nums tracking-normal">
-                    {meeting.progressStepNumber}/{meeting.progressTotalSteps}
+                </td>
+                <td className="px-3 py-2.5">
+                  <GoldStandardValidationBadge
+                    validationScore={getValidationScore(meeting)}
+                    onClick={() => handleValidationBadgeClick(meeting)}
+                  />
+                </td>
+                <td className="px-3 py-2.5">
+                  <span
+                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold ${stageTone(meeting.progressStatus)}`}
+                  >
+                    <span>{meeting.progressLabel}</span>
+                    <span className="rounded-full border border-current/20 px-1.5 py-px text-[10px] font-bold tabular-nums tracking-normal">
+                      {meeting.progressStepNumber}/{meeting.progressTotalSteps}
+                    </span>
                   </span>
-                </span>
-                <p className="min-h-[2.5rem] text-sm leading-6 text-slate-600">
-                  {meeting.progressNote}
-                </p>
-              </div>
-              <div className="text-sm font-medium text-slate-900 transition-colors group-hover:text-teal-700">
-                Open workspace &rarr;
-              </div>
-            </div>
-          </Link>
-        ))}
+                </td>
+                <td className="max-w-md px-3 py-2.5 text-slate-600">
+                  <span className="line-clamp-2">{meeting.progressNote}</span>
+                </td>
+                <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                  <Link
+                    href={`/operations/meetings/v2/${meeting.id}`}
+                    className="font-medium text-teal-700 hover:text-teal-900"
+                  >
+                    Open →
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       <GoldStandardCompareDialog
@@ -505,6 +551,10 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
         validation={panelValidation}
         onClose={() => setPanelMeetingId(null)}
         onReCompare={() => {
+          if (!panelMeetingId) return;
+          setCompareDialogMeetingId(panelMeetingId);
+        }}
+        onUploadDifferent={() => {
           if (!panelMeetingId) return;
           setCompareDialogMeetingId(panelMeetingId);
         }}
@@ -548,6 +598,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [sidePanelInitialTab, setSidePanelInitialTab] =
     useState<GoldStandardValidationTab>("generatedOnly");
+  const [focusAgendaItemId, setFocusAgendaItemId] = useState<string | null>(null);
+  const [reCompareBusy, setReCompareBusy] = useState(false);
   const [liveValidation, setLiveValidation] =
     useState<GoldStandardValidationResult | null>(null);
   const [liveAiUsage, setLiveAiUsage] = useState<string | null>(null);
@@ -593,29 +645,32 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   function handleValidationBadgeClick() {
     if (validationScore !== null) {
       setSidePanelInitialTab("generatedOnly");
+      setFocusAgendaItemId(null);
       setSidePanelOpen(true);
     } else {
       setCompareDialogOpen(true);
     }
   }
 
-  function handleOpenGoldStandardPanel(tab: GoldStandardValidationTab = "generatedOnly") {
+  function handleOpenGoldStandardPanel(
+    tab: GoldStandardValidationTab = "generatedOnly",
+    agendaItemId?: string,
+  ) {
     if (validationScore !== null) {
       setSidePanelInitialTab(tab);
+      setFocusAgendaItemId(agendaItemId ?? null);
       setSidePanelOpen(true);
     } else {
       setCompareDialogOpen(true);
     }
   }
 
-  function handleCompareSuccess(
+  function applyCompareResult(
     validation: GoldStandardValidationResult,
     aiUsageJson: string,
   ) {
     setLiveValidation(validation);
     setLiveAiUsage(aiUsageJson);
-    setCompareDialogOpen(false);
-    setSidePanelOpen(true);
     void refreshStatus({ allowHidden: true });
     void fetch(`/api/v2/meetings/${meetingId}/ai-usage`, { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : null))
@@ -623,6 +678,49 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         if (payload?.stages) setUsageStages(payload.stages);
       })
       .catch(() => undefined);
+  }
+
+  function handleCompareSuccess(
+    validation: GoldStandardValidationResult,
+    aiUsageJson: string,
+  ) {
+    applyCompareResult(validation, aiUsageJson);
+    setCompareDialogOpen(false);
+    setSidePanelOpen(true);
+  }
+
+  async function handleReuseCompare() {
+    if (!status?.meeting.goldStandardFilePath) {
+      setSidePanelOpen(false);
+      setCompareDialogOpen(true);
+      return;
+    }
+    setReCompareBusy(true);
+    try {
+      const formData = new FormData();
+      formData.set("reuseStored", "1");
+      const response = await fetch(
+        `/api/meetings/${meetingId}/compare-gold-standard`,
+        { method: "POST", body: formData },
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(
+          typeof payload?.error === "string" ? payload.error : "Re-compare failed.",
+        );
+      }
+      const validation = payload?.validation as GoldStandardValidationResult | undefined;
+      if (!validation) throw new Error("Comparison returned no validation result.");
+      applyCompareResult(
+        validation,
+        typeof payload?.aiUsageJson === "string" ? payload.aiUsageJson : "",
+      );
+    } catch (error) {
+      console.error("[MeetingV2Detail] re-compare failed:", error);
+      setCompareDialogOpen(true);
+    } finally {
+      setReCompareBusy(false);
+    }
   }
 
   const kickPollWindow = useCallback((durationMs = 120_000) => {
@@ -978,7 +1076,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   {status?.meeting.title ?? "Loading meeting"}
                 </h1>
                 <p className="mt-0.5 text-sm text-white/65">
-                  {status ? formatDate(status.meeting.meetingDate) : "Loading date"}
+                  {status
+                    ? formatMeetingDate(status.meeting.meetingDate)
+                    : "Loading date"}
                 </p>
               </div>
               <div className="flex flex-col gap-0.5 pt-1">
@@ -1239,16 +1339,23 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         meeting={
           sidePanelOpen && status?.meeting
             ? {
+                id: meetingId,
                 title: status.meeting.title,
                 meetingDate: status.meeting.meetingDate,
                 aiUsageJson: liveAiUsage ?? status.meeting.aiUsageJson ?? null,
+                goldStandardFilePath: status.meeting.goldStandardFilePath ?? null,
               }
             : null
         }
         validation={sidePanelOpen ? currentValidation : null}
         initialTab={sidePanelInitialTab}
+        focusAgendaItemId={focusAgendaItemId}
+        reCompareBusy={reCompareBusy}
         onClose={() => setSidePanelOpen(false)}
         onReCompare={() => {
+          void handleReuseCompare();
+        }}
+        onUploadDifferent={() => {
           setSidePanelOpen(false);
           setCompareDialogOpen(true);
         }}
@@ -2384,7 +2491,10 @@ function AgendaReviewListItem({
   onSelectChunkId: (chunkId: string) => void;
   onSelectTimeRange: (timeRange: string) => void;
   goldStandardFindings?: ItemGoldStandardFindings;
-  onOpenGoldStandardPanel?: (tab: GoldStandardValidationTab) => void;
+  onOpenGoldStandardPanel?: (
+    tab: GoldStandardValidationTab,
+    agendaItemId?: string,
+  ) => void;
 }) {
   const isExcluded = excludedItemIds.has(item.id);
     const currentStatus = itemStatuses[item.id] || item.discussionStatus || "discussed";
@@ -2485,6 +2595,7 @@ function AgendaReviewListItem({
 
                 <GoldStandardItemFindingBadgesRow
                   findings={goldStandardFindings}
+                  agendaItemId={item.id}
                   onOpenGoldStandardPanel={onOpenGoldStandardPanel}
                 />
               </div>
@@ -2611,7 +2722,10 @@ function ValidatedAgendaReviewListItem({
   onSelectChunkId: (chunkId: string) => void;
   onSelectTimeRange: (timeRange: string) => void;
   goldStandardFindings?: ItemGoldStandardFindings;
-  onOpenGoldStandardPanel?: (tab: GoldStandardValidationTab) => void;
+  onOpenGoldStandardPanel?: (
+    tab: GoldStandardValidationTab,
+    agendaItemId?: string,
+  ) => void;
 }) {
   const flagCount = item.validation.filter(
     (validation) => validation.severity === "error" || validation.severity === "warning",
@@ -2723,6 +2837,7 @@ function ValidatedAgendaReviewListItem({
               {!isHeading && goldStandardFindings && onOpenGoldStandardPanel ? (
                 <GoldStandardItemFindingBadgesRow
                   findings={goldStandardFindings}
+                  agendaItemId={item.id}
                   onOpenGoldStandardPanel={onOpenGoldStandardPanel}
                 />
               ) : null}
@@ -2852,7 +2967,10 @@ function HitlAgendaApprovalWorkspace({
   onSwitchToValidatedReview?: () => void;
   headerAside?: ReactNode;
   goldStandardFindingsByItemId?: Map<string, ItemGoldStandardFindings>;
-  onOpenGoldStandardPanel?: (tab: GoldStandardValidationTab) => void;
+  onOpenGoldStandardPanel?: (
+    tab: GoldStandardValidationTab,
+    agendaItemId?: string,
+  ) => void;
 }) {
   const [itemStatuses, setItemStatuses] = useState<Record<string, "discussed" | "not_discussed" | "ad_hoc">>(() => {
     const initial: Record<string, "discussed" | "not_discussed" | "ad_hoc"> = {};
@@ -3577,7 +3695,10 @@ function AgendaReviewPanel({
   meetingId: string;
   status: MeetingV2Status;
   goldStandardValidation?: GoldStandardValidationResult | null;
-  onOpenGoldStandardPanel?: (tab: GoldStandardValidationTab) => void;
+  onOpenGoldStandardPanel?: (
+    tab: GoldStandardValidationTab,
+    agendaItemId?: string,
+  ) => void;
   onReEvaluateSubmitted?: () => void;
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -3597,6 +3718,7 @@ function AgendaReviewPanel({
       status.items,
       goldStandardValidation.generatedOnly,
       goldStandardValidation.goldOnly,
+      goldStandardValidation,
     );
   }, [goldStandardValidation, status.items]);
 

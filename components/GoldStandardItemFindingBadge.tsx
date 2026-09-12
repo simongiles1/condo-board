@@ -133,10 +133,15 @@ export function GoldStandardItemFindingBadge({
 
 export function GoldStandardItemFindingBadgesRow({
   findings,
+  agendaItemId,
   onOpenGoldStandardPanel,
 }: {
   findings?: ItemGoldStandardFindings;
-  onOpenGoldStandardPanel?: (tab: GoldStandardFindingPanelTab) => void;
+  agendaItemId?: string;
+  onOpenGoldStandardPanel?: (
+    tab: GoldStandardFindingPanelTab,
+    agendaItemId?: string,
+  ) => void;
 }) {
   if (!findings || !onOpenGoldStandardPanel) return null;
   if (findings.generatedOnly.length === 0 && findings.goldOnly.length === 0) return null;
@@ -146,12 +151,12 @@ export function GoldStandardItemFindingBadgesRow({
       <GoldStandardItemFindingBadge
         kind="generatedOnly"
         findings={findings.generatedOnly}
-        onOpenPanel={() => onOpenGoldStandardPanel("generatedOnly")}
+        onOpenPanel={() => onOpenGoldStandardPanel("generatedOnly", agendaItemId)}
       />
       <GoldStandardItemFindingBadge
         kind="goldOnly"
         findings={findings.goldOnly}
-        onOpenPanel={() => onOpenGoldStandardPanel("goldOnly")}
+        onOpenPanel={() => onOpenGoldStandardPanel("goldOnly", agendaItemId)}
       />
     </div>
   );

@@ -6,9 +6,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Minutes gold-standard compare** — Official minutes are extracted with Docling, split into agenda concepts, aligned to AI minutes items, and compared concept-by-concept. Results open in a full-page side-by-side viewer (gold left, AI right) with highlighted added, omitted, changed, motion, and amount spans. Re-compare reuses the stored gold PDF.
+
 ### Added
 
-- **Global archive chat** — A chat button in the bottom-right corner opens a large conversation window on every signed-in page. Each question uses Ask the Archive, cited files open in a side preview (PDF pages, images, or the email excerpt), and people, organizations, equipment, and calendar names in the answer are highlighted like the rest of the app. While an answer is running, the waiting bubble steps through rewrite, retrieval, ranking, and writing. `[S1]` citations open the matching file. The composer grows with the question up to a short max height, then scrolls.
+- **Global archive chat** — A chat button in the bottom-right corner opens a large conversation window on every signed-in page. Each question uses Ask the Archive, cited files open in a side preview (PDF pages, images, or the email excerpt), and people, organizations, equipment, and calendar names in the answer are highlighted like the rest of the app. While an answer is running, the waiting bubble steps through rewrite, retrieval, ranking, and writing. `[S1]` citations open the matching file. The composer grows with the question up to a short max height, then scrolls. The file row matching the open preview is highlighted; **Hide** clears the preview and selection. Hover a message for **Copy** (Markdown, including cited files on assistant replies), or use **Copy chat** in the header for the full thread. **Previous chats** (clock icon) lists browser-saved conversations with estimated AI cost; selecting one restores the thread and file preview.
 
 ### Fixed
 

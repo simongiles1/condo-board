@@ -121,10 +121,24 @@ export function MeetingsGrid({ meetings }: Props) {
       />
 
       <GoldStandardValidationSidePanel
-        meeting={panelMeeting}
+        meeting={
+          panelMeeting
+            ? {
+                id: panelMeeting.id,
+                title: panelMeeting.title,
+                meetingDate: panelMeeting.meetingDate,
+                aiUsageJson: panelMeeting.aiUsageJson,
+                goldStandardFilePath: panelMeeting.goldStandardFilePath,
+              }
+            : null
+        }
         validation={panelValidation}
         onClose={() => setPanelMeetingId(null)}
         onReCompare={handleReCompare}
+        onUploadDifferent={() => {
+          if (!panelMeetingId) return;
+          setCompareDialogMeetingId(panelMeetingId);
+        }}
       />
     </>
   );

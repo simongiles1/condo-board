@@ -12,6 +12,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Gold-standard compare highlights** — Side-by-side spans no longer swallow spaces at mark boundaries (e.g. `OrderProper` → `Order Proper`) when the diff JSON omitted the gap.
+
 - **Gold-standard compare viewer** — Highlight legend sits in the top header (right). Main concept headers center the match percent with gold-side and AI-side severity badges on either side; title stays left with an inline AI-only or gold-only chip when applicable. The outline list keeps title, percent, and a single Paired or split/merge chip only. Difference detail is a hover popover on severity badges.
 
 - **Gold-standard compare headline score** — The header percent is the average of the per-concept scores. It no longer subtracts four points per critical finding, which could drop a meeting to single digits while every listed item still showed 20% or higher.

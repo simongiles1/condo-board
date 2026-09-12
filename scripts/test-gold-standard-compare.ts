@@ -13,6 +13,8 @@ import {
   displaySegmentMark,
   findingColumn,
   findingsForAlignmentColumn,
+  needsSpaceBetweenCompareSegments,
+  repairCompareSegmentBoundaries,
   scoreCompareDocument,
 } from "../lib/minutes/gold-standard-compare";
 import { buildGoldStandardFindingsByItemId } from "../lib/minutes/gold-standard-item-match";
@@ -284,6 +286,34 @@ describe("scoreCompareDocument", () => {
       ],
     });
     assert.equal(scored.validationScore, 63);
+  });
+});
+
+describe("repairCompareSegmentBoundaries", () => {
+  it("inserts a space between adjacent spans when the model omitted it", () => {
+    const repaired = repairCompareSegmentBoundaries([
+      { text: "1. Call to Order", mark: "same" },
+      { text: "Proper notice was given.", mark: "omitted" },
+    ]);
+    assert.equal(repaired[1]?.text, " Proper notice was given.");
+    assert.equal(
+      repaired.map((segment) => segment.text).join(""),
+      "1. Call to Order Proper notice was given.",
+    );
+  });
+
+  it("does not double spaces already present on a boundary", () => {
+    const repaired = repairCompareSegmentBoundaries([
+      { text: "Order ", mark: "same" },
+      { text: "Proper", mark: "changed" },
+    ]);
+    assert.equal(repaired[1]?.text, "Proper");
+  });
+});
+
+describe("needsSpaceBetweenCompareSegments", () => {
+  it("skips punctuation boundaries", () => {
+    assert.equal(needsSpaceBetweenCompareSegments("carried", "."), false);
   });
 });
 

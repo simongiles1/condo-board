@@ -19,6 +19,7 @@ import {
 import {
   displaySegmentMark,
   findingsForAlignmentColumn,
+  repairCompareSegmentBoundaries,
   scoreCompareDocument,
 } from "@/lib/minutes/gold-standard-compare";
 import { HOVER_POPOVER_ATTR } from "@/lib/ui/hover-popover-group";
@@ -177,9 +178,10 @@ function HighlightedProse({
       <p className="min-h-[1.25rem] text-sm italic text-slate-400">{emptyLabel}</p>
     );
   }
+  const displaySegments = repairCompareSegmentBoundaries(segments);
   return (
     <p className="whitespace-pre-wrap text-sm leading-relaxed">
-      {segments.map((segment, index) => {
+      {displaySegments.map((segment, index) => {
         const mark = displaySegmentMark(segment.mark, segment.text);
         return (
           <span

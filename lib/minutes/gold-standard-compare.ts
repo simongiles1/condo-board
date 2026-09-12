@@ -6,6 +6,7 @@ import {
   type CompareAlignmentKind,
   type ComparePair,
   type CompareTextMark,
+  type CompareTextSegment,
   type GoldStandardCompareDocument,
   type GoldStandardConcept,
   type GoldStandardValidationResult,
@@ -323,6 +324,33 @@ export function findingColumn(
     return "gold";
   }
   return "both";
+}
+
+/** Adjacent inline spans drop a space unless one segment still carries it. */
+export function needsSpaceBetweenCompareSegments(
+  previousText: string,
+  nextText: string,
+): boolean {
+  if (!previousText || !nextText) return false;
+  if (/\s$/.test(previousText) || /^\s/.test(nextText)) return false;
+  if (/^[.,;:!?)\]}]/.test(nextText)) return false;
+  return true;
+}
+
+export function repairCompareSegmentBoundaries(
+  segments: CompareTextSegment[],
+): CompareTextSegment[] {
+  if (segments.length === 0) return [];
+  const repaired: CompareTextSegment[] = [{ ...segments[0] }];
+  for (let index = 1; index < segments.length; index += 1) {
+    const previous = repaired[repaired.length - 1];
+    const current = { ...segments[index] };
+    if (needsSpaceBetweenCompareSegments(previous.text, current.text)) {
+      current.text = ` ${current.text}`;
+    }
+    repaired.push(current);
+  }
+  return repaired;
 }
 
 export function displaySegmentMark(

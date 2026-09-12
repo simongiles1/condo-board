@@ -83,6 +83,118 @@ function conceptLabel(
   return gold[0]?.heading || ai[0]?.heading || "Concept";
 }
 
+function goldAiMatchScore(
+  gold: GoldStandardConcept,
+  ai: AiMinutesConcept,
+): number {
+  return Math.max(
+    pairMatchScore(gold.heading, ai.heading),
+    pairMatchScore(`${gold.heading} ${gold.body}`, `${ai.heading} ${ai.body}`),
+  );
+}
+
+function confidenceForScore(
+  score: number,
+  fallback: CompareAlignment["confidence"],
+): CompareAlignment["confidence"] {
+  if (score >= 70) return "high";
+  if (score >= 40) return "medium";
+  return fallback;
+}
+
+/**
+ * One viewer row per AI agenda item. Packed 1:n / n:n alignments concatenate
+ * sibling items (4.1(a) + 4.1(b)) into a single cell.
+ */
+function explodeMultiAiAlignment(
+  source: CompareAlignment,
+  goldRows: GoldStandardConcept[],
+  aiRows: AiMinutesConcept[],
+): CompareAlignment[] {
+  if (aiRows.length <= 1) {
+    return [
+      {
+        ...source,
+        goldConceptIds: goldRows.map((row) => row.id),
+        aiConceptIds: aiRows.map((row) => row.id),
+        kind: alignmentKindFor(goldRows.length, aiRows.length),
+        label: source.label || conceptLabel(goldRows, aiRows),
+      },
+    ];
+  }
+
+  const assignedGold = new Set<string>();
+  const assignedAi = new Set<string>();
+  const exploded: CompareAlignment[] = [];
+
+  const edges = goldRows.flatMap((gold) =>
+    aiRows.map((ai) => ({ gold, ai, score: goldAiMatchScore(gold, ai) })),
+  );
+  edges.sort((left, right) => right.score - left.score);
+
+  for (const edge of edges) {
+    if (assignedGold.has(edge.gold.id) || assignedAi.has(edge.ai.id)) continue;
+    assignedGold.add(edge.gold.id);
+    assignedAi.add(edge.ai.id);
+    exploded.push({
+      id: exploded.length === 0 ? source.id : newId("align"),
+      kind: "1:1",
+      goldConceptIds: [edge.gold.id],
+      aiConceptIds: [edge.ai.id],
+      confidence: confidenceForScore(edge.score, source.confidence),
+      label: edge.ai.heading || edge.gold.heading,
+    });
+  }
+
+  for (const gold of goldRows) {
+    if (assignedGold.has(gold.id)) continue;
+    exploded.push({
+      id: newId("align"),
+      kind: "gold_only",
+      goldConceptIds: [gold.id],
+      aiConceptIds: [],
+      confidence: "high",
+      label: gold.heading,
+    });
+    assignedGold.add(gold.id);
+  }
+
+  for (const ai of aiRows) {
+    if (assignedAi.has(ai.id)) continue;
+    let bestGold: GoldStandardConcept | null = null;
+    let bestScore = 0;
+    for (const gold of goldRows) {
+      const score = goldAiMatchScore(gold, ai);
+      if (score > bestScore) {
+        bestScore = score;
+        bestGold = gold;
+      }
+    }
+    exploded.push(
+      bestGold
+        ? {
+            id: newId("align"),
+            kind: "1:1",
+            goldConceptIds: [bestGold.id],
+            aiConceptIds: [ai.id],
+            confidence: confidenceForScore(bestScore, "low"),
+            label: ai.heading,
+          }
+        : {
+            id: newId("align"),
+            kind: "ai_only",
+            goldConceptIds: [],
+            aiConceptIds: [ai.id],
+            confidence: "high",
+            label: ai.heading,
+          },
+    );
+    assignedAi.add(ai.id);
+  }
+
+  return exploded;
+}
+
 export function completeAlignments(
   goldConcepts: GoldStandardConcept[],
   aiConcepts: AiMinutesConcept[],
@@ -106,13 +218,7 @@ export function completeAlignments(
     aiConceptIds.forEach((id) => usedAi.add(id));
     const goldRows = goldConceptIds.map((id) => goldById.get(id)!);
     const aiRows = aiConceptIds.map((id) => aiById.get(id)!);
-    completed.push({
-      ...alignment,
-      goldConceptIds,
-      aiConceptIds,
-      kind: alignmentKindFor(goldConceptIds.length, aiConceptIds.length),
-      label: alignment.label || conceptLabel(goldRows, aiRows),
-    });
+    completed.push(...explodeMultiAiAlignment(alignment, goldRows, aiRows));
   }
 
   for (const gold of goldConcepts) {

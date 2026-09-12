@@ -12,6 +12,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Gold-standard compare packed rows** — Sibling agenda items (for example 4.1(a) steam-room heat pump and 4.1(b) lobby restoration) no longer share one comparison cell when gold minutes bundled them or the aligner emitted 1:n / n:n. Each AI agenda item is its own row.
+
 - **Gold-standard compare highlights** — Side-by-side spans restore spaces and paragraph breaks at mark boundaries (including before MOTION / Seconded / THAT lines) when the diff JSON flattened them onto the prior line.
 
 - **Gold-standard compare viewer** — Highlight legend sits in the top header (right). Main concept headers center the match percent with gold-side and AI-side severity badges on either side; title stays left with an inline AI-only or gold-only chip when applicable. The outline list keeps title, percent, and a single Paired or split/merge chip only. Difference detail is a hover popover on severity badges.

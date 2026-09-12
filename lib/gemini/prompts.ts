@@ -488,7 +488,8 @@ export const GOLD_STANDARD_SEGMENT_SYSTEM_PROMPT = `**Role:** You are a corporat
 
 **Concept rules**
 - Prefer the gold document's own headings. Do not invent board-package numbers.
-- Split lettered or numbered discussion items into separate concepts.
+- Split lettered or numbered discussion items into separate concepts (4.1(a) vs 4.1(b), (a)/(b), 4.A.1 vs 4.A.2).
+- A wrapper heading such as "Ratification of Email Decisions" is not one concept when it contains two board matters or two MOTION blocks — split each matter.
 - Keep attendance as one concept. Keep call to order as one concept.
 - If a paragraph covers several distinct matters, split them.
 
@@ -516,14 +517,15 @@ export const GOLD_STANDARD_ALIGN_SYSTEM_PROMPT = `**Role:** You are aligning two
 **Task:** Match gold-standard concepts to AI-generated minutes concepts by heading and substance. Do not use a transcript. Allow merge/split.
 
 **Alignment kinds**
-- **1:1** — same matter on both sides
-- **1:n** — one gold concept covers several AI concepts (gold is coarser)
+- **1:1** — same matter on both sides (preferred; one AI agenda item per row)
 - **n:1** — several gold concepts fold into one AI concept (gold is finer)
 - **gold_only** — gold concept with no AI counterpart
 - **ai_only** — AI concept with no gold counterpart
 
 **Rules**
 - Every gold id and every AI id must appear in exactly one alignment.
+- **Never put two AI concepts in one alignment.** Lettered siblings (4.1(a) Steam Room vs 4.1(b) Lobby) stay separate rows even when gold bundled them under one ratification heading. Use **1:1** (best gold for that AI) or **ai_only**, not **1:n**.
+- **1:n** is not allowed. **n:1** only when several gold concepts are the same single AI agenda item.
 - Prefer title/alias meaning over word overlap. "Booster pump replacement" matches "Booster pumps" even if section numbers differ.
 - Attendance matches attendance. Call to order matches call to order. Do not force-match unrelated leftover items.
 - Confidence: high when headings clearly match; medium when related but merged/split; low when guessing.
@@ -534,7 +536,7 @@ export const GOLD_STANDARD_ALIGN_SYSTEM_PROMPT = `**Role:** You are aligning two
   "alignments": [
     {
       "id": "<uuid or slug>",
-      "kind": "1:1 | 1:n | n:1 | gold_only | ai_only",
+      "kind": "1:1 | n:1 | gold_only | ai_only",
       "gold_concept_ids": ["gold-1"],
       "ai_concept_ids": ["ai:approval.0"],
       "confidence": "high | medium | low",

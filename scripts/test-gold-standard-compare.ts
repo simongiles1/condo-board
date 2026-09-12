@@ -117,6 +117,105 @@ describe("completeAlignments", () => {
     assert.equal(completed[1]?.kind, "gold_only");
     assert.deepEqual(completed[1]?.goldConceptIds, ["g2"]);
   });
+
+  it("splits packed n:n alignments into one row per AI agenda item", () => {
+    const gold = [
+      {
+        id: "g-steam",
+        heading: "Steam Room Heat Pump Design",
+        body: "Trace Consulting Group heat pump design tender.",
+        kind: "agenda_item" as const,
+        sortOrder: 0,
+      },
+      {
+        id: "g-lobby",
+        heading: "Main Lobby and Elevator Lobby Restoration",
+        body: "Certificate of Completion for the main lobby restoration.",
+        kind: "agenda_item" as const,
+        sortOrder: 1,
+      },
+    ];
+    const ai = [
+      {
+        id: "a-steam",
+        heading: "4.1(a) Steam Room Heat Pump",
+        body: "Ratified the Trace steam room heat pump proposal.",
+        kind: "agenda_item" as const,
+        sortOrder: 0,
+        agendaItemIds: ["item-steam"],
+      },
+      {
+        id: "a-lobby",
+        heading: "4.1(b) Main Lobby and Elevator Lobby Restoration",
+        body: "Ratified the Absolute lobby certificate of completion.",
+        kind: "agenda_item" as const,
+        sortOrder: 1,
+        agendaItemIds: ["item-lobby"],
+      },
+    ];
+    const raw: CompareAlignment[] = [
+      {
+        id: "align-packed",
+        kind: "1:1",
+        goldConceptIds: ["g-steam", "g-lobby"],
+        aiConceptIds: ["a-steam", "a-lobby"],
+        confidence: "medium",
+        label: "Ratification of Email Decisions",
+      },
+    ];
+    const completed = completeAlignments(gold, ai, raw);
+    assert.equal(completed.length, 2);
+    const steam = completed.find((row) => row.aiConceptIds.includes("a-steam"));
+    const lobby = completed.find((row) => row.aiConceptIds.includes("a-lobby"));
+    assert.equal(steam?.kind, "1:1");
+    assert.deepEqual(steam?.goldConceptIds, ["g-steam"]);
+    assert.equal(lobby?.kind, "1:1");
+    assert.deepEqual(lobby?.goldConceptIds, ["g-lobby"]);
+  });
+
+  it("explodes 1:n so sibling AI items are not concatenated", () => {
+    const gold = [
+      {
+        id: "g-ratify",
+        heading: "Ratification of Email Decisions",
+        body: "Steam room heat pump and main lobby restoration were ratified.",
+        kind: "agenda_item" as const,
+        sortOrder: 0,
+      },
+    ];
+    const ai = [
+      {
+        id: "a-steam",
+        heading: "4.1(a) Steam Room Heat Pump",
+        body: "Ratified the steam room heat pump.",
+        kind: "agenda_item" as const,
+        sortOrder: 0,
+        agendaItemIds: ["item-steam"],
+      },
+      {
+        id: "a-lobby",
+        heading: "4.1(b) Main Lobby Restoration",
+        body: "Ratified the lobby restoration.",
+        kind: "agenda_item" as const,
+        sortOrder: 1,
+        agendaItemIds: ["item-lobby"],
+      },
+    ];
+    const raw: CompareAlignment[] = [
+      {
+        id: "align-1n",
+        kind: "1:n",
+        goldConceptIds: ["g-ratify"],
+        aiConceptIds: ["a-steam", "a-lobby"],
+        confidence: "medium",
+        label: "Ratification of Email Decisions",
+      },
+    ];
+    const completed = completeAlignments(gold, ai, raw);
+    assert.equal(completed.length, 2);
+    assert.ok(completed.every((row) => row.aiConceptIds.length === 1));
+    assert.ok(completed.every((row) => row.goldConceptIds[0] === "g-ratify"));
+  });
 });
 
 describe("compare_v2 persistence", () => {

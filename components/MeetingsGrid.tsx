@@ -7,6 +7,7 @@ import { GoldStandardCompareDialog } from "@/components/GoldStandardCompareDialo
 import { GoldStandardValidationSidePanel } from "@/components/GoldStandardValidationSidePanel";
 import { MeetingCard } from "@/components/MeetingCard";
 import type { Meeting } from "@/lib/db/types";
+import { headlineValidationScore } from "@/lib/minutes/gold-standard-compare";
 import {
   parseStoredGoldStandardValidation,
   type GoldStandardValidationResult,
@@ -57,11 +58,11 @@ export function MeetingsGrid({ meetings }: Props) {
   const getValidationScore = useCallback(
     (meeting: Meeting): number | null => {
       const live = liveValidationByMeetingId[meeting.id];
-      if (live) return live.validationScore;
+      if (live) return headlineValidationScore(live);
       const stored = parseStoredGoldStandardValidation(
         meeting.goldStandardValidationJson,
       );
-      return stored?.validationScore ?? null;
+      return stored ? headlineValidationScore(stored) : null;
     },
     [liveValidationByMeetingId],
   );

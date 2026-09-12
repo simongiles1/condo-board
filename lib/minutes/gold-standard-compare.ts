@@ -5,8 +5,10 @@ import {
   type CompareAlignment,
   type CompareAlignmentKind,
   type ComparePair,
+  type CompareTextMark,
   type GoldStandardCompareDocument,
   type GoldStandardConcept,
+  type GoldStandardValidationResult,
   type ValidationFinding,
 } from "@/lib/minutes/gold-standard-schema";
 
@@ -285,6 +287,42 @@ export function deriveBidirectionalFindings(
   return { generatedOnly, goldOnly };
 }
 
+export function findingColumn(
+  finding: ValidationFinding,
+): "gold" | "ai" | "both" {
+  const detail = finding.detail;
+  if (
+    /missing from gold|not in the gold|AI minutes include|AI adds|AI includes|fabricat/i.test(
+      detail,
+    )
+  ) {
+    return "ai";
+  }
+  if (
+    /missing from AI|not in the AI|gold standard includes|AI omits|gold includes/i.test(
+      detail,
+    )
+  ) {
+    return "gold";
+  }
+  return "both";
+}
+
+export function displaySegmentMark(
+  mark: CompareTextMark,
+  text: string,
+): CompareTextMark {
+  if (mark !== "motion" && mark !== "amount") return mark;
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (mark === "amount" && compact.length <= 80) return "amount";
+  if (mark === "motion") {
+    const looksLikeMotion =
+      /\b(motion|seconded|duly ratified|moved by|carried)\b/i.test(compact);
+    if (looksLikeMotion && compact.length <= 420) return "motion";
+  }
+  return "changed";
+}
+
 export function scoreCompareDocument(
   compare: GoldStandardCompareDocument,
 ): { validationScore: number; scoreRationale: string } {
@@ -300,18 +338,24 @@ export function scoreCompareDocument(
       count + pair.findings.filter((finding) => finding.significance === "critical").length,
     0,
   );
-  const validationScore = Math.min(
-    100,
-    Math.max(0, Math.round(mean - critical * 4)),
-  );
+  const validationScore = Math.min(100, Math.max(0, Math.round(mean)));
   const matched = compare.alignments.filter(
     (row) => row.kind === "1:1" || row.kind === "1:n" || row.kind === "n:1",
   ).length;
   const scoreRationale = [
-    `Compared ${compare.alignments.length} concepts (${matched} matched, ${unmatchedGold} gold-only, ${unmatchedAi} AI-only).`,
+    `Average agreement across ${compare.alignments.length} concepts is ${validationScore}% (${matched} paired, ${unmatchedGold} gold-only, ${unmatchedAi} AI-only).`,
     critical > 0
-      ? `${critical} critical fact, motion, or amount difference${critical === 1 ? "" : "s"} reduced the score.`
+      ? `${critical} critical fact, motion, or amount difference${critical === 1 ? "" : "s"} ${critical === 1 ? "is" : "are"} listed in the notes — they do not stack extra penalties on top of the per-concept scores.`
       : "No critical fact, motion, or amount mismatches were recorded.",
   ].join(" ");
   return { validationScore, scoreRationale };
+}
+
+export function headlineValidationScore(
+  validation: GoldStandardValidationResult,
+): number {
+  if (validation.compare) {
+    return scoreCompareDocument(validation.compare).validationScore;
+  }
+  return validation.validationScore;
 }

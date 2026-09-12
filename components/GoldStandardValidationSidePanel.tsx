@@ -9,6 +9,11 @@ import {
   parseStoredAiUsage,
 } from "@/lib/gemini/usage";
 import {
+  displaySegmentMark,
+  findingColumn,
+  scoreCompareDocument,
+} from "@/lib/minutes/gold-standard-compare";
+import {
   significanceChipClasses,
   significanceLabel,
   validationScoreBadgeClasses,
@@ -56,8 +61,8 @@ const MARK_LABELS: Record<CompareTextMark, string> = {
   added: "In AI only",
   omitted: "In gold only",
   changed: "Changed",
-  motion: "Motion",
-  amount: "Amount",
+  motion: "Differing motion",
+  amount: "Differing amount",
 };
 
 function formatAnalyzedAt(iso: string): string {
@@ -83,7 +88,7 @@ function alignmentKindLabel(kind: CompareAlignment["kind"]): string {
   if (kind === "ai_only") return "AI only";
   if (kind === "1:n") return "Gold merged";
   if (kind === "n:1") return "Gold split";
-  return "Matched";
+  return "Paired";
 }
 
 function HighlightedProse({
@@ -98,14 +103,18 @@ function HighlightedProse({
   }
   return (
     <p className="whitespace-pre-wrap text-sm leading-relaxed">
-      {segments.map((segment, index) => (
-        <span
-          key={`${index}-${segment.mark}`}
-          className={`rounded-sm ${MARK_CLASSES[segment.mark]}`}
-        >
-          {segment.text}
-        </span>
-      ))}
+      {segments.map((segment, index) => {
+        const mark = displaySegmentMark(segment.mark, segment.text);
+        return (
+          <span
+            key={`${index}-${segment.mark}`}
+            className={`rounded-sm ${MARK_CLASSES[mark]}`}
+            title={MARK_LABELS[mark]}
+          >
+            {segment.text}
+          </span>
+        );
+      })}
     </p>
   );
 }
@@ -136,6 +145,32 @@ function FindingsList({ findings }: { findings: ValidationFinding[] }) {
   );
 }
 
+function findingsForColumn(
+  findings: ValidationFinding[],
+  column: "gold" | "ai",
+): ValidationFinding[] {
+  return findings.filter((finding) => {
+    const side = findingColumn(finding);
+    return side === column || side === "both";
+  });
+}
+
+function alignmentKindTitle(kind: CompareAlignment["kind"]): string {
+  if (kind === "gold_only") {
+    return "This concept appears only in the gold-standard minutes.";
+  }
+  if (kind === "ai_only") {
+    return "This concept appears only in the AI minutes.";
+  }
+  if (kind === "1:n") {
+    return "One gold concept covers several AI items. The percent is wording agreement, not whether a pair was found.";
+  }
+  if (kind === "n:1") {
+    return "Several gold concepts fold into one AI item. The percent is wording agreement, not whether a pair was found.";
+  }
+  return "The same agenda matter exists on both sides. The percent is how closely the wording and facts agree.";
+}
+
 export function GoldStandardValidationSidePanel({
   meeting,
   validation,
@@ -151,6 +186,9 @@ export function GoldStandardValidationSidePanel({
   );
   const [activeAlignmentId, setActiveAlignmentId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLElement | null>(null);
+  const skipScrollSpyRef = useRef(false);
+  const pendingContentScrollRef = useRef(false);
 
   useEffect(() => {
     if (!meeting || !validation) return;
@@ -214,18 +252,71 @@ export function GoldStandardValidationSidePanel({
         )?.alignmentId ??
         null;
     }
+    pendingContentScrollRef.current = true;
+    skipScrollSpyRef.current = true;
     setActiveAlignmentId(nextId ?? compare.alignments[0]?.id ?? null);
   }, [compare, focusAgendaItemId, initialTab]);
 
   useEffect(() => {
     if (!activeAlignmentId || !scrollRef.current) return;
+    if (!pendingContentScrollRef.current) return;
+    pendingContentScrollRef.current = false;
     const node = scrollRef.current.querySelector(
       `[data-alignment-id="${activeAlignmentId}"]`,
     );
     if (node instanceof HTMLElement) {
+      skipScrollSpyRef.current = true;
       node.scrollIntoView({ block: "start", behavior: "smooth" });
+      window.setTimeout(() => {
+        skipScrollSpyRef.current = false;
+      }, 450);
     }
   }, [activeAlignmentId]);
+
+  useEffect(() => {
+    if (!activeAlignmentId || !navRef.current) return;
+    const node = navRef.current.querySelector(
+      `[data-nav-alignment-id="${activeAlignmentId}"]`,
+    );
+    if (node instanceof HTMLElement) {
+      node.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeAlignmentId]);
+
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || !compare) return;
+
+    function syncFromScroll() {
+      if (skipScrollSpyRef.current || !root) return;
+      const sections = [
+        ...root.querySelectorAll<HTMLElement>("[data-alignment-id]"),
+      ];
+      if (sections.length === 0) return;
+      const header = root.querySelector("[data-compare-column-header]");
+      const headerHeight =
+        header instanceof HTMLElement ? header.getBoundingClientRect().height : 40;
+      const line = root.getBoundingClientRect().top + headerHeight + 8;
+      let current = sections[0];
+      for (const section of sections) {
+        if (section.getBoundingClientRect().top <= line) {
+          current = section;
+        }
+      }
+      const nextId = current.dataset.alignmentId ?? null;
+      if (nextId) {
+        setActiveAlignmentId((previous) => (previous === nextId ? previous : nextId));
+      }
+    }
+
+    root.addEventListener("scroll", syncFromScroll, { passive: true });
+    return () => root.removeEventListener("scroll", syncFromScroll);
+  }, [compare, visibleAlignments]);
+
+  const compareScore = useMemo(() => {
+    if (!compare) return null;
+    return scoreCompareDocument(compare);
+  }, [compare]);
 
   const costRun = useMemo(() => {
     if (!meeting?.aiUsageJson) return null;
@@ -237,6 +328,8 @@ export function GoldStandardValidationSidePanel({
 
   const generatedCount = validation.generatedOnly.length;
   const goldCount = validation.goldOnly.length;
+  const displayedScore = compareScore?.validationScore ?? validation.validationScore;
+  const displayedRationale = compareScore?.scoreRationale ?? validation.scoreRationale;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white">
@@ -247,9 +340,10 @@ export function GoldStandardValidationSidePanel({
               Gold standard compare
             </h2>
             <span
-              className={`inline-flex rounded-full px-3 py-1 text-sm font-semibold ring-1 ${validationScoreBadgeClasses(validation.validationScore)}`}
+              className={`inline-flex rounded-full px-3 py-1 text-sm font-semibold ring-1 ${validationScoreBadgeClasses(displayedScore)}`}
+              title="Average of the per-concept agreement scores in the list"
             >
-              {validationScoreLabel(validation.validationScore)}
+              {validationScoreLabel(displayedScore)}
             </span>
           </div>
           <p className="mt-1 text-sm font-medium text-slate-800">{meeting.title}</p>
@@ -272,7 +366,10 @@ export function GoldStandardValidationSidePanel({
 
       {compare ? (
         <div className="flex min-h-0 flex-1">
-          <nav className="hidden w-72 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50 lg:block">
+          <nav
+            ref={navRef}
+            className="hidden w-72 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50 lg:block"
+          >
             <div className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-3 py-2">
               <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
                 <input
@@ -291,7 +388,12 @@ export function GoldStandardValidationSidePanel({
                   <li key={alignment.id}>
                     <button
                       type="button"
-                      onClick={() => setActiveAlignmentId(alignment.id)}
+                      data-nav-alignment-id={alignment.id}
+                      onClick={() => {
+                        pendingContentScrollRef.current = true;
+                        skipScrollSpyRef.current = true;
+                        setActiveAlignmentId(alignment.id);
+                      }}
                       className={`mb-1 w-full rounded-lg px-2.5 py-2 text-left transition ${
                         selected
                           ? "bg-white shadow-sm ring-1 ring-slate-200"
@@ -302,12 +404,16 @@ export function GoldStandardValidationSidePanel({
                         <span className="truncate text-xs font-semibold text-slate-900">
                           {alignment.label}
                         </span>
-                        <span className="font-mono text-[10px] text-slate-500">
+                        <span
+                          className="font-mono text-[10px] text-slate-500"
+                          title="How closely this pair's wording and facts agree (0–100). Separate from whether the items were paired."
+                        >
                           {pair ? `${pair.pairScore}%` : "—"}
                         </span>
                       </div>
                       <span
                         className={`mt-1 inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${alignmentChip(alignment.kind)}`}
+                        title={alignmentKindTitle(alignment.kind)}
                       >
                         {alignmentKindLabel(alignment.kind)}
                       </span>
@@ -319,7 +425,10 @@ export function GoldStandardValidationSidePanel({
           </nav>
 
           <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-            <div className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200 bg-white text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <div
+              data-compare-column-header
+              className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200 bg-white text-xs font-semibold uppercase tracking-wide text-slate-500"
+            >
               <div className="border-r border-slate-200 px-4 py-2">
                 Gold standard
               </div>
@@ -327,7 +436,7 @@ export function GoldStandardValidationSidePanel({
             </div>
             <div className="px-4 py-3">
               <p className="text-sm leading-relaxed text-slate-700">
-                {validation.scoreRationale}
+                {displayedRationale}
               </p>
               <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
                 {(Object.keys(MARK_LABELS) as CompareTextMark[]).map((mark) => (
@@ -346,7 +455,7 @@ export function GoldStandardValidationSidePanel({
                 <section
                   key={alignment.id}
                   data-alignment-id={alignment.id}
-                  className={`border-t border-slate-200 ${
+                  className={`scroll-mt-10 border-t border-slate-200 ${
                     alignment.id === activeAlignmentId ? "bg-teal-50/30" : ""
                   }`}
                 >
@@ -357,11 +466,15 @@ export function GoldStandardValidationSidePanel({
                     <div className="flex items-center gap-2">
                       <span
                         className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${alignmentChip(alignment.kind)}`}
+                        title={alignmentKindTitle(alignment.kind)}
                       >
                         {alignmentKindLabel(alignment.kind)}
                       </span>
                       {pair ? (
-                        <span className="font-mono text-xs text-slate-500">
+                        <span
+                          className="font-mono text-xs text-slate-500"
+                          title="How closely this pair's wording and facts agree (0–100)."
+                        >
                           {pair.pairScore}%
                         </span>
                       ) : null}
@@ -370,16 +483,21 @@ export function GoldStandardValidationSidePanel({
                   <div className="grid grid-cols-1 md:grid-cols-2">
                     <div className="border-b border-slate-100 px-4 py-3 md:border-b-0 md:border-r">
                       <HighlightedProse segments={pair?.goldSegments ?? []} />
+                      {pair ? (
+                        <FindingsList
+                          findings={findingsForColumn(pair.findings, "gold")}
+                        />
+                      ) : null}
                     </div>
                     <div className="px-4 py-3">
                       <HighlightedProse segments={pair?.aiSegments ?? []} />
+                      {pair ? (
+                        <FindingsList
+                          findings={findingsForColumn(pair.findings, "ai")}
+                        />
+                      ) : null}
                     </div>
                   </div>
-                  {pair ? (
-                    <div className="px-4 pb-4">
-                      <FindingsList findings={pair.findings} />
-                    </div>
-                  ) : null}
                 </section>
               );
             })}

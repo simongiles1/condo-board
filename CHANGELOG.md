@@ -10,9 +10,17 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V2 leftover transcript holes** — After outline-order hole assignment, remaining unboxed stretches are matched to any still-unassigned agenda leaf. That covers official items discussed out of order (for example the next board-meeting date sitting between two ad-hoc 4.E items), which the previous pass skipped because their outline codes fall after the next ranged leaf.
 
+### Fixed
+
+- **Gold-standard compare headline score** — The header percent is the average of the per-concept scores. It no longer subtracts four points per critical finding, which could drop a meeting to single digits while every listed item still showed 20% or higher.
+
+- **Gold-standard compare motion paint** — Whole-paragraph “motion” highlights are treated as ordinary changes. Blue motion marking is reserved for a short formal resolution line. Difference notes sit in the gold or AI column they describe.
+
 ### Changed
 
-- **Minutes gold-standard compare** — Official minutes are extracted with Docling, split into agenda concepts, aligned to AI minutes items, and compared concept-by-concept. Results open in a full-page side-by-side viewer (gold left, AI right) with highlighted added, omitted, changed, motion, and amount spans. Re-compare reuses the stored gold PDF.
+- **Minutes gold-standard compare** — Official minutes are extracted with Docling, split into agenda concepts, aligned to AI minutes items, and compared concept-by-concept. Results open in a full-page side-by-side viewer (gold left, AI right) with highlighted added, omitted, changed, motion, and amount spans. Re-compare reuses the stored gold PDF. Paired means the same agenda matter exists on both sides; the percent is wording agreement.
+
+- **Gold-standard compare navigation** — Clicking a concept in the outline scrolls so the section heading sits below the sticky column headers. The outline selection follows scroll position.
 
 ### Added
 

@@ -554,12 +554,14 @@ export const GOLD_STANDARD_PAIR_DIFF_SYSTEM_PROMPT = `**Role:** You are a govern
 **Do not** use or invent transcript content. Compare the two minutes texts only.
 
 **Segment marks**
-- **same** — substantively equivalent wording
-- **added** — AI includes a fact/motion/amount gold does not (AI column only)
-- **omitted** — gold includes a fact/motion/amount AI does not (gold column only)
+- **same** — substantively equivalent wording (default). Most of each column must stay **same**.
+- **added** — a fact, motion, or amount the AI minutes include and gold does not (AI column only)
+- **omitted** — a fact, motion, or amount gold includes and the AI minutes do not (gold column only)
 - **changed** — both sides state the matter but disagree (amount, outcome, name)
-- **motion** — motion text that differs in operative language
-- **amount** — dollar figure that differs or is missing on one side
+- **motion** — ONLY the short formal resolution line that differs (e.g. the "THAT IT BE DULY…" sentence, mover/seconder line). Never mark discussion, recitals, or a whole paragraph as motion.
+- **amount** — ONLY the dollar figure token that differs (e.g. "$10,500"). Never mark the surrounding sentence.
+
+Do not paint an entire column **motion** or **added** because a motion exists. Narrative stays **same** unless that sentence itself is a fact difference.
 
 Rewrite each side as an ordered list of segments that concatenate to the original meaning (you may lightly normalize whitespace). Do not drop content.
 

@@ -10,6 +10,8 @@ import { buildAiMinutesConcepts } from "../lib/minutes/gold-standard-ai-concepts
 import {
   completeAlignments,
   deriveBidirectionalFindings,
+  displaySegmentMark,
+  findingColumn,
   scoreCompareDocument,
 } from "../lib/minutes/gold-standard-compare";
 import { buildGoldStandardFindingsByItemId } from "../lib/minutes/gold-standard-item-match";
@@ -234,7 +236,7 @@ describe("compare_v2 persistence", () => {
 });
 
 describe("scoreCompareDocument", () => {
-  it("averages pair scores", () => {
+  it("averages pair scores without stacking a critical-finding penalty", () => {
     const scored = scoreCompareDocument({
       goldConcepts: [],
       aiConcepts: [],
@@ -262,7 +264,14 @@ describe("scoreCompareDocument", () => {
           pairScore: 90,
           goldSegments: [],
           aiSegments: [],
-          findings: [],
+          findings: [
+            {
+              id: "c1",
+              topic: "Motion",
+              detail: "Motion wording differs.",
+              significance: "critical",
+            },
+          ],
         },
         {
           alignmentId: "b",
@@ -274,6 +283,48 @@ describe("scoreCompareDocument", () => {
       ],
     });
     assert.equal(scored.validationScore, 63);
+  });
+});
+
+describe("displaySegmentMark", () => {
+  it("keeps short formal motion lines and demotes whole-paragraph motion paint", () => {
+    assert.equal(
+      displaySegmentMark(
+        "motion",
+        "**THAT IT BE DULY RATIFIED** that the proposal be approved. Motion carried.",
+      ),
+      "motion",
+    );
+    assert.equal(
+      displaySegmentMark(
+        "motion",
+        `${"The Board considered the ratification of email decisions. ".repeat(8)} MOTION by S. Greenspan. THAT IT BE DULY RATIFIED that the work proceed.`,
+      ),
+      "changed",
+    );
+  });
+});
+
+describe("findingColumn", () => {
+  it("puts AI-adds notes on the AI side and AI-omits notes on gold", () => {
+    assert.equal(
+      findingColumn({
+        id: "1",
+        topic: "Tender",
+        detail: "AI adds specific tender details, including Ambient Mechanical.",
+        significance: "moderate",
+      }),
+      "ai",
+    );
+    assert.equal(
+      findingColumn({
+        id: "2",
+        topic: "Legal fees",
+        detail: "AI omits that the legal fees for the contract review are a Reserve Fund cost.",
+        significance: "moderate",
+      }),
+      "gold",
+    );
   });
 });
 

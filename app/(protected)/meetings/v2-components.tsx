@@ -36,6 +36,7 @@ import {
   AgendaItemDetailSidePanel,
   type AgendaItemDetail,
 } from "@/components/AgendaItemDetailSidePanel";
+import { headlineValidationScore } from "@/lib/minutes/gold-standard-compare";
 import {
   parseStoredGoldStandardValidation,
   validationScoreLabel,
@@ -394,9 +395,9 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
   const getValidationScore = useCallback(
     (meeting: MeetingCard): number | null => {
       const live = liveValidationByMeetingId[meeting.id];
-      if (live) return live.validationScore;
+      if (live) return headlineValidationScore(live);
       const stored = parseStoredGoldStandardValidation(meeting.goldStandardValidationJson);
-      return stored?.validationScore ?? null;
+      return stored ? headlineValidationScore(stored) : null;
     },
     [liveValidationByMeetingId],
   );
@@ -640,7 +641,9 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     );
   }, [liveValidation, status?.meeting.goldStandardValidationJson]);
 
-  const validationScore = currentValidation?.validationScore ?? null;
+  const validationScore = currentValidation
+    ? headlineValidationScore(currentValidation)
+    : null;
 
   function handleValidationBadgeClick() {
     if (validationScore !== null) {

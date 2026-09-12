@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 
 import {
   formatCostUsd,
@@ -10,9 +18,11 @@ import {
 } from "@/lib/gemini/usage";
 import {
   displaySegmentMark,
-  findingColumn,
+  findingsForAlignmentColumn,
   scoreCompareDocument,
 } from "@/lib/minutes/gold-standard-compare";
+import { HOVER_POPOVER_ATTR } from "@/lib/ui/hover-popover-group";
+import { useHoverPopover } from "@/lib/ui/use-hover-popover";
 import {
   significanceChipClasses,
   significanceLabel,
@@ -65,6 +75,8 @@ const MARK_LABELS: Record<CompareTextMark, string> = {
   amount: "Differing amount",
 };
 
+const VIEWPORT_MARGIN = 8;
+
 function formatAnalyzedAt(iso: string): string {
   try {
     return new Date(iso).toLocaleString(undefined, {
@@ -91,14 +103,78 @@ function alignmentKindLabel(kind: CompareAlignment["kind"]): string {
   return "Paired";
 }
 
+function alignmentKindTitle(kind: CompareAlignment["kind"]): string {
+  if (kind === "gold_only") {
+    return "This concept appears only in the gold-standard minutes.";
+  }
+  if (kind === "ai_only") {
+    return "This concept appears only in the AI minutes.";
+  }
+  if (kind === "1:n") {
+    return "One gold concept covers several AI items. The percent is wording agreement, not whether a pair was found.";
+  }
+  if (kind === "n:1") {
+    return "Several gold concepts fold into one AI item. The percent is wording agreement, not whether a pair was found.";
+  }
+  return "The same agenda matter exists on both sides. The percent is how closely the wording and facts agree.";
+}
+
+function computePopoverPosition(
+  triggerRect: DOMRect,
+  popoverWidth: number,
+  popoverHeight: number,
+  preferBelow: boolean,
+): CSSProperties {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const spaceBelow = viewportHeight - triggerRect.bottom - VIEWPORT_MARGIN;
+  const showBelow =
+    preferBelow && spaceBelow >= popoverHeight * 0.5;
+
+  let top: number;
+  if (showBelow) {
+    top = triggerRect.bottom + VIEWPORT_MARGIN;
+  } else {
+    top = Math.max(
+      VIEWPORT_MARGIN,
+      triggerRect.top - popoverHeight - VIEWPORT_MARGIN,
+    );
+  }
+
+  let left = triggerRect.left + triggerRect.width / 2 - popoverWidth / 2;
+  left = Math.min(
+    Math.max(left, VIEWPORT_MARGIN),
+    viewportWidth - popoverWidth - VIEWPORT_MARGIN,
+  );
+
+  return { position: "fixed", top, left, zIndex: 60 };
+}
+
+function CompareLegend() {
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+      {(Object.keys(MARK_LABELS) as CompareTextMark[]).map((mark) => (
+        <span
+          key={mark}
+          className={`rounded px-1.5 py-0.5 font-medium ${MARK_CLASSES[mark]}`}
+        >
+          {MARK_LABELS[mark]}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function HighlightedProse({
   segments,
+  emptyLabel = "No counterpart on this side.",
 }: {
   segments: Array<{ text: string; mark: CompareTextMark }>;
+  emptyLabel?: string;
 }) {
   if (segments.length === 0) {
     return (
-      <p className="text-sm italic text-slate-400">No counterpart on this side.</p>
+      <p className="min-h-[1.25rem] text-sm italic text-slate-400">{emptyLabel}</p>
     );
   }
   return (
@@ -116,6 +192,143 @@ function HighlightedProse({
         );
       })}
     </p>
+  );
+}
+
+function FindingSignificanceBadge({ finding }: { finding: ValidationFinding }) {
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const hover = useHoverPopover({ scanGroup: "gold-compare-finding" });
+  const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({
+    position: "fixed",
+    visibility: "hidden",
+    zIndex: 60,
+  });
+
+  useLayoutEffect(() => {
+    if (!hover.open || !rootRef.current || !popoverRef.current) return;
+    const triggerRect = rootRef.current.getBoundingClientRect();
+    const popover = popoverRef.current;
+    setPopoverStyle({
+      ...computePopoverPosition(
+        triggerRect,
+        popover.offsetWidth,
+        popover.offsetHeight,
+        true,
+      ),
+      visibility: "visible",
+    });
+  }, [hover.open, finding.id]);
+
+  useEffect(() => {
+    if (!hover.open) return;
+    function update() {
+      const triggerRect = rootRef.current?.getBoundingClientRect();
+      const popover = popoverRef.current;
+      if (!triggerRect || !popover) return;
+      setPopoverStyle({
+        ...computePopoverPosition(
+          triggerRect,
+          popover.offsetWidth,
+          popover.offsetHeight,
+          true,
+        ),
+        visibility: "visible",
+      });
+    }
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [hover.open]);
+
+  return (
+    <>
+      <span
+        ref={rootRef}
+        className="inline-flex"
+        onMouseEnter={hover.onTriggerEnter}
+        onMouseLeave={hover.onTriggerLeave}
+      >
+        <span
+          className={`inline-flex cursor-default rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${significanceChipClasses(finding.significance)}`}
+        >
+          {significanceLabel(finding.significance)}
+        </span>
+      </span>
+      {hover.open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={popoverRef}
+              role="tooltip"
+              style={popoverStyle}
+              className="w-72 max-w-[min(20rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+              {...{ [HOVER_POPOVER_ATTR]: "" }}
+              onMouseEnter={hover.onPopoverEnter}
+              onMouseLeave={hover.onPopoverLeave}
+            >
+              <p className="text-xs font-semibold text-slate-900">{finding.topic}</p>
+              <p className="mt-1.5 text-xs leading-relaxed text-slate-700">
+                {finding.detail}
+              </p>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+function ColumnMetaRow({
+  alignment,
+  findings,
+  column,
+}: {
+  alignment: CompareAlignment;
+  findings: ValidationFinding[];
+  column: "gold" | "ai";
+}) {
+  const columnFindings = findingsForAlignmentColumn(alignment, findings, column);
+  const showGoldOnly = column === "gold" && alignment.kind === "gold_only";
+  const showAiOnly = column === "ai" && alignment.kind === "ai_only";
+  const justify =
+    column === "gold" ? "justify-end" : "justify-between";
+
+  if (!showGoldOnly && !showAiOnly && columnFindings.length === 0) {
+    return <div className="min-h-[1.75rem]" aria-hidden />;
+  }
+
+  return (
+    <div
+      className={`flex min-h-[1.75rem] items-center gap-2 ${justify} ${
+        column === "gold" ? "border-r border-slate-100 pr-4" : "pl-4"
+      }`}
+    >
+      {showAiOnly ? (
+        <span
+          className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${alignmentChip(alignment.kind)}`}
+          title={alignmentKindTitle(alignment.kind)}
+        >
+          {alignmentKindLabel(alignment.kind)}
+        </span>
+      ) : null}
+      {column === "ai" && !showAiOnly ? <span className="flex-1" /> : null}
+      <div className="flex flex-wrap items-center justify-end gap-1.5">
+        {columnFindings.map((finding) => (
+          <FindingSignificanceBadge key={finding.id} finding={finding} />
+        ))}
+      </div>
+      {showGoldOnly ? (
+        <span
+          className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${alignmentChip(alignment.kind)}`}
+          title={alignmentKindTitle(alignment.kind)}
+        >
+          {alignmentKindLabel(alignment.kind)}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -145,32 +358,6 @@ function FindingsList({ findings }: { findings: ValidationFinding[] }) {
   );
 }
 
-function findingsForColumn(
-  findings: ValidationFinding[],
-  column: "gold" | "ai",
-): ValidationFinding[] {
-  return findings.filter((finding) => {
-    const side = findingColumn(finding);
-    return side === column || side === "both";
-  });
-}
-
-function alignmentKindTitle(kind: CompareAlignment["kind"]): string {
-  if (kind === "gold_only") {
-    return "This concept appears only in the gold-standard minutes.";
-  }
-  if (kind === "ai_only") {
-    return "This concept appears only in the AI minutes.";
-  }
-  if (kind === "1:n") {
-    return "One gold concept covers several AI items. The percent is wording agreement, not whether a pair was found.";
-  }
-  if (kind === "n:1") {
-    return "Several gold concepts fold into one AI item. The percent is wording agreement, not whether a pair was found.";
-  }
-  return "The same agenda matter exists on both sides. The percent is how closely the wording and facts agree.";
-}
-
 export function GoldStandardValidationSidePanel({
   meeting,
   validation,
@@ -189,6 +376,7 @@ export function GoldStandardValidationSidePanel({
   const navRef = useRef<HTMLElement | null>(null);
   const skipScrollSpyRef = useRef(false);
   const pendingContentScrollRef = useRef(false);
+  const openedForValidationRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!meeting || !validation) return;
@@ -221,9 +409,29 @@ export function GoldStandardValidationSidePanel({
     });
   }, [compare, differencesOnly, pairByAlignmentId]);
 
+  const conceptCounts = useMemo(() => {
+    if (!compare) {
+      return { aiOnly: 0, goldOnly: 0, paired: 0 };
+    }
+    let aiOnly = 0;
+    let goldOnly = 0;
+    let paired = 0;
+    for (const alignment of compare.alignments) {
+      if (alignment.kind === "ai_only") aiOnly += 1;
+      else if (alignment.kind === "gold_only") goldOnly += 1;
+      else paired += 1;
+    }
+    return { aiOnly, goldOnly, paired };
+  }, [compare]);
+
   useEffect(() => {
-    if (!compare) return;
+    if (!compare || !validation) return;
+    const openKey = `${validation.analyzedAt}:${compare.alignments.length}`;
+    if (openedForValidationRef.current === openKey) return;
+    openedForValidationRef.current = openKey;
+
     let nextId: string | null = null;
+    let shouldScroll = false;
     if (focusAgendaItemId) {
       const match = compare.alignments.find((alignment) =>
         alignment.aiConceptIds.some((id) =>
@@ -233,29 +441,24 @@ export function GoldStandardValidationSidePanel({
         ),
       );
       nextId = match?.id ?? null;
+      shouldScroll = Boolean(nextId);
     }
-    if (!nextId && initialTab === "goldOnly") {
-      nextId =
-        compare.alignments.find((alignment) => alignment.kind === "gold_only")
-          ?.id ??
-        compare.pairs.find((pair) =>
-          pair.goldSegments.some((segment) => segment.mark === "omitted"),
-        )?.alignmentId ??
-        null;
-    }
-    if (!nextId && initialTab === "generatedOnly") {
-      nextId =
-        compare.alignments.find((alignment) => alignment.kind === "ai_only")
-          ?.id ??
-        compare.pairs.find((pair) =>
-          pair.aiSegments.some((segment) => segment.mark === "added"),
-        )?.alignmentId ??
-        null;
-    }
-    pendingContentScrollRef.current = true;
+
+    const firstInList =
+      visibleAlignments[0]?.id ?? compare.alignments[0]?.id ?? null;
+    setActiveAlignmentId(nextId ?? firstInList);
+    pendingContentScrollRef.current = shouldScroll;
     skipScrollSpyRef.current = true;
-    setActiveAlignmentId(nextId ?? compare.alignments[0]?.id ?? null);
-  }, [compare, focusAgendaItemId, initialTab]);
+
+    requestAnimationFrame(() => {
+      if (!shouldScroll && scrollRef.current) {
+        scrollRef.current.scrollTop = 0;
+      }
+      window.setTimeout(() => {
+        skipScrollSpyRef.current = false;
+      }, 100);
+    });
+  }, [compare, validation, focusAgendaItemId, visibleAlignments]);
 
   useEffect(() => {
     if (!activeAlignmentId || !scrollRef.current) return;
@@ -293,9 +496,9 @@ export function GoldStandardValidationSidePanel({
         ...root.querySelectorAll<HTMLElement>("[data-alignment-id]"),
       ];
       if (sections.length === 0) return;
-      const header = root.querySelector("[data-compare-column-header]");
+      const header = root.querySelector("[data-compare-sticky-header]");
       const headerHeight =
-        header instanceof HTMLElement ? header.getBoundingClientRect().height : 40;
+        header instanceof HTMLElement ? header.getBoundingClientRect().height : 56;
       const line = root.getBoundingClientRect().top + headerHeight + 8;
       let current = sections[0];
       for (const section of sections) {
@@ -329,13 +532,12 @@ export function GoldStandardValidationSidePanel({
   const generatedCount = validation.generatedOnly.length;
   const goldCount = validation.goldOnly.length;
   const displayedScore = compareScore?.validationScore ?? validation.validationScore;
-  const displayedRationale = compareScore?.scoreRationale ?? validation.scoreRationale;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white">
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-3">
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             <h2 className="min-w-0 text-lg font-semibold text-slate-900">
               Gold standard compare
             </h2>
@@ -345,13 +547,27 @@ export function GoldStandardValidationSidePanel({
             >
               {validationScoreLabel(displayedScore)}
             </span>
+            {compare ? (
+              <>
+                <span
+                  className="inline-flex rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-semibold text-sky-900"
+                  title="Concepts present only in the AI minutes"
+                >
+                  {conceptCounts.aiOnly} AI only
+                </span>
+                <span
+                  className="inline-flex rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-semibold text-violet-900"
+                  title="Concepts present only in the gold-standard minutes"
+                >
+                  {conceptCounts.goldOnly} Gold only
+                </span>
+              </>
+            ) : null}
           </div>
           <p className="mt-1 text-sm font-medium text-slate-800">{meeting.title}</p>
           <p className="mt-0.5 text-xs text-slate-500">
             Compared {formatAnalyzedAt(validation.analyzedAt)}
-            {compare
-              ? ` · ${compare.alignments.length} concepts`
-              : ""}
+            {compare ? ` · ${compare.alignments.length} concepts` : ""}
           </p>
         </div>
         <button
@@ -406,7 +622,7 @@ export function GoldStandardValidationSidePanel({
                         </span>
                         <span
                           className="font-mono text-[10px] text-slate-500"
-                          title="How closely this pair's wording and facts agree (0–100). Separate from whether the items were paired."
+                          title="How closely this pair's wording and facts agree (0–100)."
                         >
                           {pair ? `${pair.pairScore}%` : "—"}
                         </span>
@@ -426,36 +642,27 @@ export function GoldStandardValidationSidePanel({
 
           <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
             <div
-              data-compare-column-header
-              className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200 bg-white text-xs font-semibold uppercase tracking-wide text-slate-500"
+              data-compare-sticky-header
+              className="sticky top-0 z-10 border-b border-slate-200 bg-white shadow-sm"
             >
-              <div className="border-r border-slate-200 px-4 py-2">
-                Gold standard
+              <div className="grid grid-cols-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <div className="border-r border-slate-200 px-4 py-2">
+                  Gold standard
+                </div>
+                <div className="px-4 py-2">AI minutes</div>
               </div>
-              <div className="px-4 py-2">AI minutes</div>
-            </div>
-            <div className="px-4 py-3">
-              <p className="text-sm leading-relaxed text-slate-700">
-                {displayedRationale}
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
-                {(Object.keys(MARK_LABELS) as CompareTextMark[]).map((mark) => (
-                  <span
-                    key={mark}
-                    className={`rounded px-1.5 py-0.5 font-medium ${MARK_CLASSES[mark]}`}
-                  >
-                    {MARK_LABELS[mark]}
-                  </span>
-                ))}
+              <div className="border-t border-slate-100 px-4 py-2">
+                <CompareLegend />
               </div>
             </div>
             {visibleAlignments.map((alignment) => {
               const pair = pairByAlignmentId.get(alignment.id);
+              const findings = pair?.findings ?? [];
               return (
                 <section
                   key={alignment.id}
                   data-alignment-id={alignment.id}
-                  className={`scroll-mt-10 border-t border-slate-200 ${
+                  className={`scroll-mt-[4.5rem] border-t border-slate-200 ${
                     alignment.id === activeAlignmentId ? "bg-teal-50/30" : ""
                   }`}
                 >
@@ -463,39 +670,37 @@ export function GoldStandardValidationSidePanel({
                     <h3 className="text-sm font-semibold text-slate-900">
                       {alignment.label}
                     </h3>
-                    <div className="flex items-center gap-2">
+                    {pair ? (
                       <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${alignmentChip(alignment.kind)}`}
-                        title={alignmentKindTitle(alignment.kind)}
+                        className="font-mono text-xs text-slate-500"
+                        title="How closely this pair's wording and facts agree (0–100)."
                       >
-                        {alignmentKindLabel(alignment.kind)}
+                        {pair.pairScore}%
                       </span>
-                      {pair ? (
-                        <span
-                          className="font-mono text-xs text-slate-500"
-                          title="How closely this pair's wording and facts agree (0–100)."
-                        >
-                          {pair.pairScore}%
-                        </span>
-                      ) : null}
+                    ) : null}
+                  </div>
+                  <div className="grid grid-cols-2 items-start">
+                    <div className="px-4 pt-2">
+                      <ColumnMetaRow
+                        alignment={alignment}
+                        findings={findings}
+                        column="gold"
+                      />
+                    </div>
+                    <div className="px-4 pt-2">
+                      <ColumnMetaRow
+                        alignment={alignment}
+                        findings={findings}
+                        column="ai"
+                      />
                     </div>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2">
-                    <div className="border-b border-slate-100 px-4 py-3 md:border-b-0 md:border-r">
+                  <div className="grid grid-cols-2 items-start pb-3">
+                    <div className="border-r border-slate-100 px-4 pb-1 pt-1">
                       <HighlightedProse segments={pair?.goldSegments ?? []} />
-                      {pair ? (
-                        <FindingsList
-                          findings={findingsForColumn(pair.findings, "gold")}
-                        />
-                      ) : null}
                     </div>
-                    <div className="px-4 py-3">
+                    <div className="px-4 pb-1 pt-1">
                       <HighlightedProse segments={pair?.aiSegments ?? []} />
-                      {pair ? (
-                        <FindingsList
-                          findings={findingsForColumn(pair.findings, "ai")}
-                        />
-                      ) : null}
                     </div>
                   </div>
                 </section>

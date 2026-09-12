@@ -12,6 +12,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Gold-standard compare viewer** — Sticky legend under the column headers; header shows AI-only and gold-only concept counts instead of a long rationale paragraph. Opening the panel starts at the top (no jump to the first AI-only item). Difference notes are hover popovers on severity badges; AI-only and gold-only chips sit on the inner edges of each column so paired rows stay aligned.
+
 - **Gold-standard compare headline score** — The header percent is the average of the per-concept scores. It no longer subtracts four points per critical finding, which could drop a meeting to single digits while every listed item still showed 20% or higher.
 
 - **Gold-standard compare motion paint** — Whole-paragraph “motion” highlights are treated as ordinary changes. Blue motion marking is reserved for a short formal resolution line. Difference notes sit in the gold or AI column they describe.

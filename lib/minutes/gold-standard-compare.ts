@@ -287,6 +287,23 @@ export function deriveBidirectionalFindings(
   return { generatedOnly, goldOnly };
 }
 
+export function findingsForAlignmentColumn(
+  alignment: CompareAlignment,
+  findings: ValidationFinding[],
+  column: "gold" | "ai",
+): ValidationFinding[] {
+  if (alignment.kind === "ai_only") {
+    return column === "ai" ? findings : [];
+  }
+  if (alignment.kind === "gold_only") {
+    return column === "gold" ? findings : [];
+  }
+  return findings.filter((finding) => {
+    const side = findingColumn(finding);
+    return side === column || side === "both";
+  });
+}
+
 export function findingColumn(
   finding: ValidationFinding,
 ): "gold" | "ai" | "both" {

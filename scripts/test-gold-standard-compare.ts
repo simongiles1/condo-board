@@ -12,6 +12,7 @@ import {
   deriveBidirectionalFindings,
   displaySegmentMark,
   findingColumn,
+  findingsForAlignmentColumn,
   scoreCompareDocument,
 } from "../lib/minutes/gold-standard-compare";
 import { buildGoldStandardFindingsByItemId } from "../lib/minutes/gold-standard-item-match";
@@ -302,6 +303,29 @@ describe("displaySegmentMark", () => {
       ),
       "changed",
     );
+  });
+});
+
+describe("findingsForAlignmentColumn", () => {
+  it("keeps ai_only findings on the AI column only", () => {
+    const alignment: CompareAlignment = {
+      id: "a1",
+      kind: "ai_only",
+      goldConceptIds: [],
+      aiConceptIds: ["ai"],
+      confidence: "high",
+      label: "Not discussed",
+    };
+    const findings = [
+      {
+        id: "f",
+        topic: "Not discussed",
+        detail: "Present in the AI minutes with no matching gold-standard concept.",
+        significance: "moderate" as const,
+      },
+    ];
+    assert.equal(findingsForAlignmentColumn(alignment, findings, "ai").length, 1);
+    assert.equal(findingsForAlignmentColumn(alignment, findings, "gold").length, 0);
   });
 });
 

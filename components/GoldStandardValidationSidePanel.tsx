@@ -337,36 +337,72 @@ function CoverageBadges({
     );
   }
   const compact = size === "sm";
+  const sideLabelCls = compact
+    ? "text-[8px] font-bold uppercase tracking-wide"
+    : "text-[10px] font-bold uppercase tracking-wide";
+  const sideBadgeCls = compact
+    ? "min-w-[2.25rem] justify-center px-1 py-0 text-[9px] font-semibold tabular-nums"
+    : "min-w-[2.75rem] justify-center px-1.5 py-0.5 text-[10px] font-semibold tabular-nums";
+  const overlapLabelCls = compact
+    ? "text-[8px] font-bold uppercase tracking-wide text-slate-500"
+    : "text-[10px] font-bold uppercase tracking-wide text-slate-600";
+  const overlapBadgeCls = compact
+    ? `px-2 py-0.5 text-xs font-bold tabular-nums ring-2 ${validationScoreBadgeClasses(coverage.coveragePct)}`
+    : `px-3.5 py-1 text-sm font-bold tabular-nums ring-2 shadow-sm ${validationScoreBadgeClasses(coverage.coveragePct)}`;
+
   return (
-    <span className="inline-flex flex-wrap items-center justify-center gap-1">
-      <span
-        className={`inline-flex rounded-full font-semibold ring-1 ${validationScoreBadgeClasses(coverage.coveragePct)} ${
-          compact ? "px-1.5 py-0 text-[10px]" : "px-2.5 py-0.5 text-xs"
-        }`}
-        title="Share of official minutes also present in the AI minutes"
-      >
-        {coverage.coveragePct}%
+    <span
+      className={`inline-flex items-end justify-center ${compact ? "gap-1" : "gap-2"}`}
+      role="group"
+      aria-label={`Overlap ${coverage.coveragePct} percent. Gold missing ${coverage.missingPct} percent. AI extra ${coverage.extraPct} percent.`}
+    >
+      <span className="flex flex-col items-center gap-0.5">
+        <span className={`${sideLabelCls} text-violet-800`}>Gold</span>
+        {coverage.missingPct > 0 ? (
+          <span
+            className={`inline-flex rounded-full bg-rose-100 text-rose-900 ring-1 ring-rose-300 ${sideBadgeCls}`}
+            title="Official wording not in the AI minutes"
+          >
+            −{coverage.missingPct}%
+          </span>
+        ) : (
+          <span
+            className={`inline-flex rounded-full bg-slate-50 text-slate-400 ring-1 ring-slate-200 ${sideBadgeCls}`}
+            title="No official wording missing from the AI minutes"
+          >
+            —
+          </span>
+        )}
       </span>
-      {coverage.missingPct > 0 ? (
+
+      <span className="flex flex-col items-center gap-0.5">
+        <span className={overlapLabelCls}>Overlap</span>
         <span
-          className={`inline-flex rounded-full bg-rose-100 font-semibold text-rose-900 ring-1 ring-rose-200 ${
-            compact ? "px-1.5 py-0 text-[10px]" : "px-2 py-0.5 text-xs"
-          }`}
-          title="Share of official minutes missing from the AI minutes"
+          className={`inline-flex rounded-full ${overlapBadgeCls}`}
+          title="Share of official minutes also present in the AI minutes"
         >
-          −{coverage.missingPct}%
+          {coverage.coveragePct}%
         </span>
-      ) : null}
-      {coverage.extraPct > 0 ? (
-        <span
-          className={`inline-flex rounded-full bg-emerald-100 font-semibold text-emerald-900 ring-1 ring-emerald-200 ${
-            compact ? "px-1.5 py-0 text-[10px]" : "px-2 py-0.5 text-xs"
-          }`}
-          title="Share of AI minutes that is extra versus the official minutes"
-        >
-          +{coverage.extraPct}%
-        </span>
-      ) : null}
+      </span>
+
+      <span className="flex flex-col items-center gap-0.5">
+        <span className={`${sideLabelCls} text-sky-800`}>AI</span>
+        {coverage.extraPct > 0 ? (
+          <span
+            className={`inline-flex rounded-full bg-emerald-100 text-emerald-900 ring-1 ring-emerald-300 ${sideBadgeCls}`}
+            title="AI wording not in the official minutes"
+          >
+            +{coverage.extraPct}%
+          </span>
+        ) : (
+          <span
+            className={`inline-flex rounded-full bg-slate-50 text-slate-400 ring-1 ring-slate-200 ${sideBadgeCls}`}
+            title="No extra AI wording versus official minutes"
+          >
+            —
+          </span>
+        )}
+      </span>
     </span>
   );
 }

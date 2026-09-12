@@ -26,6 +26,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Gold-standard compare coverage** — The headline and per-item percents are how much official wording the AI minutes cover. Extra AI wording shows as a green `+` badge; official wording missing from the AI minutes shows as a red `−` badge. Character length of the highlighted spans is the weight, so longer items count more. Stored compares update without a re-run.
 
+- **Gold-standard compare coverage layout** — Overlap is a larger center badge with Gold (−missing) and AI (+extra) as smaller side badges labeled to match the left and right columns, so the three metrics read without hovering each pill.
+
 - **Minutes gold-standard compare** — Official minutes are extracted with Docling, split into agenda concepts, aligned to AI minutes items, and compared concept-by-concept. Results open in a full-page side-by-side viewer (gold left, AI right) with highlighted added, omitted, changed, motion, and amount spans. Re-compare reuses the stored gold PDF. Paired means the same agenda matter exists on both sides.
 
 - **Gold-standard compare navigation** — Clicking a concept in the outline scrolls so the section heading sits below the sticky column headers. The outline selection follows scroll position.

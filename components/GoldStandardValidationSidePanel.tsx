@@ -284,15 +284,17 @@ function FindingSignificanceBadge({ finding }: { finding: ValidationFinding }) {
 function AlignmentKindBadge({
   alignment,
   compact,
+  className = "",
 }: {
   alignment: CompareAlignment;
   compact?: boolean;
+  className?: string;
 }) {
   return (
     <span
       className={`inline-flex shrink-0 rounded-full font-semibold ${alignmentChip(alignment.kind)} ${
         compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[10px]"
-      }`}
+      } ${className}`}
       title={alignmentKindTitle(alignment.kind)}
     >
       {alignmentKindLabel(alignment.kind)}
@@ -321,31 +323,23 @@ function ConceptMatchCluster({
   alignment,
   findings,
   pairScore,
-  compact,
 }: {
   alignment: CompareAlignment;
   findings: ValidationFinding[];
   pairScore: number | null;
-  compact?: boolean;
 }) {
   const goldFindings = findingsForAlignmentColumn(alignment, findings, "gold");
   const aiFindings = findingsForAlignmentColumn(alignment, findings, "ai");
-  const showKind =
-    alignment.kind !== "ai_only" && alignment.kind !== "gold_only";
-  const scoreClass = compact
-    ? "min-w-[2.25rem] text-[10px]"
-    : "min-w-[2.5rem] text-xs";
 
   return (
-    <div className="flex shrink-0 items-center gap-1">
-      {showKind ? <AlignmentKindBadge alignment={alignment} compact /> : null}
+    <div className="flex items-center justify-center gap-1.5">
       <div className="flex items-center justify-end gap-1">
         {goldFindings.map((finding) => (
           <FindingSignificanceBadge key={finding.id} finding={finding} />
         ))}
       </div>
       <span
-        className={`font-mono tabular-nums text-center font-semibold text-slate-600 ${scoreClass}`}
+        className="min-w-[2.5rem] font-mono text-xs tabular-nums text-center font-semibold text-slate-600"
         title="How closely this pair's wording and facts agree (0–100)."
       >
         {pairScore != null ? `${pairScore}%` : "—"}
@@ -355,6 +349,30 @@ function ConceptMatchCluster({
           <FindingSignificanceBadge key={finding.id} finding={finding} />
         ))}
       </div>
+    </div>
+  );
+}
+
+function ConceptSectionHeader({
+  alignment,
+  findings,
+  pairScore,
+}: {
+  alignment: CompareAlignment;
+  findings: ValidationFinding[];
+  pairScore: number | null;
+}) {
+  return (
+    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-slate-100 px-4 py-2">
+      <h3 className="min-w-0 text-left text-sm font-semibold text-slate-900">
+        <ConceptTitle alignment={alignment} />
+      </h3>
+      <ConceptMatchCluster
+        alignment={alignment}
+        findings={findings}
+        pairScore={pairScore}
+      />
+      <div aria-hidden className="min-w-0" />
     </div>
   );
 }
@@ -650,18 +668,26 @@ export function GoldStandardValidationSidePanel({
                           : "hover:bg-white/70"
                       }`}
                     >
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-between gap-2">
                         <ConceptTitle
                           alignment={alignment}
                           className="min-w-0 flex-1 text-xs font-semibold text-slate-900"
                         />
-                        <ConceptMatchCluster
-                          alignment={alignment}
-                          findings={pair?.findings ?? []}
-                          pairScore={pair?.pairScore ?? null}
-                          compact
-                        />
+                        <span
+                          className="shrink-0 font-mono text-[10px] text-slate-500"
+                          title="How closely this pair's wording and facts agree (0–100)."
+                        >
+                          {pair ? `${pair.pairScore}%` : "—"}
+                        </span>
                       </div>
+                      {alignment.kind !== "ai_only" &&
+                      alignment.kind !== "gold_only" ? (
+                        <AlignmentKindBadge
+                          alignment={alignment}
+                          compact
+                          className="mt-1"
+                        />
+                      ) : null}
                     </button>
                   </li>
                 );
@@ -692,16 +718,11 @@ export function GoldStandardValidationSidePanel({
                     alignment.id === activeAlignmentId ? "bg-teal-50/30" : ""
                   }`}
                 >
-                  <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-2">
-                    <h3 className="min-w-0 flex-1 text-sm font-semibold text-slate-900">
-                      <ConceptTitle alignment={alignment} />
-                    </h3>
-                    <ConceptMatchCluster
-                      alignment={alignment}
-                      findings={findings}
-                      pairScore={pair?.pairScore ?? null}
-                    />
-                  </div>
+                  <ConceptSectionHeader
+                    alignment={alignment}
+                    findings={findings}
+                    pairScore={pair?.pairScore ?? null}
+                  />
                   <div className="grid grid-cols-2 items-start pb-3 pt-2">
                     <div className="border-r border-slate-100 px-4 pb-1 pt-1">
                       <HighlightedProse segments={pair?.goldSegments ?? []} />

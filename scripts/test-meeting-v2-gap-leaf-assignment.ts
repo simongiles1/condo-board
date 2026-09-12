@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  assignRemainingHolesToAgenda,
   assignUnmatchedLeavesInHoles,
   findTranscriptHoles,
 } from "../lib/meeting-v2/gap-leaf-assignment";
@@ -154,5 +155,109 @@ describe("assignUnmatchedLeavesInHoles", () => {
     assert.equal(reviewed[1]?.discussionStatus, "discussed");
     assert.equal(reviewed[2]?.discussionStatus, "discussed");
     assert.equal(reviewed[3]?.discussionStatus, "discussed");
+  });
+});
+
+function nextMeetingHoleTopics(): SpanReviewTopic[] {
+  return [
+    {
+      title: "Shared Cost Invoices with Studio 2",
+      itemNumber: "4.E.g",
+      discussionStatus: "ad_hoc",
+      discussionTimestampRange: "01:58:45 - 02:01:53",
+      sourceTranscriptRanges: [[1, 20]],
+    },
+    {
+      title: "Manual Fire Alarm Announcements",
+      itemNumber: "4.E.h",
+      discussionStatus: "ad_hoc",
+      discussionTimestampRange: "02:04:07 - 02:08:28",
+      sourceTranscriptRanges: [[80, 120]],
+    },
+    {
+      title: "Date and time of the next Board Meeting",
+      itemNumber: "5",
+      discussionStatus: "not_discussed",
+      sourceTranscriptRanges: [],
+    },
+    {
+      title: "Adjournment",
+      itemNumber: "6",
+      discussionStatus: "not_discussed",
+      sourceTranscriptRanges: [],
+    },
+  ];
+}
+
+describe("leftover holes after outline-order assignment", () => {
+  const gEnd = 2 * 3600 + 1 * 60 + 53;
+  const nextStart = 2 * 3600 + 2 * 60 + 9;
+  const nextEnd = 2 * 3600 + 3 * 60 + 40;
+  const hStart = 2 * 3600 + 4 * 60 + 7;
+
+  it("treats item 5 as outside unmatched-between 4.E.g and 4.E.h", () => {
+    const holes = findTranscriptHoles(nextMeetingHoleTopics(), [
+      cueAt(gEnd + 10, "we can wait"),
+      cueAt(hStart + 5, "manual announcements"),
+    ]);
+    assert.equal(holes.length, 1);
+    assert.equal(holes[0]?.left.itemNumber, "4.E.g");
+    assert.equal(holes[0]?.right?.itemNumber, "4.E.h");
+    assert.deepEqual(
+      holes[0]?.unmatched.map((topic) => topic.itemNumber),
+      [],
+    );
+  });
+
+  it("does not open item 5 during outline-order hole assignment", async () => {
+    const reviewed = await assignUnmatchedLeavesInHoles({
+      topics: nextMeetingHoleTopics(),
+      cues: [cueAt(nextStart, "we didn't talk about the next board meeting")],
+      judge: async () => ({
+        extendFloorTo: null,
+        opens: [
+          {
+            itemNumber: "5",
+            startSeconds: nextStart,
+            endSeconds: nextEnd,
+          },
+        ],
+      }),
+    });
+    assert.equal(reviewed[2]?.discussionTimestampRange, undefined);
+  });
+
+  it("assigns item 5 in the leftover hole between 4.E.g and 4.E.h", async () => {
+    const reviewed = await assignRemainingHolesToAgenda({
+      topics: nextMeetingHoleTopics(),
+      cues: [
+        cueAt(gEnd + 4, "We can wait on that, actually."),
+        cueAt(nextStart, "Oh, one other important thing, we didn't talk about the next board"),
+        cueAt(nextStart + 1, "We can deal with them that time."),
+        cueAt(nextEnd, "Yeah, it goes fast."),
+      ],
+      judge: async ({ unmatched, cues: windowCues }) => {
+        const text = windowCues.map((cue) => cue.text.toLowerCase()).join(" ");
+        if (text.includes("next board") && unmatched.some((topic) => topic.itemNumber === "5")) {
+          return {
+            extendFloorTo: null,
+            opens: [
+              {
+                itemNumber: "5",
+                startSeconds: nextStart,
+                endSeconds: nextEnd,
+              },
+            ],
+          };
+        }
+        return { extendFloorTo: null, opens: [] };
+      },
+    });
+    assert.match(reviewed[2]?.discussionTimestampRange ?? "", /02:02:09/);
+    assert.match(reviewed[2]?.discussionTimestampRange ?? "", /02:03:40/);
+    assert.equal(reviewed[2]?.discussionStatus, "discussed");
+    assert.equal(reviewed[3]?.discussionTimestampRange, undefined);
+    assert.match(reviewed[0]?.discussionTimestampRange ?? "", /02:01:53/);
+    assert.match(reviewed[1]?.discussionTimestampRange ?? "", /02:04:07/);
   });
 });

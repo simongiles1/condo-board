@@ -211,22 +211,19 @@ function addSpanToTopic(
   };
 }
 
-export async function assignUnmatchedLeavesInHoles(options: {
+async function fillHolesWithJudge(options: {
   topics: SpanReviewTopic[];
   cues: SpanReviewCue[];
-  judge?: GapHoleJudge;
+  holes: TranscriptHole[];
+  remainingForHole: (hole: TranscriptHole, topics: SpanReviewTopic[]) => string[];
+  judge: GapHoleJudge;
+  progressLabel: (hole: TranscriptHole) => string;
   onProgress?: (label: string) => Promise<void> | void;
 }): Promise<SpanReviewTopic[]> {
-  const judge = options.judge ?? defaultGapJudge;
   const topics = options.topics.map((topic) => ({ ...topic }));
-  const holes = findTranscriptHoles(topics, options.cues).filter(
-    (hole) => hole.unmatched.length > 0,
-  );
 
-  for (const hole of holes) {
-    await options.onProgress?.(
-      `Assigning unmatched items in transcript gap ${formatClockFromSeconds(hole.startSeconds)}–${formatClockFromSeconds(hole.endSeconds)}`,
-    );
+  for (const hole of options.holes) {
+    await options.onProgress?.(options.progressLabel(hole));
     let cursor = hole.startSeconds;
     let floorIndex = topics.findIndex(
       (topic) =>
@@ -234,9 +231,7 @@ export async function assignUnmatchedLeavesInHoles(options: {
         (hole.left.itemNumber || "").trim().toLowerCase(),
     );
     if (floorIndex < 0) continue;
-    let remaining = hole.unmatched
-      .map((topic) => topic.itemNumber?.trim().toLowerCase() ?? "")
-      .filter(Boolean);
+    let remaining = options.remainingForHole(hole, topics);
 
     for (let window = 0; window < GAP_MAX_WINDOWS && cursor < hole.endSeconds - 1; window += 1) {
       const windowEnd = Math.min(cursor + GAP_WINDOW_SECONDS, hole.endSeconds);
@@ -249,7 +244,7 @@ export async function assignUnmatchedLeavesInHoles(options: {
         .map((code) => topics.find((topic) => (topic.itemNumber || "").trim().toLowerCase() === code))
         .filter((topic): topic is SpanReviewTopic => Boolean(topic));
 
-      const decision = await judge({
+      const decision = await options.judge({
         floor: topics[floorIndex],
         unmatched: unmatchedTopics,
         rightTitle: hole.right?.title ?? null,
@@ -300,6 +295,123 @@ export async function assignUnmatchedLeavesInHoles(options: {
   }
 
   return topics;
+}
+
+export async function assignUnmatchedLeavesInHoles(options: {
+  topics: SpanReviewTopic[];
+  cues: SpanReviewCue[];
+  judge?: GapHoleJudge;
+  onProgress?: (label: string) => Promise<void> | void;
+}): Promise<SpanReviewTopic[]> {
+  const holes = findTranscriptHoles(options.topics, options.cues).filter(
+    (hole) => hole.unmatched.length > 0,
+  );
+  return fillHolesWithJudge({
+    topics: options.topics,
+    cues: options.cues,
+    holes,
+    remainingForHole: (hole) =>
+      hole.unmatched.map((topic) => topic.itemNumber?.trim().toLowerCase() ?? "").filter(Boolean),
+    judge: options.judge ?? defaultGapJudge,
+    progressLabel: (hole) =>
+      `Assigning unmatched items in transcript gap ${formatClockFromSeconds(hole.startSeconds)}–${formatClockFromSeconds(hole.endSeconds)}`,
+    onProgress: options.onProgress,
+  });
+}
+
+export function listUnassignedLeaves(topics: SpanReviewTopic[]): SpanReviewTopic[] {
+  return topics.filter(
+    (topic) => isOutlineLeafTopic(topic, topics) && topicClockSpans(topic).length === 0,
+  );
+}
+
+const REMAINING_HOLE_SYSTEM_PROMPT = `You assign leftover unboxed transcript (a hole between extracted discussion spans) to the meeting agenda.
+
+The hole is after the floor item and before the next ranged item. Speakers often take an official agenda item out of outline order (for example the next board meeting date between two ad-hoc property-management items).
+
+Rules:
+- OPEN an unassigned agenda leaf when this window is clearly that matter. Only use itemNumbers from the unassigned list.
+- Discussion of "next board meeting", "next meeting date", or scheduling the next meeting belongs to that agenda leaf even if a later ad-hoc item already has a transcript range after this hole.
+- Extend the floor only through wrap-up / thanks that still belong to it.
+- Leave the window unassigned when it is skippable chatter or the start of the next ranged item. Do not invent itemNumbers.
+- Return JSON only.`;
+
+async function defaultRemainingHoleJudge(input: {
+  floor: SpanReviewTopic;
+  unmatched: SpanReviewTopic[];
+  rightTitle: string | null;
+  windowStartSeconds: number;
+  windowEndSeconds: number;
+  cues: SpanReviewCue[];
+}): Promise<GapJudgeDecision> {
+  const unmatchedList =
+    input.unmatched.length === 0
+      ? "(none)"
+      : input.unmatched
+          .map((topic) => `${topic.itemNumber ?? "?"} — ${topic.title}`)
+          .join("\n");
+  const userText = `FLOOR ITEM: ${input.floor.itemNumber ?? "?"} — ${input.floor.title}
+NEXT RANGED ITEM: ${input.rightTitle ?? "(end of transcript)"}
+WINDOW: ${formatClockFromSeconds(input.windowStartSeconds)} – ${formatClockFromSeconds(input.windowEndSeconds)}
+
+UNASSIGNED AGENDA LEAVES (may be discussed out of outline order in this hole):
+${unmatchedList}
+
+If wrap-up of the floor continues, set extendFloorTo to the last cue still on the floor.
+If an unassigned leaf is what this window is about, add an opens entry. Overlap with the floor is allowed.
+If this is chatter or the next ranged item, return empty opens and null extendFloorTo.
+
+Return:
+{"extendFloorTo":"HH:MM:SS"|null,"opens":[{"itemNumber":"5","startTimestamp":"HH:MM:SS","endTimestamp":"HH:MM:SS"}]}
+
+CUES:
+${input.cues
+  .map(
+    (cue) =>
+      `${cue.startTimestamp} seq=${cue.sequence} ${cue.speaker.trim() || "Unknown"}: ${cue.text}`,
+  )
+  .join("\n")}`;
+
+  const response = await generateDeepSeekJson({
+    systemInstruction: REMAINING_HOLE_SYSTEM_PROMPT,
+    userText,
+    modelName: "deepseek-v4-flash",
+    maxOutputTokens: 700,
+    temperature: 0,
+    thinking: false,
+  });
+  return parseGapJudgeJson(response.text);
+}
+
+/**
+ * After span-edge and outline-order hole assignment, leftover overlay holes
+ * can still hold an official agenda leaf discussed out of order (item 5
+ * between two 4.E.* ad-hoc spans). This pass maps those holes to any
+ * still-unassigned leaf.
+ */
+export async function assignRemainingHolesToAgenda(options: {
+  topics: SpanReviewTopic[];
+  cues: SpanReviewCue[];
+  judge?: GapHoleJudge;
+  onProgress?: (label: string) => Promise<void> | void;
+}): Promise<SpanReviewTopic[]> {
+  const holes = findTranscriptHoles(options.topics, options.cues);
+  return fillHolesWithJudge({
+    topics: options.topics,
+    cues: options.cues,
+    holes,
+    remainingForHole: (hole, topics) => {
+      const rightCode = hole.right?.itemNumber?.trim().toLowerCase() ?? "";
+      const leftCode = hole.left.itemNumber?.trim().toLowerCase() ?? "";
+      return listUnassignedLeaves(topics)
+        .map((topic) => topic.itemNumber?.trim().toLowerCase() ?? "")
+        .filter((code) => code && code !== leftCode && code !== rightCode);
+    },
+    judge: options.judge ?? defaultRemainingHoleJudge,
+    progressLabel: (hole) =>
+      `Assigning leftover transcript gap ${formatClockFromSeconds(hole.startSeconds)}–${formatClockFromSeconds(hole.endSeconds)}`,
+    onProgress: options.onProgress,
+  });
 }
 
 export function discussionTimingPresent(topic: {

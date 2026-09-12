@@ -37,7 +37,10 @@ import {
   reviewTranscriptTopicSpans,
   transcriptSegmentsToReviewCues,
 } from "@/lib/meeting-v2/span-edge-review";
-import { assignUnmatchedLeavesInHoles } from "@/lib/meeting-v2/gap-leaf-assignment";
+import {
+  assignRemainingHolesToAgenda,
+  assignUnmatchedLeavesInHoles,
+} from "@/lib/meeting-v2/gap-leaf-assignment";
 
 type WorkflowTopic = {
   title: string;
@@ -1639,13 +1642,24 @@ export async function extractAgendaItemsWithAi(
         });
       },
     });
+    const leftover = await assignRemainingHolesToAgenda({
+      topics: gapped,
+      cues: transcriptSegmentsToReviewCues(transcriptSegments),
+      onProgress: async (label) => {
+        await options?.onProgress?.({
+          current: totalChunks,
+          total: totalChunks + 1,
+          label,
+        });
+      },
+    });
     finalTopics = finalTopics.map((topic, index) => ({
       ...topic,
       discussionTimestampRange:
-        gapped[index]?.discussionTimestampRange ?? topic.discussionTimestampRange,
+        leftover[index]?.discussionTimestampRange ?? topic.discussionTimestampRange,
       sourceTranscriptRanges:
-        gapped[index]?.sourceTranscriptRanges ?? topic.sourceTranscriptRanges,
-      discussionStatus: gapped[index]?.discussionStatus ?? topic.discussionStatus,
+        leftover[index]?.sourceTranscriptRanges ?? topic.sourceTranscriptRanges,
+      discussionStatus: leftover[index]?.discussionStatus ?? topic.discussionStatus,
     }));
     finalTopics = applyAgendaHierarchyCorrections(finalTopics);
   }

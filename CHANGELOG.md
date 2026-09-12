@@ -6,6 +6,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Meetings V2 leftover transcript holes** — After outline-order hole assignment, remaining unboxed stretches are matched to any still-unassigned agenda leaf. That covers official items discussed out of order (for example the next board-meeting date sitting between two ad-hoc 4.E items), which the previous pass skipped because their outline codes fall after the next ranged leaf.
+
 ### Changed
 
 - **Minutes gold-standard compare** — Official minutes are extracted with Docling, split into agenda concepts, aligned to AI minutes items, and compared concept-by-concept. Results open in a full-page side-by-side viewer (gold left, AI right) with highlighted added, omitted, changed, motion, and amount spans. Re-compare reuses the stored gold PDF.

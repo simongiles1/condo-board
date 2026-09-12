@@ -73,9 +73,16 @@ export const PIPELINE_STAGE_TOOLTIPS: Record<string, PipelineStageTooltip> = {
         ],
       },
       {
+        title: "Phase 5 — Leftover holes",
+        items: [
+          "Walk remaining unboxed transcript stretches, including holes whose outline codes skip over an official item (for example next-meeting date between two ad-hoc 4.E items).",
+          "Assign the hole to any still-unassigned agenda leaf when the talk matches that item; otherwise leave chatter unboxed or extend floor wrap-up only.",
+        ],
+      },
+      {
         title: "Output",
         items: [
-          "When both passes finish, persist the topic JSON and materialize agenda-item rows in the database.",
+          "When extract, span-edge, hole assignment, and leftover-hole passes finish, persist the topic JSON and materialize agenda-item rows in the database.",
         ],
       },
     ],

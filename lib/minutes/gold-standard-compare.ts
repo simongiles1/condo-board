@@ -326,30 +326,86 @@ export function findingColumn(
   return "both";
 }
 
+const MINUTES_BLOCK_START =
+  /^(?:\*\*)?(?:MOTION\b|Seconded\b|SECONDED\b|THAT\b|Action:)/i;
+
 /** Adjacent inline spans drop a space unless one segment still carries it. */
 export function needsSpaceBetweenCompareSegments(
   previousText: string,
   nextText: string,
 ): boolean {
   if (!previousText || !nextText) return false;
+  if (compareSegmentBoundarySeparator(previousText, nextText)) return false;
   if (/\s$/.test(previousText) || /^\s/.test(nextText)) return false;
   if (/^[.,;:!?)\]}]/.test(nextText)) return false;
   return true;
+}
+
+/** Newlines lost between spans or inside a flattened segment (common before motions). */
+export function compareSegmentBoundarySeparator(
+  previousText: string,
+  nextText: string,
+): "" | " " | "\n" | "\n\n" {
+  if (!previousText || !nextText) return "";
+  if (/\n\s*$/.test(previousText) || /^\s*\n/.test(nextText)) return "";
+
+  const nextStart = nextText.trimStart();
+  const prevTrimmedEnd = previousText.trimEnd();
+
+  if (
+    /[.!?]["']?$/.test(prevTrimmedEnd) &&
+    MINUTES_BLOCK_START.test(nextStart)
+  ) {
+    return "\n\n";
+  }
+
+  if (/^(?:\*\*)?Seconded\b/i.test(nextStart) && /\bMOTION\b/i.test(previousText)) {
+    return "\n";
+  }
+
+  if (/^(?:\*\*)?THAT\b/i.test(nextStart) && /\bSeconded\b/i.test(previousText)) {
+    return "\n";
+  }
+
+  return "";
+}
+
+export function repairParagraphBreaksInSegmentText(text: string): string {
+  return text.replace(
+    /([.!?]["']?)(\s*)(?=(?:\*\*)?(?:MOTION\b|Seconded\b|THAT\b|Action:))/gi,
+    (match, punct: string, space: string) =>
+      space.includes("\n") ? match : `${punct}\n\n`,
+  );
 }
 
 export function repairCompareSegmentBoundaries(
   segments: CompareTextSegment[],
 ): CompareTextSegment[] {
   if (segments.length === 0) return [];
-  const repaired: CompareTextSegment[] = [{ ...segments[0] }];
+
+  const repaired: CompareTextSegment[] = [
+    {
+      ...segments[0],
+      text: repairParagraphBreaksInSegmentText(segments[0].text),
+    },
+  ];
+
   for (let index = 1; index < segments.length; index += 1) {
     const previous = repaired[repaired.length - 1];
-    const current = { ...segments[index] };
-    if (needsSpaceBetweenCompareSegments(previous.text, current.text)) {
+    const current = {
+      ...segments[index],
+      text: segments[index].text,
+    };
+    const separator = compareSegmentBoundarySeparator(previous.text, current.text);
+    if (separator) {
+      current.text = `${separator}${current.text}`;
+    } else if (needsSpaceBetweenCompareSegments(previous.text, current.text)) {
       current.text = ` ${current.text}`;
     }
+    current.text = repairParagraphBreaksInSegmentText(current.text);
     repaired.push(current);
   }
+
   return repaired;
 }
 

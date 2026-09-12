@@ -563,7 +563,7 @@ export const GOLD_STANDARD_PAIR_DIFF_SYSTEM_PROMPT = `**Role:** You are a govern
 
 Do not paint an entire column **motion** or **added** because a motion exists. Narrative stays **same** unless that sentence itself is a fact difference.
 
-Rewrite each side as an ordered list of segments that concatenate to the original meaning (you may lightly normalize whitespace). Do not drop content.
+Rewrite each side as an ordered list of segments that concatenate to the original meaning. Preserve paragraph breaks and line breaks from the source text—especially blank lines before **MOTION**, **Seconded**, **THAT**, and **Action:** lines. When you split into multiple segments, keep leading `\\n` on the segment that starts a new line in the source. Do not flatten motions onto the preceding narrative line. Do not drop content.
 
 **Output schema (JSON only)**
 {

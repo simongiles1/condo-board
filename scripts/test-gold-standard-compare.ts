@@ -13,8 +13,10 @@ import {
   displaySegmentMark,
   findingColumn,
   findingsForAlignmentColumn,
+  compareSegmentBoundarySeparator,
   needsSpaceBetweenCompareSegments,
   repairCompareSegmentBoundaries,
+  repairParagraphBreaksInSegmentText,
   scoreCompareDocument,
 } from "../lib/minutes/gold-standard-compare";
 import { buildGoldStandardFindingsByItemId } from "../lib/minutes/gold-standard-item-match";
@@ -290,6 +292,14 @@ describe("scoreCompareDocument", () => {
 });
 
 describe("repairCompareSegmentBoundaries", () => {
+  it("inserts a paragraph break before a motion block", () => {
+    const repaired = repairCompareSegmentBoundaries([
+      { text: "The equipment is inspected daily.", mark: "same" },
+      { text: "MOTION by P. Gartenburg", mark: "motion" },
+    ]);
+    assert.equal(repaired[1]?.text, "\n\nMOTION by P. Gartenburg");
+  });
+
   it("inserts a space between adjacent spans when the model omitted it", () => {
     const repaired = repairCompareSegmentBoundaries([
       { text: "1. Call to Order", mark: "same" },
@@ -314,6 +324,27 @@ describe("repairCompareSegmentBoundaries", () => {
 describe("needsSpaceBetweenCompareSegments", () => {
   it("skips punctuation boundaries", () => {
     assert.equal(needsSpaceBetweenCompareSegments("carried", "."), false);
+  });
+});
+
+describe("repairParagraphBreaksInSegmentText", () => {
+  it("breaks a flattened narrative-to-motion line inside one segment", () => {
+    const text = repairParagraphBreaksInSegmentText(
+      "inspected daily.MOTION by S. Greenspan",
+    );
+    assert.equal(text, "inspected daily.\n\nMOTION by S. Greenspan");
+  });
+});
+
+describe("compareSegmentBoundarySeparator", () => {
+  it("uses a single line break between motion and seconded lines", () => {
+    assert.equal(
+      compareSegmentBoundarySeparator(
+        "MOTION by S. Greenspan",
+        "Seconded by P. Gartenburg",
+      ),
+      "\n",
+    );
   });
 });
 

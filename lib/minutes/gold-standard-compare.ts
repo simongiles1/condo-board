@@ -515,6 +515,34 @@ export function repairCompareSegmentBoundaries(
   return repaired;
 }
 
+/** Render-only: keep highlight backgrounds off leading/trailing whitespace on a marked span. */
+export function splitSegmentHighlightBounds(
+  text: string,
+  mark: CompareTextMark,
+): CompareTextSegment[] {
+  if (mark === "same" || text.length === 0) {
+    return [{ text, mark }];
+  }
+
+  const leading = text.match(/^\s*/)?.[0] ?? "";
+  const trailing = text.match(/\s*$/)?.[0] ?? "";
+  const core = text.slice(leading.length, text.length - trailing.length);
+
+  if (core.length === 0) {
+    return [{ text, mark: "same" }];
+  }
+
+  const parts: CompareTextSegment[] = [];
+  if (leading.length > 0) {
+    parts.push({ text: leading, mark: "same" });
+  }
+  parts.push({ text: core, mark });
+  if (trailing.length > 0) {
+    parts.push({ text: trailing, mark: "same" });
+  }
+  return parts;
+}
+
 export function displaySegmentMark(
   mark: CompareTextMark,
   text: string,

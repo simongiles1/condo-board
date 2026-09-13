@@ -1052,21 +1052,21 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
             : null;
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
+    <div className="min-w-0 max-w-full space-y-3">
+      <div className="flex min-w-0 items-center justify-between gap-3">
         <Link
           href="/operations/meetings?v=2"
-          className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-900"
+          className="inline-flex min-w-0 items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-900"
         >
           <span>&larr;</span>
-          <span>Back to V2 meetings</span>
+          <span className="truncate">Back to V2 meetings</span>
         </Link>
-        <span className="rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-600">
+        <span className="hidden shrink-0 rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-600 sm:inline-flex">
           Meetings V2 Workspace
         </span>
       </div>
 
-      <div className="-mx-4 border-y border-slate-200 bg-white shadow-sm sm:mx-0 sm:rounded-2xl sm:border">
+      <div className="max-sm:relative max-sm:left-1/2 max-sm:w-[100dvw] max-sm:max-w-[100dvw] max-sm:-translate-x-1/2 border-y border-slate-200 bg-white shadow-sm sm:rounded-2xl sm:border">
         <div
           className={`border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-4 py-4 text-white sm:rounded-t-2xl ${
             hasSuccessfulRun ? "" : "sm:rounded-b-2xl border-b-0"
@@ -1082,6 +1082,27 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   ? formatMeetingDate(status.meeting.meetingDate)
                   : "Loading date"}
               </p>
+              <div className="mt-2 hidden flex-col gap-0.5 xl:flex">
+                <label
+                  htmlFor="meeting-autonomy-slider-desktop"
+                  className="text-[10px] font-semibold uppercase tracking-wider text-white/70"
+                >
+                  AI Autonomy: {autonomyTemperature.toFixed(1)}
+                </label>
+                <input
+                  id="meeting-autonomy-slider-desktop"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={autonomyTemperature}
+                  onChange={(event) =>
+                    setAutonomyTemperature(parseFloat(event.target.value))
+                  }
+                  className="w-28 accent-teal-400"
+                  title="0 = Always ask user | 1 = Fully autonomous"
+                />
+              </div>
             </div>
 
             <div className="w-full min-w-0 rounded-xl border border-white/10 bg-black/15 p-3 xl:mx-2">
@@ -1137,7 +1158,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               ) : null}
             </div>
 
-            <div className="max-xl:absolute max-xl:right-0 max-xl:top-0 max-xl:z-10 xl:justify-self-end">
+            <div className="max-xl:absolute max-xl:right-0 max-xl:top-0 max-xl:z-10 xl:flex xl:flex-col xl:items-stretch xl:justify-self-end xl:gap-2">
               <MeetingWorkspaceMoreMenu
                 hasMeetingDocuments={hasMeetingDocuments}
                 validationScore={validationScore}
@@ -1166,13 +1187,33 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   />
                 }
               />
+              <div className="hidden flex-col items-stretch gap-2 sm:items-end xl:flex">
+                <PipelineActionButton
+                  runBusy={runBusy}
+                  pipelineNotStarted={pipelineNotStarted}
+                  pipelineValidated={pipelineValidated}
+                  pipelineActivelyRunning={pipelineRunning}
+                  disabled={!pipelineSourcesReady || pipelineRunning}
+                  disabledReason={pipelineDisabledReason}
+                  onRun={handleRunPipeline}
+                  onRestart={handleRestartPipeline}
+                />
+                {status?.latestDraft ? (
+                  <a
+                    href={`/api/v2/meetings/${meetingId}/draft/file?download=1`}
+                    className="inline-flex items-center justify-center rounded-lg border border-white/15 bg-white px-3 py-2 text-sm font-semibold text-slate-900 transition hover:bg-slate-100"
+                  >
+                    Download PDF
+                  </a>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>
 
         {hasSuccessfulRun ? (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-b-2xl px-3 py-2 sm:px-4">
-            <div className="flex flex-wrap gap-1.5 rounded-xl bg-slate-50 p-1">
+          <div className="flex min-w-0 flex-col gap-2 rounded-b-2xl px-3 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-4">
+            <div className="flex min-w-0 flex-wrap gap-1.5 rounded-xl bg-slate-50 p-1">
               {([
                 ["overview", "Overview"],
                 ["review", "Agenda Review"],
@@ -1440,7 +1481,7 @@ function MeetingWorkspaceMoreMenu({
           role="menu"
           className="absolute right-0 top-full z-50 mt-1 w-72 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
-          <div className="border-b border-slate-100 px-3 py-2.5">
+          <div className="border-b border-slate-100 px-3 py-2.5 xl:hidden">
             <label
               htmlFor="meeting-autonomy-slider"
               className="text-[10px] font-semibold uppercase tracking-wider text-slate-500"
@@ -1459,13 +1500,13 @@ function MeetingWorkspaceMoreMenu({
               title="0 = Always ask user | 1 = Fully autonomous"
             />
           </div>
-          <div className="border-b border-slate-100 px-3 py-2.5">{pipelineSlot}</div>
+          <div className="border-b border-slate-100 px-3 py-2.5 xl:hidden">{pipelineSlot}</div>
           {hasDraftPdf ? (
             <a
               role="menuitem"
               href={`/api/v2/meetings/${meetingId}/draft/file?download=1`}
               onClick={closeMenu}
-              className="flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+              className="flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 xl:hidden"
             >
               <PdfTemplateMenuIcon className="h-5 w-5 shrink-0 text-slate-500" />
               <span>

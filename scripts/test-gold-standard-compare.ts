@@ -19,6 +19,7 @@ import {
   repairCompareSegmentBoundaries,
   repairParagraphBreaksInSegmentText,
   scoreCompareDocument,
+  splitSegmentHighlightBounds,
 } from "../lib/minutes/gold-standard-compare";
 import { buildGoldStandardFindingsByItemId } from "../lib/minutes/gold-standard-item-match";
 import {
@@ -489,6 +490,24 @@ describe("compareSegmentBoundarySeparator", () => {
       ),
       "\n",
     );
+  });
+});
+
+describe("splitSegmentHighlightBounds", () => {
+  it("strips leading and trailing whitespace from highlighted spans", () => {
+    const parts = splitSegmentHighlightBounds(" Chair: the AGM ", "changed");
+    assert.equal(parts.length, 3);
+    assert.equal(parts[0]?.text, " ");
+    assert.equal(parts[0]?.mark, "same");
+    assert.equal(parts[1]?.text, "Chair: the AGM");
+    assert.equal(parts[1]?.mark, "changed");
+    assert.equal(parts[2]?.text, " ");
+    assert.equal(parts[2]?.mark, "same");
+  });
+
+  it("leaves same-mark segments untouched", () => {
+    const parts = splitSegmentHighlightBounds(" plain ", "same");
+    assert.deepEqual(parts, [{ text: " plain ", mark: "same" }]);
   });
 });
 

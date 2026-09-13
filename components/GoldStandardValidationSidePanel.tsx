@@ -22,6 +22,7 @@ import {
   displaySegmentMark,
   findingsForAlignmentColumn,
   repairCompareSegmentBoundaries,
+  splitSegmentHighlightBounds,
   scoreCompareDocument,
   type CompareCoverage,
 } from "@/lib/minutes/gold-standard-compare";
@@ -181,16 +182,19 @@ function HighlightedProse({
       <p className="min-h-[1.25rem] text-sm italic text-slate-400">{emptyLabel}</p>
     );
   }
-  const displaySegments = repairCompareSegmentBoundaries(segments);
+  const displaySegments = repairCompareSegmentBoundaries(segments).flatMap(
+    (segment) => splitSegmentHighlightBounds(segment.text, segment.mark),
+  );
   return (
     <p className="break-words whitespace-pre-wrap text-sm leading-relaxed">
       {displaySegments.map((segment, index) => {
         const mark = displaySegmentMark(segment.mark, segment.text);
+        const showMarkTitle = mark !== "same";
         return (
           <span
-            key={`${index}-${segment.mark}`}
+            key={`${index}-${segment.mark}-${segment.text.slice(0, 12)}`}
             className={`rounded-sm ${MARK_CLASSES[mark]}`}
-            title={MARK_LABELS[mark]}
+            title={showMarkTitle ? MARK_LABELS[mark] : undefined}
           >
             {segment.text}
           </span>
@@ -526,7 +530,7 @@ function CompareHeaderMoreMenu({
   }, [menuOpen]);
 
   return (
-    <div className="relative shrink-0" ref={containerRef}>
+    <div className="relative shrink-0 lg:hidden" ref={containerRef}>
       <button
         type="button"
         onClick={() => setMenuOpen((open) => !open)}
@@ -784,8 +788,20 @@ export function GoldStandardValidationSidePanel({
               </>
             ) : null}
           </div>
+          <p className="mt-1 hidden text-sm font-medium text-slate-800 lg:block">
+            {meeting.title}
+          </p>
+          <p className="mt-0.5 hidden text-xs text-slate-500 lg:block">
+            Compared {formatAnalyzedAt(validation.analyzedAt)}
+            {compare ? ` · ${compare.alignments.length} concepts` : ""}
+          </p>
         </div>
         <div className="flex shrink-0 items-start gap-1 sm:gap-2">
+          {compare ? (
+            <div className="hidden max-w-[min(28rem,42vw)] pt-0.5 lg:block">
+              <CompareLegend />
+            </div>
+          ) : null}
           <CompareHeaderMoreMenu
             meetingTitle={meeting.title}
             comparedAtLabel={formatAnalyzedAt(validation.analyzedAt)}
@@ -821,7 +837,6 @@ export function GoldStandardValidationSidePanel({
             </div>
             <ul className="p-2">
               {visibleAlignments.map((alignment) => {
-                const pair = pairByAlignmentId.get(alignment.id);
                 const selected = alignment.id === activeAlignmentId;
                 return (
                   <li key={alignment.id}>
@@ -839,24 +854,9 @@ export function GoldStandardValidationSidePanel({
                           : "hover:bg-white/70"
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <ConceptTitle
-                          alignment={alignment}
-                          className="min-w-0 flex-1 text-xs font-semibold text-slate-900"
-                        />
-                        <CoverageBadges
-                          coverage={pair ? computePairCoverage(pair) : null}
-                          size="sm"
-                        />
-                      </div>
-                      {alignment.kind !== "ai_only" &&
-                      alignment.kind !== "gold_only" ? (
-                        <AlignmentKindBadge
-                          alignment={alignment}
-                          compact
-                          className="mt-1"
-                        />
-                      ) : null}
+                      <span className="block truncate text-xs font-semibold text-slate-900">
+                        {alignment.label}
+                      </span>
                     </button>
                   </li>
                 );

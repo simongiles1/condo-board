@@ -20,7 +20,7 @@ export default async function MeetingV2DetailPage(props: PageProps) {
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto py-4">
+    <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-4 max-sm:py-3">
       <MeetingV2Detail meetingId={id} />
     </div>
   );

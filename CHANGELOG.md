@@ -12,11 +12,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Meetings V2 detail layout (mobile)** — The workspace card spans the full content width on small screens (no double horizontal padding). Pipeline controls, PDF download, and the AI autonomy slider live in the header more menu so the dark progress bar stays compact.
+- **Meetings V2 detail layout (mobile)** — Below the `xl` breakpoint, pipeline controls, PDF download, and the AI autonomy slider move into the header more menu; wider layouts show them in the header again. The workspace card uses a viewport-width breakout with horizontal overflow clipped on the scroll container.
 
-- **Gold-standard compare viewer (mobile)** — The highlight legend, meeting title, and compared timestamp move into a header more menu; overlap coverage badges stay visible. Side-by-side rows use constrained columns and word breaking so the compare view scrolls vertically only.
+- **Gold-standard compare viewer (mobile)** — Below the `lg` breakpoint, the highlight legend, meeting title, and compared timestamp move into a header more menu; overlap coverage badges stay visible on all sizes. Side-by-side rows use constrained columns and word breaking so the compare view scrolls vertically only.
 
 ### Fixed
+
+- **Gold-standard compare highlight paint** — Diff backgrounds no longer cover leading or trailing whitespace on a marked span (for example the space before “Chair: the AGM” after boundary repair inserts a separator space).
+
+- **Gold-standard compare outline nav** — The left concept list shows titles only again; coverage and paired/split chips stay in the main compare rows, not duplicated in the sidebar.
 
 - **Gold-standard compare packed rows** — Sibling agenda items (for example 4.1(a) steam-room heat pump and 4.1(b) lobby restoration) no longer share one comparison cell when gold minutes bundled them or the aligner emitted 1:n / n:n. Each AI agenda item is its own row.
 

@@ -69,6 +69,7 @@ Rules:
 - Include consulting / engineering firms printed in the header even when the body is only tables.
 - Omit generic software names (Microsoft Excel, Adobe Acrobat, and similar producers).
 - If DOCUMENT OUTLINE or middle page samples are present, the summary MUST mention interior components (notices, tables, signatures, later sections) even when they are not in the opening pages. A mixed packet is not only its cover page.
+- document_date is the issuance or as-of date of THIS copy (letter date, statement month, meeting date). Do not use a historical date merely mentioned in the body — copyright years, original bylaw/policy effective dates, or cited older versions. If the copy was issued recently and an older date is only background, prefer null over that older date.
 - If email_summary is requested in the prompt, summarize the email body concisely. Otherwise set email_summary to null.`;
 
 export function hashPackedText(text: string): string {

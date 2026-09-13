@@ -1559,11 +1559,17 @@ export const documentSeriesMembers = pgTable(
     })
       .notNull()
       .default("discovery"),
+    subtypeKey: text("subtype_key"),
+    subtypeTitle: text("subtype_title"),
     createdAt: text("created_at").notNull(),
   },
   (table) => ({
     seriesIdIdx: index("document_series_members_series_id_idx").on(
       table.seriesId,
+    ),
+    subtypeIdx: index("document_series_members_subtype_idx").on(
+      table.seriesId,
+      table.subtypeKey,
     ),
   }),
 );

@@ -1,5 +1,6 @@
 /**
- * Discover recurring document series from file cards: catalog types, then assign.
+ * Discover recurring document series from file cards: catalog types, assign
+ * candidates, then keep only subtypes that actually repeat.
  */
 
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
@@ -9,11 +10,18 @@ import {
   DOCUMENT_SERIES_ASSIGN_BATCH_SIZE,
   DOCUMENT_SERIES_ASSIGN_SYSTEM_PROMPT,
   DOCUMENT_SERIES_CATALOG_SYSTEM_PROMPT,
+  DOCUMENT_SERIES_VERIFY_BATCH_SIZE,
+  DOCUMENT_SERIES_VERIFY_SYSTEM_PROMPT,
+  groupByInstanceKey,
+  keepRecurringSubtypeMembers,
   parseJsonObjectText,
   parseSeriesAssignments,
   parseSeriesCatalog,
+  parseSeriesSubtypeAssignments,
   sampleSeriesDiscoveryDocs,
   seriesKeyFromTitle,
+  titleFromInstanceKey,
+  type RecurringSubtypeMember,
   type SeriesCatalogEntry,
 } from "@/lib/documents/series-shared";
 import {
@@ -295,6 +303,146 @@ ${batch.map((doc, index) => formatCardLine(doc, index)).join("\n")}`;
   return { inputTokens, outputTokens, costUsd, byHash };
 }
 
+type SubtypeCatalogEntry = { key: string; title: string };
+
+function formatSubtypeCatalogBlock(
+  catalog: Map<string, SubtypeCatalogEntry>,
+): string {
+  if (catalog.size === 0) {
+    return "None yet. Only introduce a key when stems in this batch are clearly the same repeating document.";
+  }
+  return [...catalog.values()]
+    .map((entry) => `- ${entry.key} | ${entry.title}`)
+    .join("\n");
+}
+
+function formatStemLine(
+  group: { instanceKey: string; docs: SeriesDiscoveryDoc[] },
+  index: number,
+): string {
+  const sample = group.docs[0]!;
+  const summary = sample.summary.replace(/\s+/g, " ").trim().slice(0, 180);
+  return `  ${index}. stem="${group.instanceKey}" files=${group.docs.length} sample=${sample.filename} — ${summary}`;
+}
+
+async function verifySubtypeStems(params: {
+  docs: SeriesDiscoveryDoc[];
+  seriesTitle: string;
+  onBatch?: (done: number, total: number) => Promise<void>;
+  shouldContinue?: () => Promise<boolean>;
+}): Promise<{
+  members: RecurringSubtypeMember[];
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+}> {
+  const groups = groupByInstanceKey(params.docs);
+  const catalog = new Map<string, SubtypeCatalogEntry>();
+  const stemToSubtype = new Map<string, SubtypeCatalogEntry>();
+  const singletons: typeof groups = [];
+
+  for (const group of groups) {
+    const dates = group.docs.map((doc) => doc.receivedAt);
+    if (clusterLooksRecurring(dates)) {
+      const key = seriesKeyFromTitle(group.instanceKey);
+      const title = titleFromInstanceKey(group.instanceKey);
+      const entry = catalog.get(key) ?? { key, title };
+      catalog.set(entry.key, entry);
+      stemToSubtype.set(group.instanceKey, entry);
+    } else {
+      singletons.push(group);
+    }
+  }
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let costUsd = 0;
+
+  if (singletons.length > 0) {
+    const totalBatches = Math.max(
+      1,
+      Math.ceil(singletons.length / DOCUMENT_SERIES_VERIFY_BATCH_SIZE),
+    );
+    for (
+      let offset = 0;
+      offset < singletons.length;
+      offset += DOCUMENT_SERIES_VERIFY_BATCH_SIZE
+    ) {
+      const batchIndex =
+        Math.floor(offset / DOCUMENT_SERIES_VERIFY_BATCH_SIZE) + 1;
+      if (params.shouldContinue && !(await params.shouldContinue())) {
+        break;
+      }
+      if (params.onBatch) await params.onBatch(batchIndex, totalBatches);
+      const batch = singletons.slice(
+        offset,
+        offset + DOCUMENT_SERIES_VERIFY_BATCH_SIZE,
+      );
+      const knownIndexes = new Set(batch.map((_, index) => index));
+      const result = await generateDeepSeekJson({
+        systemInstruction: DOCUMENT_SERIES_VERIFY_SYSTEM_PROMPT,
+        userText: `Parent type: ${params.seriesTitle}
+
+Existing repeating subtypes (merge into these when the stem is the same document):
+${formatSubtypeCatalogBlock(catalog)}
+
+Candidate stems that do not yet have two dated copies (assign every id):
+${batch.map((group, index) => formatStemLine(group, index)).join("\n")}`,
+        modelName: SERIES_MODEL,
+        maxOutputTokens: 2048,
+        thinking: false,
+      });
+      inputTokens += result.usage.inputTokens;
+      outputTokens += result.usage.outputTokens;
+      costUsd += estimateDeepSeekCostBreakdown({
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+      }).totalCostUsd;
+
+      const parsed = parseSeriesSubtypeAssignments(
+        parseJsonObjectText(result.text),
+        knownIndexes,
+      );
+      for (const assignment of parsed) {
+        const group = batch[assignment.index];
+        if (!group || !assignment.subtypeKey) continue;
+        let entry = catalog.get(assignment.subtypeKey);
+        if (!entry) {
+          entry = {
+            key: assignment.subtypeKey,
+            title:
+              assignment.subtypeTitle ||
+              titleFromInstanceKey(group.instanceKey),
+          };
+          catalog.set(entry.key, entry);
+        }
+        stemToSubtype.set(group.instanceKey, entry);
+      }
+    }
+  }
+
+  const candidates: RecurringSubtypeMember[] = [];
+  for (const group of groups) {
+    const subtype = stemToSubtype.get(group.instanceKey);
+    if (!subtype) continue;
+    for (const doc of group.docs) {
+      candidates.push({
+        contentHash: doc.contentHash,
+        receivedAt: doc.receivedAt,
+        subtypeKey: subtype.key,
+        subtypeTitle: subtype.title,
+      });
+    }
+  }
+
+  return {
+    members: keepRecurringSubtypeMembers(candidates),
+    inputTokens,
+    outputTokens,
+    costUsd,
+  };
+}
+
 export async function runDocumentSeriesWorker(runId: string): Promise<void> {
   const initial = await getDocumentSeriesRun(runId);
   if (!initial || initial.status !== "running") return;
@@ -368,32 +516,56 @@ export async function runDocumentSeriesWorker(runId: string): Promise<void> {
   }
   const docByHash = new Map(freeDocs.map((doc) => [doc.contentHash, doc]));
 
-  const seriesForWrite = [...catalog.values()]
-    .map((entry) => {
-      const hashes = hashesByKey.get(entry.key) ?? [];
-      const dates = hashes.map((hash) => {
-        const doc = docByHash.get(hash);
-        return doc?.documentDate || doc?.receivedAt || null;
-      });
-      if (!clusterLooksRecurring(dates) && !entry.existingId) {
-        return null;
-      }
-      if (hashes.length === 0 && !entry.existingId) return null;
-      if (!clusterLooksRecurring(dates)) {
-        return null;
-      }
-      return {
-        existingId: entry.existingId,
-        title: entry.title,
-        description: entry.description,
-        usage: entry.usage,
-        contentHashes: hashes,
-      };
-    })
-    .filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const catalogEntries = [...catalog.values()];
+  const seriesForWrite: Array<{
+    existingId: string | null;
+    title: string;
+    description: string;
+    usage: SeriesCatalogEntry["usage"];
+    members: RecurringSubtypeMember[];
+  }> = [];
+  let verifyInputTokens = 0;
+  let verifyOutputTokens = 0;
+  let verifyCostUsd = 0;
+
+  for (const [entryIndex, entry] of catalogEntries.entries()) {
+    if (!(await stillRunning(runId))) return;
+    const hashes = hashesByKey.get(entry.key) ?? [];
+    const candidateDocs = hashes
+      .map((hash) => docByHash.get(hash))
+      .filter((doc): doc is SeriesDiscoveryDoc => Boolean(doc));
+    if (candidateDocs.length === 0) continue;
+
+    await updateDocumentSeriesRun(runId, {
+      currentLabel: `Checking which files actually repeat (${entryIndex + 1}/${catalogEntries.length}): ${entry.title}…`,
+    });
+
+    const verified = await verifySubtypeStems({
+      docs: candidateDocs,
+      seriesTitle: entry.title,
+      shouldContinue: () => stillRunning(runId),
+    });
+    if (!(await stillRunning(runId))) return;
+    verifyInputTokens += verified.inputTokens;
+    verifyOutputTokens += verified.outputTokens;
+    verifyCostUsd += verified.costUsd;
+
+    if (verified.members.length === 0) continue;
+    if (!clusterLooksRecurring(verified.members.map((member) => member.receivedAt))) {
+      continue;
+    }
+
+    seriesForWrite.push({
+      existingId: entry.existingId,
+      title: entry.title,
+      description: entry.description,
+      usage: entry.usage,
+      members: verified.members,
+    });
+  }
 
   const clusteredDocs = seriesForWrite.reduce(
-    (sum, row) => sum + row.contentHashes.length,
+    (sum, row) => sum + row.members.length,
     0,
   );
 
@@ -403,13 +575,14 @@ export async function runDocumentSeriesWorker(runId: string): Promise<void> {
     lockedHashes,
   });
 
-  const totalCost = named.costUsd + assigned.costUsd;
+  const totalCost = named.costUsd + assigned.costUsd + verifyCostUsd;
   await updateDocumentSeriesRun(runId, {
     status: "completed",
     seriesCount,
     clusteredDocs,
-    llmInputTokens: named.inputTokens + assigned.inputTokens,
-    llmOutputTokens: named.outputTokens + assigned.outputTokens,
+    llmInputTokens: named.inputTokens + assigned.inputTokens + verifyInputTokens,
+    llmOutputTokens:
+      named.outputTokens + assigned.outputTokens + verifyOutputTokens,
     totalCostUsd: totalCost.toFixed(6),
     currentLabel: `Found ${seriesCount} recurring type(s).`,
     completedAt: new Date().toISOString(),

@@ -60,6 +60,8 @@ export type DocumentSeriesMemberFile = {
   documentDate: string | null;
   summary: string;
   source: DocumentSeriesMemberSource;
+  subtypeKey: string | null;
+  subtypeTitle: string | null;
 };
 
 export type SeriesDiscoveryDoc = {
@@ -261,7 +263,11 @@ export async function replaceDiscoveryMembership(params: {
     title: string;
     description: string;
     usage: DocumentSeriesUsage | null;
-    contentHashes: string[];
+    members: Array<{
+      contentHash: string;
+      subtypeKey: string | null;
+      subtypeTitle: string | null;
+    }>;
   }>;
   lockedHashes: Set<string>;
 }): Promise<number> {
@@ -292,10 +298,12 @@ export async function replaceDiscoveryMembership(params: {
 
   let created = 0;
   for (const item of params.series) {
-    const hashes = item.contentHashes.filter(
-      (hash) => !humanHashes.has(hash) && !params.lockedHashes.has(hash),
+    const members = item.members.filter(
+      (member) =>
+        !humanHashes.has(member.contentHash) &&
+        !params.lockedHashes.has(member.contentHash),
     );
-    if (hashes.length === 0 && !item.existingId) continue;
+    if (members.length === 0 && !item.existingId) continue;
 
     let seriesId = item.existingId;
     if (seriesId) {
@@ -331,13 +339,15 @@ export async function replaceDiscoveryMembership(params: {
         .where(eq(documentSeries.id, seriesId));
     }
 
-    for (const contentHash of hashes) {
+    for (const member of members) {
       await db
         .insert(documentSeriesMembers)
         .values({
-          contentHash,
+          contentHash: member.contentHash,
           seriesId,
           source: "discovery",
+          subtypeKey: member.subtypeKey,
+          subtypeTitle: member.subtypeTitle,
           createdAt: now,
         })
         .onConflictDoNothing();
@@ -357,8 +367,8 @@ export async function listDocumentSeries(): Promise<DocumentSeriesListItem[]> {
       description: documentSeries.description,
       usage: documentSeries.usage,
       memberCount: sql<number>`count(distinct ${documentSeriesMembers.contentHash})::int`,
-      firstDate: sql<string | null>`min(coalesce(${attachmentFileCards.documentDate}, ${emails.receivedAt}))`,
-      lastDate: sql<string | null>`max(coalesce(${attachmentFileCards.documentDate}, ${emails.receivedAt}))`,
+      firstDate: sql<string | null>`min(${emails.receivedAt})`,
+      lastDate: sql<string | null>`max(${emails.receivedAt})`,
     })
     .from(documentSeries)
     .leftJoin(
@@ -366,16 +376,12 @@ export async function listDocumentSeries(): Promise<DocumentSeriesListItem[]> {
       eq(documentSeriesMembers.seriesId, documentSeries.id),
     )
     .leftJoin(
-      attachmentFileCards,
-      eq(attachmentFileCards.contentHash, documentSeriesMembers.contentHash),
-    )
-    .leftJoin(
       emailAttachments,
       eq(emailAttachments.contentHash, documentSeriesMembers.contentHash),
     )
     .leftJoin(emails, eq(emails.id, emailAttachments.emailId))
     .groupBy(documentSeries.id)
-    .orderBy(sql`max(coalesce(${attachmentFileCards.documentDate}, ${emails.receivedAt})) desc nulls last`);
+    .orderBy(sql`max(${emails.receivedAt}) desc nulls last`);
 
   return rows.map((row) => ({
     id: row.id,
@@ -406,6 +412,8 @@ export async function listSeriesMembers(
       threadId: emails.threadId,
       documentDate: attachmentFileCards.documentDate,
       summary: attachmentFileCards.summary,
+      subtypeKey: documentSeriesMembers.subtypeKey,
+      subtypeTitle: documentSeriesMembers.subtypeTitle,
     })
     .from(documentSeriesMembers)
     .innerJoin(
@@ -437,13 +445,13 @@ export async function listSeriesMembers(
       documentDate: row.documentDate,
       summary: row.summary ?? "",
       source: row.source as DocumentSeriesMemberSource,
+      subtypeKey: row.subtypeKey,
+      subtypeTitle: row.subtypeTitle,
     });
   }
-  return [...byHash.values()].sort((a, b) => {
-    const dateA = a.documentDate || a.receivedAt;
-    const dateB = b.documentDate || b.receivedAt;
-    return dateB.localeCompare(dateA);
-  });
+  return [...byHash.values()].sort((a, b) =>
+    b.receivedAt.localeCompare(a.receivedAt),
+  );
 }
 
 export async function listBoardPackageSeriesFiles(): Promise<

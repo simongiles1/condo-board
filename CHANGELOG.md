@@ -6,11 +6,19 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Recurring documents — repeating instances only** — Finding recurring types still proposes parent categories (Resident Notices, minutes, and so on), but that assignment is now a candidate list. A second pass groups files by the same document (filename with dates stripped, then a model merge for close variants) and keeps a file only when that subtype appears on at least two email dates. One-off notices — a temporary hot-tub closure, a unique guidelines PDF — are dropped. Large types expose a subtype dropdown in the file list.
+
+- **File card document date** — The card’s `document_date` is the issuance or as-of date of this copy, not a historical date merely mentioned in the body (copyright years, original bylaw or policy effective dates).
+
 ### Added
 
 - **Recurring document types** — Knowledge → Recurring documents classifies file cards with the model: it proposes a catalog from a diverse sample, then assigns each card to a type or “not recurring.” A type is kept only when instances fall on at least two dates. Logos, screenshots, and valueless attachments are skipped. The page lists those types for review. Meetings V2 on-file packages prefer the series marked as the pre-meeting packet, and fall back to the filename list until a discovery run has one.
 
 ### Fixed
+
+- **Recurring documents dates** — The type list and each file row use the covering email’s received time, not the date extracted onto the file card. File cards often pick a historical date printed in the PDF (an original 2008 balcony-guidelines effective date), and date-only values rendered as the previous evening in Toronto.
 
 - **Recurring documents file count** — Each type counts unique files, not every email that carried the same attachment.
 

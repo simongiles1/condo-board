@@ -8,13 +8,18 @@ import { describe, it } from "node:test";
 
 import {
   clusterLooksRecurring,
+  groupByInstanceKey,
   isSeriesDiscoveryEligible,
+  keepRecurringSubtypeMembers,
   parseDocumentSeriesUsage,
   parseSeriesAssignments,
   parseSeriesCatalog,
+  parseSeriesSubtypeAssignments,
   sampleSeriesDiscoveryDocs,
+  seriesInstanceKey,
   seriesKeyFromTitle,
   stripTemporalTokens,
+  titleFromInstanceKey,
 } from "../lib/documents/series-shared";
 
 describe("stripTemporalTokens", () => {
@@ -37,6 +42,74 @@ describe("clusterLooksRecurring", () => {
     assert.equal(
       clusterLooksRecurring(["2026-08-06T12:00:00.000Z", "2026-08-12T18:00:00.000Z"]),
       true,
+    );
+  });
+});
+
+describe("seriesInstanceKey", () => {
+  it("strips dates and weekdays so dated copies share a stem", () => {
+    assert.equal(
+      seriesInstanceKey("Management Office Hours (Friday, August 14, 2026).pdf"),
+      "management office hours",
+    );
+    assert.equal(
+      seriesInstanceKey("Scheduled Hot Water Interruption.pdf"),
+      "scheduled hot water interruption",
+    );
+    assert.notEqual(
+      seriesInstanceKey("Temporary Closure of Hot Tubs.pdf"),
+      seriesInstanceKey("Scheduled Hot Water Interruption.pdf"),
+    );
+  });
+});
+
+describe("titleFromInstanceKey", () => {
+  it("title-cases a stem", () => {
+    assert.equal(titleFromInstanceKey("management office hours"), "Management Office Hours");
+  });
+});
+
+describe("groupByInstanceKey", () => {
+  it("groups dated copies and leaves unique events alone", () => {
+    const groups = groupByInstanceKey([
+      { filename: "Management Office Hours (Friday, August 14, 2026).pdf" },
+      { filename: "Management Office Hours (Friday, August 7, 2026).pdf" },
+      { filename: "Temporary Closure of Hot Tubs.pdf" },
+    ]);
+    const office = groups.find((row) => row.instanceKey === "management office hours");
+    const hotTubs = groups.find(
+      (row) => row.instanceKey === "temporary closure of hot tubs",
+    );
+    assert.equal(office?.docs.length, 2);
+    assert.equal(hotTubs?.docs.length, 1);
+  });
+});
+
+describe("keepRecurringSubtypeMembers", () => {
+  it("keeps subtypes with two dates and drops singleton one-offs", () => {
+    const kept = keepRecurringSubtypeMembers([
+      {
+        contentHash: "office-1",
+        receivedAt: "2026-08-06T00:00:00.000Z",
+        subtypeKey: "office-hours",
+        subtypeTitle: "Office hours",
+      },
+      {
+        contentHash: "office-2",
+        receivedAt: "2026-07-29T00:00:00.000Z",
+        subtypeKey: "office-hours",
+        subtypeTitle: "Office hours",
+      },
+      {
+        contentHash: "tubs",
+        receivedAt: "2026-07-09T00:00:00.000Z",
+        subtypeKey: "hot-tub-closure",
+        subtypeTitle: "Hot tub closure",
+      },
+    ]);
+    assert.deepEqual(
+      kept.map((row) => row.contentHash).sort(),
+      ["office-1", "office-2"],
     );
   });
 });
@@ -151,6 +224,26 @@ describe("parseSeriesAssignments", () => {
     assert.equal(assignments[1]?.seriesKey, null);
     assert.equal(assignments[2]?.seriesKey, "resident-notices");
     assert.equal(assignments[2]?.newTitle, "Resident notices");
+  });
+});
+
+describe("parseSeriesSubtypeAssignments", () => {
+  it("maps stems to subtype keys or not-recurring", () => {
+    const assignments = parseSeriesSubtypeAssignments(
+      {
+        assignments: [
+          { id: 0, subtypeKey: "office-hours", subtypeTitle: "Office hours" },
+          { id: 1, subtypeKey: null },
+          { id: 2, subtypeTitle: "Hot water interruptions" },
+        ],
+      },
+      new Set([0, 1, 2]),
+    );
+    assert.equal(assignments.length, 3);
+    assert.equal(assignments[0]?.subtypeKey, "office-hours");
+    assert.equal(assignments[1]?.subtypeKey, null);
+    assert.equal(assignments[2]?.subtypeKey, "hot-water-interruptions");
+    assert.equal(assignments[2]?.subtypeTitle, "Hot water interruptions");
   });
 });
 

@@ -34,6 +34,8 @@ type SeriesMember = {
   documentDate: string | null;
   summary: string;
   source: "discovery" | "human";
+  subtypeKey: string | null;
+  subtypeTitle: string | null;
 };
 
 type SeriesRun = {
@@ -67,6 +69,7 @@ export function DocumentSeriesFilesClient() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [previewHash, setPreviewHash] = useState<string | null>(null);
+  const [subtypeFilter, setSubtypeFilter] = useState("");
 
   const running = run?.status === "running" && run.workerAlive !== false;
 
@@ -151,9 +154,39 @@ export function DocumentSeriesFilesClient() {
     };
   }, [activeId, reloadMembers, run?.status]);
 
+  useEffect(() => {
+    setSubtypeFilter("");
+  }, [activeId]);
+
+  const subtypes = useMemo(() => {
+    const counts = new Map<
+      string,
+      { key: string; title: string; count: number }
+    >();
+    for (const file of members) {
+      if (!file.subtypeKey) continue;
+      const current = counts.get(file.subtypeKey);
+      if (current) {
+        current.count += 1;
+      } else {
+        counts.set(file.subtypeKey, {
+          key: file.subtypeKey,
+          title: file.subtypeTitle || file.subtypeKey,
+          count: 1,
+        });
+      }
+    }
+    return [...counts.values()].sort((a, b) => b.count - a.count);
+  }, [members]);
+
+  const visibleMembers = useMemo(() => {
+    if (!subtypeFilter) return members;
+    return members.filter((file) => file.subtypeKey === subtypeFilter);
+  }, [members, subtypeFilter]);
+
   const previewMember = useMemo(
-    () => members.find((row) => row.contentHash === previewHash) ?? null,
-    [members, previewHash],
+    () => visibleMembers.find((row) => row.contentHash === previewHash) ?? null,
+    [visibleMembers, previewHash],
   );
 
   async function startDiscovery() {
@@ -245,8 +278,9 @@ export function DocumentSeriesFilesClient() {
           Recurring documents
         </h1>
         <p className="mt-1 text-sm text-slate-600">
-          Types the archive has seen more than once. Click a type, then a file,
-          to check that the instances belong together.
+          Types the archive has seen more than once. Open a type, pick a
+          subtype when the list is large, then click a file to check that the
+          copies belong together.
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <button
@@ -328,25 +362,50 @@ export function DocumentSeriesFilesClient() {
 
         <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           {activeId && membersTitle ? (
-            <div className="shrink-0 border-b border-slate-100 px-4 py-3">
-              <h2 className="text-base font-semibold text-slate-900">
-                {membersTitle}
-              </h2>
-              {membersDescription ? (
-                <p className="mt-1 text-sm text-slate-600">{membersDescription}</p>
+            <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold text-slate-900">
+                  {membersTitle}
+                </h2>
+                {membersDescription ? (
+                  <p className="mt-1 text-sm text-slate-600">{membersDescription}</p>
+                ) : null}
+              </div>
+              {subtypes.length > 1 ? (
+                <label className="flex shrink-0 flex-col gap-1 text-xs font-medium text-slate-600">
+                  Subtype
+                  <select
+                    value={subtypeFilter}
+                    onChange={(event) => setSubtypeFilter(event.target.value)}
+                    className="min-w-[14rem] rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm font-normal text-slate-800"
+                  >
+                    <option value="">
+                      All subtypes ({members.length})
+                    </option>
+                    {subtypes.map((subtype) => (
+                      <option key={subtype.key} value={subtype.key}>
+                        {subtype.title} ({subtype.count})
+                      </option>
+                    ))}
+                  </select>
+                </label>
               ) : null}
             </div>
           ) : null}
-          {members.length === 0 ? (
+          {visibleMembers.length === 0 ? (
             <div className="flex flex-1 items-center justify-center px-4 py-8 text-sm text-slate-500">
-              {activeId ? "No files in this type." : "Select a type."}
+              {activeId
+                ? subtypeFilter
+                  ? "No files in this subtype."
+                  : "No files in this type."
+                : "Select a type."}
             </div>
           ) : (
             <ul className="min-h-0 flex-1 overflow-y-auto">
-              {members.map((file) => {
+              {visibleMembers.map((file) => {
                 const kind = attachmentKind(file.mimeType, file.filename);
                 const sizeLabel = formatAttachmentSize(file.sizeBytes);
-                const when = file.documentDate || file.receivedAt;
+                const when = file.receivedAt;
                 return (
                   <li
                     key={file.contentHash}

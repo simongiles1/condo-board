@@ -8,11 +8,25 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Recurring document types** — Knowledge → Document Library no longer uses four filename tabs. A corpus job reads file cards, clusters dated instances of the same document role, and the model names the series (so a Management Report packet can sit with board meeting packages). The page lists those types; open a type to click through files, preview them, move a mis-filed instance, or remove it. Meetings V2 on-file packages prefer the series marked as the pre-meeting packet, and fall back to the filename list until a discovery run has one.
+
+### Fixed
+
+- **Meetings V2 create — on-file packages** — The archive dropdown now includes standalone *Management Report* PDFs, not only files whose name contains “board meeting package.” ICC often sends the circulated packet under the report title (for example the August 6, 2026 report) while the covering email still says board meeting package. Continuation meetings (August 12 after August 6) still show as a nearest date match, not an exact filename match.
+
+### Added
+
+- **Meetings V2 create wizard** — Creating a V2 workspace is a three-step flow (details, transcript, board package) with back/forward navigation and a fixed-height modal. The package step defaults to the archive file that matches the meeting date, with an upload-new tab as the fallback. Both tabs keep the existing page-range picker.
+
 - **Meetings V2 leftover transcript holes** — After outline-order hole assignment, remaining unboxed stretches are matched to any still-unassigned agenda leaf. That covers official items discussed out of order (for example the next board-meeting date sitting between two ad-hoc 4.E items), which the previous pass skipped because their outline codes fall after the next ranged leaf.
 
 - **Meetings V2 unmute wrap-up holes** — After the leftover-hole model pass, unmute and “can we move to the next item” stretches between two ranged leaves are attached to the floor item in code. Span-edge and leftover-hole judges often stop on that phrasing even though it is still the current item.
 
 ### Changed
+
+- **Meetings V2 create — board package step** — Removed the intro paragraph, placed the on-file package dropdown on one row with the On file / Upload new tabs (tabs on the right), and widened the page preview to match the preview panel width.
+
+- **Meetings V2 create — transcript step** — The transcript upload uses a compact drop zone and an inline preview (Readable / Raw VTT tabs, search, and copy) instead of opening a separate viewer modal.
 
 - **Meetings V2 detail layout (mobile)** — Below the `xl` breakpoint, pipeline controls, PDF download, and the AI autonomy slider move into the header more menu; wider layouts show them in the header again. The workspace card uses a viewport-width breakout with horizontal overflow clipped on the scroll container.
 

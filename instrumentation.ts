@@ -92,12 +92,16 @@ export async function register() {
       const { resumeBoardReportScanWorkersOnStartup } = await import(
         "@/lib/projects/board-report-worker"
       );
+      const { resumeDocumentSeriesWorkersOnStartup } = await import(
+        "@/lib/documents/series-worker"
+      );
       startEmailScheduler();
       await resumePersonalForwardWorkflow();
       await resumeBulkExtractWorkersOnStartup();
       await resumeDoclingBackfillWorkersOnStartup();
       await resumeIdentityReviewWorkersOnStartup();
       await resumeBoardReportScanWorkersOnStartup();
+      await resumeDocumentSeriesWorkersOnStartup();
       const { startTelegramRuntime } = await import("@/lib/telegram/polling");
       startTelegramRuntime();
     } catch (error) {

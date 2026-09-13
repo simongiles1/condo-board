@@ -126,7 +126,7 @@ export const KNOWLEDGE_SUBNAV: SubNavTab[] = [
     ],
   },
   { href: "/knowledge/emails", label: "Synced Emails" },
-  { href: "/knowledge/files", label: "Document Library" },
+  { href: "/knowledge/files", label: "Recurring documents" },
 ];
 
 export const BUILDING_SUBNAV: SubNavTab[] = [

@@ -1489,6 +1489,96 @@ export const emailFileCards = pgTable("email_file_cards", {
 });
 
 /**
+ * Corpus job that discovers recurring attachment series from file cards.
+ */
+export const documentSeriesRuns = pgTable("document_series_runs", {
+  id: text("id").primaryKey(),
+  status: text("status", {
+    enum: ["running", "completed", "failed", "cancelled"],
+  })
+    .notNull()
+    .default("running"),
+  totalDocs: integer("total_docs").notNull().default(0),
+  clusteredDocs: integer("clustered_docs").notNull().default(0),
+  seriesCount: integer("series_count").notNull().default(0),
+  embedTokens: integer("embed_tokens").notNull().default(0),
+  llmInputTokens: integer("llm_input_tokens").notNull().default(0),
+  llmOutputTokens: integer("llm_output_tokens").notNull().default(0),
+  totalCostUsd: text("total_cost_usd").notNull().default("0"),
+  currentLabel: text("current_label"),
+  errorMessage: text("error_message"),
+  startedAt: text("started_at").notNull(),
+  completedAt: text("completed_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/**
+ * Discovered repeating document type (board packet, monthly FS, fire notice, …).
+ * Titles come from the corpus job, not a hand-typed seed list.
+ */
+export const documentSeries = pgTable(
+  "document_series",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    usage: text("usage", {
+      enum: [
+        "board_package",
+        "minutes",
+        "financial_statements",
+        "financial_notes",
+        "other",
+      ],
+    }),
+    runId: text("run_id").references(() => documentSeriesRuns.id, {
+      onDelete: "set null",
+    }),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    usageIdx: index("document_series_usage_idx").on(table.usage),
+  }),
+);
+
+export const documentSeriesMembers = pgTable(
+  "document_series_members",
+  {
+    contentHash: text("content_hash")
+      .primaryKey()
+      .references(() => attachmentDocuments.contentHash, {
+        onDelete: "cascade",
+      }),
+    seriesId: text("series_id")
+      .notNull()
+      .references(() => documentSeries.id, { onDelete: "cascade" }),
+    source: text("source", {
+      enum: ["discovery", "human"],
+    })
+      .notNull()
+      .default("discovery"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    seriesIdIdx: index("document_series_members_series_id_idx").on(
+      table.seriesId,
+    ),
+  }),
+);
+
+/** Human ejects: discovery must not re-add this file to a series. */
+export const documentSeriesExclusions = pgTable("document_series_exclusions", {
+  contentHash: text("content_hash")
+    .primaryKey()
+    .references(() => attachmentDocuments.contentHash, {
+      onDelete: "cascade",
+    }),
+  createdAt: text("created_at").notNull(),
+});
+
+/**
  * Global person registry (post thread pass-4).
  * One row = one human; emails/titles are time-bounded on child tables.
  */
@@ -2604,6 +2694,35 @@ export const emailFileCardsRelations = relations(
     run: one(fileCardRuns, {
       fields: [emailFileCards.runId],
       references: [fileCardRuns.id],
+    }),
+  }),
+);
+
+export const documentSeriesRunsRelations = relations(
+  documentSeriesRuns,
+  ({ many }) => ({
+    series: many(documentSeries),
+  }),
+);
+
+export const documentSeriesRelations = relations(documentSeries, ({ one, many }) => ({
+  run: one(documentSeriesRuns, {
+    fields: [documentSeries.runId],
+    references: [documentSeriesRuns.id],
+  }),
+  members: many(documentSeriesMembers),
+}));
+
+export const documentSeriesMembersRelations = relations(
+  documentSeriesMembers,
+  ({ one }) => ({
+    series: one(documentSeries, {
+      fields: [documentSeriesMembers.seriesId],
+      references: [documentSeries.id],
+    }),
+    document: one(attachmentDocuments, {
+      fields: [documentSeriesMembers.contentHash],
+      references: [attachmentDocuments.contentHash],
     }),
   }),
 );

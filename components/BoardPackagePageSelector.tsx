@@ -23,13 +23,22 @@ const PREVIEW_CANVAS_MAX_HEIGHT_PX = 200;
 
 function limitCanvasDisplaySize(
   canvas: HTMLCanvasElement,
-  maxHeightPx: number,
+  options: { maxHeightPx?: number; fitWidth?: boolean } = {},
 ): void {
   if (!canvas.width || !canvas.height) return;
 
+  const maxHeightPx = options.maxHeightPx ?? PREVIEW_CANVAS_MAX_HEIGHT_PX;
   const parentWidth = canvas.parentElement?.clientWidth ?? canvas.width;
   const maxWidth = Math.max(1, parentWidth - 24);
   const ratio = canvas.width / canvas.height;
+
+  if (options.fitWidth) {
+    const displayWidth = Math.min(canvas.width, maxWidth);
+    const displayHeight = displayWidth / ratio;
+    canvas.style.width = `${Math.floor(displayWidth)}px`;
+    canvas.style.height = `${Math.floor(displayHeight)}px`;
+    return;
+  }
 
   let displayWidth = Math.min(canvas.width, maxWidth);
   let displayHeight = displayWidth / ratio;
@@ -46,12 +55,20 @@ type Props = {
   disabled?: boolean;
   label?: string;
   onSelectionChange: (value: BoardPackageSelection | null) => void;
+  /** Load this PDF instead of waiting for a drop. */
+  externalFile?: File | null;
+  showFilePicker?: boolean;
+  /** Scale preview to the panel width (scroll vertically if needed). */
+  previewFitWidth?: boolean;
 };
 
 export function BoardPackagePageSelector({
   disabled = false,
   label = "Board package / management report *",
   onSelectionChange,
+  externalFile = null,
+  showFilePicker = true,
+  previewFitWidth = false,
 }: Props) {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -69,6 +86,7 @@ export function BoardPackagePageSelector({
 
   const selectedSorted = [...selected].sort((a, b) => a - b);
   const selectedKey = selectedSorted.join(",");
+  const loadedExternalRef = useRef<File | null>(null);
 
   useEffect(() => {
     if (!sourceFile || selected.size === 0) {
@@ -135,6 +153,7 @@ export function BoardPackagePageSelector({
   }, []);
 
   const clearFile = useCallback(() => {
+    loadedExternalRef.current = null;
     setSourceFile(null);
     setPdfBytes(null);
     setPageCount(0);
@@ -144,6 +163,18 @@ export function BoardPackagePageSelector({
     if (inputRef.current) inputRef.current.value = "";
     onSelectionChange(null);
   }, [onSelectionChange]);
+
+  useEffect(() => {
+    if (!externalFile) {
+      if (loadedExternalRef.current) {
+        clearFile();
+      }
+      return;
+    }
+    if (loadedExternalRef.current === externalFile) return;
+    loadedExternalRef.current = externalFile;
+    void loadFile(externalFile);
+  }, [clearFile, externalFile, loadFile]);
 
   const togglePage = useCallback((page: number) => {
     setSelected((prev) => {
@@ -183,7 +214,7 @@ export function BoardPackagePageSelector({
       const canvas = canvasRef.current;
       if (!canvas || !pdfBytes) return;
       await renderPdfPageToCanvas(pdfBytes, previewPage, canvas, 1);
-      limitCanvasDisplaySize(canvas, PREVIEW_CANVAS_MAX_HEIGHT_PX);
+      limitCanvasDisplaySize(canvas, { fitWidth: previewFitWidth });
     }
 
     void render().catch(() => {
@@ -193,7 +224,7 @@ export function BoardPackagePageSelector({
     return () => {
       cancelled = true;
     };
-  }, [pdfBytes, previewPage]);
+  }, [pdfBytes, previewFitWidth, previewPage]);
 
   return (
     <div className="flex flex-col gap-2 md:col-span-3">
@@ -201,7 +232,11 @@ export function BoardPackagePageSelector({
         {label}
       </span>
 
-      {!sourceFile ? (
+      {!sourceFile && !showFilePicker ? (
+        <div className="rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+          {loading ? "Reading PDF…" : "Select a package on file to set the page range."}
+        </div>
+      ) : !sourceFile ? (
         <label
           htmlFor={inputId}
           className="flex cursor-pointer flex-col rounded-lg border-2 border-dashed border-teal-200 bg-teal-50/40 px-4 py-6 text-center text-sm transition hover:border-teal-400 hover:bg-teal-50"
@@ -230,14 +265,16 @@ export function BoardPackagePageSelector({
                 {formatPageList(selectedSorted)})
               </p>
             </div>
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={clearFile}
-              className="text-sm font-semibold text-slate-600 hover:text-slate-900 disabled:opacity-50"
-            >
-              Choose different file
-            </button>
+            {showFilePicker ? (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={clearFile}
+                className="text-sm font-semibold text-slate-600 hover:text-slate-900 disabled:opacity-50"
+              >
+                Choose different file
+              </button>
+            ) : null}
           </div>
 
           <div className="flex flex-wrap items-end gap-2">
@@ -392,15 +429,17 @@ export function BoardPackagePageSelector({
         <p className="text-sm text-red-700">{loadError}</p>
       ) : null}
 
-      <input
-        ref={inputRef}
-        id={inputId}
-        type="file"
-        accept=".pdf,application/pdf"
-        className="sr-only"
-        disabled={disabled}
-        onChange={onPick}
-      />
+      {showFilePicker ? (
+        <input
+          ref={inputRef}
+          id={inputId}
+          type="file"
+          accept=".pdf,application/pdf"
+          className="sr-only"
+          disabled={disabled}
+          onChange={onPick}
+        />
+      ) : null}
     </div>
   );
 }

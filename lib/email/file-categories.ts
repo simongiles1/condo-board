@@ -56,16 +56,6 @@ const FINANCIAL_NOTES_PATTERN = new RegExp(
   "i",
 );
 
-const BOARD_PACKAGE_PREFIX_PATTERN = new RegExp(
-  `^TSCC\\s+${CONDO_NUMBER}-\\s*board meeting package.*\\.pdf$`,
-  "i",
-);
-
-const BOARD_PACKAGE_WITH_CONDO_PATTERN = new RegExp(
-  `${CONDO_NUMBER}.*board meeting package|board meeting package.*${CONDO_NUMBER}`,
-  "i",
-);
-
 const MONTH_INDEX: Record<string, number> = {
   january: 0,
   february: 1,
@@ -99,16 +89,14 @@ export function isMeetingMinutesFilename(filename: string): boolean {
 
 export function isBoardPackageFilename(filename: string): boolean {
   if (!/\.pdf$/i.test(filename)) return false;
-  if (!/board meeting package/i.test(filename)) return false;
-
-  const corpNumber = filename.match(/TSCC\s*(\d{4})/i);
-  if (corpNumber && corpNumber[1] !== CONDO_NUMBER) return false;
-
-  if (BOARD_PACKAGE_PREFIX_PATTERN.test(filename)) return true;
-  if (/^board meeting package/i.test(filename)) return true;
-  if (BOARD_PACKAGE_WITH_CONDO_PATTERN.test(filename)) return true;
-
-  return false;
+  // Keep this in lockstep with classifyBoardDocumentName (projects board-report
+  // scan). Do not import that module here — it carries LLM prompt text that
+  // would ship to the Files page client bundle.
+  if (/\b2573\b/.test(filename) && !/\b2517\b/.test(filename)) return false;
+  const label = filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ");
+  if (/\bmanagement\s+reports?\b/i.test(label)) return true;
+  if (/\bboard\s+meeting\s+package\b/i.test(label)) return true;
+  return /\bboard\b/i.test(label) && /\bmeeting\s+package\b/i.test(label);
 }
 
 export function isFinancialStatementsFilename(filename: string): boolean {
@@ -187,6 +175,19 @@ export function parseBoardPackageDate(filename: string): Date | null {
     const date = new Date(year, month, day);
     if (Number.isNaN(date.getTime())) return null;
 
+    return date;
+  }
+
+  const dotted = filename.match(
+    /(?:^|[_\s-])((?:19|20)\d{2})\.(\d{1,2})\.(\d{1,2})(?:\b|[_\s-])/,
+  );
+  if (dotted) {
+    const date = new Date(
+      Number.parseInt(dotted[1], 10),
+      Number.parseInt(dotted[2], 10) - 1,
+      Number.parseInt(dotted[3], 10),
+    );
+    if (Number.isNaN(date.getTime())) return null;
     return date;
   }
 

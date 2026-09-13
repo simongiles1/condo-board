@@ -15,6 +15,7 @@ type Props = {
   accept: string;
   hint?: string;
   required?: boolean;
+  compact?: boolean;
   onFileChange?: (file: File | null) => void;
 };
 
@@ -25,6 +26,7 @@ export function FileDropzone({
   accept,
   hint,
   required = true,
+  compact = false,
   onFileChange,
 }: Props) {
   const inputId = useId();
@@ -73,7 +75,9 @@ export function FileDropzone({
         role="button"
         tabIndex={0}
         aria-label={`${label}. Drop files here or activate to browse.`}
-        className="flex cursor-pointer flex-col rounded-lg border-2 border-dashed border-teal-200 bg-teal-50/40 px-4 py-6 text-center text-sm transition hover:border-teal-400 hover:bg-teal-50"
+        className={`flex cursor-pointer flex-col rounded-lg border-2 border-dashed border-teal-200 bg-teal-50/40 text-center text-sm transition hover:border-teal-400 hover:bg-teal-50 ${
+          compact ? "px-3 py-3" : "px-4 py-6"
+        }`}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
@@ -85,17 +89,32 @@ export function FileDropzone({
         onDragOver={preventDefaults}
         onDrop={onDropFiles}
       >
-        <span className="font-medium text-teal-900">Drop files here</span>
-        <span className="mt-1 text-slate-600">or click to browse</span>
-        <span className="mt-2 text-xs text-slate-500">
-          {hint ?? accept.replace(/,/g, ", ")}
-        </span>
+        {compact ? (
+          <span className="text-slate-700">
+            <span className="font-medium text-teal-900">Drop .vtt here</span>
+            <span className="text-slate-600"> or click to browse</span>
+          </span>
+        ) : (
+          <>
+            <span className="font-medium text-teal-900">Drop files here</span>
+            <span className="mt-1 text-slate-600">or click to browse</span>
+          </>
+        )}
+        {!compact ? (
+          <span className="mt-2 text-xs text-slate-500">
+            {hint ?? accept.replace(/,/g, ", ")}
+          </span>
+        ) : null}
         {fileName ? (
-          <span className="mt-3 rounded bg-white px-2 py-1 font-mono text-xs text-slate-700 ring-1 ring-slate-200">
+          <span
+            className={`rounded bg-white px-2 py-1 font-mono text-xs text-slate-700 ring-1 ring-slate-200 ${
+              compact ? "mt-2" : "mt-3"
+            }`}
+          >
             Selected: {fileName}
           </span>
         ) : (
-          <span className="mt-3 text-xs text-amber-800">
+          <span className={`text-xs text-amber-800 ${compact ? "mt-2" : "mt-3"}`}>
             No file chosen yet ({required ? "required" : "optional"})
           </span>
         )}

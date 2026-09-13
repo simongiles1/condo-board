@@ -36,6 +36,8 @@ type Props = {
   onClose: () => void;
   /** When true, renders only the viewer body (no modal shell). */
   embedded?: boolean;
+  /** With embedded, fill the parent height instead of a fixed max-height. */
+  embeddedFill?: boolean;
   /** Extracted agenda items used to overlay section headings on the readable transcript. */
   agendaItems?: AgendaOverlayItem[];
 } & (
@@ -51,6 +53,7 @@ export function VttViewerDialog({
   fileLabel,
   onClose,
   embedded = false,
+  embeddedFill = false,
   agendaItems,
 }: Props) {
   const [rawContent, setRawContent] = useState<string | null>(null);
@@ -414,7 +417,9 @@ export function VttViewerDialog({
   const bodyBlock = (
     <div
       ref={scrollContainerRef}
-      className={`min-h-0 flex-1 overflow-y-auto ${embedded ? "max-h-[min(60vh,560px)]" : ""}`}
+      className={`min-h-0 flex-1 overflow-y-auto ${
+        embedded && !embeddedFill ? "max-h-[min(60vh,560px)]" : ""
+      }`}
     >
       <div className={embedded ? "px-4 py-3" : "px-6 py-5"}>
           {loading ? (
@@ -476,7 +481,9 @@ export function VttViewerDialog({
   if (embedded) {
     return (
       <>
-        <div className="flex h-full flex-col">
+        <div
+          className={`flex flex-col ${embeddedFill ? "h-full min-h-0" : "h-full"}`}
+        >
           {headerBlock}
           {bodyBlock}
         </div>

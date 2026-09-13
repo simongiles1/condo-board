@@ -332,8 +332,8 @@ The hole is after the floor item and before the next ranged item. Speakers often
 Rules:
 - OPEN an unassigned agenda leaf when this window is clearly that matter. Only use itemNumbers from the unassigned list.
 - Discussion of "next board meeting", "next meeting date", or scheduling the next meeting belongs to that agenda leaf even if a later ad-hoc item already has a transcript range after this hole.
-- Extend the floor only through wrap-up / thanks that still belong to it.
-- Leave the window unassigned when it is skippable chatter or the start of the next ranged item. Do not invent itemNumbers.
+- Extend the floor through wrap-up, "can we move to the next item", unmute, and "can you hear me?" until speakers name a different matter. That is still the floor item.
+- Leave the window unassigned only when it is neither the floor wrap-up nor any unassigned leaf. Do not invent itemNumbers.
 - Return JSON only.`;
 
 async function defaultRemainingHoleJudge(input: {
@@ -357,9 +357,9 @@ WINDOW: ${formatClockFromSeconds(input.windowStartSeconds)} – ${formatClockFro
 UNASSIGNED AGENDA LEAVES (may be discussed out of outline order in this hole):
 ${unmatchedList}
 
-If wrap-up of the floor continues, set extendFloorTo to the last cue still on the floor.
+If wrap-up of the floor continues (including "move to the next item" and unmute without naming the next matter), set extendFloorTo to the last cue still on the floor.
 If an unassigned leaf is what this window is about, add an opens entry. Overlap with the floor is allowed.
-If this is chatter or the next ranged item, return empty opens and null extendFloorTo.
+If speakers have already named the next ranged item, return empty opens and null extendFloorTo.
 
 Return:
 {"extendFloorTo":"HH:MM:SS"|null,"opens":[{"itemNumber":"5","startTimestamp":"HH:MM:SS","endTimestamp":"HH:MM:SS"}]}
@@ -412,6 +412,116 @@ export async function assignRemainingHolesToAgenda(options: {
       `Assigning leftover transcript gap ${formatClockFromSeconds(hole.startSeconds)}–${formatClockFromSeconds(hole.endSeconds)}`,
     onProgress: options.onProgress,
   });
+}
+
+const PROCEDURAL_CUE_RE =
+  /\b(un-?mute|muted?|can you hear|hear me|are you(?: there)?|we(?:'re| are) good|move on|next item|next one|any other questions|i(?:'?m| am) fine|thank you|thanks|go ahead|you move forward|felt heard|that'?s (?:good|great|fine)|you are mute)/i;
+
+const FILLER_WORDS = new Set([
+  "okay",
+  "ok",
+  "mm",
+  "mhm",
+  "uh",
+  "um",
+  "yes",
+  "yeah",
+  "yep",
+  "no",
+  "right",
+  "paul",
+  "haider",
+  "bonnie",
+  "shawna",
+  "sorry",
+  "perfect",
+  "he",
+  "is",
+  "us",
+  "oh",
+  "now",
+  "you",
+  "are",
+  "me",
+  "can",
+  "hear",
+  "hey",
+  "there",
+]);
+
+function cueWordList(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+export function isProceduralTranscriptCue(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  if (PROCEDURAL_CUE_RE.test(trimmed)) return true;
+  const words = cueWordList(trimmed);
+  return words.length > 0 && words.length <= 6 && words.every((word) => FILLER_WORDS.has(word) || word.length <= 2);
+}
+
+function distinctiveTitleTokens(title: string): string[] {
+  return cueWordList(title).filter((word) => word.length >= 4 || /\d/.test(word));
+}
+
+function cueNamesMatter(text: string, title: string, otherTitle: string | null): boolean {
+  const words = new Set(cueWordList(text));
+  const other = new Set(otherTitle ? distinctiveTitleTokens(otherTitle) : []);
+  return distinctiveTitleTokens(title).some((token) => words.has(token) && !other.has(token));
+}
+
+/**
+ * After LLM hole passes, leftover unmute / "move on" stretches still belong
+ * to the floor item. Span-edge and leftover-hole judges often STOP because
+ * "next item" sounds like OPEN. This does not invent new agenda rows.
+ */
+export function extendFloorThroughLifecycleHoles(options: {
+  topics: SpanReviewTopic[];
+  cues: SpanReviewCue[];
+}): SpanReviewTopic[] {
+  const topics = options.topics.map((topic) => ({ ...topic }));
+  const holes = findTranscriptHoles(topics, options.cues);
+  for (const hole of holes) {
+    const floorIndex = topics.findIndex(
+      (topic) =>
+        (topic.itemNumber || "").trim().toLowerCase() ===
+        (hole.left.itemNumber || "").trim().toLowerCase(),
+    );
+    if (floorIndex < 0) continue;
+    const holeCues = cuesInWindow(options.cues, hole.startSeconds, hole.endSeconds);
+    if (holeCues.length === 0) continue;
+    let lastProcedural: SpanReviewCue | null = null;
+    for (const cue of holeCues) {
+      if (cueNamesMatter(cue.text, hole.right?.title ?? "", hole.left.title)) {
+        break;
+      }
+      if (isProceduralTranscriptCue(cue.text)) {
+        lastProcedural = cue;
+        continue;
+      }
+      break;
+    }
+    if (!lastProcedural) continue;
+    const endSeconds = Math.min(
+      lastProcedural.endSeconds || lastProcedural.startSeconds,
+      hole.endSeconds - 0.01,
+    );
+    const floorSpans = topicClockSpans(topics[floorIndex]);
+    const floorSpan = floorSpans[floorSpans.length - 1];
+    if (!floorSpan || endSeconds <= floorSpan.endSeconds + 0.5) continue;
+    topics[floorIndex] = addSpanToTopic(
+      topics[floorIndex],
+      { startSeconds: floorSpan.startSeconds, endSeconds },
+      options.cues,
+    );
+  }
+  return topics;
 }
 
 export function discussionTimingPresent(topic: {

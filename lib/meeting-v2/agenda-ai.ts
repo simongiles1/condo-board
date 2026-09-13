@@ -40,6 +40,7 @@ import {
 import {
   assignRemainingHolesToAgenda,
   assignUnmatchedLeavesInHoles,
+  extendFloorThroughLifecycleHoles,
 } from "@/lib/meeting-v2/gap-leaf-assignment";
 
 type WorkflowTopic = {
@@ -1653,13 +1654,17 @@ export async function extractAgendaItemsWithAi(
         });
       },
     });
+    const wrapped = extendFloorThroughLifecycleHoles({
+      topics: leftover,
+      cues: transcriptSegmentsToReviewCues(transcriptSegments),
+    });
     finalTopics = finalTopics.map((topic, index) => ({
       ...topic,
       discussionTimestampRange:
-        leftover[index]?.discussionTimestampRange ?? topic.discussionTimestampRange,
+        wrapped[index]?.discussionTimestampRange ?? topic.discussionTimestampRange,
       sourceTranscriptRanges:
-        leftover[index]?.sourceTranscriptRanges ?? topic.sourceTranscriptRanges,
-      discussionStatus: leftover[index]?.discussionStatus ?? topic.discussionStatus,
+        wrapped[index]?.sourceTranscriptRanges ?? topic.sourceTranscriptRanges,
+      discussionStatus: wrapped[index]?.discussionStatus ?? topic.discussionStatus,
     }));
     finalTopics = applyAgendaHierarchyCorrections(finalTopics);
   }

@@ -197,7 +197,7 @@ Walk the supplied cues in clock order. Each cue is:
 3. CHANGE LIFECYCLE — assent, unmute, "move on", clerk tags about the current item
 
 Assent ratifies the current item. It does not open the next outline item.
-OPEN only when speakers name a different matter (project, asset, quote, contractor).
+"Can we move to the next item?", unmute, "are you muted?", and "can you hear me?" are CHANGE LIFECYCLE of the current item. They are not OPEN. OPEN only when speakers name a different matter (project, asset, quote, contractor, unit).
 
 Return JSON only.`;
 
@@ -264,7 +264,7 @@ ${foreign}
 
 ${unmatched}
 
-If they still belong to the current item (enrich or lifecycle wrap-up), return:
+If they still belong to the current item (enrich or lifecycle wrap-up, including "move to the next item" and unmute without naming the next matter), return:
 {"action":"extend","endTimestamp":"HH:MM:SS"}
 using the last cue that still belongs to this item.
 

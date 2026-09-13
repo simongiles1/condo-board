@@ -10,6 +10,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V2 leftover transcript holes** — After outline-order hole assignment, remaining unboxed stretches are matched to any still-unassigned agenda leaf. That covers official items discussed out of order (for example the next board-meeting date sitting between two ad-hoc 4.E items), which the previous pass skipped because their outline codes fall after the next ranged leaf.
 
+- **Meetings V2 unmute wrap-up holes** — After the leftover-hole model pass, unmute and “can we move to the next item” stretches between two ranged leaves are attached to the floor item in code. Span-edge and leftover-hole judges often stop on that phrasing even though it is still the current item.
+
 ### Changed
 
 - **Meetings V2 detail layout (mobile)** — Below the `xl` breakpoint, pipeline controls, PDF download, and the AI autonomy slider move into the header more menu; wider layouts show them in the header again. The workspace card uses a viewport-width breakout with horizontal overflow clipped on the scroll container.

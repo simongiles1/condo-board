@@ -9,7 +9,9 @@ import { describe, it } from "node:test";
 import {
   assignRemainingHolesToAgenda,
   assignUnmatchedLeavesInHoles,
+  extendFloorThroughLifecycleHoles,
   findTranscriptHoles,
+  isProceduralTranscriptCue,
 } from "../lib/meeting-v2/gap-leaf-assignment";
 import {
   listUnmatchedLaterLeaves,
@@ -259,5 +261,70 @@ describe("leftover holes after outline-order assignment", () => {
     assert.equal(reviewed[3]?.discussionTimestampRange, undefined);
     assert.match(reviewed[0]?.discussionTimestampRange ?? "", /02:01:53/);
     assert.match(reviewed[1]?.discussionTimestampRange ?? "", /02:04:07/);
+  });
+});
+
+describe("lifecycle wrap-up holes", () => {
+  const b3End = 38 * 60 + 18;
+  const unmute = 38 * 60 + 21;
+  const hearMe = 38 * 60 + 34;
+  const good = 38 * 60 + 35;
+  const pumpStart = 38 * 60 + 49;
+
+  function muaAndPump(): SpanReviewTopic[] {
+    return [
+      {
+        title: "PH Mechanical Room Make-Up Air Unit Leak Repair",
+        itemNumber: "4.B.3",
+        discussionStatus: "discussed",
+        discussionTimestampRange: "00:31:35 - 00:38:18",
+        sourceTranscriptRanges: [[1, 40]],
+      },
+      {
+        title: "Heating Pump P-10A Seal Replacement",
+        itemNumber: "4.B.4",
+        discussionStatus: "discussed",
+        discussionTimestampRange: "00:38:49 - 00:42:27",
+        sourceTranscriptRanges: [[80, 120]],
+      },
+    ];
+  }
+
+  it("treats unmute and move-on lines as procedural", () => {
+    assert.equal(isProceduralTranscriptCue("Okay, can we move to the next item?"), true);
+    assert.equal(isProceduralTranscriptCue("Hey, Paul, are you?"), true);
+    assert.equal(isProceduralTranscriptCue("He is muted."), true);
+    assert.equal(isProceduralTranscriptCue("Can you hear me?"), true);
+    assert.equal(isProceduralTranscriptCue("We are good."), true);
+    assert.equal(
+      isProceduralTranscriptCue("We have a sealed replacement for pump 10A"),
+      false,
+    );
+  });
+
+  it("extends 4.B.3 through the unmute hole before 4.B.4", () => {
+    const reviewed = extendFloorThroughLifecycleHoles({
+      topics: muaAndPump(),
+      cues: [
+        cueAt(b3End + 1, "Okay, can we move to the next item?"),
+        cueAt(unmute, "Hey, Paul, are you?"),
+        cueAt(unmute + 3, "He is muted."),
+        cueAt(hearMe, "Can you hear me?"),
+        cueAt(good, "We are good."),
+        cueAt(pumpStart, "We have a sealed replacement for pump 10A"),
+      ],
+    });
+    assert.match(reviewed[0]?.discussionTimestampRange ?? "", /00:38:3/);
+    assert.doesNotMatch(reviewed[0]?.discussionTimestampRange ?? "", /00:38:49/);
+    assert.match(reviewed[1]?.discussionTimestampRange ?? "", /00:38:49/);
+  });
+
+  it("does not swallow the next named matter", () => {
+    const reviewed = extendFloorThroughLifecycleHoles({
+      topics: muaAndPump(),
+      cues: [cueAt(b3End + 2, "We have a sealed replacement for pump 10A")],
+    });
+    assert.match(reviewed[0]?.discussionTimestampRange ?? "", /00:38:18/);
+    assert.doesNotMatch(reviewed[0]?.discussionTimestampRange ?? "", /00:38:20/);
   });
 });

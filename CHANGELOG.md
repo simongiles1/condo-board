@@ -8,9 +8,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Recurring document types** — Knowledge → Document Library no longer uses four filename tabs. A corpus job reads file cards, clusters dated instances of the same document role, and the model names the series (so a Management Report packet can sit with board meeting packages). The page lists those types; open a type to click through files, preview them, move a mis-filed instance, or remove it. Meetings V2 on-file packages prefer the series marked as the pre-meeting packet, and fall back to the filename list until a discovery run has one.
+- **Recurring document types** — Knowledge → Recurring documents classifies file cards with the model: it proposes a catalog from a diverse sample, then assigns each card to a type or “not recurring.” A type is kept only when instances fall on at least two dates. Logos, screenshots, and valueless attachments are skipped. The page lists those types for review. Meetings V2 on-file packages prefer the series marked as the pre-meeting packet, and fall back to the filename list until a discovery run has one.
 
 ### Fixed
+
+- **Recurring documents file count** — Each type counts unique files, not every email that carried the same attachment.
 
 - **Meetings V2 create — on-file packages** — The archive dropdown now includes standalone *Management Report* PDFs, not only files whose name contains “board meeting package.” ICC often sends the circulated packet under the report title (for example the August 6, 2026 report) while the covering email still says board meeting package. Continuation meetings (August 12 after August 6) still show as a nearest date match, not an exact filename match.
 

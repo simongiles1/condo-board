@@ -15,6 +15,7 @@ import {
   emails,
 } from "@/lib/db/schema";
 import {
+  isSeriesDiscoveryEligible,
   type DocumentSeriesMemberSource,
   type DocumentSeriesRunStatus,
   type DocumentSeriesUsage,
@@ -64,6 +65,7 @@ export type DocumentSeriesMemberFile = {
 export type SeriesDiscoveryDoc = {
   contentHash: string;
   filename: string;
+  mimeType: string;
   documentType: string;
   documentDate: string | null;
   coveringEmailContext: string;
@@ -174,6 +176,8 @@ export async function loadSeriesDiscoveryDocs(): Promise<SeriesDiscoveryDoc[]> {
       coveringEmailContext: attachmentFileCards.coveringEmailContext,
       summary: attachmentFileCards.summary,
       filename: emailAttachments.filename,
+      mimeType: emailAttachments.mimeType,
+      hasValue: emailAttachments.hasValue,
       receivedAt: emails.receivedAt,
       excluded: documentSeriesExclusions.contentHash,
       memberSource: documentSeriesMembers.source,
@@ -197,12 +201,22 @@ export async function loadSeriesDiscoveryDocs(): Promise<SeriesDiscoveryDoc[]> {
   const byHash = new Map<string, SeriesDiscoveryDoc>();
   for (const row of rows) {
     if (row.excluded) continue;
+    if (
+      !isSeriesDiscoveryEligible({
+        mimeType: row.mimeType,
+        filename: row.filename,
+        hasValue: row.hasValue,
+      })
+    ) {
+      continue;
+    }
     const receivedAt = row.receivedAt;
     const existing = byHash.get(row.contentHash);
     if (existing && existing.receivedAt <= receivedAt) continue;
     byHash.set(row.contentHash, {
       contentHash: row.contentHash,
       filename: row.filename,
+      mimeType: row.mimeType,
       documentType: row.documentType,
       documentDate: row.documentDate,
       coveringEmailContext: row.coveringEmailContext,
@@ -342,7 +356,7 @@ export async function listDocumentSeries(): Promise<DocumentSeriesListItem[]> {
       title: documentSeries.title,
       description: documentSeries.description,
       usage: documentSeries.usage,
-      memberCount: sql<number>`count(${documentSeriesMembers.contentHash})::int`,
+      memberCount: sql<number>`count(distinct ${documentSeriesMembers.contentHash})::int`,
       firstDate: sql<string | null>`min(coalesce(${attachmentFileCards.documentDate}, ${emails.receivedAt}))`,
       lastDate: sql<string | null>`max(coalesce(${attachmentFileCards.documentDate}, ${emails.receivedAt}))`,
     })

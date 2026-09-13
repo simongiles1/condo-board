@@ -1,5 +1,5 @@
 /**
- * Recurring document series clustering and LLM name parsing.
+ * Recurring document series catalog/assignment parsing.
  * Run: npx tsx --test scripts/test-document-series.ts
  */
 
@@ -7,11 +7,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  buildSeriesIdentityText,
-  clusterByCosine,
   clusterLooksRecurring,
+  isSeriesDiscoveryEligible,
   parseDocumentSeriesUsage,
-  parseSeriesNameProposals,
+  parseSeriesAssignments,
+  parseSeriesCatalog,
+  sampleSeriesDiscoveryDocs,
+  seriesKeyFromTitle,
   stripTemporalTokens,
 } from "../lib/documents/series-shared";
 
@@ -39,65 +41,122 @@ describe("clusterLooksRecurring", () => {
   });
 });
 
-describe("clusterByCosine", () => {
-  it("joins near-identical vectors and leaves an outlier alone", () => {
-    const a = [1, 0, 0];
-    const b = [0.99, 0.1, 0];
-    const c = [0, 1, 0];
-    const groups = clusterByCosine([a, b, c], 0.9);
-    const sorted = groups.map((g) => [...g].sort((x, y) => x - y));
-    assert.deepEqual(
-      sorted.find((g) => g.length === 2),
-      [0, 1],
+describe("isSeriesDiscoveryEligible", () => {
+  it("skips valueless, image, and decorative filenames", () => {
+    assert.equal(
+      isSeriesDiscoveryEligible({
+        mimeType: "application/pdf",
+        filename: "Minutes.pdf",
+        hasValue: true,
+      }),
+      true,
     );
-    assert.deepEqual(
-      sorted.find((g) => g.length === 1),
-      [2],
+    assert.equal(
+      isSeriesDiscoveryEligible({
+        mimeType: "application/pdf",
+        filename: "Minutes.pdf",
+        hasValue: false,
+      }),
+      false,
+    );
+    assert.equal(
+      isSeriesDiscoveryEligible({
+        mimeType: "image/png",
+        filename: "notice.png",
+        hasValue: true,
+      }),
+      false,
+    );
+    assert.equal(
+      isSeriesDiscoveryEligible({
+        mimeType: "application/pdf",
+        filename: "image001.png",
+        hasValue: true,
+      }),
+      false,
+    );
+    assert.equal(
+      isSeriesDiscoveryEligible({
+        mimeType: "application/pdf",
+        filename: "Screenshot 2025-04-23 at 9.30.58 AM.png",
+        hasValue: true,
+      }),
+      false,
     );
   });
 });
 
-describe("parseSeriesNameProposals", () => {
-  it("merges clusters, maps usage aliases, and ignores unknown ids", () => {
-    const proposals = parseSeriesNameProposals(
+describe("sampleSeriesDiscoveryDocs", () => {
+  it("round-robins across type and filename buckets", () => {
+    const docs = [
+      { documentType: "letter", filename: "Office Hours Aug 6.pdf" },
+      { documentType: "letter", filename: "Office Hours Aug 13.pdf" },
+      { documentType: "minutes", filename: "Minutes Aug 6.pdf" },
+      { documentType: "tables", filename: "GL Aug 6.pdf" },
+    ];
+    const sampled = sampleSeriesDiscoveryDocs(docs, 3);
+    const types = new Set(sampled.map((doc) => doc.documentType));
+    assert.equal(sampled.length, 3);
+    assert.ok(types.size >= 2);
+  });
+});
+
+describe("parseSeriesCatalog", () => {
+  it("slugs keys, maps usage aliases, and keeps known existing ids", () => {
+    const entries = parseSeriesCatalog(
       {
         series: [
           {
+            key: "Board Meeting Packages",
             title: "Board meeting packages",
             description: "Circulated pre-meeting packet",
-            clusterIds: [0, 2, 2, 9],
             usage: "board_meeting_package",
-            drop: false,
+            existingId: "keep-me",
           },
           {
-            title: "One-off",
-            clusterIds: [1],
-            drop: true,
+            title: "Monthly financial statements",
+            usage: "financial_statements",
+            existingId: "unknown",
           },
+          { title: "" },
         ],
       },
-      new Set([0, 1, 2]),
-      new Set<string>(),
+      new Set(["keep-me"]),
     );
-    assert.equal(proposals.length, 2);
-    assert.deepEqual(proposals[0]?.clusterIds, [0, 2]);
-    assert.equal(proposals[0]?.usage, "board_package");
-    assert.equal(proposals[1]?.drop, true);
+    assert.equal(entries.length, 2);
+    assert.equal(entries[0]?.key, "board-meeting-packages");
+    assert.equal(entries[0]?.usage, "board_package");
+    assert.equal(entries[0]?.existingId, "keep-me");
+    assert.equal(entries[1]?.existingId, null);
+    assert.equal(entries[1]?.key, "monthly-financial-statements");
   });
 });
 
-describe("buildSeriesIdentityText", () => {
-  it("puts a date-stripped role label ahead of the instance date", () => {
-    const text = buildSeriesIdentityText({
-      filename: "Management Report Aug 6, 2026 (TSCC 2517).pdf",
-      documentType: "other",
-      documentDate: "2026-08-06",
-      coveringEmailContext: "Board Meeting Package for Review",
-      summary: "Agenda, ratifications, and the property management report.",
-    });
-    assert.match(text, /Role label: Management Report \(TSCC 2517\)/);
-    assert.match(text, /Instance date: 2026-08-06/);
-    assert.match(text, /Board Meeting Package/);
+describe("parseSeriesAssignments", () => {
+  it("maps ids to catalog keys, new titles, or not-recurring", () => {
+    const assignments = parseSeriesAssignments(
+      {
+        assignments: [
+          { id: 0, seriesKey: "minutes" },
+          { id: 1, seriesKey: null },
+          { id: 2, newTitle: "Resident notices" },
+          { id: 2, seriesKey: "dup" },
+          { id: 9, seriesKey: "minutes" },
+        ],
+      },
+      new Set([0, 1, 2]),
+    );
+    assert.equal(assignments.length, 3);
+    assert.equal(assignments[0]?.seriesKey, "minutes");
+    assert.equal(assignments[1]?.seriesKey, null);
+    assert.equal(assignments[2]?.seriesKey, "resident-notices");
+    assert.equal(assignments[2]?.newTitle, "Resident notices");
+  });
+});
+
+describe("seriesKeyFromTitle", () => {
+  it("kebab-cases titles", () => {
+    assert.equal(seriesKeyFromTitle("Board meeting packages"), "board-meeting-packages");
   });
 });
 

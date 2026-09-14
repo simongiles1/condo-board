@@ -27,7 +27,11 @@ import {
   normalizeTelegramChatId,
   shouldPollTelegram,
 } from "../lib/telegram/config";
-import { explainTelegramSendFailure } from "../lib/telegram/api";
+import {
+  clampTelegramText,
+  explainTelegramSendFailure,
+  TELEGRAM_MAX_TEXT_LENGTH,
+} from "../lib/telegram/api";
 
 function person(
   id: string,
@@ -328,6 +332,19 @@ describe("formatResolvedMessage", () => {
     const first = formatResolvedMessage("Ambiguous contact", "approved");
     assert.match(first, /Approved in Telegram/);
     assert.equal(formatResolvedMessage(first, "approved"), first);
+  });
+});
+
+describe("clampTelegramText", () => {
+  it("leaves short copy unchanged", () => {
+    assert.equal(clampTelegramText("Allowlist review pending."), "Allowlist review pending.");
+  });
+
+  it("fits the Bot API 4096-character cap", () => {
+    const text = "x".repeat(TELEGRAM_MAX_TEXT_LENGTH + 800);
+    const clamped = clampTelegramText(text);
+    assert.ok(clamped.length <= TELEGRAM_MAX_TEXT_LENGTH);
+    assert.match(clamped, /truncated/);
   });
 });
 

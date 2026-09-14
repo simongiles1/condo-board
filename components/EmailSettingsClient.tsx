@@ -1192,8 +1192,9 @@ export function EmailSettingsClient(props: {
                     </p>
                     {schedulerEnabled ? (
                       <p className="mt-1 text-xs text-slate-500">
-                        Uses your computer&apos;s local timezone while the app is
-                        running.
+                        Clock time is Eastern (America/Toronto), including daylight
+                        saving. Production servers run in UTC, so 7:00 p.m. here is
+                        7:00 p.m. Toronto, not 7:00 p.m. UTC.
                         {settings
                           ? ` Scheduler ${schedulerRunning ? "active" : "inactive"} · last updated ${formatSettingsDate(settings.updatedAt)}`
                           : ""}

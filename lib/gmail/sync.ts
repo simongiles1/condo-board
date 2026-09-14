@@ -27,6 +27,7 @@ import {
   parsedMessageMatchesAllowlist,
 } from "./queries";
 import { storeParsedMessage, type EmailSource } from "./store";
+import { summarizeGmailSyncErrors, withGmailQuotaRetry } from "./quota";
 import {
   assertDedicatedConnectionValid,
   assertPersonalConnectionValid,
@@ -65,11 +66,13 @@ async function fetchFullMessage(
   gmail: gmail_v1.Gmail,
   messageId: string,
 ): Promise<ReturnType<typeof parseGmailMessage>> {
-  const response = await gmail.users.messages.get({
-    userId: "me",
-    id: messageId,
-    format: "full",
-  });
+  const response = await withGmailQuotaRetry(() =>
+    gmail.users.messages.get({
+      userId: "me",
+      id: messageId,
+      format: "full",
+    }),
+  );
   return parseGmailMessage(response.data);
 }
 
@@ -479,6 +482,7 @@ export async function syncPersonalAccount(
   } finally {
     personalSyncInProgress = false;
 
+    const reported = summarizeGmailSyncErrors(errors);
     try {
       await db
         .update(syncRuns)
@@ -486,7 +490,7 @@ export async function syncPersonalAccount(
           finishedAt: new Date().toISOString(),
           messagesAdded,
           messagesSkipped,
-          errors: errors.length > 0 ? errors.join("\n") : null,
+          errors: reported.length > 0 ? reported.join("\n") : null,
         })
         .where(eq(syncRuns.id, syncRunId));
     } catch (finalizeError) {
@@ -498,7 +502,7 @@ export async function syncPersonalAccount(
     syncRunId,
     messagesAdded,
     messagesSkipped,
-    errors,
+    errors: summarizeGmailSyncErrors(errors),
   };
 }
 
@@ -613,7 +617,10 @@ export async function syncDedicatedAccount(
       finishedAt: new Date().toISOString(),
       messagesAdded,
       messagesSkipped,
-      errors: errors.length > 0 ? errors.join("\n") : null,
+      errors: (() => {
+        const reported = summarizeGmailSyncErrors(errors);
+        return reported.length > 0 ? reported.join("\n") : null;
+      })(),
     })
     .where(eq(syncRuns.id, syncRunId));
 
@@ -621,6 +628,6 @@ export async function syncDedicatedAccount(
     syncRunId,
     messagesAdded,
     messagesSkipped,
-    errors,
+    errors: summarizeGmailSyncErrors(errors),
   };
 }

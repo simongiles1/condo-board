@@ -8,6 +8,26 @@ import {
 
 const TELEGRAM_API = "https://api.telegram.org";
 
+/** Bot API sendMessage / editMessageText hard limit. */
+export const TELEGRAM_MAX_TEXT_LENGTH = 4096;
+
+const TELEGRAM_TRUNCATE_SUFFIX =
+  "\n\n…truncated. Open Email Settings for the rest.";
+
+/**
+ * Telegram rejects the whole send if text exceeds 4096 characters.
+ * Keep one message (so inline buttons stay attached) and point at Email Settings.
+ */
+export function clampTelegramText(
+  text: string,
+  maxLength = TELEGRAM_MAX_TEXT_LENGTH,
+): string {
+  if (text.length <= maxLength) return text;
+  const suffix = TELEGRAM_TRUNCATE_SUFFIX;
+  const budget = Math.max(0, maxLength - suffix.length);
+  return `${text.slice(0, budget).trimEnd()}${suffix}`;
+}
+
 export type TelegramInlineKeyboard = {
   inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
 };
@@ -56,7 +76,7 @@ export async function sendTelegramMessage(input: {
     "sendMessage",
     {
       chat_id: chatId,
-      text: input.text,
+      text: clampTelegramText(input.text),
       disable_web_page_preview: true,
       reply_markup: input.replyMarkup,
     },
@@ -78,7 +98,7 @@ export async function editTelegramMessage(input: {
     await telegramCall("editMessageText", {
       chat_id: input.chatId,
       message_id: input.messageId,
-      text: input.text,
+      text: clampTelegramText(input.text),
       disable_web_page_preview: true,
       reply_markup: input.replyMarkup ?? { inline_keyboard: [] },
     });

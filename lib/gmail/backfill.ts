@@ -16,6 +16,7 @@ import {
   isMessageOnOrBeforeCutoff,
 } from "./queries";
 import { storeParsedMessage, type EmailSource } from "./store";
+import { summarizeGmailSyncErrors, withGmailQuotaRetry } from "./quota";
 import { listMatchingThreadIds } from "./thread-search";
 
 export type BackfillTrigger = "manual" | "backfill";
@@ -49,11 +50,13 @@ export async function importGmailThread(
   const errors: string[] = [];
 
   try {
-    const response = await gmail.users.threads.get({
-      userId: "me",
-      id: threadId,
-      format: "full",
-    });
+    const response = await withGmailQuotaRetry(() =>
+      gmail.users.threads.get({
+        userId: "me",
+        id: threadId,
+        format: "full",
+      }),
+    );
 
     for (const message of response.data.messages ?? []) {
       try {
@@ -170,13 +173,14 @@ export async function backfillPersonalAccount(options?: {
     errors.push(error instanceof Error ? error.message : String(error));
   }
 
+  const reported = summarizeGmailSyncErrors(errors);
   await db
     .update(syncRuns)
     .set({
       finishedAt: new Date().toISOString(),
       messagesAdded,
       messagesSkipped,
-      errors: errors.length > 0 ? errors.join("\n") : null,
+      errors: reported.length > 0 ? reported.join("\n") : null,
     })
     .where(eq(syncRuns.id, syncRunId));
 
@@ -184,6 +188,6 @@ export async function backfillPersonalAccount(options?: {
     syncRunId,
     messagesAdded,
     messagesSkipped,
-    errors,
+    errors: reported,
   };
 }

@@ -6,6 +6,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Automatic email sync time** — The daily schedule was interpreted as UTC on the server, so 7:00 p.m. in Email Settings ran at 3:00 p.m. Eastern. Cron now uses America/Toronto (Eastern, including daylight saving).
+
+- **Cron ingest Failed from Telegram** — A Telegram Bot API “message is too long” (4,096-character) rejection could mark the whole ingest run Failed and hide the original error. Long cards are truncated, and a Telegram send failure no longer fails the pipeline.
+
+- **Cron ingest Failed from Gmail quota** — The 3:00 p.m. Eastern cron on 2026-09-14 imported 0 messages because Gmail returned “Units per minute per user” quota errors on a 161-message history batch. Sync now waits and retries those calls, and collapses the duplicate quota lines so Telegram is not flooded.
+
 ### Changed
 
 - **Build-out progress Gantt** — Curated statuses reviewed 2026-09-14. Corpus search / RAG and Ask the archive move to **In parallel** (product slice shipped; backfill + file-card qualify ongoing). Added **Recurring document types**. Gated ingest pipeline, meetings v2 (gold compare, create wizard, duplicate), and global archive chat reflected in card copy.

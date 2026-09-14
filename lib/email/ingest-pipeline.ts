@@ -285,6 +285,14 @@ export async function refreshIngestTelegramMessage(
 }
 
 async function upsertTelegramMessage(runId: string): Promise<void> {
+  try {
+    await upsertTelegramMessageInner(runId);
+  } catch (error) {
+    console.error("[ingest] telegram notify failed", runId, error);
+  }
+}
+
+async function upsertTelegramMessageInner(runId: string): Promise<void> {
   const run = await getIngestRun(runId);
   if (!run) return;
   if (!(await isTelegramHitlReady())) return;
@@ -402,21 +410,24 @@ async function waitOrAdvance(runId: string, nextStage: IngestStage): Promise<voi
 }
 
 async function completeRun(runId: string, error?: string): Promise<void> {
-  await patchRun(runId, {
-    status: error ? "failed" : "completed",
-    stage: "done",
-    waitKind: null,
-    lastError: error ?? null,
-    finishedAt: new Date().toISOString(),
-  });
-  if (error) {
-    const item = (await getIngestRun(runId))?.telegramReviewItemId;
-    if (item) {
-      await markTelegramReviewResolved({
-        id: item,
-        status: "denied",
-        via: "ui",
-      }).catch(() => undefined);
+  const existing = await getIngestRun(runId);
+  if (existing?.status !== "completed" && existing?.status !== "failed") {
+    await patchRun(runId, {
+      status: error ? "failed" : "completed",
+      stage: "done",
+      waitKind: null,
+      lastError: error ?? null,
+      finishedAt: new Date().toISOString(),
+    });
+    if (error) {
+      const item = (await getIngestRun(runId))?.telegramReviewItemId;
+      if (item) {
+        await markTelegramReviewResolved({
+          id: item,
+          status: "denied",
+          via: "ui",
+        }).catch(() => undefined);
+      }
     }
   }
   await upsertTelegramMessage(runId);

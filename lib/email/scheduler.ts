@@ -6,7 +6,12 @@ import {
   remindStaleAllowlistReviews,
 } from "@/lib/email/ingest-pipeline";
 
+import { DISPLAY_TIME_ZONE } from "@/lib/format/datetime";
+
 import { getEmailSyncSettings } from "./settings";
+
+/** Clock times saved in Email Settings are Eastern (Toronto), including DST. */
+export const EMAIL_SYNC_CRON_TIME_ZONE = DISPLAY_TIME_ZONE;
 
 let scheduledTask: ScheduledTask | null = null;
 let currentExpression: string | null = null;
@@ -53,12 +58,16 @@ export async function refreshEmailScheduler() {
     return;
   }
 
-  scheduledTask = cron.schedule(settings.syncCron, () => {
-    void runScheduledSync();
-  });
+  scheduledTask = cron.schedule(
+    settings.syncCron,
+    () => {
+      void runScheduledSync();
+    },
+    { timezone: EMAIL_SYNC_CRON_TIME_ZONE },
+  );
   currentExpression = settings.syncCron;
   console.info(
-    `[email-scheduler] Scheduled with cron "${settings.syncCron}"`,
+    `[email-scheduler] Scheduled with cron "${settings.syncCron}" (${EMAIL_SYNC_CRON_TIME_ZONE})`,
   );
 }
 

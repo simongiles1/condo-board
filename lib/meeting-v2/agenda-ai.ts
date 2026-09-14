@@ -279,7 +279,7 @@ Transcript rules:
 - Prefer updating notes and aliases on existing topics.
 - Lines marked as [PREVIOUS TRANSCRIPT CONTEXT] are provided strictly so you can read conversations that connect to the current lines. Do not extract brand new extra topics from the previous transcript context if they do not spill over into the new lines.
 - Preserve early guest-presentation topics when the transcript clearly shows a contractor, engineer, or presenter leading a distinct opening discussion block.
-- GUEST PRESENTERS & CARRIED OVER ITEMS: If a topic is an official agenda presentation (e.g. "Meeting with Eng. Ryan Ratcliff from TCG"), check whether the guest actually attended or spoke in this meeting. If the guest was NOT present in the audio recording, and the topic was only mentioned in passing or while reviewing amendments to previous minutes, DO NOT mark it as "discussed". Mark it as "not_discussed" and set evidenceStrength to "UNCERTAIN" with needsHumanReview: true and humanReviewReason: "Guest presenter did not speak in audio; topic was only mentioned in passing during review of prior minutes."
+- GUEST PRESENTERS & CARRIED OVER ITEMS: Distinguish a guest presentation from a later management-report discussion of the same project. A silent guest is not proof that an item was not discussed. Keep any relevant staff or board discussion associated with the item. If the evidence only refers to an earlier meeting or attendance is unclear, request review and describe the uncertainty; never invent attendance or remove a supported discussion.
 - If the transcript clearly reveals a planned or structured meeting matter that belongs in the main agenda but is missing from documentTopics, add it to documentTopics rather than extraTopics.
 - Use extraTopics only for genuinely additional matters that do not behave like an official agenda topic.
 - Every transcript-only new matter must use itemType "extra_topic". EXCEPTION: If the transcript introduces the approval of previous minutes or financial matters, add it to documentTopics with itemType "approval_of_previous_minutes" or "financial_matters" respectively. Do not invent custom itemType values for extraTopics.
@@ -454,8 +454,6 @@ async function parseWithRepair(text: string): Promise<unknown> {
   try {
     return safeJsonParse(text);
   } catch {
-    const balanced = tryBalanceTruncatedJson(text);
-    if (balanced) return balanced;
     const repaired = await generateDeepSeekJson({
       systemInstruction: "Repair invalid JSON into one valid JSON object.",
       userText: `Repair the following invalid JSON-like response into one valid JSON object.
@@ -475,8 +473,6 @@ ${text}`,
     try {
       return safeJsonParse(repaired.text);
     } catch {
-      const repairedBalanced = tryBalanceTruncatedJson(repaired.text);
-      if (repairedBalanced) return repairedBalanced;
       throw new Error("Could not repair malformed JSON response.");
     }
   }
@@ -923,14 +919,14 @@ function findPriorTopic(topic: WorkflowTopic, previous: WorkflowTopic[]): Workfl
     const byNumber = previous.find((entry) => (entry.itemNumber || "").trim().toLowerCase() === code);
     if (byNumber) return byNumber;
   }
-  return previous.find((entry) => normalize(entry.title) === normalize(topic.title));
+  const titleMatches = previous.filter(entry => normalize(entry.title) === normalize(topic.title) && normalize(entry.sectionLabel) === normalize(topic.sectionLabel));
+  return titleMatches.length === 1 ? titleMatches[0] : undefined;
 }
 
 function preserveItemNumbers(next: WorkflowTopic[], previous: WorkflowTopic[]): WorkflowTopic[] {
   if (previous.length === 0) return next;
-  const byTitle = new Map(previous.map((topic) => [normalize(topic.title), topic]));
   return next.map((topic) => {
-    const prior = byTitle.get(normalize(topic.title));
+    const prior = findPriorTopic(topic, previous);
     return prior?.itemNumber ? { ...topic, itemNumber: prior.itemNumber } : topic;
   });
 }
@@ -1472,7 +1468,7 @@ export async function extractAgendaItemsWithAi(
         };
       });
     } catch (err) {
-      console.warn("[agenda-ai] extractBoardPackageAgendaJson failed, falling back to chunk extraction:", err);
+    throw new Error(`Board package agenda extraction failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

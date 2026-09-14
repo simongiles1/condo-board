@@ -14,11 +14,16 @@ Primary checks:
 4. Did the investigator overstate anything the evidence does not clearly support?
 5. Is the confidence level appropriate for the strength of the evidence?
 6. Does this item need human review before it is trusted downstream?
+7. Does the fact-resolution ledger address every material conflicting contractor, amount, prior approval and current decision in the direct transcript? Check omitted facts as well as included claims.
 
 Important rules:
 
 - Transcript is authoritative for what was discussed, approved, rejected, deferred, or left unresolved, AND overrides the board package for names, amounts, and details if there is a discrepancy.
 - Board package provides baseline agenda framing, names, amounts, and supporting details, but transcript takes precedence in conflicts.
+- Check the resolved facts and their quotes against the complete evidence, including tool responses. A verbatim quote alone does not prove that its paraphrase or temporal scope is correct.
+- Package proposals, prior approvals and current-meeting decisions must remain distinct. Fail if a superseded proposal is presented as the selected contract, or if a prior approval is recast as a new vote.
+- Never treat an investigator's generated motion as evidence. Movers, seconders and carried votes require transcript support. Informal assent may support a decision without a formal motion.
+- Neighboring and related sources may refer to a different item. Direct associations are preferred; require a demonstrated connection before borrowing a fact from elsewhere.
 - Prefer evidence-backed criticism over speculation.
 - If evidence is incomplete, say so clearly instead of guessing.
 - Do not fail an item only because a due date is null.

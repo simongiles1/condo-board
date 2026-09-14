@@ -1,10 +1,35 @@
-/** Gmail user-rate / query-cost quota handling. */
+/** Gmail user-rate / query-cost quota handling and call metering. */
+
+import { AsyncLocalStorage } from "node:async_hooks";
 
 const QUOTA_MESSAGE =
   /quota exceeded|ratelimitexceeded|userratelimitexceeded/i;
 
 const HISTORY_CURSOR_NOTE =
   /history cursor was not advanced/i;
+
+/** Google docs (updated 2026-05-01): per minute per user per project. */
+export const GMAIL_UNITS_PER_USER_PER_MINUTE = 6_000;
+
+/**
+ * Official per-method quota units:
+ * https://developers.google.com/workspace/gmail/api/reference/quota
+ */
+export const GMAIL_METHOD_UNITS: Record<string, number> = {
+  getProfile: 1,
+  "history.list": 2,
+  "messages.attachments.get": 20,
+  "messages.get": 20,
+  "messages.list": 5,
+  "messages.send": 100,
+  "messages.trash": 20,
+  "threads.get": 40,
+  "threads.list": 10,
+};
+
+export function gmailMethodUnits(method: string): number {
+  return GMAIL_METHOD_UNITS[method] ?? 1;
+}
 
 export function isGmailQuotaError(error: unknown): boolean {
   const status =
@@ -73,4 +98,167 @@ export async function withGmailQuotaRetry<T>(
     }
   }
   throw lastError;
+}
+
+export type GmailQuotaMethodRow = {
+  method: string;
+  calls: number;
+  units: number;
+};
+
+export type GmailQuotaSnapshot = {
+  calls: number;
+  units: number;
+  durationMs: number;
+  peakUnitsIn60s: number;
+  limitUnitsPerUserPerMinute: number;
+  percentOfLimit: number;
+  byMethod: GmailQuotaMethodRow[];
+};
+
+type MeterEvent = { at: number; method: string; units: number };
+
+class GmailQuotaMeter {
+  private readonly events: MeterEvent[] = [];
+
+  record(method: string): void {
+    this.events.push({
+      at: Date.now(),
+      method,
+      units: gmailMethodUnits(method),
+    });
+  }
+
+  snapshot(): GmailQuotaSnapshot {
+    return snapshotFromEvents(this.events);
+  }
+}
+
+export function snapshotFromEvents(events: MeterEvent[]): GmailQuotaSnapshot {
+  const byMethodMap = new Map<string, GmailQuotaMethodRow>();
+  let units = 0;
+  for (const event of events) {
+    units += event.units;
+    const row = byMethodMap.get(event.method) ?? {
+      method: event.method,
+      calls: 0,
+      units: 0,
+    };
+    row.calls += 1;
+    row.units += event.units;
+    byMethodMap.set(event.method, row);
+  }
+  const started = events[0]?.at ?? Date.now();
+  const ended = events[events.length - 1]?.at ?? started;
+  const durationMs = Math.max(0, ended - started);
+  const peakUnitsIn60s = peakUnitsInWindow(events, 60_000);
+  const percentOfLimit = Math.round(
+    (peakUnitsIn60s / GMAIL_UNITS_PER_USER_PER_MINUTE) * 100,
+  );
+  const byMethod = [...byMethodMap.values()].sort((a, b) => b.units - a.units);
+  return {
+    calls: events.length,
+    units,
+    durationMs,
+    peakUnitsIn60s,
+    limitUnitsPerUserPerMinute: GMAIL_UNITS_PER_USER_PER_MINUTE,
+    percentOfLimit,
+    byMethod,
+  };
+}
+
+export function peakUnitsInWindow(
+  events: Array<{ at: number; units: number }>,
+  windowMs: number,
+): number {
+  if (events.length === 0) return 0;
+  let peak = 0;
+  let windowSum = 0;
+  let left = 0;
+  for (let right = 0; right < events.length; right += 1) {
+    windowSum += events[right]!.units;
+    while (events[right]!.at - events[left]!.at > windowMs) {
+      windowSum -= events[left]!.units;
+      left += 1;
+    }
+    if (windowSum > peak) peak = windowSum;
+  }
+  return peak;
+}
+
+const meterStore = new AsyncLocalStorage<GmailQuotaMeter>();
+
+export function recordGmailApiCall(method: string): void {
+  meterStore.getStore()?.record(method);
+}
+
+export function snapshotGmailQuotaMeter(): GmailQuotaSnapshot | null {
+  return meterStore.getStore()?.snapshot() ?? null;
+}
+
+export async function runWithGmailQuotaMeter<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; usage: GmailQuotaSnapshot }> {
+  const existing = meterStore.getStore();
+  if (existing) {
+    const result = await fn();
+    return { result, usage: existing.snapshot() };
+  }
+  const meter = new GmailQuotaMeter();
+  return meterStore.run(meter, async () => {
+    const result = await fn();
+    return { result, usage: meter.snapshot() };
+  });
+}
+
+export function parseGmailQuotaSnapshot(
+  value: unknown,
+): GmailQuotaSnapshot | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Partial<GmailQuotaSnapshot>;
+  if (typeof row.calls !== "number" || typeof row.units !== "number") {
+    return null;
+  }
+  const byMethod = Array.isArray(row.byMethod)
+    ? row.byMethod.filter(
+        (item): item is GmailQuotaMethodRow =>
+          Boolean(item) &&
+          typeof item === "object" &&
+          typeof item.method === "string" &&
+          typeof item.calls === "number" &&
+          typeof item.units === "number",
+      )
+    : [];
+  const peak =
+    typeof row.peakUnitsIn60s === "number" ? row.peakUnitsIn60s : row.units;
+  const limit =
+    typeof row.limitUnitsPerUserPerMinute === "number"
+      ? row.limitUnitsPerUserPerMinute
+      : GMAIL_UNITS_PER_USER_PER_MINUTE;
+  return {
+    calls: row.calls,
+    units: row.units,
+    durationMs: typeof row.durationMs === "number" ? row.durationMs : 0,
+    peakUnitsIn60s: peak,
+    limitUnitsPerUserPerMinute: limit,
+    percentOfLimit:
+      typeof row.percentOfLimit === "number"
+        ? row.percentOfLimit
+        : Math.round((peak / limit) * 100),
+    byMethod,
+  };
+}
+
+export function formatGmailQuotaDetail(usage: GmailQuotaSnapshot): string {
+  const seconds = Math.max(1, Math.round(usage.durationMs / 1000));
+  const methods =
+    usage.byMethod.length === 0
+      ? "no methods recorded"
+      : usage.byMethod
+          .map(
+            (row) =>
+              `${row.method} ×${row.calls.toLocaleString()} = ${row.units.toLocaleString()}`,
+          )
+          .join("; ");
+  return `${usage.calls.toLocaleString()} calls · ${usage.units.toLocaleString()} units in ${seconds}s. Peak ${usage.peakUnitsIn60s.toLocaleString()} units in any 60s (${usage.percentOfLimit}% of the ${usage.limitUnitsPerUserPerMinute.toLocaleString()} units/user/min cap). ${methods}.`;
 }

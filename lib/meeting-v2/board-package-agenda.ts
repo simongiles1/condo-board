@@ -123,7 +123,7 @@ Your task is to locate and extract the official meeting agenda outline from the 
 Guidelines:
 - Search for the formal Agenda or Table of Contents (usually within the first few pages).
 - Extract the official numbered business items (e.g. Item 1, Item 2, Item 3, Item 4, Item 5, Item 6).
-- If lines like "Call to Order" or "Ratification of Agenda" appear before Item 1 without a number, do NOT label them as Item 1. Maintain the document's actual numbered items (e.g. if "1. Meeting with Eng. Ryan Ratcliff..." is numbered 1, keep it as itemNumber "1").
+- If lines like "Call to Order" or "Ratification of Agenda" appear before Item 1 without a number, do NOT label them as Item 1. Maintain the document's actual numbered items.
 - For items like "Property Management Report", extract its sub-sections (e.g. "A. Ratification of email decisions...", "B. Review and approval of projects...", "C. Items completed...", "D. The items for discussion...") with codes like "4.A", "4.B", "4.C", "4.D".
 - If the printed Agenda/TOC jumps from Financial Statements to "Date and time of the next Board Meeting", that does NOT mean Property Management Report is missing. The later management-report body (sections A–D) IS that numbered agenda item. Insert it before Date/Adjournment.
 - Always keep Date/Adjournment as the last numbered official items. Never place them before the Property Management Report body.
@@ -137,7 +137,7 @@ Return strict JSON:
   "agendaItems": [
     {
       "itemNumber": "1",
-      "title": "Meeting with Eng. Ryan Ratcliff from the engineer, to discuss projects",
+      "title": "Meeting with the consulting engineer to discuss projects",
       "subItems": ["Booster Pump", "Riser Expansion", "Tender Analysis for the Generator Fuel Delivery Upgrade and Exhaust Project"]
     },
     {
@@ -289,7 +289,8 @@ function mergePageItemsIntoAgenda(
 
     const targetTopItem = agenda.agendaItems.find((ai) => ai.itemNumber === item.sectionCode);
 
-    if (item.isContinuationOfPrevious && lastItem) {
+    if (item.isContinuationOfPrevious && lastItem && targetSection?.items.includes(lastItem) &&
+        (!item.itemCode || item.itemCode === lastItem.itemCode)) {
       enrichAgendaSubItem(lastItem, item, pageNumber);
       continue;
     }

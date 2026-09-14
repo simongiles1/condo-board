@@ -28,6 +28,6 @@ export async function POST(
   } catch (error) {
     console.error("[meetings/v2/draft] POST failed:", error);
     const message = error instanceof Error ? error.message : "Failed to generate draft";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: /Draft is not ready|Approve the agenda/.test(message) ? 409 : 500 });
   }
 }

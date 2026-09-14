@@ -66,6 +66,8 @@ export type MeetingV2Settings = {
   sourceFingerprint?: string;
   agendaEvidence?: Record<string, import("./evidence-contract").CanonicalAgendaEvidence>;
   draftReadiness?: { ready: boolean; problems: string[]; checkedAt: string };
+  userClarifications?: Record<string, Record<string, string>>;
+  replay?: { sourceMeetingId: string; fromStage: "agenda_review"; copiedAt: string };
   autonomyTemperature?: number;
   extractionRun?: MeetingV2ExtractionRun;
   /** Accumulated DeepSeek usage for the validate stage (per-item AI reviews). */

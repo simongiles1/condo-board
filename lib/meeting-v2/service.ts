@@ -5,8 +5,10 @@ import path from "node:path";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
-import { buildEvidenceSources, draftReadiness, evidenceFingerprint, FACT_RESOLUTION_PROMPT, MINUTES_PIPELINE_VERSION, parseFactResolution, type EvidenceSource, type FactResolution } from "./evidence-contract";
+import { buildEvidenceSources, draftReadiness, evidenceFingerprint, investigationFingerprint, MINUTES_PIPELINE_VERSION, type EvidenceSource, type FactResolution } from "./evidence-contract";
 import { AGENDA_ITEM_REPAIR_PROMPT } from "./repair-prompts";
+import { parseInvestigation, type InvestigationDocument } from "./investigation-contract";
+import { resolveAgendaFacts } from "./fact-resolution";
 import { getDb } from "@/lib/db";
 import {
   meetings,
@@ -135,6 +137,7 @@ export type MeetingV2Detail = {
     goldStandardValidationJson?: string | null;
     aiUsageJson?: string | null;
     agendaApproval?: AgendaApprovalSettings | null;
+    draftReadiness?: MeetingV2Settings["draftReadiness"];
     pipelineActivelyRunning?: boolean;
   };
   items: Array<{
@@ -806,11 +809,12 @@ export function deriveMeetingV2ComputedStatus(
   }
 
   return {
-    pipelineState: "validated",
-    currentStep: "Ready for review",
+    pipelineState: settings?.draftReadiness?.ready ? "validated" : "investigated",
+    currentStep: settings?.draftReadiness?.ready ? "Ready for review" : "Validation complete — corrections or review required",
     progressPercent: 90,
-    isConsistent: true,
-    note: "Stored pipeline data is complete through validation.",
+    isConsistent: Boolean(settings?.draftReadiness?.ready),
+    note: settings?.draftReadiness?.ready ? "All current investigations passed validation." :
+      settings?.draftReadiness?.problems.join(" ") || "Validation readiness has not been confirmed for the current evidence.",
   };
 }
 
@@ -1512,6 +1516,7 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
 
 async function clearAgendaDerivedData(meetingId: string): Promise<void> {
   const db = getDb();
+  await markMeetingV2DraftStale(meetingId, "The agenda is being extracted again.");
   await db
     .delete(meetingsV2AgendaChunkSnapshots)
     .where(eq(meetingsV2AgendaChunkSnapshots.meetingV2Id, meetingId));
@@ -1527,14 +1532,12 @@ async function clearAgendaDerivedData(meetingId: string): Promise<void> {
   await db
     .delete(meetingsV2AgendaItemEvidence)
     .where(eq(meetingsV2AgendaItemEvidence.meetingV2Id, meetingId));
-  await db
-    .delete(meetingsV2MinutesDrafts)
-    .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId));
   await db.delete(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));
 }
 
 async function clearMeetingV2DownstreamData(meetingId: string): Promise<void> {
   const db = getDb();
+  await markMeetingV2DraftStale(meetingId, "Agenda evidence changed. Re-run investigation and validation.");
   await db
     .delete(meetingsV2ValidationResults)
     .where(eq(meetingsV2ValidationResults.meetingV2Id, meetingId));
@@ -1547,9 +1550,29 @@ async function clearMeetingV2DownstreamData(meetingId: string): Promise<void> {
   await db
     .delete(meetingsV2AgendaItemEvidence)
     .where(eq(meetingsV2AgendaItemEvidence.meetingV2Id, meetingId));
-  await db
-    .delete(meetingsV2MinutesDrafts)
-    .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId));
+}
+
+/** Run before inspecting stage counts; old outputs cannot establish readiness for new inputs. */
+export async function prepareMeetingV2Pipeline(meetingId: string): Promise<void> {
+  const meeting = await ensureMeetingV2Seed(meetingId);
+  const legacy = await getLegacyMeeting(meetingId);
+  const paths = [resolveStoredPath(legacy.vttFilePath), resolveStoredPath(legacy.boardPackageFilePath || legacy.pdfFilePath)];
+  if (paths.some(p => !p)) throw new Error("Both transcript and board package are required.");
+  const checksums = await Promise.all(paths.map(async p => checksumFor(await readFile(p!))));
+  const fingerprint = evidenceFingerprint(checksums);
+  const settings = meeting.settings ?? {};
+  if (settings.sourceFingerprint && settings.sourceFingerprint !== fingerprint) {
+    await resetMeetingV2AllData(meetingId);
+  } else if (settings.pipelineVersion !== MINUTES_PIPELINE_VERSION) {
+    await resetMeetingV2DerivedData(meetingId);
+  }
+  const nextSettings = { ...settings, pipelineVersion: MINUTES_PIPELINE_VERSION, sourceFingerprint: fingerprint };
+  if (settings.pipelineVersion !== MINUTES_PIPELINE_VERSION || settings.sourceFingerprint && settings.sourceFingerprint !== fingerprint) {
+    delete nextSettings.agendaEvidence;
+    delete nextSettings.agendaApproval;
+    nextSettings.draftReadiness = { ready: false, problems: ["Inputs or pipeline rules changed. Review the regenerated agenda."], checkedAt: nowIso() };
+  }
+  await getDb().update(meetingsV2).set({ settings: nextSettings }).where(eq(meetingsV2.id, meetingId));
 }
 
 export async function extractMeetingV2Agenda(meetingId: string): Promise<{ count: number }> {
@@ -1786,6 +1809,13 @@ type AiValidationDocument = {
 
 type ValidationSeverity = "error" | "warning" | "info";
 
+function investigationColumns(doc: InvestigationDocument) {
+  return { discussionSummary: doc.discussion_summary, outcome: doc.outcome.toLowerCase(),
+    confidence: doc.confidence.toLowerCase(), visibility: doc.visibility.toLowerCase(),
+    decisionsJson: JSON.stringify(doc.decisions), motionJson: JSON.stringify(doc.motion), actionsJson: JSON.stringify(doc.actions),
+    openQuestionsJson: JSON.stringify(doc.open_questions.map(q => q.question)) };
+}
+
 function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument {
   const record = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
   const outcome = typeof record.outcome === "string" ? record.outcome.trim().toUpperCase() : "UNCLEAR";
@@ -1858,6 +1888,8 @@ function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument
 
 function normalizeValidationDocument(value: unknown): AiValidationDocument {
   const record = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  if (!["pass", "review_required", "fail"].includes(String(record.verdict)) || !Array.isArray(record.issues) ||
+      typeof record.needs_human_review !== "boolean") throw new Error("Validator returned an incomplete review.");
   const verdict = typeof record.verdict === "string" ? record.verdict.trim().toLowerCase() : "review_required";
   const validatorConfidence =
     typeof record.validator_confidence === "string" ? record.validator_confidence.trim().toLowerCase() : "medium";
@@ -2174,7 +2206,7 @@ function addDeterministicValidationRows(options: {
     return { transcriptEvidenceCount: 0, documentEvidenceCount: 0 };
   }
 
-  if (!contextDocument || contextDocument.anchorChunkIds.length === 0) {
+  if (!contextDocument?.sources?.length && !investigation.modelName?.startsWith("rule_engine_")) {
     pushValidationRow(rows, {
       meetingId,
       agendaItemId: agendaItem.id,
@@ -2191,8 +2223,19 @@ function addDeterministicValidationRows(options: {
         .map((chunkId) => contextDocument.chunksById[chunkId] ?? null)
         .filter((entry): entry is ChunkContext => Boolean(entry))
     : [];
-  const transcriptEvidenceCount = chunkContexts.filter((entry) => entry.chunkKind === "transcript").length;
-  const documentEvidenceCount = chunkContexts.filter((entry) => entry.chunkKind === "document").length;
+  const transcriptEvidenceCount = contextDocument?.sources?.filter(s => s.kind === "transcript" && s.association === "direct").length ?? 0;
+  const documentEvidenceCount = contextDocument?.sources?.filter(s => s.kind === "document").length ?? 0;
+  const savedUsage = safeJsonParse<Record<string, unknown>>(investigation.usageJson, {});
+  const resolution = savedUsage.factResolution as FactResolution | undefined;
+  if (savedUsage.pipelineVersion !== MINUTES_PIPELINE_VERSION || savedUsage.evidenceFingerprint !== contextDocument?.fingerprint) {
+    pushValidationRow(rows, { meetingId, agendaItemId: agendaItem.id, validationType: "completeness", severity: "error",
+      code: "stale_investigation", message: "Investigation does not match the current evidence and pipeline version." });
+  }
+
+  if (!resolution || resolution.facts.some(f => f.selected === null) || resolution.unresolvedQuestions.length > 0) {
+    pushValidationRow(rows, { meetingId, agendaItemId: agendaItem.id, validationType: "evidence_support", severity: "error",
+      code: "unresolved_facts", message: "Material facts remain unresolved; clarify the evidence and re-evaluate this item." });
+  }
 
   const decisions = safeJsonParse<string[]>(investigation.decisionsJson, []);
   const motion = safeJsonParse<AiInvestigationDocument["motion"]>(investigation.motionJson, null);
@@ -2201,7 +2244,8 @@ function addDeterministicValidationRows(options: {
     [],
   );
   const openQuestions = safeJsonParse<string[]>(investigation.openQuestionsJson, []);
-  const transcriptEvidenceText = getEvidenceText(contextDocument, "transcript");
+  const transcriptEvidenceText = (contextDocument?.sources ?? []).filter(s => s.kind === "transcript" && s.association === "direct").map(s => s.text).join("\n") +
+    "\n" + Object.values(safeJsonParse<Record<string, string>>(investigation.userAnswersJson, {})).join("\n");
 
   if (investigation.confidence === "low" || investigation.confidence === "insufficient") {
     pushValidationRow(rows, {
@@ -2220,7 +2264,7 @@ function addDeterministicValidationRows(options: {
       meetingId,
       agendaItemId: agendaItem.id,
       validationType: "business_rule",
-      severity: "warning",
+      severity: "error",
       code: "unknown_visibility",
       message: "Visibility/confidentiality is still unknown for this agenda item.",
       details: { title: agendaItem.title },
@@ -2239,7 +2283,7 @@ function addDeterministicValidationRows(options: {
     });
   }
 
-  if (investigation.outcome === "approved" && !hasCue(transcriptEvidenceText, APPROVAL_CUES) && motion?.result !== "CARRIED") {
+  if (investigation.outcome === "approved" && !hasCue(transcriptEvidenceText, APPROVAL_CUES)) {
     pushValidationRow(rows, {
       meetingId,
       agendaItemId: agendaItem.id,
@@ -2251,7 +2295,7 @@ function addDeterministicValidationRows(options: {
     });
   }
 
-  if (investigation.outcome === "rejected" && !hasCue(transcriptEvidenceText, REJECTION_CUES) && motion?.result !== "DEFEATED") {
+  if (investigation.outcome === "rejected" && !hasCue(transcriptEvidenceText, REJECTION_CUES)) {
     pushValidationRow(rows, {
       meetingId,
       agendaItemId: agendaItem.id,
@@ -2719,24 +2763,15 @@ export async function investigateAgendaItems(
     db.select().from(meetingsV2DocumentChunks).where(eq(meetingsV2DocumentChunks.meetingV2Id, meetingId)),
   ]);
 
-  if (agendaItemId) {
-    await db
-      .delete(meetingsV2AgendaItemInvestigations)
-      .where(
-        and(
-          eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId),
-          eq(meetingsV2AgendaItemInvestigations.agendaItemId, agendaItemId),
-        ),
-      );
-  }
-
   const pendingItems = agendaItemId
     ? agendaItems
     : agendaItems.filter(
-        (item) => !existingInvestigations.some((entry) => entry.agendaItemId === item.id),
+        (item) => !existingInvestigations.some((entry) => entry.agendaItemId === item.id &&
+          safeJsonParse<Record<string, unknown>>(entry.usageJson, {}).pipelineVersion === MINUTES_PIPELINE_VERSION),
       );
   let completedCount = agendaItems.length - pendingItems.length;
   let investigatedThisRun = 0;
+  const hierarchyItems = agendaItemId ? await getMeetingV2AgendaItems(meetingId) : agendaItems;
   const runtime = await loadInvestigationToolRuntime({ meetingId });
 
   let directorsPromptLines: string[] = [];
@@ -2752,29 +2787,34 @@ export async function investigateAgendaItems(
     const context = contexts.find((entry) => entry.agendaItemId === item.id);
     const evidenceForItem = evidenceRows.filter((entry) => entry.agendaItemId === item.id);
     const existing = existingInvestigations.find((entry) => entry.agendaItemId === item.id);
-    const userAnswers = safeJsonParse<Record<string, string>>(existing?.userAnswersJson, {});
+    const userAnswers = meetingRec?.settings?.userClarifications?.[item.id] ?? safeJsonParse<Record<string, string>>(existing?.userAnswersJson, {});
     const answerText = Object.values(userAnswers).filter(Boolean).join("\n").trim() || null;
+    const prepared = safeJsonParse<AgendaItemContextDocument | null>(context?.contextJson, null);
+    if (!prepared?.sources || prepared.pipelineVersion !== MINUTES_PIPELINE_VERSION) {
+      throw new Error(`Current evidence is required before investigating ${item.title}.`);
+    }
+    const sources: EvidenceSource[] = [...prepared.sources, ...Object.entries(userAnswers).filter(([,answer]) => answer.trim()).map(([question, answer], index) => ({
+      id: `user:${index}`, kind: "user" as const, association: "direct" as const, text: `${question}: ${answer}`,
+    }))];
     const promptInput = [
       `Agenda item title: ${item.title}`,
       `Item number: ${item.itemNumber ?? "Unknown"}`,
       `Item type: ${item.itemType}`,
       `Section label: ${item.sectionLabel ?? "Unknown"}`,
-      `Board package source text: ${item.sourceText ?? "None"}`,
       "",
       "Attending Voting Directors:",
       ...directorsPromptLines,
       "",
-      "Prepared context JSON",
-      context?.contextJson ?? "{}",
-      "",
-      "Prepared context text",
-      context?.assembledContextText ?? item.sourceText ?? item.title,
+      "Prepared evidence (direct, neighboring, and related sources are explicitly labeled)",
+      JSON.stringify(sources),
       "",
       "Additional user clarification",
       answerText ?? "None",
     ].join("\n");
 
-    let normalized: AiInvestigationDocument;
+    let normalized: InvestigationDocument;
+    let factResolution: FactResolution = { facts: [], unresolvedQuestions: [] };
+    let factResolutionAttempts: unknown[] = [];
     let modelName = "deepseek-v4-flash";
     const reEvaluate = options?.usageSource === "re_evaluate";
     let usageJson = JSON.stringify({
@@ -2794,11 +2834,13 @@ export async function investigateAgendaItems(
             ? "not_discussed"
             : null);
 
-    if (itemStatus === "not_discussed") {
+    const isHeading = Boolean(item.itemNumber && item.itemNumber.split(".").length < 3 &&
+      hierarchyItems.some(other => other.itemNumber?.startsWith(`${item.itemNumber}.`)));
+    if (itemStatus === "not_discussed" || isHeading) {
       normalized = {
         discussion_summary:
-          "This item was listed on the agenda but was not discussed during this meeting session (adjourned or deferred).",
-        outcome: "DEFERRED",
+          "This item was listed on the agenda but was not discussed during this meeting.",
+        outcome: "NO_DECISION",
         confidence: "HIGH",
         visibility: inferVisibility(item.title) === "in_camera" ? "RESTRICTED" : "PUBLIC",
         decisions: [],
@@ -2806,20 +2848,23 @@ export async function investigateAgendaItems(
         actions: [],
         open_questions: [],
       };
-      modelName = "rule_engine_deferred";
+      if (isHeading) normalized.discussion_summary = "Agenda heading; substantive discussion is recorded under its child items.";
+      modelName = isHeading ? "rule_engine_heading" : "rule_engine_not_discussed";
       usageJson = JSON.stringify({
         skippedLlm: true,
         reason: "Item confirmed not discussed during HITL agenda approval",
       });
     } else {
-      try {
+        const resolved = await resolveAgendaFacts({ agenda: item, sources });
+        factResolution = resolved.facts;
+        factResolutionAttempts = resolved.attempts;
         const aiResult = await runToolEnabledInvestigation({
           systemInstruction: AGENDA_ITEM_INVESTIGATION_PROMPT,
-          userText: promptInput,
+          userText: `${promptInput}\n\nResolved facts (preserve temporal scope and rejected alternatives):\n${JSON.stringify(factResolution)}`,
           runtime,
-          maxOutputTokens: 4096,
+          maxOutputTokens: 8192,
         });
-        normalized = normalizeInvestigationDocument(safeJsonObjectParse(aiResult.text));
+        normalized = parseInvestigation(safeJsonObjectParse(aiResult.text));
         modelName = aiResult.modelName;
         usageJson = JSON.stringify({
           evidenceCount: evidenceForItem.length,
@@ -2829,65 +2874,13 @@ export async function investigateAgendaItems(
           requestTrace: aiResult.requestTrace,
           ...(reEvaluate ? { reEvaluate: true } : {}),
         });
-      } catch {
-        const transcriptEvidenceCount = evidenceForItem.filter(
-          (entry) => entry.sourceType === "transcript_segment",
-        ).length;
-        const openQuestions = buildOpenQuestions(item.title, transcriptEvidenceCount, answerText);
-        normalized = {
-          discussion_summary: normalizeWhitespace(
-            `${item.sourceText ?? context?.assembledContextText ?? item.title}\n${answerText ?? ""}`,
-          ).slice(0, 900),
-          outcome: inferOutcome(context?.assembledContextText ?? item.sourceText ?? "", answerText).toUpperCase() as AiInvestigationDocument["outcome"],
-          confidence: inferConfidence(evidenceForItem.length, answerText, openQuestions).toUpperCase() as AiInvestigationDocument["confidence"],
-          visibility: inferVisibility(item.title) === "in_camera" ? "RESTRICTED" : "PUBLIC",
-          decisions: [],
-          motion: null,
-          actions: [],
-          open_questions: openQuestions,
-        };
-      }
     }
-
-    
-    const AUTONOMY_TEMPERATURE = (meetingRec?.settings as { autonomyTemperature?: number })?.autonomyTemperature ?? 0.8;
-    if (AUTONOMY_TEMPERATURE >= 0.5 && normalized.open_questions && normalized.open_questions.length > 0) {
-      const remainingQuestions: AiInvestigationDocument["open_questions"] = [];
-      for (const q of normalized.open_questions) {
-        if ((q.confidence === "high" || q.confidence === "medium") && q.recommended_answer) {
-          if (recommendedAnswerAddsNewFact(normalized.discussion_summary, q.recommended_answer)) {
-            normalized.discussion_summary += `\n\n${q.recommended_answer}`;
-          }
-        } else {
-          remainingQuestions.push(q);
-        }
-      }
-      normalized.open_questions = remainingQuestions;
-    }
-
-    if (normalized.revised_notes && normalized.revised_notes.length > 0 && context) {
-      const parsedContext = safeJsonParse<AgendaItemContextDocument | null>(context.contextJson, null);
-      if (parsedContext) {
-        const applied = applyRevisedNotes({
-          notes: normalized.revised_notes,
-          sourceText: item.sourceText ?? "",
-          assembledContextText: context.assembledContextText,
-        });
-        parsedContext.notes = applied.notes;
-        await db
-          .update(meetingsV2AgendaItemContexts)
-          .set({
-            contextJson: JSON.stringify(parsedContext),
-            assembledContextText: applied.assembledContextText,
-            updatedAt: nowIso(),
-          })
-          .where(eq(meetingsV2AgendaItemContexts.id, context.id));
-        await db
-          .update(meetingsV2AgendaItems)
-          .set({ sourceText: applied.sourceText })
-          .where(eq(meetingsV2AgendaItems.id, item.id));
-      }
-    }
+    // Proposed answers and revised notes remain model output, never edits to source evidence.
+    usageJson = JSON.stringify({ ...safeJsonParse<Record<string, unknown>>(usageJson, {}),
+      pipelineVersion: MINUTES_PIPELINE_VERSION, evidenceFingerprint: prepared.fingerprint,
+      inputFingerprint: evidenceFingerprint({ sources, itemStatus, title: item.title, itemNumber: item.itemNumber }),
+      factResolution, factResolutionAttempts, proposedAnswers: normalized.open_questions, revisedNotes: normalized.revised_notes,
+    });
 
     const investigationRow: typeof meetingsV2AgendaItemInvestigations.$inferInsert = {
       id: randomUUID(),
@@ -2907,7 +2900,16 @@ export async function investigateAgendaItems(
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
-    await db.insert(meetingsV2AgendaItemInvestigations).values(investigationRow);
+    const latestContext = await db.query.meetingsV2AgendaItemContexts.findFirst({ where: eq(meetingsV2AgendaItemContexts.id, context!.id) });
+    const latestMeeting = await db.query.meetingsV2.findFirst({ where: eq(meetingsV2.id, meetingId) });
+    const latestAnswers = latestMeeting?.settings?.userClarifications?.[item.id] ?? userAnswers;
+    if (!latestContext || safeJsonParse<AgendaItemContextDocument | null>(latestContext.contextJson, null)?.fingerprint !== prepared.fingerprint ||
+        evidenceFingerprint(latestAnswers) !== evidenceFingerprint(userAnswers)) throw new Error("Inputs changed during investigation. Re-run the item with the current evidence.");
+    await db.transaction(async tx => {
+      await tx.delete(meetingsV2ValidationResults).where(and(eq(meetingsV2ValidationResults.meetingV2Id, meetingId), eq(meetingsV2ValidationResults.agendaItemId, item.id)));
+      await tx.delete(meetingsV2AgendaItemInvestigations).where(and(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId), eq(meetingsV2AgendaItemInvestigations.agendaItemId, item.id)));
+      await tx.insert(meetingsV2AgendaItemInvestigations).values(investigationRow);
+    });
 
     completedCount += 1;
     investigatedThisRun += 1;
@@ -2932,12 +2934,12 @@ export async function listPendingValidationAgendaItemIds(meetingId: string): Pro
       .from(meetingsV2AgendaItemInvestigations)
       .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
     db
-      .select({ agendaItemId: meetingsV2ValidationResults.agendaItemId })
+      .select({ agendaItemId: meetingsV2ValidationResults.agendaItemId, code: meetingsV2ValidationResults.code })
       .from(meetingsV2ValidationResults)
       .where(eq(meetingsV2ValidationResults.meetingV2Id, meetingId)),
   ]);
 
-  const validatedAgendaItemIds = new Set(existingValidations.map((row) => row.agendaItemId));
+  const validatedAgendaItemIds = new Set(existingValidations.filter(row => ["ai_verdict", "item_not_discussed", "structural_heading"].includes(row.code)).map((row) => row.agendaItemId));
   return investigations
     .filter((investigation) => !validatedAgendaItemIds.has(investigation.agendaItemId))
     .map((investigation) => investigation.agendaItemId);
@@ -2981,16 +2983,7 @@ export async function validateAgendaItemInvestigations(
     ),
   ]);
 
-  if (agendaItemId) {
-    await db
-      .delete(meetingsV2ValidationResults)
-      .where(
-        and(
-          eq(meetingsV2ValidationResults.meetingV2Id, meetingId),
-          eq(meetingsV2ValidationResults.agendaItemId, agendaItemId),
-        ),
-      );
-  } else {
+  if (!agendaItemId) {
     await clearMeetingV2ValidationUsage(meetingId);
   }
 
@@ -3011,6 +3004,7 @@ export async function validateAgendaItemInvestigations(
     await updateValidationPhaseProgress(meetingId, { activeItemTitle: agendaItem.title });
 
     const itemRows: Array<typeof meetingsV2ValidationResults.$inferInsert> = [];
+    const originalFingerprint = investigationFingerprint(investigation);
     const contextDocument =
       safeJsonParse<AgendaItemContextDocument | null>(context?.contextJson, null) ?? null;
     const deterministic = addDeterministicValidationRows({
@@ -3021,14 +3015,14 @@ export async function validateAgendaItemInvestigations(
       contextDocument,
     });
 
-    if (investigation.outcome === "DEFERRED" || investigation.outcome === "deferred") {
+    if (investigation.modelName === "rule_engine_not_discussed" || investigation.modelName === "rule_engine_heading") {
       pushValidationRow(itemRows, {
         meetingId,
         agendaItemId: agendaItem.id,
         validationType: "deterministic",
         severity: "info",
-        code: "item_not_discussed",
-        message: "Item was listed on the agenda but confirmed not discussed during this meeting session.",
+        code: investigation.modelName === "rule_engine_heading" ? "structural_heading" : "item_not_discussed",
+        message: investigation.modelName === "rule_engine_heading" ? "Structural heading; child items are validated separately." : "Item was listed on the agenda but confirmed not discussed during this meeting session.",
         details: { title: agendaItem.title },
       });
     } else {
@@ -3044,7 +3038,7 @@ export async function validateAgendaItemInvestigations(
             ? (investigationUsage.requestTrace as Record<string, unknown>)
             : null;
 
-        const aiValidation = await runAiValidationReview({
+        const reviewInput = {
           agendaItem,
           investigation,
           contextDocument,
@@ -3055,7 +3049,24 @@ export async function validateAgendaItemInvestigations(
             toolCalls,
             requestTrace,
           },
-        });
+        };
+        let aiValidation = await runAiValidationReview(reviewInput);
+        const reviewHistory: unknown[] = [aiValidation];
+        if (aiValidation.parsed.verdict !== "pass" || aiValidation.parsed.needs_human_review || itemRows.some(row => row.severity === "error")) {
+          const repaired = await generateDeepSeekJson({
+            systemInstruction: `${AGENDA_ITEM_REPAIR_PROMPT}\nOnly selected, cited facts may support assertions. Preserve proposed motions as UNKNOWN and informal assent as informal. Never fill missing mover or seconder names.`,
+            userText: JSON.stringify({ input: buildValidationInput(reviewInput), findings: aiValidation.parsed, deterministicFindings: itemRows }),
+            modelName: "deepseek-v4-flash", temperature: 0, thinking: false, maxOutputTokens: 8192, requestTimeoutMs: 90_000,
+          });
+          const corrected = parseInvestigation(safeJsonObjectParse(repaired.text));
+          Object.assign(investigation, investigationColumns(corrected), { updatedAt: nowIso() });
+          reviewHistory.push({ repair: repaired });
+          itemRows.length = 0;
+          addDeterministicValidationRows({ rows: itemRows, meetingId, agendaItem, investigation, contextDocument });
+          aiValidation = await runAiValidationReview({ ...reviewInput, investigation });
+          reviewHistory.push(aiValidation);
+        }
+        investigation.usageJson = JSON.stringify({ ...investigationUsage, validationHistory: reviewHistory });
         addAiValidationRows({
           rows: itemRows,
           meetingId,
@@ -3085,9 +3096,21 @@ export async function validateAgendaItemInvestigations(
     }
 
     if (itemRows.length > 0) {
-      await db.insert(meetingsV2ValidationResults).values(itemRows);
+      const current = await db.query.meetingsV2AgendaItemInvestigations.findFirst({ where: eq(meetingsV2AgendaItemInvestigations.id, investigation.id) });
+      if (!current || investigationFingerprint(current) !== originalFingerprint) throw new Error("Investigation changed during validation. Re-run validation for the current item.");
+      for (const row of itemRows) row.detailsJson = JSON.stringify({ ...safeJsonParse<Record<string, unknown>>(row.detailsJson, {}),
+        pipelineVersion: MINUTES_PIPELINE_VERSION, investigationId: investigation.id,
+        investigationFingerprint: investigationFingerprint(investigation), evidenceFingerprint: contextDocument?.fingerprint,
+      });
+      await db.transaction(async tx => {
+        await tx.update(meetingsV2AgendaItemInvestigations).set(investigation).where(eq(meetingsV2AgendaItemInvestigations.id, investigation.id));
+        await tx.delete(meetingsV2ValidationResults).where(and(eq(meetingsV2ValidationResults.meetingV2Id, meetingId), eq(meetingsV2ValidationResults.agendaItemId, investigation.agendaItemId)));
+        await tx.insert(meetingsV2ValidationResults).values(itemRows);
+      });
       validationCount += itemRows.length;
     }
+
+    if (itemRows.some(row => row.code === "ai_validation_failed")) throw new Error(`Validation failed for ${agendaItem.title}; retry the item.`);
 
     await updateValidationPhaseProgress(meetingId);
   }
@@ -3140,9 +3163,14 @@ export async function generateMeetingV2Draft(meetingId: string): Promise<{
       .orderBy(asc(meetingsV2DocumentPages.pageNumber)),
   ]);
 
-  if (investigations.length === 0) {
-    throw new Error("Investigations are required before generating a draft.");
+  if (!meeting.settings?.agendaApproval?.approvedAt) throw new Error("Approve the agenda before generating minutes.");
+  const problems = draftReadiness(agendaItems, investigations, validationRows);
+  for (const context of contexts) {
+    const evidence = safeJsonParse<AgendaItemContextDocument | null>(context.contextJson, null);
+    const inv = investigations.find(i => i.agendaItemId === context.agendaItemId);
+    if (!inv || safeJsonParse<Record<string, unknown>>(inv.usageJson, {}).evidenceFingerprint !== evidence?.fingerprint) problems.push("Evidence changed after investigation; re-evaluate the affected item.");
   }
+  if (problems.length) throw new Error(`Draft is not ready. ${problems.join(" ")}`);
   const draftArtifact = buildMeetingV2DraftArtifact({
     meeting,
     agendaItems,
@@ -3166,9 +3194,7 @@ export async function generateMeetingV2Draft(meetingId: string): Promise<{
     updatedAt: createdAt,
   } satisfies typeof meetingsV2MinutesDrafts.$inferInsert;
 
-  await db
-    .delete(meetingsV2MinutesDrafts)
-    .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId));
+  // Keep earlier drafts and user edits as immutable history when generating a new version.
   await db.insert(meetingsV2MinutesDrafts).values(draftRow);
 
   return {
@@ -3417,6 +3443,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       goldStandardValidationJson,
       aiUsageJson,
       agendaApproval: selectedSettings.agendaApproval ?? null,
+      draftReadiness: selectedSettings.draftReadiness,
     },
     items: agendaItems.map((item) => {
       const investigation = investigations.find((entry) => entry.agendaItemId === item.id);
@@ -3531,9 +3558,16 @@ export async function loadLatestMeetingV2Draft(meetingId: string): Promise<{
 }
 
 export async function rerunAgendaItem(meetingId: string, agendaItemId: string): Promise<void> {
+  await markMeetingV2DraftStale(meetingId, "An agenda item is being re-evaluated.");
   await retrieveAgendaItemEvidence(meetingId, agendaItemId);
   await investigateAgendaItems(meetingId, agendaItemId, { usageSource: "re_evaluate" });
   await validateAgendaItemInvestigations(meetingId, agendaItemId, { usageSource: "re_evaluate" });
+  await finalizeMeetingV2PipelineStatus(meetingId);
+}
+
+export async function markMeetingV2DraftStale(meetingId: string, reason: string): Promise<void> {
+  const readiness = { ready: false, problems: [reason], checkedAt: nowIso() };
+  await getDb().update(meetingsV2).set({ settings: sql`jsonb_set(coalesce(${meetingsV2.settings}, '{}'::jsonb), '{draftReadiness}', ${JSON.stringify(readiness)}::jsonb)`, updatedAt: nowIso() }).where(eq(meetingsV2.id, meetingId));
 }
 
 export async function finalizeMeetingV2PipelineStatus(meetingId: string): Promise<void> {
@@ -3543,6 +3577,13 @@ export async function finalizeMeetingV2PipelineStatus(meetingId: string): Promis
     .from(meetingsV2)
     .where(eq(meetingsV2.id, meetingId));
   const settings = (meeting?.settings as MeetingV2Settings) || {};
+  const [agenda, investigations, validations] = await Promise.all([
+    getMeetingV2AgendaItems(meetingId), getMeetingV2Investigations(meetingId), getMeetingV2Validations(meetingId),
+  ]);
+  const problems = draftReadiness(agenda, investigations, validations);
+  const readiness = { ready: problems.length === 0, problems, checkedAt: nowIso() };
+  settings.draftReadiness = readiness;
+  await db.update(meetingsV2).set({ settings: sql`jsonb_set(coalesce(${meetingsV2.settings}, '{}'::jsonb), '{draftReadiness}', ${JSON.stringify(readiness)}::jsonb)` }).where(eq(meetingsV2.id, meetingId));
   const counts = await getMeetingV2Counts(meetingId);
   const computed = deriveMeetingV2ComputedStatus(counts, settings);
   const extractionQuality = await assessMeetingV2Extraction(meetingId);
@@ -3644,6 +3685,14 @@ export async function saveUserAnswers(
   userAnswers: Record<string, string>,
 ): Promise<void> {
   const db = getDb();
+  if (!userAnswers || typeof userAnswers !== "object" || Array.isArray(userAnswers) || !Object.values(userAnswers).every(value => typeof value === "string")) {
+    throw new Error("Clarifications must contain text answers.");
+  }
+  const itemExists = await db.query.meetingsV2AgendaItems.findFirst({ where: and(eq(meetingsV2AgendaItems.meetingV2Id, meetingId), eq(meetingsV2AgendaItems.id, agendaItemId)) });
+  if (!itemExists) throw new Error(`Agenda item ${agendaItemId} was not found.`);
+  await markMeetingV2DraftStale(meetingId, "User clarification changed. Re-evaluation is required.");
+  await db.update(meetingsV2).set({ settings: sql`jsonb_set(coalesce(${meetingsV2.settings}, '{}'::jsonb), '{userClarifications}', coalesce(${meetingsV2.settings}->'userClarifications', '{}'::jsonb) || ${JSON.stringify({ [agendaItemId]: userAnswers })}::jsonb)` }).where(eq(meetingsV2.id, meetingId));
+  await db.delete(meetingsV2ValidationResults).where(and(eq(meetingsV2ValidationResults.meetingV2Id, meetingId), eq(meetingsV2ValidationResults.agendaItemId, agendaItemId)));
   const [existing] = await db
     .select()
     .from(meetingsV2AgendaItemInvestigations)
@@ -3677,24 +3726,5 @@ export async function saveUserAnswers(
     throw new Error(`Agenda item ${agendaItemId} was not found.`);
   }
 
-  await db.insert(meetingsV2AgendaItemInvestigations).values({
-    id: randomUUID(),
-    meetingV2Id: meetingId,
-    agendaItemId,
-    discussionSummary: agendaItem.sourceText?.slice(0, 500) ?? agendaItem.title,
-    outcome: "pending_user_clarification",
-    confidence: "low",
-    visibility: inferVisibility(agendaItem.title),
-    decisionsJson: JSON.stringify([]),
-    motionJson: null,
-    actionsJson: JSON.stringify([]),
-    openQuestionsJson: JSON.stringify([
-      `Can you confirm the final outcome for "${agendaItem.title}" from the live discussion?`,
-    ]),
-    userAnswersJson: JSON.stringify(userAnswers),
-    modelName: "heuristic-v2",
-    usageJson: JSON.stringify({ seeded: true }),
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-  });
+  // A clarification is stored independently; it must never count as an investigation.
 }

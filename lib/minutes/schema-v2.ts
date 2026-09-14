@@ -86,6 +86,8 @@ export type CallToOrderV2 = {
 };
 
 export type ApprovalOfPreviousMinutesV2 = {
+  sourceAgendaItemId?: string;
+  summary?: string;
   previousMeetingDate?: string;
   amendmentsNoted?: boolean;
   motion?: MotionV2;
@@ -705,6 +707,8 @@ export function validateMinutesV2(raw: unknown): ValidateMinutesV2Result {
           return {};
         }
         return {
+          sourceAgendaItemId: asOptionalString(entry.sourceAgendaItemId),
+          summary: asOptionalString(entry.summary),
           previousMeetingDate: asOptionalString(
             entry.previous_meeting_date ?? entry.previousMeetingDate,
           ),

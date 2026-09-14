@@ -38,6 +38,11 @@ import { buildSenderBackfillQuery, getAllowlistEmails } from "@/lib/gmail/querie
 import { syncPersonalAccount, type SyncTrigger } from "@/lib/gmail/sync";
 import { getQueryMatchCounts } from "@/lib/gmail/thread-search";
 import {
+  formatGmailQuotaDetail,
+  runWithGmailQuotaMeter,
+  snapshotGmailQuotaMeter,
+} from "@/lib/gmail/quota";
+import {
   allowlistReviewKeyboard,
   ingestContinueKeyboard,
   type TelegramCallbackAction,
@@ -409,7 +414,22 @@ async function waitOrAdvance(runId: string, nextStage: IngestStage): Promise<voi
   await runCurrentStage(runId);
 }
 
+async function persistGmailQuota(runId: string): Promise<void> {
+  const usage = snapshotGmailQuotaMeter();
+  if (!usage) return;
+  const run = await getIngestRun(runId);
+  if (!run) return;
+  console.info("[gmail:quota] ingest", runId, formatGmailQuotaDetail(usage));
+  await patchRun(runId, {
+    countsJson: JSON.stringify({
+      ...run.counts,
+      gmailQuota: usage,
+    }),
+  });
+}
+
 async function completeRun(runId: string, error?: string): Promise<void> {
+  await persistGmailQuota(runId);
   const existing = await getIngestRun(runId);
   if (existing?.status !== "completed" && existing?.status !== "failed") {
     await patchRun(runId, {
@@ -445,6 +465,7 @@ async function runStageA(runId: string): Promise<void> {
       messagesAdded: sync.messagesAdded,
       messagesSkipped: sync.messagesSkipped,
       ingestErrors: sync.errors,
+      gmailQuota: sync.gmailQuota ?? snapshotGmailQuotaMeter(),
     }),
   });
   if (sync.errors.length > 0 && sync.messagesAdded === 0) {
@@ -863,13 +884,17 @@ async function runIngestPipelineWork(runId: string): Promise<void> {
   }
   pipelineBusy = true;
   try {
-    await runCurrentStage(runId);
-  } catch (error) {
-    console.error("[ingest] pipeline work failed", runId, error);
-    await completeRun(
-      runId,
-      error instanceof Error ? error.message : String(error),
-    );
+    await runWithGmailQuotaMeter(async () => {
+      try {
+        await runCurrentStage(runId);
+      } catch (error) {
+        console.error("[ingest] pipeline work failed", runId, error);
+        await completeRun(
+          runId,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    });
   } finally {
     pipelineBusy = false;
   }

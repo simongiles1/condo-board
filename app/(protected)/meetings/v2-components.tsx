@@ -101,6 +101,7 @@ type MeetingCard = MeetingV2DashboardCard;
 
 type MeetingV2Status = {
   meeting: {
+    draftReadiness?: { ready: boolean; problems: string[]; checkedAt: string };
     id: string;
     title: string;
     meetingDate: string;
@@ -1294,6 +1295,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 {activeTab === "draft" ? (
                   <DraftWorkspacePanel
                     meetingId={meetingId}
+                    readiness={status.meeting.draftReadiness}
                     draft={status.latestDraft}
                     draftBusy={draftBusy}
                     draftError={draftError}
@@ -2289,7 +2291,8 @@ function parseSourceSnippet(rawText: string, itemTitle: string) {
 
 type AgendaReviewTab = "agenda" | "discrepancies";
 type AgendaReviewItem = MeetingV2Status["items"][number];
-type AgendaOutlineNode = OutlineTreeNode<AgendaReviewItem> & {
+type AgendaOutlineNode = Omit<OutlineTreeNode<AgendaReviewItem>, "children"> & {
+  children: AgendaOutlineNode[];
   subItems: Array<{ label: string; title: string }>;
 };
 
@@ -3811,6 +3814,7 @@ function AgendaReviewPanel({
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [dirtyItems, setDirtyItems] = useState<Record<string, boolean>>({});
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
+  const [reevaluationError, setReevaluationError] = useState<string | null>(null);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [detailPanelItem, setDetailPanelItem] = useState<AgendaItemDetail | null>(null);
   const [detailPanelInitialTab, setDetailPanelInitialTab] = useState<
@@ -3853,17 +3857,24 @@ function AgendaReviewPanel({
 
   async function handleSubmit(itemId: string) {
     setBusyItemId(itemId);
+    setReevaluationError(null);
     try {
-      await fetch(`/api/v2/meetings/${meetingId}/items/${itemId}/re-evaluate`, {
+      const response = await fetch(`/api/v2/meetings/${meetingId}/items/${itemId}/re-evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userAnswers: { text: answers[itemId] ?? "" } }),
       });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "Re-evaluation could not be started. Your answer has been retained.");
+      }
       onReEvaluateSubmitted?.();
       setDirtyItems((current) => ({
         ...current,
         [itemId]: false,
       }));
+    } catch (error) {
+      setReevaluationError(error instanceof Error ? error.message : "Re-evaluation failed.");
     } finally {
       setBusyItemId(null);
     }
@@ -4015,6 +4026,7 @@ function AgendaReviewPanel({
       description="Work through items in official agenda order. Expand an item to answer clarifications, inspect flags and evidence, or re-run investigation for that topic only."
       headerAside={reviewViewToggle}
     >
+      {reevaluationError ? <p role="alert" className="mb-3 text-sm text-red-700">{reevaluationError}</p> : null}
       <div className="mb-4 flex flex-col gap-3 border-b border-slate-100 pb-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="text-slate-500">
@@ -4306,6 +4318,7 @@ function DiagnosticTile({ label, value }: { label: string; value: string }) {
 
 function DraftWorkspacePanel({
   meetingId,
+  readiness,
   draft,
   draftBusy,
   draftError,
@@ -4317,6 +4330,7 @@ function DraftWorkspacePanel({
 }: {
   meetingId: string;
   draft: MeetingV2Status["latestDraft"] | null;
+  readiness?: { ready: boolean; problems: string[]; checkedAt: string };
   draftBusy: boolean;
   draftError: string | null;
   validationScore?: number | null;
@@ -4333,6 +4347,10 @@ function DraftWorkspacePanel({
       description="After validation, generate a formatted minutes document from the pipeline output. Edit here or preview the PDF layout."
       compact
     >
+      {!readiness?.ready ? <p role="status" className="mb-3 text-sm text-amber-800">
+        {draft ? "The saved draft may be outdated. " : ""}Resolve the validation findings before generating minutes.
+        {readiness?.problems.slice(0, 3).map(problem => <span key={problem} className="block">{problem}</span>)}
+      </p> : null}
       {!draft ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center">
           <p className="text-sm text-slate-600">
@@ -4344,7 +4362,7 @@ function DraftWorkspacePanel({
           <button
             type="button"
             onClick={onGenerateDraft}
-            disabled={draftBusy}
+            disabled={draftBusy || !readiness?.ready}
             className="mt-3 inline-flex items-center rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {draftBusy ? "Generating..." : "Generate minutes draft"}
@@ -4352,6 +4370,11 @@ function DraftWorkspacePanel({
         </div>
       ) : (
         <>
+          {draftError ? <p role="alert" className="mb-2 text-sm text-red-700">{draftError}</p> : null}
+          <button type="button" onClick={onGenerateDraft} disabled={draftBusy || !readiness?.ready}
+            className="mb-3 rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50">
+            {draftBusy ? "Generating..." : "Generate a new draft version"}
+          </button>
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <span className="text-sm text-slate-600">

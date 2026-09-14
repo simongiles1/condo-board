@@ -301,6 +301,15 @@ describe("ingest completion summary", () => {
         embedSlices: 4,
         harvest: "ran",
         stageNote: "Harvested missing contacts 38/46.",
+        gmailQuota: {
+          calls: 161,
+          units: 3220,
+          durationMs: 18000,
+          peakUnitsIn60s: 3220,
+          limitUnitsPerUserPerMinute: 6000,
+          percentOfLimit: 54,
+          byMethod: [{ method: "messages.get", calls: 161, units: 3220 }],
+        },
       },
       cursorIndex: 0,
       reminderSentAt: null,
@@ -326,5 +335,8 @@ describe("ingest completion summary", () => {
       rows.find((row) => row.label === "Emails in this run")?.detail ?? "",
       /44 emails/,
     );
+    const quota = rows.find((row) => row.label === "Gmail API quota");
+    assert.match(quota?.detail ?? "", /3,220 units/);
+    assert.match(quota?.detail ?? "", /6,000 units\/user\/min/);
   });
 });

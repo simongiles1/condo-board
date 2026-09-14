@@ -169,10 +169,10 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   lines.push("## 1. CALL TO ORDER");
   lines.push("");
   if (doc.callToOrder) {
-    const chair = doc.callToOrder.chairName?.trim() ?? "the Chair";
-    const time = doc.callToOrder.time?.trim() ?? (doc.metadata || {}).meetingTime.trim();
+    const chair = doc.callToOrder.chairName?.trim();
+    const time = doc.callToOrder.time?.trim();
     lines.push(
-      `Proper notice having been given and there being a quorum present, ${chair} called the meeting to order${time ? ` at ${time.replace(/\.+$/, "")}.` : "."} and presided as Chair.`,
+      `${chair ? `${chair} called the meeting to order` : "The meeting was called to order"}${time ? ` at ${time.replace(/\.+$/, "")}` : ""}.`,
     );
   }
   lines.push("");
@@ -185,7 +185,9 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
       const prevDate = approval.previousMeetingDate
         ? formatMeetingDateDisplay(approval.previousMeetingDate)
         : "the previous meeting";
-      if (approval.amendmentsNoted) {
+      if (approval.summary) {
+        lines.push(approval.summary, "");
+      } else if (approval.amendmentsNoted) {
         lines.push(
           `The Chair asked for any errors or omissions in the minutes of the Board meeting of ${prevDate} that were circulated previously for review. Several amendments were agreed to and incorporated into a clean copy of the minutes.`,
         );
@@ -281,7 +283,7 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
     const t = (doc.dateOfNextMeeting || {}).time?.trim() ?? "";
     const loc = (doc.dateOfNextMeeting || {}).location?.trim() ?? "";
     lines.push(
-      `The next meeting of the Board of Directors will be held${loc ? ` ${loc}` : " virtually"}${d ? ` on ${d}` : ""}${t ? ` commencing at ${t.replace(/\.+$/, "")}.` : "."}`,
+      `The next meeting of the Board of Directors will be held${loc ? ` ${loc}` : ""}${d ? ` on ${d}` : ""}${t ? ` commencing at ${t.replace(/\.+$/, "")}.` : "."}`,
     );
   } else {
     lines.push("The date of the next Board meeting is to be determined.");
@@ -293,7 +295,7 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   lines.push("");
   if (doc.termination?.time) {
     lines.push(
-      `There being no further business to discuss, the meeting was unanimously concluded at ${(doc.termination || {}).time.replace(/\.+$/, "")}.`,
+      `The meeting concluded at ${doc.termination.time.replace(/\.+$/, "")}.`,
     );
   } else {
     lines.push("There being no further business to discuss, the meeting was concluded.");
@@ -338,6 +340,10 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
     lines.push("");
     lines.push(markdownItalicizeCondominiumAct(RESTRICTED_ADDENDUM_DISCLAIMER));
     lines.push("");
+    for (const section of [{ title: "SPECIAL PRESENTATIONS", items: doc.specialPresentations }, { title: "CORRESPONDENCE", items: doc.correspondence }]) {
+      const restricted = restrictedOnly(section.items || []);
+      if (restricted.length) lines.push(`## ${section.title}`, "", ...renderAgendaArray(restricted, 0, opts));
+    }
 
     if (finRest.length > 0) {
       lines.push("## 3. FINANCIAL MATTERS, continued.");

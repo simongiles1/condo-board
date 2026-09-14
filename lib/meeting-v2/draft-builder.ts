@@ -22,6 +22,9 @@ import {
   meetingsV2ValidationResults,
 } from "@/lib/db/schema";
 import { CORP_LONG } from "@/lib/pdf/corporation";
+import { draftReadiness, MINUTES_PIPELINE_VERSION } from "./evidence-contract";
+import { canonicalEnum } from "./investigation-contract";
+import { parentAgendaItemCode } from "./agenda-outline";
 
 type MeetingRow = typeof meetingsV2.$inferSelect;
 type AgendaItemRow = typeof meetingsV2AgendaItems.$inferSelect;
@@ -32,6 +35,8 @@ type ChunkRow = typeof meetingsV2DocumentChunks.$inferSelect;
 type PageRow = typeof meetingsV2DocumentPages.$inferSelect;
 
 type InvestigationMotion = {
+  is_candidate?: boolean;
+  is_informal?: boolean;
   moved_by: string | null;
   seconded_by: string | null;
   resolution_text: string | null;
@@ -72,6 +77,7 @@ type AgendaItemContextDocument = {
 
 type DraftInputItem = {
   id: string;
+  itemNumber: string | null;
   sortOrder: number;
   title: string;
   sectionLabel: string | null;
@@ -236,6 +242,14 @@ function mapSuggestedSectionPath(item: {
     sectionLabel.includes("approval") || sectionLabel.includes("discussion and approval");
 
   switch (item.itemType) {
+    case "next_meeting":
+      return "date_of_next_meeting";
+    case "adjournment":
+      return "termination";
+    case "call_to_order":
+      return "call_to_order";
+    case "correspondence":
+      return "correspondence";
     case "guest_presentation":
       return "special_presentations";
     case "approval_of_previous_minutes":
@@ -556,7 +570,7 @@ function parseCallToOrderFromTranscript(text: string): {
     return {
       clockTime,
       offsetSeconds: parseVttClockToSeconds(explicit[1]),
-      chairName: /kafi/i.test(explicit[2] ?? "") ? "Management" : titleCaseName(explicit[2] ?? ""),
+      chairName: titleCaseName(explicit[2] ?? ""),
     };
   }
 
@@ -596,10 +610,11 @@ function parseNextMeetingHint(text: string): {
 
 function mapMotionStatus(
   motion: InvestigationMotion,
-): "Motion carried." | "Motion defeated." | "Deferred." {
-  if (motion.result === "DEFERRED") return "Deferred.";
-  if (motion.result === "DEFEATED") return "Motion defeated.";
-  return "Motion carried.";
+): MotionV2["status"] {
+  if (canonicalEnum(motion.result) === "DEFERRED") return "Deferred.";
+  if (canonicalEnum(motion.result) === "DEFEATED") return "Motion defeated.";
+  if (canonicalEnum(motion.result) === "CARRIED" && !motion.is_candidate) return "Motion carried.";
+  return "Outcome not recorded.";
 }
 
 function mapOutcomeToStatus(
@@ -778,7 +793,7 @@ export function buildMeetingFrame(
     sequenceEnd: chunk.sequenceEnd,
     startTimestamp: chunk.startTimestamp,
     endTimestamp: chunk.endTimestamp,
-    text: truncateText(chunk.text, 2600),
+    text: chunk.text,
   }));
   const closingTranscript = transcriptChunks.slice(-6).map((chunk) => ({
     chunkKey: chunk.chunkKey,
@@ -786,7 +801,7 @@ export function buildMeetingFrame(
     sequenceEnd: chunk.sequenceEnd,
     startTimestamp: chunk.startTimestamp,
     endTimestamp: chunk.endTimestamp,
-    text: truncateText(chunk.text, 2200),
+    text: chunk.text,
   }));
   const distribution = parseDistributionPeople(extractDistributionBlock(coverPageText));
   const coverRoster = parseCoverRoster(coverPageText);
@@ -841,7 +856,7 @@ export function buildMeetingFrame(
       ? parseVttClockToSeconds(closingTranscript.at(-1)?.endTimestamp ?? null)
       : null,
   });
-  const terminationTime = explicitTerminationTime ?? inferredTerminationTime;
+  const terminationTime = explicitTerminationTime;
   const speakerMatchesPerson = (speaker: string, person: MeetingFramePerson) => {
     const normalizedSpeaker = speaker.toLowerCase();
     return person.name
@@ -869,22 +884,12 @@ export function buildMeetingFrame(
   const presentBoard = boardRoster.filter((person) =>
     transcriptSpeakerNames.some((speaker: string) => speakerMatchesPerson(speaker, person)),
   );
-  const regrets = canonicalBoardRoster.filter(
-    (person) => !presentBoard.some((present) => present.name === person.name),
-  );
+  const allTranscriptText = transcriptChunks.map(chunk => chunk.text).join("\n");
+  const regrets = boardRoster.filter(person => !presentBoard.some(p => p.name === person.name) &&
+    allTranscriptText.split(/\n/).some(line => /regrets|unable to attend|absent/i.test(line) && speakerMatchesPerson(line, person)));
   const byInvitation = managementRoster.filter(
     (person) => transcriptSpeakerNames.some((speaker: string) => speakerMatchesPerson(speaker, person)),
   );
-  if (
-    transcriptSpeakerNames.some((speaker: string) => /gretta/i.test(speaker)) &&
-    !byInvitation.some((person) => /gretta/i.test(person.name))
-  ) {
-    byInvitation.push({
-      name: "Gretta Averbukh",
-      title_or_role: "Recording Secretary",
-      company: "Minute Take Care Inc.",
-    });
-  }
   const knownNames = new Set(
     [...canonicalBoardRoster, ...byInvitation].map((person) => person.name.toLowerCase()),
   );
@@ -893,7 +898,7 @@ export function buildMeetingFrame(
       const normalized = speaker.toLowerCase();
       return (
         !knownNames.has(normalized) &&
-        !/(shawna|paul|bonnie kafi|banafsheh kafi|haider|gretta|studiopm)/i.test(normalized)
+        !coverRoster.some(person => speakerMatchesPerson(speaker, person))
       );
     })
     .map((speaker: string) => ({
@@ -913,9 +918,9 @@ export function buildMeetingFrame(
       meetingLocation,
     },
     attendanceCandidates: {
-      present: presentBoard.length > 0 ? presentBoard : distribution.present,
-      byInvitation: byInvitation.length > 0 ? byInvitation : distribution.byInvitation,
-      guests: guests.length > 0 ? guests : distribution.guests,
+      present: presentBoard,
+      byInvitation,
+      guests,
       regrets,
     },
     callToOrderHints: {
@@ -927,6 +932,7 @@ export function buildMeetingFrame(
       time: terminationTime,
     },
     sourceNotes: [
+      ...boardRoster.filter(person => !presentBoard.includes(person) && !regrets.includes(person)).map(person => `Attendance not confirmed: ${person.name}. Silence is not evidence of absence.`),
       corporationName ? "Corporation name candidate parsed from package." : null,
       distribution.present.length + distribution.byInvitation.length + distribution.guests.length > 0
         ? "Attendance candidates parsed from the package distribution block."
@@ -974,6 +980,7 @@ function buildDraftInputItems(options: {
       return [
         {
           id: agendaItem.id,
+          itemNumber: agendaItem.itemNumber,
           sortOrder: agendaItem.sortOrder,
           title: agendaItem.title,
           sectionLabel: agendaItem.sectionLabel,
@@ -994,9 +1001,9 @@ function buildDraftInputItems(options: {
           : [],
           investigation: {
             discussionSummary: normalizeWhitespace(investigation.discussionSummary),
-            outcome: investigation.outcome,
-            confidence: investigation.confidence,
-            visibility: investigation.visibility,
+            outcome: canonicalEnum(investigation.outcome),
+            confidence: canonicalEnum(investigation.confidence),
+            visibility: canonicalEnum(investigation.visibility),
             decisions: safeParseArray<string>(investigation.decisionsJson),
             motion: safeParseObject<InvestigationMotion>(investigation.motionJson),
             actions: safeParseArray<InvestigationAction>(investigation.actionsJson),
@@ -1040,20 +1047,17 @@ function mapMotion(item: DraftInputItem, presentDirectors: MeetingFramePerson[] 
   }
 
   return {
-    movedBy: motion.moved_by || presentDirectors.find(d => /president|chair/i.test(d.title_or_role))?.name || presentDirectors[0]?.name || "",
-    secondedBy: motion.seconded_by || presentDirectors.find(d => d.name !== (presentDirectors.find(pd => /president|chair/i.test(pd.title_or_role))?.name || presentDirectors[0]?.name))?.name || presentDirectors[1]?.name || "",
+    movedBy: motion.moved_by || "",
+    secondedBy: motion.seconded_by || "",
     resolutionText: motion.resolution_text,
     status: mapMotionStatus(motion),
+    isCandidate: motion.is_candidate,
+    isInformal: motion.is_informal,
   };
 }
 
 function summarizeAgendaItem(item: DraftInputItem): string {
-  const fallbackSummary =
-    item.investigation.discussionSummary ||
-    item.notes.join(" ") ||
-    "Discussion occurred on this topic and the Board considered the matter.";
-
-  return ensureSentence(fallbackSummary);
+  return ensureSentence(item.investigation.discussionSummary);
 }
 
 function mapAgendaItemStatus(item: DraftInputItem, presentDirectors: MeetingFramePerson[] = []): AgendaItemV2["status"] | undefined {
@@ -1072,26 +1076,19 @@ function detectContractor(item: DraftInputItem): string | undefined {
 }
 
 function inferRestricted(item: DraftInputItem): boolean {
-  const blob = `${item.title} ${item.investigation.discussionSummary} ${item.notes.join(" ")} ${item.aliases.join(" ")}`.toLowerCase();
-  return (
-    item.investigation.visibility === "RESTRICTED" ||
-    /\bsuite\s+\d{2,4}\b/.test(blob) ||
-    /\bowner request for records\b/.test(blob) ||
-    /\blegal\b/.test(blob) ||
-    /\bbroken window\b/.test(blob) ||
-    /\bwater leak dispute\b/.test(blob)
-  );
+  return canonicalEnum(item.investigation.visibility) === "RESTRICTED";
 }
 
 function buildAgendaItemV2(item: DraftInputItem, presentDirectors: MeetingFramePerson[] = []): AgendaItemV2 {
   const motion = mapMotion(item, presentDirectors);
   return {
+    sourceAgendaItemId: item.id,
+    sourceItemNumber: item.itemNumber ?? undefined,
     topic: item.title,
     summary: summarizeAgendaItem(item),
-    contractorMentioned: detectContractor(item),
     motion,
     actionItems: item.investigation.actions.map((action) => ({
-      assignee: action.owner ?? "Management",
+      assignee: action.owner ?? "",
       taskDescription: ensureSentence(action.description),
     })),
     subItems: [],
@@ -1106,6 +1103,8 @@ function buildApprovalOfPreviousMinutes(
   return items
     .filter((item) => item.itemType === "approval_of_previous_minutes")
     .map((item) => ({
+      sourceAgendaItemId: item.id,
+      summary: item.investigation.discussionSummary,
       previousMeetingDate: extractPreviousMeetingDate(item.title),
       amendmentsNoted: /amended|amendment/i.test(
         `${item.title} ${item.investigation.discussionSummary} ${item.investigation.decisions.join(" ")}`,
@@ -1122,7 +1121,7 @@ function buildMetadata(
     corporationName:
       meetingFrame.metadataHints.corporationName || CORP_LONG,
     meetingDate: meeting.meetingDate,
-    meetingTime: meetingFrame.metadataHints.meetingTime || "6:00 pm",
+    meetingTime: meetingFrame.metadataHints.meetingTime || "",
     meetingLocation: meetingFrame.metadataHints.meetingLocation || undefined,
     meetingPlatform: meetingFrame.metadataHints.meetingPlatform || undefined,
   };
@@ -1167,12 +1166,12 @@ function buildAttendance(
 function buildCallToOrderSection(
   meetingFrame: ReturnType<typeof buildMeetingFrame>,
 ): CallToOrderV2 | undefined {
+  if (!meetingFrame.callToOrderHints.time && !meetingFrame.callToOrderHints.chairName) return undefined;
   return {
     time:
       meetingFrame.callToOrderHints.time ??
-      meetingFrame.metadataHints.meetingTime ??
       undefined,
-    chairName: meetingFrame.callToOrderHints.chairName ?? "Management",
+    chairName: meetingFrame.callToOrderHints.chairName || undefined,
   };
 }
 
@@ -1286,11 +1285,17 @@ function buildDeterministicMinutesDocument(input: {
     newOrOtherBusiness: [] as AgendaItemV2[],
   };
 
+  const isHeading = (item: DraftInputItem) => Boolean(item.itemNumber && item.itemNumber.split(".").length < 3 &&
+    input.agendaItems.some(other => other.itemNumber?.startsWith(`${item.itemNumber}.`)));
+  const substantiveItems = input.agendaItems.filter(item => !isHeading(item));
+  const assembledByNumber = new Map(substantiveItems.filter(i => i.itemNumber).map(i => [i.itemNumber!, buildAgendaItemV2(i, presentDirectors)]));
   const assemblyPlan = input.agendaItems.map((item) => {
     const sectionPath = mapSuggestedSectionPath(item);
-    const agendaItem = buildAgendaItemV2(item, presentDirectors);
+    const agendaItem = assembledByNumber.get(item.itemNumber ?? "") ?? buildAgendaItemV2(item, presentDirectors);
+    const parent = assembledByNumber.get(parentAgendaItemCode(item.itemNumber ?? "") ?? "");
+    if (parent) parent.subItems.push(agendaItem);
 
-    switch (sectionPath) {
+    if (!isHeading(item) && !parent) switch (sectionPath) {
       case "special_presentations":
         sections.specialPresentations.push(agendaItem);
         break;
@@ -1312,8 +1317,13 @@ function buildDeterministicMinutesDocument(input: {
       case "new_or_other_business":
         sections.newOrOtherBusiness.push(agendaItem);
         break;
+      case "correspondence":
+        sections.correspondence.push(agendaItem);
+        break;
       case "approval_of_previous_minutes":
       case "date_of_next_meeting":
+      case "termination":
+      case "call_to_order":
         break;
       default:
         sections.newOrOtherBusiness.push(agendaItem);
@@ -1325,7 +1335,7 @@ function buildDeterministicMinutesDocument(input: {
       title: item.title,
       itemType: item.itemType,
       sectionLabel: item.sectionLabel,
-      sectionPath,
+      sectionPath: isHeading(item) ? "heading" : parent ? "sub_item" : sectionPath,
       restricted: item.investigation.visibility === "RESTRICTED",
       sourcePages: item.sourcePages,
       sourceChunkIds: item.sourceChunkIds.slice(0, 8),
@@ -1340,8 +1350,8 @@ function buildDeterministicMinutesDocument(input: {
     metadata: buildMetadata(input.meeting, input.meetingFrame),
     attendance: buildAttendance(input.meetingFrame, input.agendaItems),
     callToOrder: buildCallToOrderSection(input.meetingFrame),
-    specialPresentations: buildSpecialPresentations(input.agendaItems, presentDirectors),
-    approvalOfPreviousMinutes: buildApprovalOfPreviousMinutes(input.agendaItems, presentDirectors),
+    specialPresentations: sections.specialPresentations,
+    approvalOfPreviousMinutes: buildApprovalOfPreviousMinutes(substantiveItems, presentDirectors),
     financialMatters: sections.financialMatters,
     managementReport: {
       itemsForRatification: sections.managementRatification,
@@ -1388,6 +1398,8 @@ export function buildMeetingV2DraftArtifact(input: {
   chunks: ChunkRow[];
   pages: PageRow[];
 }) {
+  const problems = draftReadiness(input.agendaItems, input.investigations, input.validations);
+  if (problems.length) throw new Error(`Draft is not ready. ${problems.join(" ")}`);
   const draftItems = buildDraftInputItems(input);
   if (draftItems.length === 0) {
     throw new Error("Validated agenda investigations are required before generating a draft.");
@@ -1414,6 +1426,7 @@ export function buildMeetingV2DraftArtifact(input: {
     contentMarkdown: v2ToMarkdown(finalDocument),
     summaryJson: JSON.stringify({
       assemblyMode: "deterministic_v1",
+      pipelineVersion: MINUTES_PIPELINE_VERSION,
       agendaItemCount: draftItems.length,
       substantiveAgendaItemCount: countSubstantiveAgendaItems(finalDocument),
       sectionHints: [

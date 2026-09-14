@@ -1,3 +1,8 @@
+import {
+  formatGmailQuotaDetail,
+  parseGmailQuotaSnapshot,
+} from "@/lib/gmail/quota";
+
 export const INGEST_STAGES = [
   "a_ingest",
   "b_discover",
@@ -453,6 +458,20 @@ export function ingestRunSummaryRows(run: IngestRunPublic): IngestSummaryRow[] {
       label: "Harvest",
       detail: harvestMessage,
       tone: incomplete ? "warn" : "ok",
+    });
+  }
+
+  const gmailQuota = parseGmailQuotaSnapshot(counts.gmailQuota);
+  if (gmailQuota) {
+    rows.push({
+      label: "Gmail API quota",
+      detail: formatGmailQuotaDetail(gmailQuota),
+      tone:
+        gmailQuota.peakUnitsIn60s >= gmailQuota.limitUnitsPerUserPerMinute
+          ? "error"
+          : gmailQuota.percentOfLimit >= 80
+            ? "warn"
+            : "ok",
     });
   }
 

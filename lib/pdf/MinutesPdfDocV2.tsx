@@ -445,11 +445,11 @@ function MotionPdf({ motion }: { motion: MotionV2 }) {
     <View>
       <HangRow marker=" ">
         <Text style={styles.bodyParagraph}>
-          <Text style={styles.motionKeyword}>MOTION</Text>
-          <Text style={styles.motionRegular}> by {motion.movedBy.trim()}</Text>
+          <Text style={styles.motionKeyword}>{motion.isInformal ? "Board agreement" : motion.isCandidate ? "Proposed motion" : "MOTION"}</Text>
+          {motion.movedBy.trim() ? <Text style={styles.motionRegular}> by {motion.movedBy.trim()}</Text> : null}
         </Text>
       </HangRow>
-      <HangRow marker=" ">
+      {motion.secondedBy.trim() ? <HangRow marker=" ">
         <Text style={styles.bodyParagraph}>
           <Text style={styles.motionKeyword}>Seconded</Text>
           <Text style={styles.motionRegular}>
@@ -457,7 +457,7 @@ function MotionPdf({ motion }: { motion: MotionV2 }) {
             by {motion.secondedBy.trim()}
           </Text>
         </Text>
-      </HangRow>
+      </HangRow> : null}
       <HangRow marker=" ">
         <Text style={styles.bodyParagraph}>
           <Text style={styles.motionKeyword}>
@@ -745,15 +745,14 @@ function TitleAndAttendees({
 
 function CallToOrderBody({ doc }: { doc: MinutesDocumentV2 }) {
   if (!doc.callToOrder) return null;
-  const chairName = doc.callToOrder.chairName?.trim() || "the Chair";
+  const chairName = doc.callToOrder.chairName?.trim();
   const time = doc.callToOrder.time?.trim().replace(/\.+$/, "");
   const timePhrase = time ? ` at ${time}.` : ".";
 
   return (
     <ContentParagraph>
-      Proper notice having been given and there being a quorum present,{" "}
-      {chairName} called the meeting to order
-      {timePhrase} and presided as Chair.
+      {chairName ? `${chairName} called the meeting to order` : "The meeting was called to order"}
+      {timePhrase}
     </ContentParagraph>
   );
 }
@@ -768,7 +767,7 @@ function ApprovalOfPreviousMinutesBody({
     <View>
       {doc.approvalOfPreviousMinutes.map((approval, idx) => (
         <View key={`appr-${idx}`}>
-          {approval.amendmentsNoted ? (
+          {approval.summary ? <ContentParagraph>{approval.summary}</ContentParagraph> : approval.amendmentsNoted ? (
             <ContentParagraph>
               The Chair asked for any errors or omissions in the minutes of the
               Board meeting of{" "}
@@ -797,7 +796,7 @@ function DateOfNextMeetingBody({ doc }: { doc: MinutesDocumentV2 }) {
   return (
     <ContentParagraph>
       The next meeting of the Board of Directors will be held
-      {location ? ` ${location}` : " virtually"}
+      {location ? ` ${location}` : ""}
       {date ? ` on ${date}` : ""}
       {time ? ` commencing at ${time}.` : "."}
     </ContentParagraph>
@@ -834,6 +833,10 @@ function MainBody({ doc }: { doc: MinutesDocumentV2 }) {
     <View>
       <TopSectionHeading number="1" title="Call to Order" />
       <CallToOrderBody doc={doc} />
+      {publicOnly(doc.specialPresentations).length > 0 ? <View>
+        <TopSectionHeading number="" title="Special Presentations" />
+        <AgendaItemsPdf items={publicOnly(doc.specialPresentations)} />
+      </View> : null}
 
       {doc.approvalOfPreviousMinutes.length > 0 ? (
         <View>
@@ -873,6 +876,10 @@ function MainBody({ doc }: { doc: MinutesDocumentV2 }) {
         </View>
       ) : null}
 
+      {publicOnly(doc.correspondence).length > 0 ? <View>
+        <TopSectionHeading number="" title="Correspondence" />
+        <AgendaItemsPdf items={publicOnly(doc.correspondence)} />
+      </View> : null}
       {publicNewBusiness.length > 0 ? (
         <View>
           <TopSectionHeading number="5" title="New / Other Business" />
@@ -891,8 +898,7 @@ function MainBody({ doc }: { doc: MinutesDocumentV2 }) {
         <View>
           <TopSectionHeading number="7" title="Meeting Conclusion" />
           <ContentParagraph>
-            There being no further business to discuss, the meeting was
-            unanimously concluded at{" "}
+            The meeting concluded at{" "}
             {doc.termination.time.replace(/\.+$/, "")}.
           </ContentParagraph>
         </View>
@@ -979,6 +985,11 @@ function AddendumPdf({
       <Text style={styles.addendumConfidentialHeading}>
         {RESTRICTED_ADDENDUM_SECTION_HEADING}
       </Text>
+      {[{ title: "Special Presentations", items: doc.specialPresentations }, { title: "Correspondence", items: doc.correspondence }].map(section =>
+        restrictedOnly(section.items).length ? <View key={section.title}>
+          <TopSectionHeading number="" title={section.title} />
+          <AgendaItemsPdf items={restrictedOnly(section.items)} options={{ italicTopic: true }} />
+        </View> : null)}
       <CondominiumActItalicText
         text={RESTRICTED_ADDENDUM_DISCLAIMER}
         style={styles.addendumDisclaimer}

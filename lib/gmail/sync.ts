@@ -27,7 +27,13 @@ import {
   parsedMessageMatchesAllowlist,
 } from "./queries";
 import { storeParsedMessage, type EmailSource } from "./store";
-import { summarizeGmailSyncErrors, withGmailQuotaRetry } from "./quota";
+import {
+  formatGmailQuotaDetail,
+  runWithGmailQuotaMeter,
+  summarizeGmailSyncErrors,
+  withGmailQuotaRetry,
+  type GmailQuotaSnapshot,
+} from "./quota";
 import {
   assertDedicatedConnectionValid,
   assertPersonalConnectionValid,
@@ -40,6 +46,7 @@ export type SyncResult = {
   messagesAdded: number;
   messagesSkipped: number;
   errors: string[];
+  gmailQuota?: GmailQuotaSnapshot;
 };
 
 let personalSyncInProgress = false;
@@ -338,6 +345,16 @@ function isGmailMissingEntityError(error: unknown): boolean {
 }
 
 export async function syncPersonalAccount(
+  trigger: SyncTrigger,
+): Promise<SyncResult> {
+  const { result, usage } = await runWithGmailQuotaMeter(() =>
+    syncPersonalAccountInner(trigger),
+  );
+  console.info("[gmail:quota] personal sync", formatGmailQuotaDetail(usage));
+  return { ...result, gmailQuota: usage };
+}
+
+async function syncPersonalAccountInner(
   trigger: SyncTrigger,
 ): Promise<SyncResult> {
   if (personalSyncInProgress) {

@@ -179,6 +179,10 @@ export async function duplicateMeetingV2ToAgendaApproval(options: {
 
   const sourceSettings = (sourceV2.settings ?? {}) as MeetingV2Settings;
   const destSettings: MeetingV2Settings = {
+    pipelineVersion: sourceSettings.pipelineVersion,
+    sourceFingerprint: sourceSettings.sourceFingerprint,
+    agendaEvidence: sourceSettings.agendaEvidence ? JSON.parse(rewriteText(JSON.stringify(sourceSettings.agendaEvidence))!) : undefined,
+    replay: { sourceMeetingId, fromStage: "agenda_review", copiedAt: new Date().toISOString() },
     autonomyTemperature: sourceSettings.autonomyTemperature,
     extractionRun: sourceSettings.extractionRun,
     ingestUsage: sourceSettings.ingestUsage,

@@ -6,7 +6,7 @@ import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2AgendaItems } from "@/lib/db/schema-v2";
 import { inngest } from "@/lib/inngest/client";
 import { resolveMeetingV2SegmentMilestonePercent } from "@/lib/meeting-v2/pipeline-segment-timing";
-import { updateMeetingV2Status } from "@/lib/meeting-v2/service";
+import { updateMeetingV2Status, resetMeetingV2PostExtractData } from "@/lib/meeting-v2/service";
 import {
   inferPropertyManagementReportNumber,
   planAdHocPlacement,
@@ -107,6 +107,7 @@ export async function POST(
 
     let nextSort = existingItems.length;
     const finalItemStatuses: Record<string, AgendaItemDiscussionStatus> = {
+      ...(meeting.settings?.agendaApproval?.itemStatuses || {}),
       ...(body.itemStatuses || {}),
     };
 
@@ -185,9 +186,18 @@ export async function POST(
       });
     }
 
+    const finalItems = await db.select().from(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));
+    const agendaEvidence = Object.fromEntries(finalItems.map(item => {
+      const prior = currentSettings.agendaEvidence?.[item.id];
+      const accepted = updatedDiscrepancies.find(d => d.status === "accepted" && normalize(d.suggestedTitle) === normalize(item.title));
+      return [item.id, prior ?? { itemNumber: item.itemNumber, sourceTranscriptRanges: accepted ? [accepted.transcriptRange] : [],
+        sourceChunkIds: [], aliases: [], notes: [] }];
+    }));
     // 6. Update meeting settings with approved state
     const updatedSettings: MeetingV2Settings = {
       ...currentSettings,
+      agendaEvidence,
+      draftReadiness: { ready: false, problems: ["The approved agenda needs investigation and validation."], checkedAt: new Date().toISOString() },
       agendaApproval: {
         status: "approved",
         approvedAt: new Date().toISOString(),
@@ -201,6 +211,8 @@ export async function POST(
       .update(meetingsV2)
       .set({ settings: updatedSettings })
       .where(eq(meetingsV2.id, meetingId));
+
+    await resetMeetingV2PostExtractData(meetingId);
 
     const evidenceStartPercent = await resolveMeetingV2SegmentMilestonePercent(
       "evidence",

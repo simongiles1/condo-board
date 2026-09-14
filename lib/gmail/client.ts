@@ -9,6 +9,34 @@ import {
   type GmailAccountType,
 } from "./oauth";
 import { decryptToken, encryptToken } from "./tokens";
+import { recordGmailApiCall } from "./quota";
+
+function wrapGmailMethod(
+  target: object,
+  key: string,
+  method: string,
+): void {
+  const record = target as Record<string, unknown>;
+  const original = record[key];
+  if (typeof original !== "function") return;
+  record[key] = function wrappedGmailMethod(...args: unknown[]) {
+    recordGmailApiCall(method);
+    return (original as (...inner: unknown[]) => unknown).apply(this, args);
+  };
+}
+
+function instrumentGmailClient(gmail: ReturnType<typeof google.gmail>) {
+  wrapGmailMethod(gmail.users, "getProfile", "getProfile");
+  wrapGmailMethod(gmail.users.history, "list", "history.list");
+  wrapGmailMethod(gmail.users.messages, "get", "messages.get");
+  wrapGmailMethod(gmail.users.messages, "list", "messages.list");
+  wrapGmailMethod(gmail.users.messages, "send", "messages.send");
+  wrapGmailMethod(gmail.users.messages, "trash", "messages.trash");
+  wrapGmailMethod(gmail.users.messages.attachments, "get", "messages.attachments.get");
+  wrapGmailMethod(gmail.users.threads, "get", "threads.get");
+  wrapGmailMethod(gmail.users.threads, "list", "threads.list");
+  return gmail;
+}
 
 export async function getGmailClient(accountType: GmailAccountType) {
   const db = getDb();
@@ -56,11 +84,13 @@ export async function getGmailClient(accountType: GmailAccountType) {
   });
 
   return {
-    gmail: google.gmail({
-      version: "v1",
-      auth: oauth2Client,
-      timeout: 30_000,
-    }),
+    gmail: instrumentGmailClient(
+      google.gmail({
+        version: "v1",
+        auth: oauth2Client,
+        timeout: 30_000,
+      }),
+    ),
     connection,
   };
 }

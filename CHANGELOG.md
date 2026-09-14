@@ -14,6 +14,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Cron ingest Failed from Gmail quota** — The 3:00 p.m. Eastern cron on 2026-09-14 imported 0 messages because Gmail returned “Units per minute per user” quota errors on a 161-message history batch. Sync now waits and retries those calls, and collapses the duplicate quota lines so Telegram is not flooded.
 
+### Added
+
+- **Gmail API quota on ingest summary** — Each sync records per-method calls and Google quota units (`messages.get` = 20, `threads.get` = 40) plus the peak 60-second window versus the published **6,000 units per user per minute** cap, so a Failed run shows whether Gmail actually exceeded that limit.
+
 ### Changed
 
 - **Build-out progress Gantt** — Curated statuses reviewed 2026-09-14. Corpus search / RAG and Ask the archive move to **In parallel** (product slice shipped; backfill + file-card qualify ongoing). Added **Recurring document types**. Gated ingest pipeline, meetings v2 (gold compare, create wizard, duplicate), and global archive chat reflected in card copy.

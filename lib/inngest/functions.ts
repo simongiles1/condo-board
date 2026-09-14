@@ -23,6 +23,7 @@ import {
   getMeetingV2Counts,
   ingestMeetingV2Sources,
   investigateAgendaItems,
+  prepareMeetingV2Pipeline,
   listPendingValidationAgendaItemIds,
   resetMeetingV2PostExtractData,
   retrieveAgendaItemEvidence,
@@ -35,11 +36,13 @@ export const runMeetingV2Pipeline = inngest.createFunction(
   {
     id: "run-meeting-v2-pipeline",
     retries: 3,
+    concurrency: { limit: 1, key: "event.data.meetingId", scope: "env" },
     triggers: [{ event: "meeting-v2/pipeline.start" }],
   },
   async ({ event, step }) => {
     const { meetingId } = event.data;
     try {
+      await step.run("verify-meeting-input-version", () => prepareMeetingV2Pipeline(meetingId));
       const pipelineSnapshot = await step.run("load-meeting-v2-stage-state", async () => {
         const db = getDb();
         const [meeting] = await db
@@ -191,13 +194,7 @@ export const runMeetingV2Pipeline = inngest.createFunction(
         };
       }
 
-      if (evidenceComplete && investigationsComplete && validationsComplete) {
-        await step.run("reset-post-extract-data-for-rerun", async () => {
-          await resetMeetingV2PostExtractData(meetingId);
-        });
-      }
-
-      if (!evidenceComplete || (evidenceComplete && investigationsComplete && validationsComplete)) {
+      if (!evidenceComplete) {
         await step.run("gather-meeting-v2-evidence", async () => {
           const evidenceStartPercent = await resolveMeetingV2SegmentMilestonePercent("evidence", "start");
           const evidenceEndPercent = await resolveMeetingV2SegmentMilestonePercent("evidence", "end");
@@ -232,7 +229,7 @@ export const runMeetingV2Pipeline = inngest.createFunction(
         });
       }
 
-      if (!investigationsComplete || (evidenceComplete && investigationsComplete && validationsComplete)) {
+      if (!investigationsComplete) {
         await step.run("investigate-meeting-v2-items", async () => {
           const investigateStartPercent = await resolveMeetingV2SegmentMilestonePercent("investigate", "start");
           const investigateEndPercent = await resolveMeetingV2SegmentMilestonePercent("investigate", "end");
@@ -357,6 +354,7 @@ export const reevaluateAgendaItem = inngest.createFunction(
   {
     id: "reevaluate-agenda-item",
     retries: 3,
+    concurrency: { limit: 1, key: "event.data.meetingId", scope: "env" },
     triggers: [{ event: "meeting-v2/item.reevaluate" }],
   },
   async ({ event, step }) => {

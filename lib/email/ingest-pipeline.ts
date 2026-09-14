@@ -4,10 +4,11 @@
 
 import { randomUUID } from "crypto";
 
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import {
+  attachmentDocuments,
   emailAttachments,
   emailIngestRuns,
   emailIngestSenderReviews,
@@ -545,20 +546,13 @@ async function runStageD(runId: string): Promise<void> {
   await waitOrAdvance(runId, "e1_docling");
 }
 
-async function downloadAttachmentsForEmails(emailIds: string[]): Promise<number> {
-  if (emailIds.length === 0) return 0;
-  const db = getDb();
-  const pending = await db
-    .select({
-      id: emailAttachments.id,
-      emailId: emailAttachments.emailId,
-    })
-    .from(emailAttachments)
-    .where(inArray(emailAttachments.emailId, emailIds));
-
+async function downloadAttachmentRows(
+  rows: Array<{ id: string; emailId: string }>,
+): Promise<number> {
+  if (rows.length === 0) return 0;
   const { downloadEmailAttachment } = await import("@/lib/gmail/attachments");
   let downloaded = 0;
-  for (const row of pending) {
+  for (const row of rows) {
     try {
       await downloadEmailAttachment({
         attachmentId: row.id,
@@ -576,69 +570,168 @@ async function downloadAttachmentsForEmails(emailIds: string[]): Promise<number>
   return downloaded;
 }
 
-async function runStageE1(runId: string): Promise<void> {
-  const run = await getIngestRun(runId);
-  if (!run) return;
-  const { listRunningDoclingBackfillRuns, createDoclingBackfillRun } =
-    await import("@/lib/email/docling-backfill-runs");
-  const running = await listRunningDoclingBackfillRuns();
-  if (running.length > 0) {
-    await patchRun(runId, {
-      countsJson: JSON.stringify({
-        ...run.counts,
-        stageNote:
-          "Docling lab already has a running extraction. Finish or cancel it, then Continue.",
-      }),
-    });
-    await waitOrAdvance(runId, "e1_docling");
-    return;
-  }
-
-  const downloaded = await downloadAttachmentsForEmails(run.newEmailIds);
+async function downloadAttachmentsForEmails(emailIds: string[]): Promise<number> {
+  if (emailIds.length === 0) return 0;
   const db = getDb();
-  const hashRows =
-    run.newEmailIds.length === 0
-      ? []
-      : await db
-          .select({ contentHash: emailAttachments.contentHash })
-          .from(emailAttachments)
-          .where(inArray(emailAttachments.emailId, run.newEmailIds));
-  const hashes = [
+  const pending = await db
+    .select({
+      id: emailAttachments.id,
+      emailId: emailAttachments.emailId,
+    })
+    .from(emailAttachments)
+    .where(inArray(emailAttachments.emailId, emailIds));
+  return downloadAttachmentRows(pending);
+}
+
+/** Attachments Gmail already listed but never hashed — they never reach Docling. */
+async function downloadUnhashedAttachments(): Promise<number> {
+  const db = getDb();
+  const stranded = await db
+    .select({
+      id: emailAttachments.id,
+      emailId: emailAttachments.emailId,
+    })
+    .from(emailAttachments)
+    .where(
+      and(
+        isNull(emailAttachments.contentHash),
+        isNotNull(emailAttachments.gmailAttachmentId),
+      ),
+    );
+  return downloadAttachmentRows(stranded);
+}
+
+function uniqueHashes(values: Array<string | null | undefined>): string[] {
+  return [
     ...new Set(
-      hashRows
-        .map((row) => row.contentHash)
+      values
+        .map((hash) => hash?.trim().toLowerCase())
         .filter((hash): hash is string => Boolean(hash)),
     ),
   ];
+}
 
-  if (hashes.length > 0) {
-    const { DEFAULT_DOCLING_PROVIDER } = await import(
-      "@/lib/email/docling-provider"
-    );
-    const extraction = await createDoclingBackfillRun({
-      mode: "full",
-      doclingProvider: DEFAULT_DOCLING_PROVIDER,
-      docLimit: null,
-      plannedHashes: hashes,
-      totalDoclingPages: 0,
-      totalVisionPages: 0,
-      corpusUncachedPages: 0,
-      corpusPendingDocs: hashes.length,
-      corpusPendingVisionPages: 0,
-      corpusPendingVisionDocs: 0,
-    });
-    const { waitForDoclingBackfillWorker } = await import(
-      "@/lib/email/docling-backfill-worker"
-    );
-    await waitForDoclingBackfillWorker(extraction.id);
+async function hashesForEmails(emailIds: string[]): Promise<string[]> {
+  if (emailIds.length === 0) return [];
+  const db = getDb();
+  const rows = await db
+    .select({ contentHash: emailAttachments.contentHash })
+    .from(emailAttachments)
+    .where(inArray(emailAttachments.emailId, emailIds));
+  return uniqueHashes(rows.map((row) => row.contentHash));
+}
+
+async function listPendingParseHashes(): Promise<string[]> {
+  const db = getDb();
+  const rows = await db
+    .select({ contentHash: attachmentDocuments.contentHash })
+    .from(attachmentDocuments)
+    .where(inArray(attachmentDocuments.parseStatus, ["pending", "parsing"]));
+  return uniqueHashes(rows.map((row) => row.contentHash));
+}
+
+async function listStillPendingHashes(hashes: string[]): Promise<string[]> {
+  if (hashes.length === 0) return [];
+  const db = getDb();
+  const rows = await db
+    .select({
+      contentHash: attachmentDocuments.contentHash,
+      parseStatus: attachmentDocuments.parseStatus,
+    })
+    .from(attachmentDocuments)
+    .where(inArray(attachmentDocuments.contentHash, hashes));
+  return uniqueHashes(
+    rows
+      .filter(
+        (row) => row.parseStatus === "pending" || row.parseStatus === "parsing",
+      )
+      .map((row) => row.contentHash),
+  );
+}
+
+function extractionHashListFromCounts(counts: Record<string, unknown>): string[] {
+  const raw = counts.extractionHashList;
+  if (!Array.isArray(raw)) return [];
+  return uniqueHashes(
+    raw.filter((item): item is string => typeof item === "string"),
+  );
+}
+
+async function runDoclingForHashes(hashes: string[]): Promise<void> {
+  if (hashes.length === 0) return;
+  const { ensureAttachmentPageProfile } = await import(
+    "@/lib/email/attachment-document-pages"
+  );
+  for (const hash of hashes) {
+    const profile = await ensureAttachmentPageProfile(hash);
+    if (profile.status === "failed") {
+      console.warn("[ingest] page profile", hash.slice(0, 12), profile.error);
+    }
+  }
+  const { DEFAULT_DOCLING_PROVIDER } = await import(
+    "@/lib/email/docling-provider"
+  );
+  const { createDoclingBackfillRun } = await import(
+    "@/lib/email/docling-backfill-runs"
+  );
+  const extraction = await createDoclingBackfillRun({
+    mode: "full",
+    doclingProvider: DEFAULT_DOCLING_PROVIDER,
+    docLimit: null,
+    plannedHashes: hashes,
+    totalDoclingPages: 0,
+    totalVisionPages: 0,
+    corpusUncachedPages: 0,
+    corpusPendingDocs: hashes.length,
+    corpusPendingVisionPages: 0,
+    corpusPendingVisionDocs: 0,
+  });
+  const { waitForDoclingBackfillToSettle } = await import(
+    "@/lib/email/docling-backfill-worker"
+  );
+  await waitForDoclingBackfillToSettle(extraction.id);
+}
+
+async function runStageE1(runId: string): Promise<void> {
+  const run = await getIngestRun(runId);
+  if (!run) return;
+  const { listRunningDoclingBackfillRuns } = await import(
+    "@/lib/email/docling-backfill-runs"
+  );
+  const { waitForDoclingBackfillToSettle } = await import(
+    "@/lib/email/docling-backfill-worker"
+  );
+  const running = await listRunningDoclingBackfillRuns();
+  if (running[0]) {
+    await waitForDoclingBackfillToSettle(running[0].id);
   }
 
+  const downloaded = await downloadAttachmentsForEmails(run.newEmailIds);
+  const strandedDownloaded = await downloadUnhashedAttachments();
+  const hashes = uniqueHashes([
+    ...(await hashesForEmails(run.newEmailIds)),
+    ...(await listPendingParseHashes()),
+  ]);
+
+  if (hashes.length > 0) {
+    await runDoclingForHashes(hashes);
+    const leftover = await listStillPendingHashes(hashes);
+    if (leftover.length > 0) {
+      await runDoclingForHashes(leftover);
+    }
+  }
+
+  const stillPending = await listStillPendingHashes(hashes);
+  const parsedCount = hashes.length - stillPending.length;
   await patchRun(runId, {
     countsJson: JSON.stringify({
       ...run.counts,
-      attachmentsDownloaded: downloaded,
+      attachmentsDownloaded: downloaded + strandedDownloaded,
+      strandedDownloaded,
       extractionHashes: hashes.length,
-      stageNote: `Downloaded ${downloaded} attachments; queued ${hashes.length} documents for Docling/vision.`,
+      extractionHashList: hashes,
+      extractionStillPending: stillPending.length,
+      stageNote: `Downloaded ${downloaded + strandedDownloaded} attachments (${strandedDownloaded} previously never fetched); queued ${hashes.length} for Docling/vision; ${parsedCount} parsed, ${stillPending.length} still pending.`,
     }),
   });
   await waitOrAdvance(runId, "e2_file_cards");
@@ -650,9 +743,11 @@ async function runStageE2(runId: string): Promise<void> {
   const { createFileCardRun, planFileCardTargets } = await import(
     "@/lib/rag/file-card-runs"
   );
+  const hashList = extractionHashListFromCounts(run.counts);
   const planned = await planFileCardTargets({
     scope: "target_emails",
     emailIds: run.newEmailIds,
+    hashes: hashList,
   });
   if (planned.length > 0) {
     const cardRun = await createFileCardRun({
@@ -663,11 +758,16 @@ async function runStageE2(runId: string): Promise<void> {
     const { waitForFileCardWorker } = await import("@/lib/rag/file-card-worker");
     await waitForFileCardWorker(cardRun.id);
   }
+  const stillPending = await listStillPendingHashes(hashList);
   await patchRun(runId, {
     countsJson: JSON.stringify({
       ...run.counts,
       fileCards: planned.length,
-      stageNote: `File cards: ${planned.length} document(s).`,
+      extractionStillPending: stillPending.length,
+      stageNote:
+        stillPending.length > 0
+          ? `File cards: ${planned.length} document(s). Skipped ${stillPending.length} still unparsed.`
+          : `File cards: ${planned.length} document(s).`,
     }),
   });
   await waitOrAdvance(runId, "e3_embed");

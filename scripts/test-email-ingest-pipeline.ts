@@ -16,6 +16,7 @@ import {
   formatHarvestAfterSyncMessage,
   ingestRunSummaryRows,
   ingestStageMeterSegments,
+  nextDoclingWaitRunId,
   nextIngestStage,
   shouldResumeIdleIngestRun,
 } from "../lib/email/ingest-stages";
@@ -203,6 +204,42 @@ describe("ingest stages", () => {
     assert.equal(
       segments.find((s) => s.stage === "e2_file_cards")?.state,
       "pending",
+    );
+  });
+});
+
+describe("Docling ingest wait handoff", () => {
+  it("follows the live run when the waited extraction was cancelled", () => {
+    assert.equal(
+      nextDoclingWaitRunId({
+        waitedStatus: "cancelled",
+        runningIds: ["23c4172f"],
+      }),
+      "23c4172f",
+    );
+  });
+
+  it("does not wait further when the run completed or failed", () => {
+    assert.equal(
+      nextDoclingWaitRunId({
+        waitedStatus: "completed",
+        runningIds: ["23c4172f"],
+      }),
+      null,
+    );
+    assert.equal(
+      nextDoclingWaitRunId({
+        waitedStatus: "failed",
+        runningIds: [],
+      }),
+      null,
+    );
+    assert.equal(
+      nextDoclingWaitRunId({
+        waitedStatus: "cancelled",
+        runningIds: [],
+      }),
+      null,
     );
   });
 });

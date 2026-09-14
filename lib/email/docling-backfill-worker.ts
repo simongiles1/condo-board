@@ -9,6 +9,8 @@ import {
   touchDoclingBackfillRun,
   updateDoclingBackfillRun,
 } from "@/lib/email/docling-backfill-runs";
+import { ensureAttachmentPageProfile } from "@/lib/email/attachment-document-pages";
+import { nextDoclingWaitRunId } from "@/lib/email/ingest-stages";
 import {
   requeueFailedVisionPagesForHash,
   requeueFailedVisionPagesForHashes,
@@ -127,6 +129,22 @@ async function processOneDoc(options: {
   try {
     if (!(await isRunStillActive(runId))) {
       return { ...base, cancelled: true };
+    }
+
+    const profile = await ensureAttachmentPageProfile(contentHash);
+    if (profile.status === "failed") {
+      return {
+        ...base,
+        failed: true,
+        lastError: `${shortHash(contentHash)}: page profile failed: ${profile.error}`,
+      };
+    }
+    if (profile.status === "skipped" && profile.reason === "missing_bytes") {
+      return {
+        ...base,
+        failed: true,
+        lastError: `${shortHash(contentHash)}: PDF bytes missing; cannot extract`,
+      };
     }
 
     const runDocling = async (): Promise<{
@@ -668,6 +686,26 @@ export function waitForDoclingBackfillWorker(runId: string): Promise<void> {
 
   activeWorkers.set(runId, promise);
   return promise;
+}
+
+/** Wait until this run is no longer running, following a superseding replacement. */
+export async function waitForDoclingBackfillToSettle(
+  runId: string,
+): Promise<void> {
+  let id = runId;
+  const seen = new Set<string>();
+  while (!seen.has(id)) {
+    seen.add(id);
+    await waitForDoclingBackfillWorker(id);
+    const finished = await getDoclingBackfillRun(id);
+    const running = await listRunningDoclingBackfillRuns();
+    const next = nextDoclingWaitRunId({
+      waitedStatus: finished?.status ?? null,
+      runningIds: running.map((row) => row.id),
+    });
+    if (!next) return;
+    id = next;
+  }
 }
 
 export async function resumeDoclingBackfillWorkersOnStartup(): Promise<void> {

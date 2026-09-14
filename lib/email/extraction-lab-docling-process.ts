@@ -18,6 +18,7 @@ import {
   listTextRoutePageNos,
   listUncachedTextRoutePages,
 } from "@/lib/email/docling-lab";
+import { ensureAttachmentPageProfile } from "@/lib/email/attachment-document-pages";
 import type { PromoteParsedResult } from "@/lib/email/extraction-parse-promote";
 import { requeueFailedVisionPagesForHash } from "@/lib/email/extraction-backfill-plan";
 import { promoteParsedIfExtractionComplete } from "@/lib/email/extraction-parse-promote";
@@ -87,6 +88,7 @@ export async function processLabDocumentWithDocling(
   provider: DoclingProvider = DEFAULT_DOCLING_PROVIDER,
 ): Promise<LabDoclingProcessOutcome> {
   await clearLegacyCloudflareParseFailure(contentHash);
+  await ensureAttachmentPageProfile(contentHash);
 
   const textRoutePageCount = (await listTextRoutePageNos(contentHash)).length;
   const uncached = await listUncachedTextRoutePages(contentHash);

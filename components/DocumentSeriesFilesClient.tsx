@@ -362,33 +362,33 @@ export function DocumentSeriesFilesClient() {
 
         <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           {activeId && membersTitle ? (
-            <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
-              <div className="min-w-0">
-                <h2 className="text-base font-semibold text-slate-900">
+            <div className="shrink-0 border-b border-slate-100 px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <h2 className="min-w-0 text-base font-semibold text-slate-900">
                   {membersTitle}
                 </h2>
-                {membersDescription ? (
-                  <p className="mt-1 text-sm text-slate-600">{membersDescription}</p>
+                {subtypes.length > 1 ? (
+                  <label className="flex shrink-0 flex-col items-end gap-1 text-xs font-medium text-slate-600">
+                    Subtype
+                    <select
+                      value={subtypeFilter}
+                      onChange={(event) => setSubtypeFilter(event.target.value)}
+                      className="min-w-[14rem] rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm font-normal text-slate-800"
+                    >
+                      <option value="">
+                        All subtypes ({members.length})
+                      </option>
+                      {subtypes.map((subtype) => (
+                        <option key={subtype.key} value={subtype.key}>
+                          {subtype.title} ({subtype.count})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 ) : null}
               </div>
-              {subtypes.length > 1 ? (
-                <label className="flex shrink-0 flex-col gap-1 text-xs font-medium text-slate-600">
-                  Subtype
-                  <select
-                    value={subtypeFilter}
-                    onChange={(event) => setSubtypeFilter(event.target.value)}
-                    className="min-w-[14rem] rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm font-normal text-slate-800"
-                  >
-                    <option value="">
-                      All subtypes ({members.length})
-                    </option>
-                    {subtypes.map((subtype) => (
-                      <option key={subtype.key} value={subtype.key}>
-                        {subtype.title} ({subtype.count})
-                      </option>
-                    ))}
-                  </select>
-                </label>
+              {membersDescription ? (
+                <p className="mt-1 text-sm text-slate-600">{membersDescription}</p>
               ) : null}
             </div>
           ) : null}

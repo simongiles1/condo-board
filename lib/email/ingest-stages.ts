@@ -88,6 +88,18 @@ export function nextIngestStage(
   return INGEST_STAGES[index + 1]!;
 }
 
+/**
+ * Creating a new extraction cancels the in-flight run. Ingest must then wait
+ * on the replacement instead of treating the cancelled id as success.
+ */
+export function nextDoclingWaitRunId(input: {
+  waitedStatus: string | null | undefined;
+  runningIds: string[];
+}): string | null {
+  if (input.waitedStatus !== "cancelled") return null;
+  return input.runningIds[0] ?? null;
+}
+
 export function ingestStageLabel(stage: IngestStage): string {
   switch (stage) {
     case "a_ingest":

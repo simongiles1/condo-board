@@ -189,6 +189,10 @@ export async function downloadEmailAttachment(input: {
       ext,
       hasValue: attachment.hasValue,
     });
+    const { ensureAttachmentPageProfile } = await import(
+      "@/lib/email/attachment-document-pages"
+    );
+    await ensureAttachmentPageProfile(contentHash);
   } catch (error) {
     console.warn(
       "[gmail:attachments] Could not enqueue Markdown/vision:",

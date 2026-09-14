@@ -102,6 +102,7 @@ export async function planFileCardTargets(options: {
   scope: FileCardRunScope;
   docLimit?: number | null;
   emailIds?: string[];
+  hashes?: string[];
   forceOverwrite?: boolean;
 }): Promise<FileCardTargetDoc[]> {
   const db = getDb();
@@ -114,8 +115,25 @@ export async function planFileCardTargets(options: {
     const cleanEmailIds = (options.emailIds ?? [])
       .map((id) => id.trim())
       .filter(Boolean);
-    if (cleanEmailIds.length === 0) return [];
-    conditions.push(inArray(emailAttachments.emailId, cleanEmailIds));
+    const cleanHashes = [
+      ...new Set(
+        (options.hashes ?? [])
+          .map((hash) => hash.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ];
+    if (cleanEmailIds.length === 0 && cleanHashes.length === 0) return [];
+    const scopeFilters = [
+      ...(cleanEmailIds.length > 0
+        ? [inArray(emailAttachments.emailId, cleanEmailIds)]
+        : []),
+      ...(cleanHashes.length > 0
+        ? [inArray(attachmentDocuments.contentHash, cleanHashes)]
+        : []),
+    ];
+    conditions.push(
+      scopeFilters.length === 1 ? scopeFilters[0]! : or(...scopeFilters),
+    );
   }
 
   const baseQuery = db

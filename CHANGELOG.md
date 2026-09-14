@@ -6,6 +6,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ingest extraction → file cards** — Catch-up used to start file cards as soon as a Docling run *id* finished, including when that run was cancelled after eight seconds by a replacement extraction, and it never built page profiles for newly downloaded PDFs. File cards only run on parsed markdown, so those attachments stayed pending and never appeared in Recurring documents. Ingest now profiles pages, waits for the live extraction (not the cancelled one), retries leftovers, downloads attachments that Gmail listed but never hashed, and cards the hashes that actually parsed.
+
 ### Changed
 
 - **Recurring documents — repeating instances only** — Finding recurring types still proposes parent categories (Resident Notices, minutes, and so on), but that assignment is now a candidate list. A second pass groups files by the same document (filename with dates stripped, then a model merge for close variants) and keeps a file only when that subtype appears on at least two email dates. One-off notices — a temporary hot-tub closure, a unique guidelines PDF — are dropped. Large types expose a subtype dropdown in the file list.

@@ -58,6 +58,23 @@ function spanLabel(first: string | null, last: string | null): string | null {
   return a || b;
 }
 
+/** Keep the same sidebar selection when discovery rewrites series row ids. */
+function reconcileActiveSeriesId(
+  previous: SeriesListItem[],
+  next: SeriesListItem[],
+  currentId: string | null,
+): string | null {
+  if (currentId && next.some((row) => row.id === currentId)) return currentId;
+  const previousItem = currentId
+    ? previous.find((row) => row.id === currentId)
+    : undefined;
+  if (previousItem) {
+    const byTitle = next.find((row) => row.title === previousItem.title);
+    if (byTitle) return byTitle.id;
+  }
+  return next[0]?.id ?? null;
+}
+
 export function DocumentSeriesFilesClient() {
   const [series, setSeries] = useState<SeriesListItem[]>([]);
   const [fileCardCount, setFileCardCount] = useState(0);
@@ -84,10 +101,18 @@ export function DocumentSeriesFilesClient() {
     if (!response.ok) {
       throw new Error(payload.error ?? "Could not load recurring types.");
     }
-    setSeries(payload.series ?? []);
+    const nextSeries = payload.series ?? [];
+    let previousSeries: SeriesListItem[] = [];
+    setSeries((prev) => {
+      previousSeries = prev;
+      return nextSeries;
+    });
+    setActiveId((current) =>
+      reconcileActiveSeriesId(previousSeries, nextSeries, current),
+    );
     setFileCardCount(payload.fileCardCount ?? 0);
     setRun(payload.run ?? null);
-    return payload.series ?? [];
+    return nextSeries;
   }, []);
 
   const reloadMembers = useCallback(async (id: string) => {
@@ -99,6 +124,9 @@ export function DocumentSeriesFilesClient() {
       members?: SeriesMember[];
     };
     if (!response.ok) {
+      if (response.status === 404) {
+        return;
+      }
       throw new Error(payload.error ?? "Could not load files.");
     }
     setMembersTitle(payload.title ?? "");
@@ -141,6 +169,9 @@ export function DocumentSeriesFilesClient() {
       setMembersDescription("");
       return;
     }
+    if (series.length > 0 && !series.some((row) => row.id === activeId)) {
+      return;
+    }
     let cancelled = false;
     void reloadMembers(activeId).catch((error: unknown) => {
       if (!cancelled) {
@@ -152,7 +183,7 @@ export function DocumentSeriesFilesClient() {
     return () => {
       cancelled = true;
     };
-  }, [activeId, reloadMembers, run?.status]);
+  }, [activeId, reloadMembers, run?.status, series]);
 
   useEffect(() => {
     setSubtypeFilter("");

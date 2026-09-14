@@ -19,6 +19,7 @@ import {
   repairCompareSegmentBoundaries,
   repairParagraphBreaksInSegmentText,
   scoreCompareDocument,
+  prepareCompareMarkdown,
   splitSegmentHighlightBounds,
 } from "../lib/minutes/gold-standard-compare";
 import { buildGoldStandardFindingsByItemId } from "../lib/minutes/gold-standard-item-match";
@@ -490,6 +491,16 @@ describe("compareSegmentBoundarySeparator", () => {
       ),
       "\n",
     );
+  });
+});
+
+describe("prepareCompareMarkdown", () => {
+  it("inserts blank lines between consecutive bold motion lines", () => {
+    const input =
+      "**MOTION by S. Greenspan**\n**Seconded by P. Gartenburg**\n**THAT work proceed.**";
+    const out = prepareCompareMarkdown(input);
+    assert.match(out, /\*\*MOTION by S\. Greenspan\*\*\n\n\*\*Seconded/);
+    assert.match(out, /\*\*Seconded by P\. Gartenburg\*\*\n\n\*\*THAT/);
   });
 });
 

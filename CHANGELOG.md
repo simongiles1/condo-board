@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Gold standard compare — AI minutes preview** — The AI column in gold-standard compare now renders minutes markdown (motions, actions, emphasis) instead of showing raw `**` syntax. Diff highlights are preserved per segment. Official gold PDF text stays plain with line breaks.
+
 - **Recurring documents — “Series not found” after discovery** — When Find recurring types finished, the sidebar could still point at a series row id that discovery had replaced, so the file list showed a red error even though the types loaded. The page now remaps the selection by title and ignores stale member fetches.
 
 - **Email settings — sync in progress** — While an ingest pipeline is running or waiting for Continue, the Sync control shows an amber “Sync running · …” (or “Continue sync · …”) state instead of looking like a fresh **Sync now**. Clicking it reopens progress without starting another run.

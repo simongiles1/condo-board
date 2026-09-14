@@ -484,6 +484,13 @@ export function repairParagraphBreaksInSegmentText(text: string): string {
   );
 }
 
+/** Normalize AI minutes markdown for GFM preview (motion lines use single newlines). */
+export function prepareCompareMarkdown(text: string): string {
+  let out = repairParagraphBreaksInSegmentText(text);
+  out = out.replace(/(\*\*[^*\n]+\*\*)\n(?=\*\*)/g, "$1\n\n");
+  return out;
+}
+
 export function repairCompareSegmentBoundaries(
   segments: CompareTextSegment[],
 ): CompareTextSegment[] {

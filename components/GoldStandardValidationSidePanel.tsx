@@ -8,7 +8,10 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
+import Markdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import {
   formatCostUsd,
@@ -21,6 +24,7 @@ import {
   computePairCoverage,
   displaySegmentMark,
   findingsForAlignmentColumn,
+  prepareCompareMarkdown,
   repairCompareSegmentBoundaries,
   splitSegmentHighlightBounds,
   scoreCompareDocument,
@@ -170,12 +174,73 @@ function CompareLegend() {
   );
 }
 
+function compareMarkdownComponents(
+  mark: CompareTextMark,
+  segmentText: string,
+): Components {
+  const resolved = displaySegmentMark(mark, segmentText);
+  const showMarkTitle = resolved !== "same";
+  const highlightClass =
+    resolved === "same" ? "" : `rounded-sm ${MARK_CLASSES[resolved]}`;
+  const title = showMarkTitle ? MARK_LABELS[resolved] : undefined;
+
+  function wrap(children: ReactNode) {
+    if (!highlightClass) return <>{children}</>;
+    return (
+      <span className={highlightClass} title={title}>
+        {children}
+      </span>
+    );
+  }
+
+  return {
+    p: ({ children }) => (
+      <p className="mb-2 last:mb-0 leading-relaxed text-slate-800">{wrap(children)}</p>
+    ),
+    strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+    em: ({ children }) => <em className="italic">{children}</em>,
+    ul: ({ children }) => (
+      <ul className="my-2 list-disc space-y-1 pl-5 text-slate-800">{children}</ul>
+    ),
+    ol: ({ children }) => (
+      <ol className="my-2 list-decimal space-y-1 pl-5 text-slate-800">{children}</ol>
+    ),
+    li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  };
+}
+
+function HighlightedMarkdownSegment({
+  segment,
+  index,
+}: {
+  segment: { text: string; mark: CompareTextMark };
+  index: number;
+}) {
+  const source = prepareCompareMarkdown(segment.text);
+  if (!source.trim()) {
+    return segment.text ? (
+      <span className="whitespace-pre-wrap">{segment.text}</span>
+    ) : null;
+  }
+  return (
+    <Markdown
+      key={`md-${index}-${segment.mark}-${segment.text.slice(0, 12)}`}
+      remarkPlugins={[remarkGfm]}
+      components={compareMarkdownComponents(segment.mark, segment.text)}
+    >
+      {source}
+    </Markdown>
+  );
+}
+
 function HighlightedProse({
   segments,
   emptyLabel = "No counterpart on this side.",
+  asMarkdown = false,
 }: {
   segments: Array<{ text: string; mark: CompareTextMark }>;
   emptyLabel?: string;
+  asMarkdown?: boolean;
 }) {
   if (segments.length === 0) {
     return (
@@ -185,6 +250,15 @@ function HighlightedProse({
   const displaySegments = repairCompareSegmentBoundaries(segments).flatMap(
     (segment) => splitSegmentHighlightBounds(segment.text, segment.mark),
   );
+  if (asMarkdown) {
+    return (
+      <div className="prose prose-sm max-w-none break-words text-sm leading-relaxed prose-p:my-0 prose-headings:text-slate-900">
+        {displaySegments.map((segment, index) => (
+          <HighlightedMarkdownSegment key={`seg-${index}`} segment={segment} index={index} />
+        ))}
+      </div>
+    );
+  }
   return (
     <p className="break-words whitespace-pre-wrap text-sm leading-relaxed">
       {displaySegments.map((segment, index) => {
@@ -900,7 +974,10 @@ export function GoldStandardValidationSidePanel({
                       <HighlightedProse segments={pair?.goldSegments ?? []} />
                     </div>
                     <div className="min-w-0 overflow-hidden px-2 pb-1 pt-1 sm:px-4">
-                      <HighlightedProse segments={pair?.aiSegments ?? []} />
+                      <HighlightedProse
+                        segments={pair?.aiSegments ?? []}
+                        asMarkdown
+                      />
                     </div>
                   </div>
                 </section>

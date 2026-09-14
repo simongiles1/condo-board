@@ -40,7 +40,7 @@ export type BuildoutSequenceStep = {
   relatedIds: string[];
 };
 
-export const BUILDOUT_REVIEWED_ON = "2026-09-07";
+export const BUILDOUT_REVIEWED_ON = "2026-09-14";
 
 /**
  * Corpus snapshot for the playbook header. Not queried live — refresh when
@@ -194,13 +194,26 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     title: "Corpus search / RAG",
     status: "in_progress",
     summary:
-      "Natural-language search over the full email + attachment archive. Chunk email bodies and Docling/vision markdown into document_chunks, embed with pgvector in Supabase, and surface ranked excerpts with click-through to source email or attachment. Dev qualification first ('where is the reserve fund study?'); later board questions ('what elevator project ran this year?'). OpenSearch deemed overkill — pgvector on existing Postgres is the stack. Distinct from OKF (curated wiki export) and wiki graph (entity profile navigation).",
+      "Ask the archive over email bodies and attachment markdown via document_chunks + pgvector (gemini-embedding-001). Shipped: incremental indexer (safe alongside vision backfill), hybrid retrieval (embeddings, filename, covering email, query rewrite), registry boosts, LLM rerank, grounded answers with [S#] citations, file-card pack v3 in rerank/answer, pipeline debug UI, global archive chat on every signed-in page, and dev UI at /admin/analysis/archive-search. Distinct from OKF wiki export and entity-profile navigation.",
     remaining: [
-      "Phase A shipped: schema, gemini-embedding-001 embedder, chunking engine, incremental indexer, search API, and /admin/analysis/archive-search dev UI.",
-      "Phase B shipped: lexical match against projects / equipment / orgs, similarity boost when the source email has a resolved mention link, and entity badges on archive search.",
-      "Phase C in progress: grounded Gemini answers with citations on archive search. OKF entity wiki export and governance policy ingest stay later.",
-      "Run incremental indexer across corpus as attachment vision backfill progresses.",
-      "Entity-register embeddings for Pass B resolution are a separate index — do not conflate with document_chunks.",
+      "Backfill: run corpus indexer + file-card generator until parsed attachments are mostly chunked and carded (vision cap still limits some PDF text).",
+      "Qualify file cards (thumbs, parties/date/outline pack) and spot-check ask answers on real board questions.",
+      "Entity-register embeddings for Pass B resolution stay a separate index — not document_chunks.",
+      "OKF export and governance policy ingest are later slices, not this card.",
+    ],
+  },
+  {
+    id: "recurring-documents",
+    stage: null,
+    title: "Recurring document types",
+    status: "in_progress",
+    summary:
+      "Knowledge → Recurring documents: model proposes types from file cards, clusters subtypes (filename + merge pass), keeps only documents that appear on two or more email received dates, and lists types for review. Meetings V2 create prefers the series marked pre-meeting packet; until discovery runs, on-file packages fall back to filename matching (including standalone management reports). Board-package filename variants collapse to one subtype; agenda stays distinct. Emails that sent a zip/cloud link instead of an attachment are listed for download.",
+    remaining: [
+      "Re-run Find recurring types after the board-package filename merge; confirm Agenda vs Package only.",
+      "Download linked zip/cloud files (June 30 package and similar) so they can be ingested — auto-fetch is off.",
+      "Curate pre-meeting packet flags per series once the catalog stabilizes.",
+      "One-off notices should stay dropped — do not weaken the two-date rule.",
     ],
   },
   {
@@ -209,10 +222,11 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     title: "Ongoing ingest + harvest",
     status: "done",
     summary:
-      "Gmail ingest cron and Sync now share one pipeline. Harvest after sync is on: missing-only contacts / orgs / events / to-dos, skipped when a bulk extract is already running. Projects are not on the drip until the historical project bulk finishes.",
+      "Gated Gmail pipeline: Sync and the daily cron share one worker — catch-up since last successful import (not a 2-day window), per-address allowlist review in Telegram and Email Settings, full history for approved senders, then Docling/vision, file cards, embeddings, and harvest-after-sync (contacts / orgs / events / to-dos). Stage Continue pauses exist for testing; allowlist review always waits. Projects stay off the drip until the historical project bulk finishes.",
     remaining: [
-      "Leave Harvest after sync on in production so new allowlisted mail is harvested automatically (contacts / orgs / events / to-dos).",
+      "Turn off stage Continue pauses on production when comfortable; leave harvest-after-sync on.",
       "Add projects to the drip only after the historical project bulk.",
+      "Retest ingest → extraction → file cards for recent weekly reports after Sept fixes.",
       "New PDFs still need Docling/vision; do not wait for the historical vision cap to start body harvest on new mail.",
       "DISABLE_BACKGROUND_WORKERS=true stops the ingest scheduler and Telegram long-poll on local npm run dev — production must leave workers on.",
     ],
@@ -223,10 +237,10 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     title: "Telegram human oversight",
     status: "in_progress",
     summary:
-      "After ingest + harvest, a Telegram digest covers decisions the model should not make alone. Low-confidence contact matches are held instead of auto-applied when TELEGRAM_BOT_TOKEN is set and at least one user has a chat ID on their profile. Affiliation propose still stays pending; only this-run needs_review is pinged. Historical Stage 2B stays in the Entities UI.",
+      "Gated ingest uses Telegram (and Email Settings) for per-address allowlist Approve/Deny/Back. After harvest, a digest still covers low-confidence contact matches held instead of auto-applied when TELEGRAM_BOT_TOKEN is set and a profile has a chat ID. Affiliation propose stays pending in Entities; only this-run needs_review is pinged for contacts.",
     remaining: [
       "Calendar conflicts are not in the digest yet.",
-      "Held contacts are not listed on the Entities Activity tab — Telegram and the review table are the queue.",
+      "Held contacts are not listed on the Entities Activity tab — Telegram, Email Settings, and the review table are the queue.",
       "Production should set TELEGRAM_WEBHOOK_URL + TELEGRAM_WEBHOOK_SECRET instead of long-poll so a local full-stack run cannot steal getUpdates. Save your chat ID in Profile on live.",
     ],
   },
@@ -368,11 +382,12 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     title: "Board meeting review (v2 pipeline)",
     status: "in_progress",
     summary:
-      "Operations → Meetings v2: upload board package PDF + transcript, Inngest pipeline (ingest → agenda extract → evidence → per-item investigation → validation → minutes draft). Review workspace at /operations/meetings/v2/[id]. Coexists with v1 generate flow; not yet the default board-meeting checklist.",
+      "Operations → Meetings v2: three-step create (details / transcript / on-file or upload package), Inngest pipeline (ingest → agenda → evidence → investigate → validate → minutes draft), hierarchical post-approval review, gold-standard minutes compare, transcript section overlay, duplicate-to-agenda-approval, and archive package matching. Review at /operations/meetings/v2/[id]. Coexists with v1; not the default checklist until draft quality is trusted.",
     remaining: [
-      "End-to-end QA on a real monthly package (agenda alignment, evidence cites, draft quality).",
-      "Wire reviewed items into Global To-Dos and project ops (related_project_id, meeting mode).",
-      "Replace or retire v1 generate once v2 draft quality is trusted.",
+      "Minutes + evidence quality pass in flight (separate agent) — evidence contract, draft assembly, PDF.",
+      "End-to-end QA on a real monthly package (gold compare + board-ready draft).",
+      "Wire reviewed open items into Global To-Dos and project ops (related_project_id, meeting mode).",
+      "Replace or retire v1 generate once v2 is trusted.",
       "Resolution / motion tracking still belongs under governance, not this pipeline alone.",
     ],
   },
@@ -405,8 +420,24 @@ export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
     kind: "parallel",
     title: "Meetings v2 pipeline on a real package",
     detail:
-      "Upload PDF + transcript, let Inngest run ingest → agenda → evidence → investigate → validate → draft. QA review workspace output before making it the default meeting flow. Later: hang open items off projects and Global To-Dos.",
-    relatedIds: ["meeting-review-v2", "project-ops", "todos"],
+      "Create wizard + on-file archive packages, run ingest → agenda → evidence → investigate → validate → draft, gold-standard compare, duplicate for re-test without regenerating agenda. QA board-ready minutes before defaulting the flow. Later: hang open items off projects and Global To-Dos.",
+    relatedIds: ["meeting-review-v2", "recurring-documents", "project-ops", "todos"],
+  },
+  {
+    id: "seq-corpus-rag",
+    kind: "parallel",
+    title: "Ask the archive — backfill + qualify",
+    detail:
+      "Product slice shipped (indexer, hybrid retrieval, grounded answers, file-card rerank, global chat). Keep incremental indexer and file-card runs going while vision backfill finishes. Qualify cards and spot-check real board questions — not blocked on attachment-only harvest.",
+    relatedIds: ["corpus-rag", "vision-backfill", "ongoing-extract"],
+  },
+  {
+    id: "seq-recurring-docs",
+    kind: "parallel",
+    title: "Recurring document catalog",
+    detail:
+      "Find recurring types on file cards, review subtypes, mark pre-meeting packets for V2 create. Depends on ingest wiring file cards on parsed PDFs — retest after Sept pipeline fixes.",
+    relatedIds: ["recurring-documents", "ongoing-extract"],
   },
   {
     id: "seq-project-drip",
@@ -465,14 +496,6 @@ export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
     relatedIds: ["attachment-harvest", "contacts", "organizations", "events", "todos", "projects"],
   },
   {
-    id: "seq-corpus-rag",
-    kind: "after",
-    title: "Corpus search / RAG (pgvector)",
-    detail:
-      "Only after vision backfill and Docling text extraction are complete on the attachment corpus. Chunk bodies + attachment markdown into document_chunks, embed with pgvector in Supabase, ship an 'Ask the archive' dev UI. Entity-register embeddings for Pass B stay a separate index.",
-    relatedIds: ["corpus-rag", "vision-backfill", "attachment-harvest"],
-  },
-  {
     id: "seq-todo-workspace",
     kind: "later",
     title: "To-do workspace (Working list only)",
@@ -509,7 +532,7 @@ export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
     kind: "later",
     title: "Email drafts, nodes/financials heatmap, concept auto-promote, Open Knowledge Format",
     detail:
-      "Drafts wait until source-quote quality is trusted and who's-who prompts exist. Cost heatmap rides on nodes.json + financials.json (docs/) after equipment registry quality is solid. OKF is an export + wiki layer after registries, affiliations, and equipment — not the next extraction stage. Corpus RAG (pgvector) is its own card and runs after vision backfill.",
+      "Drafts wait until source-quote quality is trusted and who's-who prompts exist. Cost heatmap rides on nodes.json + financials.json (docs/) after equipment registry quality is solid. OKF is an export + wiki layer after registries, affiliations, and equipment — not the next extraction stage. Ask-the-archive backfill is parallel (see corpus-rag), not a post-vision gate.",
     relatedIds: ["email-drafts", "digital-twin", "concept-promote", "okf"],
   },
 ];

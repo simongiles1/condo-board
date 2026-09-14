@@ -5,6 +5,8 @@ import path from "node:path";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
+import { buildEvidenceSources, draftReadiness, evidenceFingerprint, FACT_RESOLUTION_PROMPT, MINUTES_PIPELINE_VERSION, parseFactResolution, type EvidenceSource, type FactResolution } from "./evidence-contract";
+import { AGENDA_ITEM_REPAIR_PROMPT } from "./repair-prompts";
 import { getDb } from "@/lib/db";
 import {
   meetings,
@@ -293,6 +295,9 @@ type ChunkContext = {
 };
 
 type AgendaItemContextDocument = {
+  sources?: EvidenceSource[];
+  fingerprint?: string;
+  pipelineVersion?: string;
   agendaItemId: string;
   title: string;
   sectionLabel: string | null;
@@ -432,6 +437,7 @@ function overlapsTranscriptRange(
 }
 
 function buildAssembledContextText(context: AgendaItemContextDocument): string {
+  if (context.sources) return context.sources.map(source => `[${source.id}; ${source.kind}; ${source.association}]\n${source.text}`).join("\n\n");
   const parts: string[] = [
     `Agenda item: ${context.title}`,
     `Section: ${context.sectionLabel ?? "Unknown"}`,
@@ -2052,7 +2058,7 @@ function buildValidationInput(options: {
           sequenceRange: chunk.sequenceRange ?? null,
           startTimestamp: chunk.startTimestamp ?? null,
           endTimestamp: chunk.endTimestamp ?? null,
-          text: truncateForValidation(chunk.text ?? "", VALIDATION_CHUNK_TEXT_CHAR_LIMIT),
+    text: chunk.text ?? "",
         }))
     : [];
 
@@ -2085,14 +2091,15 @@ function buildValidationInput(options: {
       anchorChunkIds: options.contextDocument?.anchorChunkIds ?? [],
       transcriptEvidenceCount: options.transcriptEvidenceCount,
       documentEvidenceCount: options.documentEvidenceCount,
-      assembledContextText: truncateForValidation(
-        options.assembledContextText ?? "",
-        VALIDATION_ASSEMBLED_CONTEXT_CHAR_LIMIT,
-      ),
-      anchorChunks,
+      // Use the identical evidence bundle seen by the investigator. Never cut off a claim's citation.
+      sources: options.contextDocument?.sources ?? [],
+      assembledContextText: options.contextDocument?.sources ? undefined : options.assembledContextText ?? "",
+      anchorChunks: options.contextDocument?.sources ? undefined : anchorChunks,
       buildNotes: options.contextDocument?.buildNotes ?? [],
     },
-    investigationTrace: summarizeInvestigationTrace(options.investigationTrace),
+    investigationTrace: { toolCalls: options.investigationTrace.toolCalls },
+    factResolution: safeJsonParse<Record<string, unknown>>(options.investigation.usageJson, {}).factResolution,
+    userClarifications: safeJsonParse<Record<string, string>>(options.investigation.userAnswersJson, {}),
   };
 }
 
@@ -2434,6 +2441,8 @@ export async function retrieveAgendaItemEvidence(
   agendaItemId?: string,
 ): Promise<{ meetingId: string; evidenceCount: number }> {
   const db = getDb();
+  const evidenceMeeting = await db.query.meetingsV2.findFirst({ where: eq(meetingsV2.id, meetingId) });
+  const canonicalEvidence = evidenceMeeting?.settings?.agendaEvidence ?? {};
   const filters = agendaItemId
     ? and(
         eq(meetingsV2AgendaItems.meetingV2Id, meetingId),
@@ -2507,11 +2516,11 @@ export async function retrieveAgendaItemEvidence(
     const keywords = titleKeywords(item.title);
     const sourcePages = safeJsonParse<number[]>(item.sourcePagesJson, []);
     const section = sections.find((entry) => entry.id === item.sourceSectionId);
-    const extractedTopic = matchExtractedTopic(item, extractedTopics);
+    const extractedTopic = canonicalEvidence[item.id];
+    if (!extractedTopic) throw new Error(`Re-extract the agenda to establish current transcript associations for ${item.title}.`);
 
     const matchedPages = pages
-      .filter((page) => sourcePages.includes(page.pageNumber))
-      .slice(0, 4);
+      .filter((page) => sourcePages.includes(page.pageNumber));
     for (const page of matchedPages) {
       evidenceRows.push({
         id: randomUUID(),
@@ -2553,10 +2562,7 @@ export async function retrieveAgendaItemEvidence(
       entry.segment.sequence,
       entry.segment.sequence,
     ] as [number, number]);
-    const sourceTranscriptRanges = mergeClosedIntervals([
-      ...(extractedTopic?.sourceTranscriptRanges ?? []),
-      ...fallbackTranscriptRanges,
-    ]);
+    const sourceTranscriptRanges = mergeClosedIntervals(extractedTopic.sourceTranscriptRanges);
     const directAnchorChunkIds = (extractedTopic?.sourceChunkIds ?? []).filter((chunkId) =>
       chunkContextById.has(chunkId),
     );
@@ -2619,7 +2625,7 @@ export async function retrieveAgendaItemEvidence(
       agendaItemId: item.id,
       title: item.title,
       sectionLabel: item.sectionLabel,
-      itemType: extractedTopic?.itemType ?? item.itemType,
+      itemType: item.itemType,
       sourcePages,
       sourceChunkIds: extractedTopic?.sourceChunkIds ?? [],
       sourceTranscriptRanges,
@@ -2629,6 +2635,14 @@ export async function retrieveAgendaItemEvidence(
       chunksById,
       buildNotes,
     };
+    contextJson.sources = buildEvidenceSources({
+      ranges: sourceTranscriptRanges,
+      segments: transcriptSegments,
+      documents: Object.values(chunksById).filter(c => c.chunkKind === "document"),
+      relatedSequences: matchedTranscriptSegments.map(entry => entry.segment.sequence),
+    });
+    contextJson.pipelineVersion = MINUTES_PIPELINE_VERSION;
+    contextJson.fingerprint = evidenceFingerprint({ itemNumber: item.itemNumber, sources: contextJson.sources });
     const assembledContextText = buildAssembledContextText(contextJson);
 
     contextRows.push({

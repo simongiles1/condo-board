@@ -58,7 +58,7 @@ function renderAgendaItemBlock(
     }
   }
   item.subItems.forEach((sub, idx) => {
-    lines.push(...renderAgendaItemBlock(sub, romanMarker(idx), indentLevel + 1, opts));
+    lines.push(...renderAgendaItemBlock(sub, romanMarker(sub.displayIndex ?? idx), indentLevel + 1, opts));
   });
 
   return lines;
@@ -72,7 +72,7 @@ function renderAgendaArray(
   const lines: string[] = [];
   items.forEach((item, idx) => {
     lines.push(
-      ...renderAgendaItemBlock(item, letterMarker(startIndex + idx), 0, opts),
+      ...renderAgendaItemBlock(item, letterMarker(item.displayIndex ?? startIndex + idx), 0, opts),
     );
     lines.push("");
   });
@@ -87,7 +87,7 @@ function renderNumberedItems(
 ): string[] {
   const lines: string[] = [];
   items.forEach((item, idx) => {
-    const num = `${sectionNum}.${startIndex + idx + 1}`;
+    const num = `${sectionNum}.${(item.displayIndex ?? startIndex + idx) + 1}`;
     const topic = item.topic.trim();
     const renderedTopic = opts.italicTopic ? `*${topic}*` : topic;
     const lead = joinSummaryWithTail(
@@ -104,7 +104,7 @@ function renderNumberedItems(
     }
     item.subItems.forEach((sub, subIdx) => {
       lines.push(
-        ...renderAgendaItemBlock(sub, letterMarker(subIdx), 0, opts),
+        ...renderAgendaItemBlock(sub, letterMarker(sub.displayIndex ?? subIdx), 0, opts),
       );
       lines.push("");
     });

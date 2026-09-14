@@ -38,7 +38,15 @@ const YEAR_RE = /\b(?:19|20)\d{2}\b/g;
 const COPY_SUFFIX_RE = /\(\s*\d+\s*\)/g;
 const WEEKDAY_RE =
   /\b(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/gi;
+const CORP_CODE_RE = /\b(?:tscc|mtcc|pscc|yscc|hscc)\s*\d+\b/gi;
+const FILLER_PHRASE_RE =
+  /\b(?:for\s+board\s+meeting\s+on|board\s+meeting\s+on|dtd|dated)\b/gi;
 const EXTENSION_RE = /\.[a-z0-9]{1,5}$/i;
+const BOARD_PACKET_SUMMARY_RE =
+  /board meeting package|pre-meeting packet|board package/i;
+const AGENDA_STEM_RE = /\bagenda\b/;
+const PACKAGE_STEM_RE = /\bpackage\b/;
+const MANAGEMENT_REPORT_STEM_RE = /\bmanagement report\b/;
 const DECORATIVE_IMAGE_NAME_RE =
   /^(image(\d{0,4})?|logo|signature|img[-_]?\d*)\.(png|jpe?g|gif|webp|bmp)$/i;
 const SCREENSHOT_NAME_RE = /^screenshot\b/i;
@@ -108,16 +116,46 @@ export function clusterLooksRecurring(dates: Array<string | null>): boolean {
   return uniqueDayCount(dates) >= 2;
 }
 
-/** Filename with dates, weekdays, and copy suffixes removed — one key per repeating instance. */
+/** Filename with dates, weekdays, corp codes, and copy suffixes removed — one key per repeating instance. */
 export function seriesInstanceKey(filename: string): string {
   const base = filename.trim().split(/[/\\]/).pop() ?? filename;
   const withoutExt = base.replace(EXTENSION_RE, "");
   const stem = stripTemporalTokens(withoutExt)
     .replace(WEEKDAY_RE, " ")
+    .replace(CORP_CODE_RE, " ")
+    .replace(FILLER_PHRASE_RE, " ")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
   return stem || "untitled";
+}
+
+/**
+ * Role key used when splitting a parent type into subtypes.
+ * File-card summary wins over filename so ICC “Management Report” packets
+ * stay with “Board Meeting Package” variants. Agenda PDFs stay distinct.
+ */
+export function recurringRoleKey(params: {
+  filename: string;
+  summary: string;
+  parentUsage: DocumentSeriesUsage | null;
+}): string {
+  const stem = seriesInstanceKey(params.filename);
+  if (params.parentUsage !== "board_package") return stem;
+  const summary = params.summary;
+  const agendaOnly =
+    AGENDA_STEM_RE.test(stem) && !PACKAGE_STEM_RE.test(stem);
+  if (agendaOnly && !BOARD_PACKET_SUMMARY_RE.test(summary)) {
+    return "board meeting agenda";
+  }
+  if (
+    BOARD_PACKET_SUMMARY_RE.test(summary) ||
+    PACKAGE_STEM_RE.test(stem) ||
+    MANAGEMENT_REPORT_STEM_RE.test(stem)
+  ) {
+    return "board meeting package";
+  }
+  return stem;
 }
 
 export function titleFromInstanceKey(key: string): string {
@@ -136,9 +174,31 @@ export function titleFromInstanceKey(key: string): string {
 export function groupByInstanceKey<T extends { filename: string }>(
   docs: T[],
 ): Array<{ instanceKey: string; docs: T[] }> {
+  return groupByRoleKey(docs, (doc) => seriesInstanceKey(doc.filename));
+}
+
+export function groupByRecurringRole<
+  T extends { filename: string; summary: string },
+>(
+  docs: T[],
+  parentUsage: DocumentSeriesUsage | null,
+): Array<{ instanceKey: string; docs: T[] }> {
+  return groupByRoleKey(docs, (doc) =>
+    recurringRoleKey({
+      filename: doc.filename,
+      summary: doc.summary,
+      parentUsage,
+    }),
+  );
+}
+
+function groupByRoleKey<T>(
+  docs: T[],
+  keyOf: (doc: T) => string,
+): Array<{ instanceKey: string; docs: T[] }> {
   const buckets = new Map<string, T[]>();
   for (const doc of docs) {
-    const key = seriesInstanceKey(doc.filename);
+    const key = keyOf(doc);
     const list = buckets.get(key);
     if (list) list.push(doc);
     else buckets.set(key, [doc]);
@@ -238,7 +298,7 @@ Return JSON only:
 Rules:
 - Only propose a type when the sample shows (or clearly implies) more than one dated instance of that role.
 - Do not invent a catch-all such as Miscellaneous, Other documents, or Engineering Assessment Reports for mixed files.
-- Merge filename variants of the same role. A standalone Management Report that is the circulated pre-meeting packet belongs with Board meeting packages — one type.
+- Merge filename variants of the same role. A standalone Management Report that is the circulated pre-meeting packet belongs with Board meeting packages — one type. A standalone Board Meeting Agenda PDF is its own type, not a subtype of that packet.
 - File content wins over covering email and filename when they disagree. Sibling attachments in a "board package" email are not all the packet — ledgers and financial statements are their own types.
 - usage is a consumer binding, not the catalog:
   board_package = the pre-meeting packet the board reviews.
@@ -264,6 +324,7 @@ Rules:
 - Dated instances of the same role share one seriesKey. Do not invent one type per meeting date.
 - File content (summary + document type) wins over covering email and filename when they disagree.
 - A Management Report that is the circulated pre-meeting packet uses the board-package type when that key exists.
+- A standalone Board Meeting Agenda PDF uses an agenda type, not the board-package type.
 - Every id in the batch appears exactly once.`;
 
 export function parseSeriesCatalog(
@@ -387,11 +448,27 @@ Return JSON only:
 
 Rules:
 - Existing catalog keys are repeating subtypes already confirmed by multiple dates. Merge a stem into one of those when it is the same document with a slightly different filename.
+- Board package / management-report packets with different filenames (TSCC prefix, "for board meeting on", "Management Report" as the packet title) are ONE subtype. Board Meeting Agenda stays a different subtype.
 - subtypeKey is an existing catalog key, a new kebab-case key only when several stems in this batch are clearly the same repeating document, or null when the stem is a one-off.
 - subtypeTitle is required when subtypeKey is set. Reuse the catalog title when you reuse a key.
 - Do not dump leftovers into Other notices, Miscellaneous, or a topic bucket (all hot-tub letters). Same topic is not the same repeating document.
 - Filename dates do not make a unique event recurring.
 - Every id in the batch appears exactly once.`;
+
+export const DOCUMENT_SERIES_MERGE_SUBTYPES_SYSTEM_PROMPT = `You merge repeating filename stems that are the SAME document after the filename wording changed.
+
+Return JSON only:
+{
+  "assignments": [
+    { "id": 0, "subtypeKey": "board-meeting-package", "subtypeTitle": "Board Meeting Package" }
+  ]
+}
+
+Rules:
+- These stems already have copies on two or more dates. Merge a stem into another catalog key only when it is a filename variant of that same repeating document.
+- Keep Board Meeting Agenda (agenda-only PDFs) distinct from the circulated board package / management-report packet.
+- Do not merge different repeating documents (office-hours notices vs hot-water interruptions).
+- Reuse an existing catalog key and title when merging. Every id appears exactly once.`;
 
 export type SeriesSubtypeAssignment = {
   index: number;

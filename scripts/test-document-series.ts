@@ -9,12 +9,14 @@ import { describe, it } from "node:test";
 import {
   clusterLooksRecurring,
   groupByInstanceKey,
+  groupByRecurringRole,
   isSeriesDiscoveryEligible,
   keepRecurringSubtypeMembers,
   parseDocumentSeriesUsage,
   parseSeriesAssignments,
   parseSeriesCatalog,
   parseSeriesSubtypeAssignments,
+  recurringRoleKey,
   sampleSeriesDiscoveryDocs,
   seriesInstanceKey,
   seriesKeyFromTitle,
@@ -60,6 +62,88 @@ describe("seriesInstanceKey", () => {
       seriesInstanceKey("Temporary Closure of Hot Tubs.pdf"),
       seriesInstanceKey("Scheduled Hot Water Interruption.pdf"),
     );
+  });
+
+  it("strips corp codes and package filler so ICC filename variants share a stem", () => {
+    assert.equal(
+      seriesInstanceKey(
+        "Board Meeting Package for board meeting on May. 19, 2026.pdf",
+      ),
+      "board meeting package",
+    );
+    assert.equal(
+      seriesInstanceKey(
+        "TSCC 2517-Board Meeting Package for Board Meeting on Nov. 17, 2025.pdf",
+      ),
+      "board meeting package",
+    );
+    assert.equal(
+      seriesInstanceKey("Board meeting package dtd Jan 5, 2026.pdf"),
+      "board meeting package",
+    );
+  });
+});
+
+describe("recurringRoleKey", () => {
+  it("collapses management-report packets with board-package filenames", () => {
+    const packetSummary =
+      "A 216-page board meeting package for TSCC 2517 containing the management report.";
+    assert.equal(
+      recurringRoleKey({
+        filename: "Management Report Aug 6. 2026 (TSCC 2517).pdf",
+        summary: packetSummary,
+        parentUsage: "board_package",
+      }),
+      "board meeting package",
+    );
+    assert.equal(
+      recurringRoleKey({
+        filename:
+          "TSCC 2517-Board Meeting Package for Board Meeting on Nov. 17, 2025.pdf",
+        summary: packetSummary,
+        parentUsage: "board_package",
+      }),
+      "board meeting package",
+    );
+    assert.equal(
+      recurringRoleKey({
+        filename: "Board Meeting Agenda Aug 6, 2026.pdf",
+        summary: "Standalone agenda for the August 6 virtual board meeting.",
+        parentUsage: "board_package",
+      }),
+      "board meeting agenda",
+    );
+  });
+});
+
+describe("groupByRecurringRole", () => {
+  it("puts ICC packet filename variants in one bucket and agendas in another", () => {
+    const groups = groupByRecurringRole(
+      [
+        {
+          filename: "Management Report Aug 6. 2026 (TSCC 2517).pdf",
+          summary: "A 216-page board meeting package for TSCC 2517.",
+        },
+        {
+          filename:
+            "Board Meeting Package for board meeting on May. 19, 2026.pdf",
+          summary: "A 141-page board meeting package.",
+        },
+        {
+          filename: "Board Meeting Agenda May 19, 2026.pdf",
+          summary: "Agenda for the May 19 board meeting.",
+        },
+      ],
+      "board_package",
+    );
+    const packet = groups.find(
+      (row) => row.instanceKey === "board meeting package",
+    );
+    const agenda = groups.find(
+      (row) => row.instanceKey === "board meeting agenda",
+    );
+    assert.equal(packet?.docs.length, 2);
+    assert.equal(agenda?.docs.length, 1);
   });
 });
 

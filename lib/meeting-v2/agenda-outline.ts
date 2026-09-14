@@ -379,11 +379,7 @@ export function decorateAgendaOutlineTree<T extends AgendaOutlineSourceItem>(
     rewriteItemNumbers?: boolean;
   },
 ): Array<AgendaOutlineNode<T>> {
-  compactNumericChildren(
-    nodes,
-    reservedTopLevelItemNumbers(options.items),
-    Boolean(options.rewriteItemNumbers),
-  );
+  // Printed agenda codes are source identifiers. Gaps are not evidence of an error.
   applyHierarchicalDiscussionTiming(nodes, options.getTiming);
   return nodes;
 }

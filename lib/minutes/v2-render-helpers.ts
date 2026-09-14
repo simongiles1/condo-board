@@ -7,7 +7,14 @@ import type {
 import { stripLeadingThatFromResolution } from "@/lib/minutes/schema-v2";
 
 export function letterMarker(index: number): string {
-  return `(${String.fromCharCode(97 + index)})`;
+  let value = Math.max(0, Math.floor(index)) + 1;
+  let letters = "";
+  while (value > 0) {
+    value -= 1;
+    letters = String.fromCharCode(97 + value % 26) + letters;
+    value = Math.floor(value / 26);
+  }
+  return `(${letters})`;
 }
 
 export function romanMarker(index: number): string {
@@ -83,11 +90,11 @@ export type RenderedMotionLines = {
 };
 
 export function renderMotionLines(motion: MotionV2): RenderedMotionLines {
-  const status = motion.status.trim() || "Motion carried.";
+  const status = motion.status.trim() || "Outcome not recorded.";
   return {
     lines: [
-      `**MOTION by ${motion.movedBy.trim()}**`,
-      `**Seconded by ${motion.secondedBy.trim()}**`,
+      `**${motion.isInformal ? "Board agreement" : motion.isCandidate ? "Proposed motion" : "MOTION"}${motion.movedBy.trim() ? ` by ${motion.movedBy.trim()}` : ""}**`,
+      ...(motion.secondedBy.trim() ? [`**Seconded by ${motion.secondedBy.trim()}**`] : []),
       `**THAT ${stripLeadingThatFromResolution(motion.resolutionText)}**`,
       `**${status}**`,
     ],

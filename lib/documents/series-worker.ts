@@ -12,7 +12,8 @@ import {
   DOCUMENT_SERIES_CATALOG_SYSTEM_PROMPT,
   DOCUMENT_SERIES_VERIFY_BATCH_SIZE,
   DOCUMENT_SERIES_VERIFY_SYSTEM_PROMPT,
-  groupByInstanceKey,
+  DOCUMENT_SERIES_MERGE_SUBTYPES_SYSTEM_PROMPT,
+  groupByRecurringRole,
   keepRecurringSubtypeMembers,
   parseJsonObjectText,
   parseSeriesAssignments,
@@ -21,6 +22,7 @@ import {
   sampleSeriesDiscoveryDocs,
   seriesKeyFromTitle,
   titleFromInstanceKey,
+  type DocumentSeriesUsage,
   type RecurringSubtypeMember,
   type SeriesCatalogEntry,
 } from "@/lib/documents/series-shared";
@@ -328,6 +330,7 @@ function formatStemLine(
 async function verifySubtypeStems(params: {
   docs: SeriesDiscoveryDoc[];
   seriesTitle: string;
+  usage: DocumentSeriesUsage | null;
   onBatch?: (done: number, total: number) => Promise<void>;
   shouldContinue?: () => Promise<boolean>;
 }): Promise<{
@@ -336,9 +339,10 @@ async function verifySubtypeStems(params: {
   outputTokens: number;
   costUsd: number;
 }> {
-  const groups = groupByInstanceKey(params.docs);
+  const groups = groupByRecurringRole(params.docs, params.usage);
   const catalog = new Map<string, SubtypeCatalogEntry>();
   const stemToSubtype = new Map<string, SubtypeCatalogEntry>();
+  const repeating: typeof groups = [];
   const singletons: typeof groups = [];
 
   for (const group of groups) {
@@ -349,6 +353,7 @@ async function verifySubtypeStems(params: {
       const entry = catalog.get(key) ?? { key, title };
       catalog.set(entry.key, entry);
       stemToSubtype.set(group.instanceKey, entry);
+      repeating.push(group);
     } else {
       singletons.push(group);
     }
@@ -357,6 +362,53 @@ async function verifySubtypeStems(params: {
   let inputTokens = 0;
   let outputTokens = 0;
   let costUsd = 0;
+
+  // Repeating stems used to skip the model, so "Management Report TSCC 2517"
+  // and "Board Meeting Package for board meeting on" stayed as two types.
+  if (repeating.length > 1 && params.usage !== "board_package") {
+    const knownIndexes = new Set(repeating.map((_, index) => index));
+    const result = await generateDeepSeekJson({
+      systemInstruction: DOCUMENT_SERIES_MERGE_SUBTYPES_SYSTEM_PROMPT,
+      userText: `Parent type: ${params.seriesTitle}
+
+Existing repeating subtypes:
+${formatSubtypeCatalogBlock(catalog)}
+
+Repeating stems (assign every id; merge filename variants onto one catalog key):
+${repeating.map((group, index) => formatStemLine(group, index)).join("\n")}`,
+      modelName: SERIES_MODEL,
+      maxOutputTokens: 2048,
+      thinking: false,
+    });
+    inputTokens += result.usage.inputTokens;
+    outputTokens += result.usage.outputTokens;
+    costUsd += estimateDeepSeekCostBreakdown({
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens,
+    }).totalCostUsd;
+    const parsed = parseSeriesSubtypeAssignments(
+      parseJsonObjectText(result.text),
+      knownIndexes,
+    );
+    for (const assignment of parsed) {
+      const group = repeating[assignment.index];
+      if (!group || !assignment.subtypeKey) continue;
+      let entry = catalog.get(assignment.subtypeKey);
+      if (!entry) {
+        entry = {
+          key: assignment.subtypeKey,
+          title:
+            assignment.subtypeTitle ||
+            titleFromInstanceKey(group.instanceKey),
+        };
+        catalog.set(entry.key, entry);
+      } else if (assignment.subtypeTitle) {
+        entry = { ...entry, title: assignment.subtypeTitle };
+        catalog.set(entry.key, entry);
+      }
+      stemToSubtype.set(group.instanceKey, entry);
+    }
+  }
 
   if (singletons.length > 0) {
     const totalBatches = Math.max(
@@ -543,6 +595,7 @@ export async function runDocumentSeriesWorker(runId: string): Promise<void> {
     const verified = await verifySubtypeStems({
       docs: candidateDocs,
       seriesTitle: entry.title,
+      usage: entry.usage,
       shouldContinue: () => stillRunning(runId),
     });
     if (!(await stillRunning(runId))) return;

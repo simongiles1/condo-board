@@ -440,7 +440,7 @@ function AttendeeBlocks({
 }
 
 function MotionPdf({ motion }: { motion: MotionV2 }) {
-  const status = motion.status.trim() || "Motion carried.";
+  const status = motion.status.trim() || "Outcome not recorded.";
   return (
     <View>
       <HangRow marker=" ">
@@ -548,7 +548,7 @@ function AgendaItemPdf({
         <AgendaItemPdf
           key={`sub-${idx}`}
           item={sub}
-          marker={romanMarker(idx)}
+          marker={romanMarker(sub.displayIndex ?? idx)}
           depth={depth + 1}
           options={options}
         />
@@ -573,7 +573,7 @@ function AgendaItemsPdf({
         <AgendaItemPdf
           key={`item-${idx}`}
           item={item}
-          marker={letterMarker(startIndex + idx)}
+          marker={letterMarker(item.displayIndex ?? startIndex + idx)}
           depth={0}
           options={options}
         />
@@ -651,7 +651,7 @@ function NumberedFinancialItems({
   return (
     <View>
       {items.map((item, idx) => {
-        const num = `${sectionNum}.${startIndex + idx + 1}`;
+        const num = `${sectionNum}.${(item.displayIndex ?? startIndex + idx) + 1}`;
         const topic = item.topic.trim();
         const summary = item.summary.trim();
 

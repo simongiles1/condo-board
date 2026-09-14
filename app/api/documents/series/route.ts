@@ -13,20 +13,26 @@ import {
   isDocumentSeriesWorkerAlive,
   startDocumentSeriesDiscovery,
 } from "@/lib/documents/series-worker";
+import { listOutboundFileLinkEmails } from "@/lib/email/outbound-file-links";
 
 export async function GET() {
   const session = await requireSession();
   if (isErrorResponse(session)) return session;
 
   try {
-    const [series, latestRun, fileCardCount] = await Promise.all([
+    const [series, latestRun, fileCardCount, linkedResult] = await Promise.all([
       listDocumentSeries(),
       getLatestDocumentSeriesRun(),
       countReadyFileCards(),
+      listOutboundFileLinkEmails().catch((error) => {
+        console.error("[documents:series:linked-files]", error);
+        return [];
+      }),
     ]);
     return NextResponse.json({
       series,
       fileCardCount,
+      linkedFiles: linkedResult,
       run: latestRun
         ? {
             ...latestRun,

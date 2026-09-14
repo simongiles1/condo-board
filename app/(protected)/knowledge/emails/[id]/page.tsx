@@ -11,6 +11,7 @@ import { resolveMentionUniqueBody } from "@/lib/contacts/mention-presence";
 import { getDb } from "@/lib/db";
 import { emailAttachments, emails, emailThreads } from "@/lib/db/schema";
 import { formatEmailBodyForDisplay } from "@/lib/email/format-body-display";
+import { extractOutboundFileLinks } from "@/lib/email/outbound-file-links";
 import { computeThreadUniqueBodies } from "@/lib/email/thread-unique-content";
 import {
   EMAIL_MESSAGE_SCOPE,
@@ -60,6 +61,10 @@ async function loadMessageWithAttachments(
       sizeBytes: attachment.sizeBytes,
       hasValue: attachment.hasValue,
     })),
+    fileLinks: extractOutboundFileLinks({
+      html: message.bodyHtml,
+      text: message.bodyText,
+    }),
   };
 }
 

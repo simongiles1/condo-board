@@ -11,6 +11,7 @@ import {
   type EmailAttachmentSummary,
 } from "@/lib/email/attachment-display";
 import type { EmailBodyDisplay } from "@/lib/email/format-body-display";
+import type { OutboundFileLink } from "@/lib/email/outbound-file-links";
 import {
   resolveUniqueHighlightSplit,
   type HighlightSplit,
@@ -45,6 +46,7 @@ export type ThreadMessage = {
   bodyDisplay: EmailBodyDisplay;
   bodyDisplayUnique?: EmailBodyDisplay | null;
   attachments: Attachment[];
+  fileLinks?: OutboundFileLink[];
 };
 
 function bodyPreview(text: string, maxLength = 120): string {
@@ -542,6 +544,36 @@ export function EmailThreadMessages({
                       Quote was not found in this email's unique content
                     </p>
                     <SourceQuoteDisplay quote={messageQuote} />
+                  </div>
+                ) : null}
+
+                {message.fileLinks && message.fileLinks.length > 0 ? (
+                  <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                    <p className="font-medium">
+                      Files were sent as a link, not an attachment
+                    </p>
+                    <p className="mt-1 text-xs text-amber-900/80">
+                      Download them so they can be ingested like other
+                      attachments. Auto-fetch is off because these links often
+                      sit behind a login.
+                    </p>
+                    <ul className="mt-2 space-y-1">
+                      {message.fileLinks.map((link) => (
+                        <li key={link.url}>
+                          <a
+                            href={link.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="break-all underline decoration-amber-400 underline-offset-2 hover:text-amber-800"
+                          >
+                            {link.label || link.url}
+                          </a>
+                          <span className="ml-1 text-xs uppercase tracking-wide text-amber-900/70">
+                            {link.kind}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 ) : null}
 

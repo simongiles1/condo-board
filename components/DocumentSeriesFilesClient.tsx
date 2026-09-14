@@ -9,6 +9,7 @@ import {
   attachmentKindLabel,
   formatAttachmentSize,
 } from "@/lib/email/attachment-display";
+import { emailMessageDetailHref } from "@/lib/email/thread-filter-params";
 import { formatDateTime } from "@/lib/format/datetime";
 
 type SeriesListItem = {
@@ -36,6 +37,16 @@ type SeriesMember = {
   source: "discovery" | "human";
   subtypeKey: string | null;
   subtypeTitle: string | null;
+};
+
+type LinkedFileEmail = {
+  emailId: string;
+  threadId: string | null;
+  subject: string;
+  fromAddress: string;
+  receivedAt: string;
+  pdfAttachmentCount: number;
+  links: Array<{ url: string; label: string; kind: "zip" | "cloud" }>;
 };
 
 type SeriesRun = {
@@ -87,6 +98,7 @@ export function DocumentSeriesFilesClient() {
   const [busy, setBusy] = useState(false);
   const [previewHash, setPreviewHash] = useState<string | null>(null);
   const [subtypeFilter, setSubtypeFilter] = useState("");
+  const [linkedFiles, setLinkedFiles] = useState<LinkedFileEmail[]>([]);
 
   const running = run?.status === "running" && run.workerAlive !== false;
 
@@ -97,6 +109,7 @@ export function DocumentSeriesFilesClient() {
       series?: SeriesListItem[];
       fileCardCount?: number;
       run?: SeriesRun | null;
+      linkedFiles?: LinkedFileEmail[];
     };
     if (!response.ok) {
       throw new Error(payload.error ?? "Could not load recurring types.");
@@ -112,6 +125,7 @@ export function DocumentSeriesFilesClient() {
     );
     setFileCardCount(payload.fileCardCount ?? 0);
     setRun(payload.run ?? null);
+    setLinkedFiles(payload.linkedFiles ?? []);
     return nextSeries;
   }, []);
 
@@ -345,6 +359,43 @@ export function DocumentSeriesFilesClient() {
         ) : null}
         {loadError ? (
           <p className="mt-2 text-sm text-red-700">{loadError}</p>
+        ) : null}
+        {linkedFiles.length > 0 ? (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-sm font-medium text-amber-950">
+              {linkedFiles.length} email
+              {linkedFiles.length === 1 ? "" : "s"} sent files as a link, not
+              an attachment
+            </p>
+            <p className="mt-1 text-xs text-amber-900/80">
+              Recurring types only see Gmail attachments. Download these (zip
+              folders included), then they can be ingested like other files.
+              Auto-download is off — many of these links sit behind a login.
+            </p>
+            <ul className="mt-2 max-h-40 space-y-2 overflow-y-auto">
+              {linkedFiles.map((row) => (
+                <li key={row.emailId} className="text-sm text-amber-950">
+                  <a
+                    href={emailMessageDetailHref(row.emailId)}
+                    className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-800"
+                  >
+                    {row.subject || "(no subject)"}
+                  </a>
+                  <span className="ml-2 text-xs text-amber-900/70">
+                    {formatDateTime(row.receivedAt)}
+                    {row.pdfAttachmentCount === 0
+                      ? " · no PDF attached"
+                      : ` · ${row.pdfAttachmentCount} PDF attached`}
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs text-amber-900/70">
+                    {row.links
+                      .map((link) => link.label || link.url)
+                      .join(" · ")}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : null}
       </div>
 

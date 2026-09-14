@@ -69,54 +69,15 @@ const DEFAULT_PM_SUBSECTIONS = [
 export function normalizeBoardPackageAgendaSkeleton(
   skeleton: BoardPackageAgendaSkeleton,
 ): BoardPackageAgendaSkeleton {
-  const items = Array.isArray(skeleton.agendaItems) ? [...skeleton.agendaItems] : [];
-  const isDate = (title: string) => /date and time of the next/i.test(title);
-  const isAdjournment = (title: string) => /^\s*adjournment\b/i.test(title);
-  const isPmReport = (title: string) => /property management report/i.test(title);
-
-  const dateItems = items.filter((item) => isDate(item.title));
-  const adjournItems = items.filter((item) => isAdjournment(item.title));
-  const core = items.filter((item) => !isDate(item.title) && !isAdjournment(item.title));
-
-  let pm = core.find((item) => isPmReport(item.title));
-  if (!pm) {
-    pm = {
-      itemNumber: String(core.length + 1),
-      title: "Property Management Report",
-      subSections: [],
-    };
-    core.push(pm);
+  if (!Array.isArray(skeleton.agendaItems) || !skeleton.agendaItems.length) {
+    throw new Error("The board package did not yield a valid agenda outline.");
   }
-  if (!pm.subSections || pm.subSections.length === 0) {
-    pm.subSections = DEFAULT_PM_SUBSECTIONS.map((section) => ({
-      code: `${pm!.itemNumber}.${section.codeSuffix}`,
-      title: section.title,
-    }));
+  const codes = new Set<string>();
+  for (const item of skeleton.agendaItems) {
+    if (!item.title || !item.itemNumber || codes.has(item.itemNumber)) throw new Error("Missing or duplicate printed agenda code.");
+    codes.add(item.itemNumber);
   }
-
-  const trailing = [
-    ...(dateItems.length > 0
-      ? dateItems
-      : [{ itemNumber: "5", title: "Date and time of the next Board Meeting" }]),
-    ...(adjournItems.length > 0 ? adjournItems : [{ itemNumber: "6", title: "Adjournment" }]),
-  ];
-
-  const rebuilt = [...core, ...trailing].map((item, index) => {
-    const itemNumber = String(index + 1);
-    return {
-      ...item,
-      itemNumber,
-      subSections: item.subSections?.map((section) => ({
-        ...section,
-        code: section.code.replace(/^\d+/, itemNumber),
-      })),
-    };
-  });
-
-  return {
-    ...skeleton,
-    agendaItems: rebuilt,
-  };
+  return skeleton;
 }
 
 function inferTopLevelItemType(title: string): string {
@@ -176,7 +137,7 @@ Return strict JSON:
   "agendaItems": [
     {
       "itemNumber": "1",
-      "title": "Meeting with Eng. Ryan Ratcliff from TCG, to discuss projects",
+      "title": "Meeting with Eng. Ryan Ratcliff from the engineer, to discuss projects",
       "subItems": ["Booster Pump", "Riser Expansion", "Tender Analysis for the Generator Fuel Delivery Upgrade and Exhaust Project"]
     },
     {
@@ -250,11 +211,11 @@ Return strict JSON:
       "itemCode": "4.B.1",
       "title": "Booster Pump Replacement - Base Specification and Alternative Options",
       "isContinuationOfPrevious": false,
-      "summary": "Management discussed with TCG why Ambient Mechanical's base bid is preferred.",
-      "financials": { "amount": "$214,194.00 plus HST", "reserveEligible": true },
-      "contractorsOrVendors": ["Ambient Mechanical", "Trace Consulting Group"],
+      "summary": "Management discussed with the engineer why Example Contractor's base bid is preferred.",
+      "financials": { "amount": "$125,000.00 plus HST", "reserveEligible": true },
+      "contractorsOrVendors": ["Example Contractor", "Example Engineer"],
       "attachmentReferences": ["pages 15-26"],
-      "managementRecommendation": "Award contract to Ambient Mechanical"
+      "managementRecommendation": "Award contract to Example Contractor"
     }
   ]
 }`;
@@ -412,7 +373,10 @@ export async function extractBoardPackageAgendaJson(options: {
   }
 
   // Look at up to the core report pages (defaults to 15 pages or page count)
-  const corePages = pages.slice(0, options.maxPages ?? 15);
+  if (options.maxPages !== undefined && options.maxPages < pages.length) {
+    throw new Error("Partial board-package extraction is not a complete agenda. Process every page.");
+  }
+  const corePages = pages;
   const total = corePages.length + 1; // 1 for discovery + page count
 
   await options.onProgress?.({
@@ -492,7 +456,8 @@ export async function extractBoardPackageAgendaJson(options: {
 
     try {
       const parsed = JSON.parse(pageExtractResponse.text) as { items: PageExtractedItem[] };
-      const items = parsed.items || [];
+      if (!Array.isArray(parsed.items)) throw new Error("Missing page items array");
+      const items = parsed.items;
       if (items.length > 0) {
         const updatedLast = mergePageItemsIntoAgenda(
           fullAgenda,
@@ -505,7 +470,7 @@ export async function extractBoardPackageAgendaJson(options: {
         }
       }
     } catch (err) {
-      console.warn(`[agenda-builder] Could not parse extraction on page ${page.pageNumber}:`, err);
+      throw new Error(`Agenda extraction failed on page ${page.pageNumber}; no complete agenda was produced. ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -573,7 +538,7 @@ export function flattenBoardPackageAgenda(agenda: FullBoardPackageAgenda): Flatt
             sectionLabel: `${item.title}: ${section.title}`,
             title: subItem.title,
             itemType:
-              sectionType === "ratification_line_item" || sectionType === "discussion_approval"
+              sectionType === "ratification_line_item" || sectionType === "discussion_approval" || sectionType === "completed_items"
                 ? sectionType
                 : "discussion_topic",
             sourcePages: subItem.sourcePages,

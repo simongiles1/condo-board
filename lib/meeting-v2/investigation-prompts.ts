@@ -33,35 +33,8 @@ Important rules:
 - If the prepared context gives enough support for a careful answer, stop and return the final JSON immediately.
 - After each tool call, reassess whether you already have enough evidence to answer. If yes, stop calling tools and return the final JSON.
 - Prefer fetching the exact chunk, previous chunk, next chunk, or one narrow keyword search over making assumptions.
-- PARLIAMENTARY MOTION & RATIFICATION RULES:
-  - BATCH RATIFICATIONS (Items for Ratification / Email Approvals):
-    When an agenda item is listed under a Ratification section (e.g., Items for Ratification / Email Approvals), and the transcript shows Property Management presenting prior email decisions for formal board ratification (e.g. "we can ratify them all at the same time", "these have already been approved by email", "let us ratify and move on") and the Board gives verbal assent or confirms prior email approval ("all of these have already been approved", "yes", "agreed", "no questions"):
-    1. Set outcome to "APPROVED".
-    2. Populate the formal motion object:
-       - moved_by: The specific director named, or default to Board President / Chair among attending voting directors (format: F. LastName).
-       - seconded_by: The specific director named, or default to secondary attending voting Director (format: F. LastName).
-       - resolution_text: Formal resolution starting with "THAT IT DULY BE RATIFIED that [Contractor / Subject] be approved to proceed with [Scope] as set out in their quote dated [Date] at a total cost of [Amount] plus HST." (or "THAT IT DULY BE RATIFIED that [Subject] be approved.").
-       - result: "CARRIED"
-       - status: "Motion carried."
-  - APPROVAL OF PREVIOUS MINUTES:
-    When the agenda item is Approval of Previous Minutes and the Board agrees to approve the minutes (with or without amendments):
-    1. Set outcome to "APPROVED".
-    2. Populate the formal motion object:
-       - moved_by: The specific director named, or default to Board President / Chair among attending voting directors (format: F. LastName).
-       - seconded_by: The specific director named, or default to secondary attending voting Director (format: F. LastName).
-       - resolution_text: Formal resolution starting with "THAT the minutes of the Board meeting dated [Date] be approved [as amended]." (If the exact date is unknown, use "THAT the minutes of the previous Board meeting be approved [as amended].")
-       - result: "CARRIED"
-       - status: "Motion carried."
-  - REGULAR APPROVALS & MOTIONS:
-    When the transcript demonstrates oral board agreement, assent, or resolution to approve an expenditure, contract, quote, holdback release, or study:
-    1. Set outcome to "APPROVED".
-    2. Populate the formal motion object:
-       - moved_by: Explicit mover if named in transcript; otherwise default to Board President / Chair among attending voting directors (format: F. LastName).
-       - seconded_by: Explicit seconder if named in transcript; otherwise default to secondary attending voting Director (format: F. LastName).
-       - resolution_text: Formal legal resolution in third-person starting with "THAT [Contractor / Subject] be approved to proceed with [Scope] as set out in their quote dated [Date] at a total cost of [Amount] plus HST."
-       - result: "CARRIED" (or "DEFEATED" if voted down, "DEFERRED" if postponed).
-       - status: "Motion carried." (or "Motion defeated." / "Deferred.").
-- Motion Candidate: If a motion is proposed but not voted on, capture it as a motion with result: UNKNOWN and is_candidate: true.
+- MOTION POLICY: Never infer a mover, seconder or completed vote. Use null for missing names. Informal board assent can support a decision but is not a formal motion; leave motion null and record the agreement in decisions. Prior approval is not a new vote. A proposed motion without a recorded result must have result UNKNOWN and is_candidate true.
+- Use the supplied fact resolution as the factual basis. Do not copy a superseded package proposal into a prior approval or current decision. Preserve conditions and temporal scope. If any material fact remains unresolved, keep that uncertainty in open_questions and avoid a definitive claim.
 
 REFERENCE STYLE GUIDE:
 When writing the discussion_summary, you must adopt the exact summarization capability and tone of the Corporation's Gold Standard reference minutes:
@@ -133,9 +106,8 @@ Constraints:
 - If there was no clear board-level conclusion, decisions should be an empty array.
 - actions should only include explicit or very strong implied follow-ups. Format the description as a high-level corporate directive (e.g., "Management is directed to..."). Extract each distinct board directive as a separate action item rather than grouping them into a single run-on sentence.
 - Do not turn general discussion points into actions unless someone was clearly tasked.
-- open_questions should contain unresolved matters, if any. Use the recommended_answer field to provide your best AI guess for the answer based on context, so the user can one-click approve it. The recommended_answer MUST be written in the highly formal, third-person tone of the minutes, as it may be injected directly into the final draft document.
+- open_questions should contain unresolved matters, if any. Use the recommended_answer field to provide your best AI guess for the answer based on context, so the user can one-click approve it. The recommended_answer MUST be written in the highly formal, third-person tone of the minutes, for the user to review; a proposed answer is never evidence until explicitly confirmed.
 - open_questions should include the exact uncertainty when evidence is incomplete or ambiguous.
-- If you apply the default mover and seconder rules, DO NOT log an open_question about the missing formal language. Applying the parliamentary defaults resolves this ambiguity.
 - If there is no reliable motion, set motion to null.
 - If there are no actions or questions, return empty arrays.
 - revised_notes is optional. Omit it when package notes still match the transcript. When the transcript contradicts package Amount / Recommendation / contractor notes, return the full corrected notes list.

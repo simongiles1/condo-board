@@ -262,7 +262,7 @@ function extractMajorSectionHeading(
   }
 
   for (const line of lines.slice(0, 8)) {
-    const cleanLine = line.replace(/^#{1,4}\s+/, "").trim();
+    const cleanLine = line.replace(/^#{1,6}\s+/, "").replace(/^\d+[.)]?\s+/, "").trim();
     if (!cleanLine || cleanLine.startsWith("<!--") || cleanLine.length < 3) continue;
 
     if (SUBORDINATE_HEADER_RE.test(cleanLine)) continue;

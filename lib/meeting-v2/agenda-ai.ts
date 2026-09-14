@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { MINUTES_PIPELINE_VERSION, stableAgendaId } from "./evidence-contract";
 
 import { and, asc, eq } from "drizzle-orm";
 
@@ -881,14 +882,14 @@ export function normalizeWorkflowState(value: unknown, fallback: WorkflowState):
   return {
     documentTopics: preserveTranscriptProvenance(
       preserveItemNumbers(
-        documentTopics.length > 0 ? documentTopics : fallback.documentTopics,
+        mergeTopicUpdates(documentTopics, fallback.documentTopics),
         fallback.documentTopics,
       ),
       fallback.documentTopics,
     ),
     extraTopics: preserveTranscriptProvenance(
       preserveItemNumbers(
-        extraTopics.length > 0 || record.extraTopics ? extraTopics : fallback.extraTopics,
+        mergeTopicUpdates(extraTopics, fallback.extraTopics),
         fallback.extraTopics,
       ),
       fallback.extraTopics,
@@ -929,10 +930,19 @@ function preserveItemNumbers(next: WorkflowTopic[], previous: WorkflowTopic[]): 
   if (previous.length === 0) return next;
   const byTitle = new Map(previous.map((topic) => [normalize(topic.title), topic]));
   return next.map((topic) => {
-    if (topic.itemNumber) return topic;
     const prior = byTitle.get(normalize(topic.title));
     return prior?.itemNumber ? { ...topic, itemNumber: prior.itemNumber } : topic;
   });
+}
+
+/** Incremental responses are patches. Omission never deletes an established topic. */
+function mergeTopicUpdates(next: WorkflowTopic[], previous: WorkflowTopic[]): WorkflowTopic[] {
+  const merged = previous.map(prior => {
+    const update = next.find(topic => findPriorTopic(topic, previous) === prior);
+    return update ? { ...prior, ...update, itemNumber: prior.itemNumber || update.itemNumber,
+      notes: unique([...prior.notes, ...update.notes]), aliases: unique([...prior.aliases, ...update.aliases]) } : prior;
+  });
+  return [...merged, ...next.filter(topic => !findPriorTopic(topic, previous))];
 }
 
 function preserveTranscriptProvenance(next: WorkflowTopic[], previous: WorkflowTopic[]): WorkflowTopic[] {
@@ -942,7 +952,7 @@ function preserveTranscriptProvenance(next: WorkflowTopic[], previous: WorkflowT
     if (!prior) return topic;
     return {
       ...topic,
-      sourceChunkIds: unique([...prior.sourceChunkIds, ...topic.sourceChunkIds]).slice(0, 24),
+      sourceChunkIds: unique([...prior.sourceChunkIds, ...topic.sourceChunkIds]),
       sourceTranscriptRanges: mergeClosedIntervals([
         ...prior.sourceTranscriptRanges,
         ...topic.sourceTranscriptRanges,
@@ -1099,34 +1109,36 @@ function buildStateText(state: WorkflowState, options?: { compact?: boolean }): 
   return JSON.stringify(
     {
       documentTopics: state.documentTopics.map((topic) => ({
+        itemNumber: topic.itemNumber,
         title: topic.title,
         sectionLabel: topic.sectionLabel,
         itemType: topic.itemType,
         visibility: topic.visibility,
         sourcePages: topic.sourcePages.slice(0, 8),
-        sourceChunkIds: topic.sourceChunkIds.slice(0, 6),
+        sourceChunkIds: topic.sourceChunkIds,
         sourceTranscriptRanges: topic.sourceTranscriptRanges,
         discussionStatus: topic.discussionStatus,
         discussionTimestampRange: topic.discussionTimestampRange,
         consolidationReason: topic.consolidationReason,
         sourceText: topic.sourceText,
-        aliases: topic.aliases.slice(0, 3),
-        notes: topic.notes.slice(0, 3),
+        aliases: topic.aliases,
+        notes: topic.notes,
       })),
       extraTopics: state.extraTopics.map((topic) => ({
+        itemNumber: topic.itemNumber,
         title: topic.title,
         sectionLabel: topic.sectionLabel,
         itemType: topic.itemType,
         visibility: topic.visibility,
         sourcePages: topic.sourcePages.slice(0, 8),
-        sourceChunkIds: topic.sourceChunkIds.slice(0, 6),
+        sourceChunkIds: topic.sourceChunkIds,
         sourceTranscriptRanges: topic.sourceTranscriptRanges,
         discussionStatus: topic.discussionStatus,
         discussionTimestampRange: topic.discussionTimestampRange,
         consolidationReason: topic.consolidationReason,
         sourceText: topic.sourceText,
-        aliases: topic.aliases.slice(0, 3),
-        notes: topic.notes.slice(0, 3),
+        aliases: topic.aliases,
+        notes: topic.notes,
       })),
       uncertainties: state.uncertainties.slice(0, 8),
       discrepancies: state.discrepancies?.slice(0, 8),
@@ -1418,7 +1430,6 @@ export async function extractAgendaItemsWithAi(
     try {
       const fullAgenda = await extractBoardPackageAgendaJson({
         meetingId,
-        maxPages: 15,
         onProgress: async (p) => {
           await options?.onProgress?.({
             current: p.current,
@@ -1706,7 +1717,7 @@ export async function extractAgendaItemsWithAi(
       .filter(Boolean)
       .join("\n");
     return {
-      id: randomUUID(),
+      id: stableAgendaId(meetingId, topic.itemNumber ?? "", topic.title),
       meetingV2Id: meetingId,
       sourceArtifactId: boardPackage[0].id,
       sourceSectionId: sourceSection?.id ?? null,
@@ -1735,11 +1746,8 @@ export async function extractAgendaItemsWithAi(
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const topic = finalTopics[i];
-    const isRyanRatcliff = topic && topic.title.toLowerCase().includes("ryan ratcliff");
     initialItemStatuses[row.id] =
-      isRyanRatcliff && topic?.evidenceStrength === "UNCERTAIN"
-        ? "not_discussed"
-        : topic?.discussionStatus ??
+      topic?.discussionStatus ??
           (topic && topic.sourceTranscriptRanges.length > 0 ? "discussed" : "not_discussed");
   }
 
@@ -1751,34 +1759,20 @@ export async function extractAgendaItemsWithAi(
     finalTopics.map((topic) => topic.title),
   );
 
-  // Surface explicit inquiry for guest presentation when guest did not attend
-  const ryanTopic = finalTopics.find((t) => t.title.toLowerCase().includes("ryan ratcliff"));
-  if (ryanTopic && (ryanTopic.evidenceStrength === "UNCERTAIN" || ryanTopic.needsHumanReview)) {
-    const alreadyHasInquiry = discrepancies.some((d) =>
-      d.suggestedTitle.toLowerCase().includes("ryan ratcliff"),
-    );
-    if (!alreadyHasInquiry) {
-      discrepancies.unshift({
-        id: `inquiry-ryan-ratcliff-${randomUUID().slice(0, 8)}`,
-        transcriptRange: [0, 80],
-        timestamp: ryanTopic.discussionTimestampRange || "00:00:24",
-        speaker: "Haider Mukadam",
-        snippet: "Approval for the minutes for June 30th meeting... reserve expense... Trace Consulting",
-        suggestedTitle: "Meeting with Eng. Ryan Ratcliff from TCG",
-        suggestedSection: ryanTopic.sectionLabel,
-        clarificationQuestion:
-          "Eng. Ryan Ratcliff did not attend this meeting; Trace was only mentioned while amending previous minutes. Was this presentation completed in a prior meeting and should be marked Not Discussed?",
-        kind: "status_inquiry",
-        status: "pending",
-      });
-    }
-  }
-
   await db
     .update(meetingsV2)
     .set({
       settings: {
         ...currentSettings,
+        pipelineVersion: MINUTES_PIPELINE_VERSION,
+        agendaEvidence: Object.fromEntries(rows.map((row, index) => [row.id, {
+          itemNumber: row.itemNumber,
+          sourceTranscriptRanges: finalTopics[index].sourceTranscriptRanges,
+          sourceChunkIds: finalTopics[index].sourceChunkIds,
+          aliases: finalTopics[index].aliases,
+          notes: finalTopics[index].notes,
+          visibility: finalTopics[index].visibility,
+        }])),
         agendaApproval: {
           status: "pending_review",
           approvedAt: null,

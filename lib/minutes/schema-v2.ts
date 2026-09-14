@@ -9,6 +9,7 @@ export const AGENDA_ITEM_STATUS_VALUES = [
   "Pending.",
   "Information only.",
   "No action required.",
+  "Outcome not recorded.",
 ] as const;
 
 export type AgendaItemStatus = (typeof AGENDA_ITEM_STATUS_VALUES)[number];
@@ -23,7 +24,9 @@ export type MotionV2 = {
   movedBy: string;
   secondedBy: string;
   resolutionText: string;
-  status: "Motion carried." | "Motion defeated." | "Deferred.";
+  status: "Motion carried." | "Motion defeated." | "Deferred." | "Outcome not recorded.";
+  isCandidate?: boolean;
+  isInformal?: boolean;
 };
 
 /** Body after "THAT" — render/PDF add the keyword; models sometimes duplicate it. */
@@ -41,6 +44,10 @@ export type ActionItemV2 = {
 };
 
 export type AgendaItemV2 = {
+  sourceAgendaItemId?: string;
+  sourceItemNumber?: string;
+  /** Position in the complete sibling list, assigned before visibility filtering. */
+  displayIndex?: number;
   topic: string;
   summary: string;
   costMentioned?: number;
@@ -173,13 +180,8 @@ export function filterAgendaItems(items: AgendaItemV2[] | undefined): AgendaItem
  * regardless of how the AI/editor ordered the array.
  */
 export function reorderRestrictedLast(items: AgendaItemV2[]): AgendaItemV2[] {
-  const pub: AgendaItemV2[] = [];
-  const res: AgendaItemV2[] = [];
-  for (const item of items) {
-    if (item.restricted) res.push(item);
-    else pub.push(item);
-  }
-  return [...pub, ...res];
+  // Kept for existing callers. Canonical agenda order must never depend on visibility.
+  return items;
 }
 
 /** Split a list into (public, restricted) preserving original order. */
@@ -188,9 +190,21 @@ export function partitionRestricted<T extends AgendaItemV2>(
 ): { public: T[]; restricted: T[] } {
   const pub: T[] = [];
   const res: T[] = [];
-  for (const item of items) {
-    if (item.restricted) res.push(item);
-    else pub.push(item);
+  for (const [displayIndex, item] of items.entries()) {
+    const indexed = { ...item, displayIndex };
+    if (item.restricted) {
+      const indexChildren = (children: AgendaItemV2[]): AgendaItemV2[] =>
+        children.map((child, index) => ({ ...child, displayIndex: index, subItems: indexChildren(child.subItems) }));
+      res.push({ ...indexed, subItems: indexChildren(item.subItems) });
+    } else {
+      const children = partitionRestricted(item.subItems);
+      pub.push({ ...indexed, subItems: children.public });
+      if (children.restricted.length) {
+        // Only a navigation heading is repeated; no public summary/motion is duplicated.
+        res.push({ ...indexed, summary: "", motion: undefined, actionItems: [], status: undefined,
+          costMentioned: undefined, contractorMentioned: undefined, subItems: children.restricted });
+      }
+    }
   }
   return { public: pub, restricted: res };
 }
@@ -329,17 +343,19 @@ function normalizeMotion(raw: unknown, warnings: string[]): MotionV2 | undefined
   const resolutionText = stripLeadingThatFromResolution(
     asString(raw.resolution_text ?? raw.resolutionText ?? raw.resolution),
   );
-  const statusRaw = asString(raw.status ?? raw.outcome, "Motion carried.");
+  const statusRaw = asString(raw.status ?? raw.outcome);
   const status: MotionV2["status"] =
-    statusRaw === "Motion defeated." || statusRaw === "Deferred."
+    statusRaw === "Motion defeated." || statusRaw === "Deferred." || statusRaw === "Motion carried."
       ? statusRaw
-      : "Motion carried.";
+      : "Outcome not recorded.";
 
   if (!movedBy || !secondedBy || !resolutionText) {
     warnings.push("Motion missing required fields.");
   }
 
-  return { movedBy, secondedBy, resolutionText, status };
+  return { movedBy, secondedBy, resolutionText, status,
+    isCandidate: asOptionalBoolean(raw.is_candidate ?? raw.isCandidate),
+    isInformal: asOptionalBoolean(raw.is_informal ?? raw.isInformal) };
 }
 
 function normalizeActionItem(raw: unknown, warnings: string[]): ActionItemV2 {
@@ -400,6 +416,8 @@ function normalizeAgendaItem(
   return {
     topic,
     summary,
+    sourceAgendaItemId: asOptionalString(raw.sourceAgendaItemId),
+    sourceItemNumber: asOptionalString(raw.sourceItemNumber),
     costMentioned: asOptionalNumber(raw.cost_mentioned ?? raw.costMentioned),
     contractorMentioned: asOptionalString(
       raw.contractor_mentioned ?? raw.contractorMentioned,

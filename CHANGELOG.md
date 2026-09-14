@@ -6,7 +6,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Build-out progress Gantt** — Curated statuses reviewed 2026-09-14. Corpus search / RAG and Ask the archive move to **In parallel** (product slice shipped; backfill + file-card qualify ongoing). Added **Recurring document types**. Gated ingest pipeline, meetings v2 (gold compare, create wizard, duplicate), and global archive chat reflected in card copy.
+
+- **Recurring document subtypes** — Board-package discovery now treats ICC filename variants as one subtype (Management Report titles, TSCC prefixes, “for board meeting on”). A standalone Board Meeting Agenda stays separate. Repeating stems in other types go through a merge pass instead of locking in a subtype as soon as two dates exist.
+
 ### Added
+
+- **Linked files in emails** — Recurring documents and the email thread flag messages that sent a zip or cloud-folder link instead of a Gmail attachment, with the download URL. Auto-fetch is off (login walls). Download those files so they can be ingested like other attachments.
 
 - **Meetings V2 duplicate to agenda approval** — The workspace more menu now includes Duplicate. Meetings that already have a generated agenda can be copied into a new workspace with the same files and agenda, reset to agenda review. Post-approval minutes work is not copied, so testers can re-run that stage without regenerating the agenda.
 

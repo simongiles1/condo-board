@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Email settings — sync in progress** — While an ingest pipeline is running or waiting for Continue, the Sync control shows an amber “Sync running · …” (or “Continue sync · …”) state instead of looking like a fresh **Sync now**. Clicking it reopens progress without starting another run.
+
 - **Ingest extraction → file cards** — Catch-up used to start file cards as soon as a Docling run *id* finished, including when that run was cancelled after eight seconds by a replacement extraction, and it never built page profiles for newly downloaded PDFs. File cards only run on parsed markdown, so those attachments stayed pending and never appeared in Recurring documents. Ingest now profiles pages, waits for the live extraction (not the cancelled one), retries leftovers, downloads attachments that Gmail listed but never hashed, and cards the hashes that actually parsed.
 
 ### Changed

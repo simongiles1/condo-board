@@ -26,6 +26,8 @@ import { formatDateTime } from "@/lib/format/datetime";
 import { formatGmailOrEmailList } from "@/lib/email/gmail-filter-format";
 import {
   formatHarvestAfterSyncMessage,
+  ingestStageShortLabel,
+  isIngestPipelineActive,
   type IngestRunPublic,
 } from "@/lib/email/ingest-stages";
 import { formatSyncImportResultLabel } from "@/lib/email/sync-run-label";
@@ -431,6 +433,18 @@ export function EmailSettingsClient(props: {
     void loadData();
   }, [loadData]);
 
+  const refreshIngestRun = useCallback(async (): Promise<IngestRunPublic | null> => {
+    try {
+      const response = await fetch("/api/email/ingest");
+      if (!response.ok) return null;
+      const body = (await response.json()) as { run?: IngestRunPublic | null };
+      setIngestRun(body.run ?? null);
+      return body.run ?? null;
+    } catch {
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     if (!ingestModalOpen) return;
     const poll = () => {
@@ -447,18 +461,22 @@ export function EmailSettingsClient(props: {
         })
         .catch(() => undefined);
     };
-    if (
-      ingestRun &&
-      ingestRun.status !== "running" &&
-      ingestRun.status !== "waiting_allowlist" &&
-      ingestRun.status !== "waiting_continue"
-    ) {
+    if (!isIngestPipelineActive(ingestRun)) {
       return;
     }
     poll();
     const timer = window.setInterval(poll, 1500);
     return () => window.clearInterval(timer);
   }, [ingestModalOpen, ingestRun]);
+
+  useEffect(() => {
+    if (ingestModalOpen || !isIngestPipelineActive(ingestRun)) return;
+    void refreshIngestRun();
+    const timer = window.setInterval(() => {
+      void refreshIngestRun();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [ingestModalOpen, ingestRun, refreshIngestRun]);
 
   useEffect(() => {
     if (props.initialConnected) {
@@ -861,8 +879,27 @@ export function EmailSettingsClient(props: {
     }
   }
 
+  async function openIngestProgressModal() {
+    setIngestModalOpen(true);
+    setIngestModalBooting(true);
+    await refreshIngestRun();
+    setIngestModalBooting(false);
+  }
+
   async function runSync() {
     setErrorMessage(null);
+
+    try {
+      const active = await refreshIngestRun();
+      if (isIngestPipelineActive(active)) {
+        setIngestModalOpen(true);
+        setIngestModalBooting(false);
+        return;
+      }
+    } catch {
+      // fall through to start a new run
+    }
+
     setIngestModalOpen(true);
     setIngestModalBooting(true);
     setIngestRun(null);
@@ -1086,14 +1123,50 @@ export function EmailSettingsClient(props: {
                 <h2 className="text-lg font-semibold text-slate-900">
                   Sync controls
                 </h2>
-                <button
-                  type="button"
-                  onClick={() => void runSync()}
-                  disabled={busyAction !== null || !personalConnection}
-                  className="shrink-0 rounded-md bg-teal-700 px-3 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-50"
-                >
-                  {busyAction === "sync" ? "Syncing…" : "Sync now"}
-                </button>
+                {(() => {
+                  const pipelineActive = isIngestPipelineActive(ingestRun);
+                  const stageLabel =
+                    ingestRun && pipelineActive
+                      ? ingestStageShortLabel(
+                          ingestRun.stage as Exclude<
+                            IngestRunPublic["stage"],
+                            "done"
+                          >,
+                        )
+                      : null;
+                  const syncButtonLabel = busyAction === "sync"
+                    ? "Syncing…"
+                    : pipelineActive
+                      ? ingestRun?.status === "waiting_continue"
+                        ? `Continue sync · ${stageLabel ?? "pipeline"}`
+                        : `Sync running · ${stageLabel ?? "pipeline"}`
+                      : "Sync now";
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => void runSync()}
+                      disabled={busyAction !== null || !personalConnection}
+                      title={
+                        pipelineActive
+                          ? "A sync pipeline is already in progress. Open progress (does not start a new sync)."
+                          : "Pull new allowlist mail and run the ingest pipeline"
+                      }
+                      className={
+                        pipelineActive
+                          ? "inline-flex shrink-0 items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-950 hover:bg-amber-100 disabled:opacity-50"
+                          : "shrink-0 rounded-md bg-teal-700 px-3 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-50"
+                      }
+                    >
+                      {pipelineActive ? (
+                        <span
+                          className="inline-flex h-2 w-2 animate-pulse rounded-full bg-amber-500"
+                          aria-hidden
+                        />
+                      ) : null}
+                      {syncButtonLabel}
+                    </button>
+                  );
+                })()}
               </div>
               <p className="mt-1 text-sm text-slate-600">
                 Sync now pulls new allowlist mail from personal Gmail. When any

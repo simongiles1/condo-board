@@ -162,6 +162,18 @@ export function shouldResumeIdleIngestRun(input: {
   return input.status === "running" && !input.pipelineBusy;
 }
 
+/** Ingest still needs the pipeline modal (running or waiting on a human step). */
+export function isIngestPipelineActive(
+  run: Pick<IngestRunPublic, "status"> | null | undefined,
+): boolean {
+  if (!run) return false;
+  return (
+    run.status === "running" ||
+    run.status === "waiting_continue" ||
+    run.status === "waiting_allowlist"
+  );
+}
+
 export type HarvestSummaryKindRow = {
   kind: string;
   status: string;

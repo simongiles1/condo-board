@@ -19,6 +19,7 @@ import {
   nextDoclingWaitRunId,
   nextIngestStage,
   shouldResumeIdleIngestRun,
+  isIngestPipelineActive,
 } from "../lib/email/ingest-stages";
 import {
   appendCatchupAfterToQuery,
@@ -189,6 +190,15 @@ describe("ingest stages", () => {
       }),
       false,
     );
+  });
+
+  it("treats running and waiting ingest as pipeline-active", () => {
+    assert.equal(isIngestPipelineActive({ status: "running" }), true);
+    assert.equal(isIngestPipelineActive({ status: "waiting_continue" }), true);
+    assert.equal(isIngestPipelineActive({ status: "waiting_allowlist" }), true);
+    assert.equal(isIngestPipelineActive({ status: "completed" }), false);
+    assert.equal(isIngestPipelineActive({ status: "failed" }), false);
+    assert.equal(isIngestPipelineActive(null), false);
   });
 
   it("marks prior stages done and the current stage active on the meter", () => {

@@ -42,6 +42,7 @@
     "test:project-phase": "npx tsx --test scripts/test-project-phase.ts",
     "test:project-year-range": "npx tsx --test scripts/test-project-year-range.ts",
     "test:project-identity-review": "npx tsx --test scripts/test-project-identity-review.ts",
+    "test:meeting-v2-duplicate": "npx tsx --test scripts/test-meeting-v2-duplicate.ts",
     "test:meeting-v2-alerts": "npx tsx --test scripts/test-meeting-v2-alerts.ts",
     "test:meeting-v2-investigation-reconcile": "npx tsx --test scripts/test-meeting-v2-investigation-reconcile.ts",
     "test:meeting-v2-status-poll": "npx tsx --test scripts/test-meeting-v2-status-poll.ts",

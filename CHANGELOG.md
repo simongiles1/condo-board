@@ -6,6 +6,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Meetings V2 duplicate to agenda approval** — The workspace more menu now includes Duplicate. Meetings that already have a generated agenda can be copied into a new workspace with the same files and agenda, reset to agenda review. Post-approval minutes work is not copied, so testers can re-run that stage without regenerating the agenda.
+
 ### Fixed
 
 - **Gold standard compare — AI minutes preview** — The AI column in gold-standard compare now renders minutes markdown (motions, actions, emphasis) instead of showing raw `**` syntax. Diff highlights are preserved per segment. Official gold PDF text stays plain with line breaks.

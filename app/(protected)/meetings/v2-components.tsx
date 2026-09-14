@@ -17,6 +17,8 @@ import {
   AiUsageDialog,
 } from "@/components/AiUsageDialog";
 import { DeleteMeetingButton } from "@/components/DeleteMeetingButton";
+import { DuplicateMeetingV2Dialog, DuplicateMeetingMenuIcon } from "@/components/DuplicateMeetingV2Dialog";
+import { MEETING_V2_DUPLICATE_NOT_READY_MESSAGE } from "@/lib/meeting-v2/duplicate-meeting-shared";
 import {
   AgendaApprovalConfirmDialog,
   type AgendaApprovalConfirmMode,
@@ -1164,6 +1166,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 validationScore={validationScore}
                 meetingId={meetingId}
                 meetingTitle={status?.meeting.title ?? "Meeting"}
+                canDuplicate={Boolean(status?.meeting.counts.agendaItems)}
                 sourcesMissing={!pipelineSourcesReady}
                 onCompare={handleValidationBadgeClick}
                 onOpenDocuments={() => setDocumentsDialogOpen(true)}
@@ -1400,6 +1403,7 @@ function MeetingWorkspaceMoreMenu({
   validationScore,
   meetingId,
   meetingTitle,
+  canDuplicate,
   sourcesMissing,
   onCompare,
   onOpenDocuments,
@@ -1415,6 +1419,7 @@ function MeetingWorkspaceMoreMenu({
   validationScore: number | null;
   meetingId: string;
   meetingTitle: string;
+  canDuplicate: boolean;
   sourcesMissing: boolean;
   onCompare: () => void;
   onOpenDocuments: () => void;
@@ -1427,6 +1432,7 @@ function MeetingWorkspaceMoreMenu({
   pipelineSlot: ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const validated = validationScore !== null;
   const compareLabel = validated
@@ -1588,6 +1594,28 @@ function MeetingWorkspaceMoreMenu({
             onPulled={onSourcesPulled}
           />
           <div className="my-1 border-t border-slate-100" />
+          <button
+            role="menuitem"
+            type="button"
+            disabled={!canDuplicate}
+            title={canDuplicate ? undefined : MEETING_V2_DUPLICATE_NOT_READY_MESSAGE}
+            onClick={() => {
+              if (!canDuplicate) return;
+              closeMenu();
+              setDuplicateOpen(true);
+            }}
+            className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+          >
+            <DuplicateMeetingMenuIcon className="h-5 w-5 shrink-0 text-slate-500" />
+            <span>
+              <span className="block font-medium text-slate-900">Duplicate</span>
+              <span className="block text-xs text-slate-500">
+                {canDuplicate
+                  ? "Copy to a new workspace at agenda approval"
+                  : "Available after the agenda is generated"}
+              </span>
+            </span>
+          </button>
           <DeleteMeetingButton
             meetingId={meetingId}
             meetingTitle={meetingTitle}
@@ -1598,6 +1626,12 @@ function MeetingWorkspaceMoreMenu({
           />
         </div>
       ) : null}
+      <DuplicateMeetingV2Dialog
+        open={duplicateOpen}
+        meetingId={meetingId}
+        meetingTitle={meetingTitle}
+        onClose={() => setDuplicateOpen(false)}
+      />
     </div>
   );
 }

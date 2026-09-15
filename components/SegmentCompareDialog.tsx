@@ -9,6 +9,10 @@ import {
 import type { MergedVttCue } from "@/lib/parsers/vtt";
 import { formatVttTimestamp } from "@/lib/parsers/vtt";
 import {
+  cellCostLabel,
+  type SegmentCompareCostBaseline,
+} from "@/lib/meeting-v2/segment-compare-cost-estimates";
+import {
   formatSegmentCompareCombination,
   SAVED_AGENDA_COMPARE_ID,
   SAVED_EXTRACT_COMBINATION_KEY,
@@ -29,6 +33,7 @@ type WorkspacePayload = {
   savedOverlays: TranscriptSectionOverlay[];
   runs: SegmentCompareRun[];
   agendaItemCount: number;
+  costBaseline: SegmentCompareCostBaseline | null;
 };
 
 type CombinationRow = {
@@ -118,6 +123,7 @@ function paneIdForCombination(key: string, runs: SegmentCompareRun[]): string | 
 
 function CompareCombinationPicker({
   runs,
+  costBaseline,
   runTargetKey,
   leftId,
   rightId,
@@ -128,6 +134,7 @@ function CompareCombinationPicker({
   onError,
 }: {
   runs: SegmentCompareRun[];
+  costBaseline: SegmentCompareCostBaseline | null;
   runTargetKey: string;
   leftId: string;
   rightId: string;
@@ -218,10 +225,14 @@ function CompareCombinationPicker({
           <p className="mb-3 text-xs leading-relaxed text-slate-600">
             Rows = walk model (plain + <span className="font-semibold">· think</span>). Columns =
             edge judges (plain + think).{" "}
-            <span className="font-semibold">Done</span> appears after a lab run finishes.{" "}
-            <span className="font-semibold">V4 × V4</span> (no think) also shows the saved pipeline
-            extract before you run the lab. <span className="font-semibold">L</span> /{" "}
-            <span className="font-semibold">R</span> assign panes.
+            <span className="font-semibold">Done</span> after a lab run finishes. Costs show actual
+            spend when run; otherwise <span className="font-semibold">~</span> estimates from
+            {costBaseline?.source === "v4_lab_run"
+              ? " your completed V4×V4 lab tokens"
+              : costBaseline
+                ? " pipeline extract walk tokens (edge scaled)"
+                : " extract data once the agenda exists"}
+            . <span className="font-semibold">V4 × V4</span> (no think) = saved extract.
           </p>
           <div className="overflow-x-auto">
           <table className="w-full min-w-[54rem] border-collapse text-xs">
@@ -260,6 +271,7 @@ function CompareCombinationPicker({
                     const isSavedCell = row.key === SAVED_EXTRACT_COMBINATION_KEY;
                     const label = formatSegmentCompareCombination(row.walk, row.edge);
                     const paneReady = paneIdForCombination(row.key, runs) !== null;
+                    const cost = cellCostLabel(row.walk, row.edge, runs, costBaseline);
                     return (
                       <td
                         key={row.key}
@@ -282,41 +294,46 @@ function CompareCombinationPicker({
                               Saved extract
                             </span>
                           ) : null}
-                          {completed ? (
-                            <span className="whitespace-nowrap text-slate-500">
-                              {formatUsd(completed.totalCostUsd)}
-                            </span>
-                          ) : null}
-                          <label className="flex items-center gap-1.5 whitespace-nowrap text-slate-700">
-                            <input
-                              type="radio"
-                              name="segment-compare-run-target"
-                              className="h-3 w-3"
-                              checked={runTargetKey === row.key}
-                              onChange={() => onRunTargetChange(row.key, row)}
-                              aria-label={`Run target ${label}`}
-                            />
-                            <span>Run</span>
-                          </label>
-                          <div className="flex gap-0.5">
-                            <PaneToggle
-                              compact
-                              active={combinationPaneActive(row.key, "left")}
-                              disabled={!paneReady}
-                              label={`Left pane: ${label}`}
-                              onClick={() => assignCombination("left", row.key)}
-                            >
-                              L
-                            </PaneToggle>
-                            <PaneToggle
-                              compact
-                              active={combinationPaneActive(row.key, "right")}
-                              disabled={!paneReady}
-                              label={`Right pane: ${label}`}
-                              onClick={() => assignCombination("right", row.key)}
-                            >
-                              R
-                            </PaneToggle>
+                          <span
+                            className={`whitespace-nowrap font-medium ${
+                              cost.isEstimate ? "text-slate-500" : "text-slate-800"
+                            }`}
+                            title={cost.isEstimate ? "Estimated from baseline token profile" : "Actual lab run cost"}
+                          >
+                            {cost.text}
+                          </span>
+                          <div className="flex items-center justify-between gap-1">
+                            <label className="flex items-center gap-1.5 whitespace-nowrap text-slate-700">
+                              <input
+                                type="radio"
+                                name="segment-compare-run-target"
+                                className="h-3 w-3"
+                                checked={runTargetKey === row.key}
+                                onChange={() => onRunTargetChange(row.key, row)}
+                                aria-label={`Run target ${label}`}
+                              />
+                              <span>Run</span>
+                            </label>
+                            <div className="flex shrink-0 gap-0.5">
+                              <PaneToggle
+                                compact
+                                active={combinationPaneActive(row.key, "left")}
+                                disabled={!paneReady}
+                                label={`Left pane: ${label}`}
+                                onClick={() => assignCombination("left", row.key)}
+                              >
+                                L
+                              </PaneToggle>
+                              <PaneToggle
+                                compact
+                                active={combinationPaneActive(row.key, "right")}
+                                disabled={!paneReady}
+                                label={`Right pane: ${label}`}
+                                onClick={() => assignCombination("right", row.key)}
+                              >
+                                R
+                              </PaneToggle>
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -596,6 +613,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   const cues = workspace?.cues ?? [];
   const savedOverlays = workspace?.savedOverlays ?? [];
   const runs = workspace?.runs ?? [];
+  const costBaseline = workspace?.costBaseline ?? null;
 
   const combinationRows = useMemo(() => buildCombinationRows(), []);
   const runTargetRow = useMemo(
@@ -697,6 +715,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         <div className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-end">
           <CompareCombinationPicker
             runs={runs}
+            costBaseline={costBaseline}
             runTargetKey={runTargetKey}
             leftId={leftId}
             rightId={rightId}
@@ -717,6 +736,14 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
             >
               {starting || busy ? "Running…" : "Run combination"}
             </button>
+            {runTargetRow ? (
+              <p className="text-center text-[11px] text-slate-600">
+                Est.{" "}
+                {
+                  cellCostLabel(runTargetRow.walk, runTargetRow.edge, runs, costBaseline).text
+                }
+              </p>
+            ) : null}
           </div>
         </div>
         {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}

@@ -11,6 +11,10 @@ import {
   transcriptSegmentsToCues,
 } from "../lib/meeting-v2/segment-compare";
 import {
+  buildSegmentCompareCostBaseline,
+  estimateSegmentCompareCombinationCostUsd,
+} from "../lib/meeting-v2/segment-compare-cost-estimates";
+import {
   enumerateSegmentCompareCombinations,
   formatSegmentCompareChoice,
   isSegmentCompareModelId,
@@ -45,6 +49,54 @@ describe("segment compare catalog", () => {
       formatSegmentCompareChoice({ modelId: "gemini-3.8-flash", thinking: true }),
       "Gemini 3.8 Flash · thinking",
     );
+  });
+});
+
+describe("segment compare cost estimates", () => {
+  it("reprices baseline walk/edge tokens for another model pair", () => {
+    const baseline = buildSegmentCompareCostBaseline(
+      [
+        {
+          id: "run-1",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          completedAt: "2026-01-01T00:10:00.000Z",
+          status: "completed",
+          progressLabel: null,
+          error: null,
+          walk: { modelId: "deepseek-v4-flash", thinking: false },
+          edge: { modelId: "deepseek-v4-flash", thinking: false },
+          overlays: [],
+          walkUsage: {
+            modelId: "deepseek-v4-flash",
+            apiModel: "deepseek-v4-flash",
+            thinking: false,
+            inputTokens: 100_000,
+            outputTokens: 10_000,
+            totalTokens: 110_000,
+            costUsd: 0.05,
+          },
+          edgeUsage: {
+            modelId: "deepseek-v4-flash",
+            apiModel: "deepseek-v4-flash",
+            thinking: false,
+            inputTokens: 40_000,
+            outputTokens: 4_000,
+            totalTokens: 44_000,
+            costUsd: 0.02,
+          },
+          totalCostUsd: 0.07,
+        },
+      ],
+      null,
+    );
+    assert.ok(baseline);
+    assert.equal(baseline?.source, "v4_lab_run");
+    const gemini = estimateSegmentCompareCombinationCostUsd(
+      { modelId: "gemini-3.8-flash", thinking: false },
+      { modelId: "gemini-3.8-flash", thinking: false },
+      baseline!,
+    );
+    assert.ok(gemini > 0);
   });
 });
 

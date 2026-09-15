@@ -22,7 +22,13 @@ import {
   type WorkflowState,
   type WorkflowTopic,
 } from "@/lib/meeting-v2/agenda-ai";
+import { loadMeetingV2AiUsageStages } from "@/lib/meeting-v2/ai-usage";
 import type { MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
+import {
+  buildSegmentCompareCostBaseline,
+  type SegmentCompareCostBaseline,
+} from "@/lib/meeting-v2/segment-compare-cost-estimates";
+import type { TokenUsage } from "@/lib/gemini/usage";
 import {
   assignRemainingHolesToAgenda,
   assignUnmatchedLeavesInHoles,
@@ -311,15 +317,31 @@ export async function queueSegmentCompareRun(options: {
   return run;
 }
 
+async function loadExtractWalkTokenUsage(meetingId: string): Promise<TokenUsage | null> {
+  const stages = await loadMeetingV2AiUsageStages(meetingId);
+  const extract = stages.find((stage) => stage.id === "extract");
+  if (!extract || extract.notApplicable || extract.inputTokens <= 0) {
+    return null;
+  }
+  return {
+    inputTokens: extract.inputTokens,
+    outputTokens: extract.outputTokens,
+    totalTokens: extract.totalTokens,
+    cacheHitTokens: extract.cacheHitTokens,
+    cacheMissTokens: extract.cacheMissTokens,
+  };
+}
+
 export async function loadSegmentCompareWorkspace(meetingId: string): Promise<{
   cues: MergedVttCue[];
   savedOverlays: TranscriptSectionOverlay[];
   runs: SegmentCompareRun[];
   reviewedKeys: string[];
   agendaItemCount: number;
+  costBaseline: SegmentCompareCostBaseline | null;
 }> {
   const db = getDb();
-  const [segments, agendaItems, runs, reviewedKeys] = await Promise.all([
+  const [segments, agendaItems, runs, reviewedKeys, extractWalkUsage] = await Promise.all([
     db
       .select({
         startTimestamp: meetingsV2TranscriptSegments.startTimestamp,
@@ -342,13 +364,16 @@ export async function loadSegmentCompareWorkspace(meetingId: string): Promise<{
       .orderBy(asc(meetingsV2AgendaItems.sortOrder)),
     listSegmentCompareRuns(meetingId),
     listSegmentCompareReviewedKeys(meetingId),
+    loadExtractWalkTokenUsage(meetingId),
   ]);
+  const costBaseline = buildSegmentCompareCostBaseline(runs, extractWalkUsage);
   return {
     cues: transcriptSegmentsToCues(segments),
     savedOverlays: overlaysFromSavedAgenda(agendaItems),
     runs,
     reviewedKeys,
     agendaItemCount: agendaItems.length,
+    costBaseline,
   };
 }
 

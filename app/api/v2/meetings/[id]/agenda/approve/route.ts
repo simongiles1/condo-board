@@ -3,10 +3,11 @@ import { NextResponse } from "next/server";
 import { and, asc, eq, inArray } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
-import { meetingsV2, meetingsV2AgendaItems } from "@/lib/db/schema-v2";
+import { meetingsV2, meetingsV2AgendaItems, meetingsV2TranscriptSegments } from "@/lib/db/schema-v2";
 import { inngest } from "@/lib/inngest/client";
 import { resolveMeetingV2SegmentMilestonePercent } from "@/lib/meeting-v2/pipeline-segment-timing";
-import { updateMeetingV2Status, resetMeetingV2PostExtractData } from "@/lib/meeting-v2/service";
+import { updateMeetingV2Status, resetMeetingV2PostExtractData, markMeetingV2DraftStale } from "@/lib/meeting-v2/service";
+import { canonicalDiscussionTiming, withCanonicalDiscussionTiming } from "@/lib/meeting-v2/canonical-timing";
 import {
   inferPropertyManagementReportNumber,
   planAdHocPlacement,
@@ -66,6 +67,7 @@ export async function POST(
     }
 
     // 1. Exclude deleted items
+    await markMeetingV2DraftStale(meetingId, "Agenda review is updating the evidence. Investigation and validation must finish before generation.");
     if (body.excludedItemIds && body.excludedItemIds.length > 0) {
       await db
         .delete(meetingsV2AgendaItems)
@@ -189,10 +191,15 @@ export async function POST(
     const finalItems = await db.select().from(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));
     const agendaEvidence = Object.fromEntries(finalItems.map(item => {
       const prior = currentSettings.agendaEvidence?.[item.id];
-      const accepted = updatedDiscrepancies.find(d => d.status === "accepted" && normalize(d.suggestedTitle) === normalize(item.title));
+      const accepted = updatedDiscrepancies.find(d => d.status === "accepted" && normalize(discrepancyMap.get(d.id)?.title || d.suggestedTitle) === normalize(item.title));
       return [item.id, prior ?? { itemNumber: item.itemNumber, sourceTranscriptRanges: accepted ? [accepted.transcriptRange] : [],
         sourceChunkIds: [], aliases: [], notes: [] }];
     }));
+    const segments = await db.select().from(meetingsV2TranscriptSegments).where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId));
+    for (const item of finalItems) {
+      const timing = canonicalDiscussionTiming(agendaEvidence[item.id].sourceTranscriptRanges, segments);
+      await db.update(meetingsV2AgendaItems).set({ sourceText: withCanonicalDiscussionTiming(item.sourceText, timing) }).where(eq(meetingsV2AgendaItems.id, item.id));
+    }
     // 6. Update meeting settings with approved state
     const updatedSettings: MeetingV2Settings = {
       ...currentSettings,

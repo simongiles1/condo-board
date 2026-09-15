@@ -592,7 +592,7 @@ function TopSectionHeading({
   return (
     <View style={[styles.hangRow, { marginTop: 10 }]}>
       <Text style={[styles.markerCell, styles.sectionTopMarker]}>
-        {number}.
+        {number ? `${number}.` : ""}
       </Text>
       <ContentCell>
         <Text style={styles.sectionTopTitle}>{title.toUpperCase()}</Text>
@@ -717,7 +717,7 @@ function TitleAndAttendees({
   const dateDisplay = formatMeetingDateDisplay(doc.metadata.meetingDate);
   const corp = resolveCorporationName(doc.metadata.corporationName).trim();
   const timeClause = formatMeetingTimeClause(doc.metadata.meetingTime);
-  const openerRest = ` of the meeting of the Board of Directors of ${corp} held ${medium} on ${dateDisplay}${timeClause}`;
+  const openerRest = ` of the meeting of the Board of Directors of ${corp} held${medium ? ` ${medium}` : ""} on ${dateDisplay}${timeClause}`;
 
   return (
     <View>
@@ -769,13 +769,10 @@ function ApprovalOfPreviousMinutesBody({
         <View key={`appr-${idx}`}>
           {approval.summary ? <ContentParagraph>{approval.summary}</ContentParagraph> : approval.amendmentsNoted ? (
             <ContentParagraph>
-              The Chair asked for any errors or omissions in the minutes of the
-              Board meeting of{" "}
+              Amendments were noted to the minutes of{" "}
               {approval.previousMeetingDate
                 ? formatMeetingDateDisplay(approval.previousMeetingDate)
-                : "the previous meeting"}{" "}
-              that were circulated previously for review. Several amendments
-              were agreed to and incorporated into a clean copy of the minutes.
+                : "the previous meeting"}.
             </ContentParagraph>
           ) : null}
           {approval.motion ? <MotionPdf motion={approval.motion} /> : null}
@@ -786,7 +783,9 @@ function ApprovalOfPreviousMinutesBody({
 }
 
 function DateOfNextMeetingBody({ doc }: { doc: MinutesDocumentV2 }) {
-  if (!doc.dateOfNextMeeting) return null;
+  if (!doc.dateOfNextMeeting || !(doc.dateOfNextMeeting.date || doc.dateOfNextMeeting.time)) {
+    return <ContentParagraph>The date of the next Board meeting was not recorded.</ContentParagraph>;
+  }
   const location = doc.dateOfNextMeeting.location?.trim();
   const date = doc.dateOfNextMeeting.date
     ? formatMeetingDateDisplay(doc.dateOfNextMeeting.date)
@@ -887,22 +886,18 @@ function MainBody({ doc }: { doc: MinutesDocumentV2 }) {
         </View>
       ) : null}
 
-      {doc.dateOfNextMeeting ? (
-        <View>
-          <TopSectionHeading number="6" title="Date of Next Meeting" />
-          <DateOfNextMeetingBody doc={doc} />
-        </View>
-      ) : null}
+      <View>
+        <TopSectionHeading number="6" title="Date of Next Meeting" />
+        <DateOfNextMeetingBody doc={doc} />
+      </View>
 
-      {doc.termination?.time ? (
-        <View>
-          <TopSectionHeading number="7" title="Meeting Conclusion" />
-          <ContentParagraph>
+      <View>
+        <TopSectionHeading number="7" title="Meeting Conclusion" />
+        {doc.termination?.time ? <ContentParagraph>
             The meeting concluded at{" "}
             {doc.termination.time.replace(/\.+$/, "")}.
-          </ContentParagraph>
-        </View>
-      ) : null}
+        </ContentParagraph> : <ContentParagraph>The adjournment time was not recorded.</ContentParagraph>}
+      </View>
 
       {doc.postTerminationSections.map((section, idx) => (
         <View key={`post-${idx}`}>
@@ -985,15 +980,15 @@ function AddendumPdf({
       <Text style={styles.addendumConfidentialHeading}>
         {RESTRICTED_ADDENDUM_SECTION_HEADING}
       </Text>
+      <CondominiumActItalicText
+        text={RESTRICTED_ADDENDUM_DISCLAIMER}
+        style={styles.addendumDisclaimer}
+      />
       {[{ title: "Special Presentations", items: doc.specialPresentations }, { title: "Correspondence", items: doc.correspondence }].map(section =>
         restrictedOnly(section.items).length ? <View key={section.title}>
           <TopSectionHeading number="" title={section.title} />
           <AgendaItemsPdf items={restrictedOnly(section.items)} options={{ italicTopic: true }} />
         </View> : null)}
-      <CondominiumActItalicText
-        text={RESTRICTED_ADDENDUM_DISCLAIMER}
-        style={styles.addendumDisclaimer}
-      />
 
       {hasFinancialRestricted ? (
         <View>

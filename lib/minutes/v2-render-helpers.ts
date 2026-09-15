@@ -69,14 +69,14 @@ export function formatAttendeeLine(a: AttendeeV2): string {
 
 export function meetingMediumFromMetadata(platform?: string): string {
   const p = platform?.trim().toLowerCase() ?? "";
-  if (!p) return "virtually";
+  if (!p) return "";
   if (p.includes("person") || p === "in-person" || p === "in person") {
     return "in person";
   }
   if (p.includes("virtual") || p.includes("zoom") || p.includes("teams")) {
     return "virtually";
   }
-  return platform?.trim() || "virtually";
+  return platform?.trim() || "";
 }
 
 export function formatMeetingTimeClause(time: string | undefined): string {

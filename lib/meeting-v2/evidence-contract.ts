@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 /** Bump when evidence, resolution, investigation, validation, or assembly contracts change. */
-export const MINUTES_PIPELINE_VERSION = "2026-09-evidence-v3";
+export const MINUTES_PIPELINE_VERSION = "2026-09-evidence-v4";
 
 export type EvidenceSource = {
   id: string;

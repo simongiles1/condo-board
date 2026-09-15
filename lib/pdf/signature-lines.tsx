@@ -1,3 +1,4 @@
+import React from "react";
 import { StyleSheet, Text, View } from "@react-pdf/renderer";
 
 import { PDF_FONT } from "@/lib/pdf/fonts";

@@ -175,7 +175,7 @@ describe("Docling Semantic Section Chunking", () => {
     const sections = buildSemanticDocumentSections(pages);
     assert.equal(sections.length, 5);
     assert.equal(sections[0].title, "Management Report Cover");
-    assert.equal(sections[1].title, "AGENDA");
+    assert.equal(sections[1].title, "Meeting Agenda");
     assert.equal(sections[2].title, "1. Meeting with Eng. Ryan Ratcliff from TCG to discuss projects");
     assert.equal(sections[2].startPage, 3);
     assert.equal(sections[2].endPage, 4);
@@ -448,7 +448,7 @@ describe("transcript discrepancy deduplication", () => {
 });
 
 describe("Hierarchical board-package agenda outline", () => {
-  it("inserts Property Management Report before Date/Adjournment when the TOC skipped it", () => {
+  it("preserves the printed outline without inserting or renumbering unsupported sections", () => {
     const normalized = normalizeBoardPackageAgendaSkeleton({
       meetingTitle: "Board Meeting",
       agendaItems: [
@@ -466,12 +466,11 @@ describe("Hierarchical board-package agenda outline", () => {
         "1. Meeting with Eng. Ryan Ratcliff from TCG, to discuss projects",
         "2. Review and Approval of Minutes of June 30, 2026",
         "3. Review and approval of the unaudited financial statements for June 2026",
-        "4. Property Management Report",
-        "5. Date and time of the next Board Meeting",
-        "6. Adjournment",
+        "4. Date and time of the next Board Meeting",
+        "5. Adjournment",
       ],
     );
-    assert.ok(normalized.agendaItems[3].subSections?.some((section) => section.code === "4.D"));
+    assert.equal(normalized.agendaItems[3].subSections, undefined);
   });
 
   it("flattens the official outline plus third-level PM report items", () => {
@@ -669,7 +668,7 @@ describe("Hierarchical board-package agenda outline", () => {
     );
   });
 
-  it("fills a 4.B numbering gap when top-level 5 is next-meeting admin", () => {
+  it("preserves a printed 4.B numbering gap regardless of top-level administrative numbers", () => {
     const items = [
       { id: "4", itemNumber: "4", title: "Property Management Report" },
       { id: "4b", itemNumber: "4.B", title: "Review and approval of projects" },
@@ -691,7 +690,7 @@ describe("Hierarchical board-package agenda outline", () => {
       ?.children.find((child) => child.item.id === "4b");
     assert.deepEqual(
       sectionB?.children.map((child) => child.displayNumber),
-      ["4", "5"],
+      ["4", "6"],
     );
   });
 });

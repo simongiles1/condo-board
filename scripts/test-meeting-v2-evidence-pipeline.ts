@@ -8,6 +8,58 @@ import { normalizeWorkflowState } from "../lib/meeting-v2/agenda-ai";
 import { partitionRestricted, validateMinutesV2, type AgendaItemV2 } from "../lib/minutes/schema-v2";
 import { letterMarker } from "../lib/minutes/v2-render-helpers";
 import { RESTRICTED_ADDENDUM_TITLE } from "../lib/minutes/restricted-addendum-boilerplate";
+import { reviewAndRepairOnce } from "../lib/meeting-v2/validation-cycle";
+import { canonicalDiscussionTiming, withCanonicalDiscussionTiming } from "../lib/meeting-v2/canonical-timing";
+import { compareReferenceTopics } from "../lib/meeting-v2/reference-coverage";
+import { chunkDocumentPages } from "../lib/meeting-v2/chunking";
+
+describe("repair and evidence lifecycle", () => {
+  it("reviews the repaired facts and preserves a failing final verdict", async () => {
+    const reviewed: string[] = [];
+    const original = { contractor: "Package proposal" };
+    const result = await reviewAndRepairOnce(original, {
+      review: async candidate => { reviewed.push(candidate.contractor); return { verdict: "fail" }; },
+      requiresRepair: review => review.verdict !== "pass",
+      repair: async () => ({ contractor: "Transcript contractor" }),
+    });
+    assert.deepEqual(reviewed, ["Package proposal", "Transcript contractor"]);
+    assert.equal(result.review.verdict, "fail");
+    assert.equal(result.repaired, true);
+    assert.equal(original.contractor, "Package proposal");
+  });
+  it("does not accept a repair if its final review fails to run", async () => {
+    let reviewed = 0;
+    await assert.rejects(reviewAndRepairOnce("original", {
+      review: async () => { if (++reviewed === 2) throw new Error("review unavailable"); return "fail"; },
+      requiresRepair: () => true, repair: async () => "candidate",
+    }), /review unavailable/);
+  });
+  it("skips repair only after a passing review", async () => {
+    const result = await reviewAndRepairOnce("supported", {
+      review: async () => "pass", requiresRepair: verdict => verdict !== "pass",
+      repair: async () => { throw new Error("Unnecessary repair"); },
+    });
+    assert.equal(result.investigation, "supported"); assert.equal(result.repaired, false);
+  });
+  it("derives the overlay from final evidence ranges including a late revisit", () => {
+    const segments = [{ sequence: 1, startTimestamp: "00:01:00", endTimestamp: "00:01:30" },
+      { sequence: 2, startTimestamp: "00:01:30", endTimestamp: "00:02:00" },
+      { sequence: 90, startTimestamp: "01:00:00", endTimestamp: "01:01:00" }];
+    const timing = canonicalDiscussionTiming([[1, 2], [90, 90]], segments);
+    assert.equal(timing, "00:01:00 - 00:02:00; 01:00:00 - 01:01:00");
+    assert.equal(withCanonicalDiscussionTiming("Notes: Keep\nDiscussion timing: wrong", timing), `Notes: Keep\nDiscussion timing: ${timing}`);
+    assert.throws(() => canonicalDiscussionTiming([[1, 91]], segments), /missing segments/);
+  });
+  it("does not claim complete reference coverage when no reference exists or matches are ambiguous", () => {
+    assert.equal(compareReferenceTopics(null, [{ id: "a", title: "Pump" }]).topicCoveragePercent, null);
+    const expectation = { meetingId: "fixture", expectedMeetingRecords: [], expectedTopics: [
+      { key: "pump", title: "Pump", aliases: [], parentSection: "Management", category: "Discussion", visibility: "PUBLIC" as const },
+    ] };
+    const ambiguous = compareReferenceTopics(expectation, [{ id: "a", title: "Pump" }, { id: "b", title: "Pump" }]);
+    assert.equal(ambiguous.topicCoveragePercent, 0);
+    assert.equal(ambiguous.matches[0].status, "ambiguous");
+  });
+});
 
 const item = (topic: string, restricted = false, subItems: AgendaItemV2[] = []): AgendaItemV2 => ({ topic, summary: `${topic} summary.`, restricted, actionItems: [], subItems });
 const evidence: EvidenceSource[] = [
@@ -41,6 +93,12 @@ function fixture(topics: Array<{ title: string; code: string; type?: string; res
 }
 
 describe("source precedence and loss prevention", () => {
+  it("retains evidence at the end of long package pages", () => {
+    const page = { id: "p", meetingV2Id: "m", sourceArtifactId: "source", pageNumber: 1, pageHeading: null,
+      extractedText: "Background context ".repeat(500) + "The final contract excludes tax.", imagePath: null, createdAt: "2026-09-14" };
+    const chunks = chunkDocumentPages([page]);
+    assert.match(chunks.map(c => c.text).join(" "), /final contract excludes tax/);
+  });
   it("preserves the August 12 conflicting bids and selects the transcript's prior approval", () => {
     const result = parseFactResolution(resolution, evidence);
     assert.equal(result.facts[0].candidates[result.facts[0].selected!].value, "New Water Plumbing $163,000");
@@ -76,6 +134,12 @@ describe("source precedence and loss prevention", () => {
     assert.equal(next.documentTopics.length, 2);
     assert.equal(next.documentTopics[1].itemNumber, "4.B.2");
     assert.deepEqual(next.documentTopics[0].notes, ["Earlier discussion", "Later correction"]);
+    const manyNotes = Array.from({ length: 35 }, (_, i) => `Evidence note ${i}`);
+    const manyChunks = Array.from({ length: 35 }, (_, i) => `chunk-${i}`);
+    const repeatedTitles = normalizeWorkflowState({ documentTopics: [{ ...a, notes: manyNotes, sourceChunkIds: manyChunks }, { ...a, itemNumber: "4.B.3" }] }, { documentTopics: [], extraTopics: [], uncertainties: [] });
+    assert.equal(repeatedTitles.documentTopics.length, 2, "Distinct printed codes must not merge just because their titles match");
+    assert.deepEqual(repeatedTitles.documentTopics[0].notes, manyNotes);
+    assert.deepEqual(repeatedTitles.documentTopics[0].sourceChunkIds, manyChunks);
   });
 });
 
@@ -107,6 +171,9 @@ describe("draft quality gate", () => {
     assert.equal(parsed.visibility, "RESTRICTED");
     assert.equal(parsed.open_questions.length, 1);
     assert.doesNotMatch(parsed.discussion_summary, /cheaper/);
+  });
+  it("rejects duplicate agenda codes before they can overwrite a substantive item", () => {
+    assert.throws(() => buildMeetingV2DraftArtifact(fixture([{ title: "Pump", code: "4.B.1" }, { title: "Roof", code: "4.B.1" }])), /Duplicate agenda codes/);
   });
 });
 

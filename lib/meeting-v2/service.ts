@@ -7,6 +7,7 @@ import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
 import { buildEvidenceSources, draftReadiness, evidenceFingerprint, investigationFingerprint, MINUTES_PIPELINE_VERSION, type EvidenceSource, type FactResolution } from "./evidence-contract";
 import { AGENDA_ITEM_REPAIR_PROMPT } from "./repair-prompts";
+import { reviewAndRepairOnce } from "./validation-cycle";
 import { parseInvestigation, type InvestigationDocument } from "./investigation-contract";
 import { resolveAgendaFacts } from "./fact-resolution";
 import { getDb } from "@/lib/db";
@@ -1337,7 +1338,10 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
     "text/vtt",
     null,
   );
-  const existingPageCount = existingPages.length;
+  const existingPageNumbers = new Set(existingPages.map(page => page.pageNumber));
+  const existingPageCount = existingPageNumbers.size;
+  let firstMissingPage = 1;
+  while (existingPageNumbers.has(firstMissingPage)) firstMissingPage++;
   let extractedPageCount = existingPageCount;
   const boardPackageArtifact = await ensureSourceArtifact(
     meetingId,
@@ -1370,10 +1374,11 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
   }
 
   const pdfExtract = await extractPdfPagesWithText(boardPackageBuffer, {
-    startPage: existingPageCount + 1,
+    startPage: firstMissingPage,
     pdfPath: boardPackagePath,
     maxDoclingPages: 20,
     onPage: async (page, totalPages) => {
+      if (existingPageNumbers.has(page.pageNumber)) return;
       await db.insert(meetingsV2DocumentPages).values({
         id: randomUUID(),
         meetingV2Id: meetingId,
@@ -1552,22 +1557,35 @@ async function clearMeetingV2DownstreamData(meetingId: string): Promise<void> {
     .where(eq(meetingsV2AgendaItemEvidence.meetingV2Id, meetingId));
 }
 
-/** Run before inspecting stage counts; old outputs cannot establish readiness for new inputs. */
-export async function prepareMeetingV2Pipeline(meetingId: string): Promise<void> {
-  const meeting = await ensureMeetingV2Seed(meetingId);
+async function currentMeetingSourceFingerprint(meetingId: string): Promise<string> {
   const legacy = await getLegacyMeeting(meetingId);
   const paths = [resolveStoredPath(legacy.vttFilePath), resolveStoredPath(legacy.boardPackageFilePath || legacy.pdfFilePath)];
   if (paths.some(p => !p)) throw new Error("Both transcript and board package are required.");
   const checksums = await Promise.all(paths.map(async p => checksumFor(await readFile(p!))));
-  const fingerprint = evidenceFingerprint(checksums);
+  return evidenceFingerprint(checksums);
+}
+
+/** Run before inspecting stage counts; old outputs cannot establish readiness for new inputs. */
+export async function prepareMeetingV2Pipeline(meetingId: string): Promise<void> {
+  const meeting = await ensureMeetingV2Seed(meetingId);
+  const fingerprint = await currentMeetingSourceFingerprint(meetingId);
   const settings = meeting.settings ?? {};
-  if (settings.sourceFingerprint && settings.sourceFingerprint !== fingerprint) {
+  if (!settings.sourceFingerprint || settings.sourceFingerprint !== fingerprint) {
     await resetMeetingV2AllData(meetingId);
   } else if (settings.pipelineVersion !== MINUTES_PIPELINE_VERSION) {
     await resetMeetingV2DerivedData(meetingId);
+    // Rebuild chunk contents and section boundaries while retaining the ingested source pages.
+    await getDb().delete(meetingsV2DocumentChunks).where(eq(meetingsV2DocumentChunks.meetingV2Id, meetingId));
+    await getDb().delete(meetingsV2DocumentSections).where(eq(meetingsV2DocumentSections.meetingV2Id, meetingId));
   }
   const nextSettings = { ...settings, pipelineVersion: MINUTES_PIPELINE_VERSION, sourceFingerprint: fingerprint };
-  if (settings.pipelineVersion !== MINUTES_PIPELINE_VERSION || settings.sourceFingerprint && settings.sourceFingerprint !== fingerprint) {
+  if (settings.sourceFingerprint && settings.sourceFingerprint !== fingerprint && settings.userClarifications) {
+    nextSettings.clarificationHistory = [...(settings.clarificationHistory ?? []), {
+      sourceFingerprint: settings.sourceFingerprint, answers: settings.userClarifications, archivedAt: nowIso(),
+    }];
+    nextSettings.userClarifications = {};
+  }
+  if (settings.pipelineVersion !== MINUTES_PIPELINE_VERSION || settings.sourceFingerprint !== fingerprint) {
     delete nextSettings.agendaEvidence;
     delete nextSettings.agendaApproval;
     nextSettings.draftReadiness = { ready: false, problems: ["Inputs or pipeline rules changed. Review the regenerated agenda."], checkedAt: nowIso() };
@@ -2991,7 +3009,8 @@ export async function validateAgendaItemInvestigations(
     ? investigations
     : investigations.filter(
         (investigation) =>
-          !existingValidations.some((row) => row.agendaItemId === investigation.agendaItemId),
+          !existingValidations.some((row) => row.agendaItemId === investigation.agendaItemId &&
+            ["ai_verdict", "item_not_discussed", "structural_heading"].includes(row.code)),
       );
   const contextByAgendaItemId = new Map(contexts.map((row) => [row.agendaItemId, row] as const));
   const agendaById = new Map(agendaItems.map((row) => [row.id, row] as const));
@@ -3050,21 +3069,32 @@ export async function validateAgendaItemInvestigations(
             requestTrace,
           },
         };
-        let aiValidation = await runAiValidationReview(reviewInput);
-        const reviewHistory: unknown[] = [aiValidation];
-        if (aiValidation.parsed.verdict !== "pass" || aiValidation.parsed.needs_human_review || itemRows.some(row => row.severity === "error")) {
-          const repaired = await generateDeepSeekJson({
-            systemInstruction: `${AGENDA_ITEM_REPAIR_PROMPT}\nOnly selected, cited facts may support assertions. Preserve proposed motions as UNKNOWN and informal assent as informal. Never fill missing mover or seconder names.`,
-            userText: JSON.stringify({ input: buildValidationInput(reviewInput), findings: aiValidation.parsed, deterministicFindings: itemRows }),
-            modelName: "deepseek-v4-flash", temperature: 0, thinking: false, maxOutputTokens: 8192, requestTimeoutMs: 90_000,
-          });
-          const corrected = parseInvestigation(safeJsonObjectParse(repaired.text));
-          Object.assign(investigation, investigationColumns(corrected), { updatedAt: nowIso() });
-          reviewHistory.push({ repair: repaired });
+        const reviewHistory: unknown[] = [];
+        const cycle = await reviewAndRepairOnce(investigation, {
+          review: async candidate => {
+            const review = await runAiValidationReview({ ...reviewInput, investigation: candidate });
+            reviewHistory.push(review);
+            await recordMeetingV2ValidationUsage(meetingId, review.usage, review.modelName, { source: options?.usageSource ?? "pipeline" });
+            return review;
+          },
+          requiresRepair: review => review.parsed.verdict !== "pass" || review.parsed.needs_human_review || itemRows.some(row => row.severity === "error"),
+          repair: async (candidate, review) => {
+            const repaired = await generateDeepSeekJson({
+              systemInstruction: `${AGENDA_ITEM_REPAIR_PROMPT}\nOnly selected, cited facts may support assertions. Preserve proposed motions as UNKNOWN and informal assent as informal. Never fill missing mover or seconder names.`,
+              userText: JSON.stringify({ input: buildValidationInput({ ...reviewInput, investigation: candidate }), findings: review.parsed, deterministicFindings: itemRows }),
+              modelName: "deepseek-v4-flash", temperature: 0, thinking: false, maxOutputTokens: 8192, requestTimeoutMs: 90_000,
+            });
+            reviewHistory.push({ repair: repaired });
+            await recordMeetingV2ValidationUsage(meetingId, repaired.usage, repaired.modelName, { source: options?.usageSource ?? "pipeline" });
+            const corrected = parseInvestigation(safeJsonObjectParse(repaired.text));
+            return { ...candidate, ...investigationColumns(corrected), updatedAt: nowIso() };
+          },
+        });
+        const aiValidation = cycle.review;
+        Object.assign(investigation, cycle.investigation);
+        if (cycle.repaired) {
           itemRows.length = 0;
           addDeterministicValidationRows({ rows: itemRows, meetingId, agendaItem, investigation, contextDocument });
-          aiValidation = await runAiValidationReview({ ...reviewInput, investigation });
-          reviewHistory.push(aiValidation);
         }
         investigation.usageJson = JSON.stringify({ ...investigationUsage, validationHistory: reviewHistory });
         addAiValidationRows({
@@ -3073,12 +3103,6 @@ export async function validateAgendaItemInvestigations(
           agendaItemId: agendaItem.id,
           review: aiValidation.parsed,
         });
-        await recordMeetingV2ValidationUsage(
-          meetingId,
-          aiValidation.usage,
-          aiValidation.modelName,
-          { source: options?.usageSource ?? "pipeline" },
-        );
       } catch (error) {
         pushValidationRow(itemRows, {
           meetingId,
@@ -3165,10 +3189,20 @@ export async function generateMeetingV2Draft(meetingId: string): Promise<{
 
   if (!meeting.settings?.agendaApproval?.approvedAt) throw new Error("Approve the agenda before generating minutes.");
   const problems = draftReadiness(agendaItems, investigations, validationRows);
-  for (const context of contexts) {
-    const evidence = safeJsonParse<AgendaItemContextDocument | null>(context.contextJson, null);
-    const inv = investigations.find(i => i.agendaItemId === context.agendaItemId);
-    if (!inv || safeJsonParse<Record<string, unknown>>(inv.usageJson, {}).evidenceFingerprint !== evidence?.fingerprint) problems.push("Evidence changed after investigation; re-evaluate the affected item.");
+  if (!meeting.settings.draftReadiness?.ready) problems.push("Investigation and validation must finish for the current inputs.");
+  if (meeting.settings.pipelineVersion !== MINUTES_PIPELINE_VERSION ||
+      meeting.settings.sourceFingerprint !== await currentMeetingSourceFingerprint(meetingId)) {
+    problems.push("Source files or pipeline rules changed. Run the pipeline and review the agenda again.");
+  }
+  for (const item of agendaItems) {
+    const itemContexts = contexts.filter(context => context.agendaItemId === item.id);
+    const evidence = safeJsonParse<AgendaItemContextDocument | null>(itemContexts[0]?.contextJson, null);
+    const inv = investigations.find(i => i.agendaItemId === item.id);
+    if (itemContexts.length !== 1 || !evidence?.sources || evidence.pipelineVersion !== MINUTES_PIPELINE_VERSION ||
+        evidence.fingerprint !== evidenceFingerprint({ itemNumber: item.itemNumber, sources: evidence.sources }) ||
+        !inv || safeJsonParse<Record<string, unknown>>(inv.usageJson, {}).evidenceFingerprint !== evidence.fingerprint) {
+      problems.push(`${item.title}: evidence is missing or changed; re-evaluate the item.`);
+    }
   }
   if (problems.length) throw new Error(`Draft is not ready. ${problems.join(" ")}`);
   const draftArtifact = buildMeetingV2DraftArtifact({
@@ -3559,10 +3593,15 @@ export async function loadLatestMeetingV2Draft(meetingId: string): Promise<{
 
 export async function rerunAgendaItem(meetingId: string, agendaItemId: string): Promise<void> {
   await markMeetingV2DraftStale(meetingId, "An agenda item is being re-evaluated.");
-  await retrieveAgendaItemEvidence(meetingId, agendaItemId);
-  await investigateAgendaItems(meetingId, agendaItemId, { usageSource: "re_evaluate" });
-  await validateAgendaItemInvestigations(meetingId, agendaItemId, { usageSource: "re_evaluate" });
-  await finalizeMeetingV2PipelineStatus(meetingId);
+  try {
+    await retrieveAgendaItemEvidence(meetingId, agendaItemId);
+    await investigateAgendaItems(meetingId, agendaItemId, { usageSource: "re_evaluate" });
+    await validateAgendaItemInvestigations(meetingId, agendaItemId, { usageSource: "re_evaluate" });
+    await finalizeMeetingV2PipelineStatus(meetingId);
+  } catch (error) {
+    await updateMeetingV2Status(meetingId, "failed", "Item re-evaluation failed", 0, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
 }
 
 export async function markMeetingV2DraftStale(meetingId: string, reason: string): Promise<void> {

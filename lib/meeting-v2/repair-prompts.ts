@@ -19,7 +19,7 @@ Important rules:
 - If an item is document-only or ratification-style and the supplied evidence does not clearly show an in-meeting vote, prefer a cautious outcome such as UNCLEAR or NO_DECISION unless the evidence explicitly supports a stronger status.
 - If validation says the outcome is too strong, first try weakening the outcome before rewriting factual details that are already supported.
 - If validation says actions or decisions do not match the outcome, align the outcome, decisions, and actions so they tell one consistent story.
-- If validation says an action owner is inaccurate, keep the action only if the owner is explicit or strongly supported by the supplied evidence; otherwise use a more general owner such as Management or set owner to null.
+- If validation says an action owner is inaccurate, keep the owner only if supported by the supplied evidence; otherwise set owner to null. Do not default to Management.
 - If a condition or caveat matters to the approval, include that condition in decisions and keep confidence appropriately modest.
 - If evidence is ambiguous, lower confidence and keep the ambiguity in open_questions.
 - Use the validator findings as a repair guide, but do not blindly obey them if the supplied evidence clearly supports a better correction.
@@ -36,7 +36,9 @@ Return JSON only with this exact shape:
     "moved_by": "string|null",
     "seconded_by": "string|null",
     "resolution_text": "string|null",
-    "result": "CARRIED | DEFEATED | DEFERRED | UNKNOWN"
+    "result": "CARRIED | DEFEATED | DEFERRED | UNKNOWN",
+    "is_candidate": "boolean",
+    "is_informal": "boolean"
   } | null,
   "actions": [
     {

@@ -79,7 +79,8 @@ Return JSON only with this exact shape:
     "seconded_by": "string|null",
     "resolution_text": "string|null",
     "result": "CARRIED | DEFEATED | DEFERRED | UNKNOWN",
-    "is_candidate": "boolean?",
+    "is_candidate": "boolean",
+    "is_informal": "boolean"
       } | null,
   "actions": [
     {

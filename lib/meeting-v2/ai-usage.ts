@@ -335,7 +335,7 @@ export async function loadMeetingV2AiUsageStages(
         billedAtMs: parseBilledAtMs(row.createdAt),
       };
     })
-    .filter((record): record is DeepSeekUsageRecord & { billedAtMs?: number } => record !== null);
+    .filter((record): record is NonNullable<typeof record> => record !== null);
 
   if (extractionRecords.length > 0) {
     const billed = sumDeepSeekUsageRecords(extractionRecords);
@@ -363,17 +363,16 @@ export async function loadMeetingV2AiUsageStages(
 
   for (const investigation of investigations) {
     const parsed = safeJsonParse<Record<string, unknown>>(investigation.usageJson, {});
-    const usage = readNestedUsageRecord(parsed);
-    if (!usage) continue;
-
-    const record = {
-      ...usage,
-      billedAtMs: parseBilledAtMs(investigation.createdAt),
-    };
-    if (isReEvaluateInvestigationUsage(parsed)) {
-      reEvaluateInvestigationRecords.push(record);
-    } else {
-      pipelineInvestigationRecords.push(record);
+    const resolverAttempts = Array.isArray(parsed.factResolutionAttempts) ? parsed.factResolutionAttempts : [];
+    for (const call of [parsed, ...resolverAttempts]) {
+      const usage = readNestedUsageRecord(call);
+      if (!usage) continue;
+      const record = { ...usage, billedAtMs: parseBilledAtMs(investigation.createdAt) };
+      if (isReEvaluateInvestigationUsage(parsed)) {
+        reEvaluateInvestigationRecords.push(record);
+      } else {
+        pipelineInvestigationRecords.push(record);
+      }
     }
     if (investigation.modelName?.trim()) {
       investigationModel = investigation.modelName.trim();

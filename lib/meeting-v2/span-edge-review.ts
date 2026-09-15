@@ -79,7 +79,7 @@ export function topicClockSpans(topic: SpanReviewTopic): TimestampRange[] {
 
 function allLeafSpans(
   topics: SpanReviewTopic[],
-): Array<{ key: string; title: string; startSeconds: number; endSeconds: number }> {
+): Array<{ key: string; title: string; itemNumber?: string | null; startSeconds: number; endSeconds: number }> {
   const leaves = topics.filter((topic) => isOutlineLeafTopic(topic, topics));
   return leaves.flatMap((topic) =>
     topicClockSpans(topic).map((span) => ({
@@ -96,7 +96,7 @@ export function nextForeignSpanStartSeconds(
   topic: SpanReviewTopic,
   afterSeconds: number,
   topics: SpanReviewTopic[],
-): { startSeconds: number; title: string } | null {
+): { startSeconds: number; title: string; itemNumber?: string | null } | null {
   const key = topicKey(topic);
   const later = allLeafSpans(topics)
     .filter((span) => span.key !== key && span.startSeconds > afterSeconds)

@@ -191,7 +191,7 @@ export function planAdHocPlacement(
     existing
       .filter((value) => value.toLowerCase() !== sectionCode.toLowerCase())
       .map((value) => parseAgendaItemCode(value).segments.at(-1))
-      .filter((segment): segment is OutlineSegment => Boolean(segment) && segment.kind === "letter")
+      .filter((segment): segment is OutlineSegment => segment?.kind === "letter")
       .map((segment) => segment.raw.toLowerCase()),
   );
 

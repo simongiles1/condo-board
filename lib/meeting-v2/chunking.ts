@@ -114,7 +114,7 @@ export function chunkDocumentPages(
       const partSuffix = isMultiPart ? ` (Part ${partIndex})` : "";
       const header = `[SECTION: ${section.title}${partSuffix}] (Pages ${pageNumbers[0]}-${pageNumbers.at(-1)})`;
       const body = slice
-        .map((entry) => `PAGE ${entry.pageNumber}\n${normalizeWhitespace(entry.extractedText || entry.text).slice(0, 3200)}`)
+        .map((entry) => `PAGE ${entry.pageNumber}\n${normalizeWhitespace(entry.extractedText)}`)
         .join("\n\n");
       const text = `${header}\n\n${body}`;
 
@@ -131,7 +131,7 @@ export function chunkDocumentPages(
     };
 
     for (const page of sectionPages) {
-      const pageTextLen = normalizeWhitespace(page.extractedText || page.text).length;
+      const pageTextLen = normalizeWhitespace(page.extractedText).length;
       if (currentSlice.length > 0 && currentLength + pageTextLen > 18000) {
         flushSlice(currentSlice, true);
         currentSlice = [];
@@ -150,7 +150,7 @@ export function chunkDocumentPages(
   if (rawChunks.length === 0 && ordered.length > 0) {
     const pageNumbers = ordered.map((entry) => entry.pageNumber);
     const text = ordered
-      .map((entry) => `PAGE ${entry.pageNumber}\n${normalizeWhitespace(entry.extractedText || entry.text).slice(0, 3200)}`)
+      .map((entry) => `PAGE ${entry.pageNumber}\n${normalizeWhitespace(entry.extractedText)}`)
       .join("\n\n");
     rawChunks.push({
       chunkKey: `doc:${pageNumbers[0]}-${pageNumbers.at(-1)}:${checksumFor(text)}`,

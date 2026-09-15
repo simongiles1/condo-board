@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { canonicalDiscussionTiming } from "./canonical-timing";
 import { MINUTES_PIPELINE_VERSION, stableAgendaId } from "./evidence-contract";
 
 import { and, asc, eq } from "drizzle-orm";
@@ -502,7 +503,7 @@ export function normalizeTopic(raw: Partial<WorkflowTopic>): WorkflowTopic | nul
       (Array.isArray(raw.sourceChunkIds) ? raw.sourceChunkIds : [])
         .flatMap((chunkId) => (typeof chunkId === "string" ? [normalizeWhitespace(chunkId)] : []))
         .filter(Boolean),
-    ).slice(0, 24),
+    ),
     sourceTranscriptRanges: unique(
       (Array.isArray(raw.sourceTranscriptRanges) ? raw.sourceTranscriptRanges : [])
         .flatMap((range) =>
@@ -523,12 +524,12 @@ export function normalizeTopic(raw: Partial<WorkflowTopic>): WorkflowTopic | nul
       (Array.isArray(raw.aliases) ? raw.aliases : [])
         .flatMap((alias) => (typeof alias === "string" ? [normalizeWhitespace(alias)] : []))
         .filter(Boolean),
-    ).slice(0, 8),
+    ),
     notes: unique(
       (Array.isArray(raw.notes) ? raw.notes : [])
         .flatMap((note) => (typeof note === "string" ? [normalizeWhitespace(note)] : []))
         .filter(Boolean),
-    ).slice(0, 10),
+    ),
     confidence:
       typeof raw.confidence === "number" && Number.isFinite(raw.confidence)
         ? Math.max(0, Math.min(1, raw.confidence))
@@ -548,7 +549,7 @@ export function normalizeTopic(raw: Partial<WorkflowTopic>): WorkflowTopic | nul
       (Array.isArray(raw.openQuestions) ? raw.openQuestions : [])
         .flatMap((question) => (typeof question === "string" ? [normalizeWhitespace(question)] : []))
         .filter(Boolean),
-    ).slice(0, 6),
+    ),
     needsHumanReview: raw.needsHumanReview === true,
     humanReviewReason:
       typeof raw.humanReviewReason === "string"
@@ -562,7 +563,7 @@ export function normalizeTopic(raw: Partial<WorkflowTopic>): WorkflowTopic | nul
         : undefined,
     discussionTimestampRange:
       typeof raw.discussionTimestampRange === "string"
-        ? truncateText(normalizeWhitespace(raw.discussionTimestampRange), 400)
+        ? normalizeWhitespace(raw.discussionTimestampRange)
         : null,
     consolidationReason:
       typeof raw.consolidationReason === "string"
@@ -688,7 +689,7 @@ function attachPageReferenceHintsToTopics(options: {
     return {
       ...topic,
       sourcePages: unique([...topic.sourcePages, ...bestHint.pages]).sort((left, right) => left - right),
-      notes: unique([...topic.notes, note]).slice(0, 6),
+      notes: unique([...topic.notes, note]),
     };
   });
 }
@@ -764,7 +765,7 @@ function findTopicsRelevantToPackageChunk(options: {
 function dedupeTopics(topics: WorkflowTopic[]): WorkflowTopic[] {
   const byKey = new Map<string, WorkflowTopic>();
   for (const topic of topics) {
-    const key = `${normalize(topic.title)}::${normalize(topic.sectionLabel)}`;
+    const key = topic.itemNumber?.trim().toLowerCase() || `${normalize(topic.title)}::${normalize(topic.sectionLabel)}`;
     const existing = byKey.get(key);
     if (!existing) {
       byKey.set(key, topic);
@@ -774,7 +775,7 @@ function dedupeTopics(topics: WorkflowTopic[]): WorkflowTopic[] {
       ...existing,
       title: topic.title.length > existing.title.length ? topic.title : existing.title,
       sourcePages: unique([...existing.sourcePages, ...topic.sourcePages]).sort((a, b) => a - b),
-      sourceChunkIds: unique([...existing.sourceChunkIds, ...topic.sourceChunkIds]).slice(0, 24),
+      sourceChunkIds: unique([...existing.sourceChunkIds, ...topic.sourceChunkIds]),
       sourceTranscriptRanges: mergeClosedIntervals([
         ...existing.sourceTranscriptRanges,
         ...topic.sourceTranscriptRanges,
@@ -786,9 +787,9 @@ function dedupeTopics(topics: WorkflowTopic[]): WorkflowTopic[] {
       discussionStatus: existing.discussionStatus === "discussed" || topic.discussionStatus === "discussed"
         ? "discussed"
         : topic.discussionStatus ?? existing.discussionStatus,
-      aliases: unique([...existing.aliases, ...topic.aliases]).slice(0, 8),
-      notes: unique([...existing.notes, ...topic.notes]).slice(0, 10),
-      openQuestions: unique([...existing.openQuestions, ...topic.openQuestions]).slice(0, 6),
+      aliases: unique([...existing.aliases, ...topic.aliases]),
+      notes: unique([...existing.notes, ...topic.notes]),
+      openQuestions: unique([...existing.openQuestions, ...topic.openQuestions]),
       needsHumanReview: existing.needsHumanReview || topic.needsHumanReview,
       humanReviewReason:
         unique([existing.humanReviewReason, topic.humanReviewReason].filter(Boolean) as string[]).join(
@@ -859,8 +860,7 @@ export function normalizeDiscrepancies(raw: unknown): WorkflowDiscrepancy[] {
               : `It looks like ${suggestedTitle || "this topic"} was discussed at ${rec.timestamp || "this time"}, but does not appear on the official agenda. Should this be included as an agenda item?`,
         },
       ];
-    })
-    .slice(0, 10);
+    });
 }
 
 export function normalizeWorkflowState(value: unknown, fallback: WorkflowState): WorkflowResponse {
@@ -890,11 +890,12 @@ export function normalizeWorkflowState(value: unknown, fallback: WorkflowState):
       ),
       fallback.extraTopics,
     ),
-    uncertainties: unique(
-      (Array.isArray(record.uncertainties) ? record.uncertainties : [])
+    uncertainties: unique([
+      ...fallback.uncertainties,
+      ...(Array.isArray(record.uncertainties) ? record.uncertainties : [])
         .flatMap((entry) => (typeof entry === "string" ? [normalizeWhitespace(entry)] : []))
         .filter(Boolean),
-    ).slice(0, 20),
+    ]),
     discrepancies: dedupeDiscrepancies([
       ...(fallback.discrepancies || []),
       ...normalizeDiscrepancies(record.discrepancies),
@@ -1110,7 +1111,7 @@ function buildStateText(state: WorkflowState, options?: { compact?: boolean }): 
         sectionLabel: topic.sectionLabel,
         itemType: topic.itemType,
         visibility: topic.visibility,
-        sourcePages: topic.sourcePages.slice(0, 8),
+        sourcePages: topic.sourcePages,
         sourceChunkIds: topic.sourceChunkIds,
         sourceTranscriptRanges: topic.sourceTranscriptRanges,
         discussionStatus: topic.discussionStatus,
@@ -1126,7 +1127,7 @@ function buildStateText(state: WorkflowState, options?: { compact?: boolean }): 
         sectionLabel: topic.sectionLabel,
         itemType: topic.itemType,
         visibility: topic.visibility,
-        sourcePages: topic.sourcePages.slice(0, 8),
+        sourcePages: topic.sourcePages,
         sourceChunkIds: topic.sourceChunkIds,
         sourceTranscriptRanges: topic.sourceTranscriptRanges,
         discussionStatus: topic.discussionStatus,
@@ -1136,8 +1137,8 @@ function buildStateText(state: WorkflowState, options?: { compact?: boolean }): 
         aliases: topic.aliases,
         notes: topic.notes,
       })),
-      uncertainties: state.uncertainties.slice(0, 8),
-      discrepancies: state.discrepancies?.slice(0, 8),
+      uncertainties: state.uncertainties,
+      discrepancies: state.discrepancies,
     },
     null,
     2,
@@ -1615,6 +1616,7 @@ export async function extractAgendaItemsWithAi(
       startMs: meetingsV2TranscriptSegments.startMs,
       endMs: meetingsV2TranscriptSegments.endMs,
       startTimestamp: meetingsV2TranscriptSegments.startTimestamp,
+      endTimestamp: meetingsV2TranscriptSegments.endTimestamp,
       speakerLabel: meetingsV2TranscriptSegments.speakerLabel,
       text: meetingsV2TranscriptSegments.text,
     })
@@ -1676,8 +1678,6 @@ export async function extractAgendaItemsWithAi(
     finalTopics = applyAgendaHierarchyCorrections(finalTopics);
   }
 
-  await db.delete(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));
-
   const rows = finalTopics.map((topic, sortOrder) => {
     const firstPage = topic.sourcePages[0] ?? null;
     const sourceSection =
@@ -1697,7 +1697,7 @@ export async function extractAgendaItemsWithAi(
 
     const enrichedSourceText = [
       `Discussion status: ${statusLabel}`,
-      topic.discussionTimestampRange ? `Discussion timing: ${topic.discussionTimestampRange}` : null,
+      topic.sourceTranscriptRanges.length ? `Discussion timing: ${canonicalDiscussionTiming(topic.sourceTranscriptRanges, transcriptSegments)}` : null,
       topic.consolidationReason ? `Consolidation: ${topic.consolidationReason}` : null,
       !isRedundantTitle ? topic.sourceText : null,
       topic.sourceChunkIds.length > 0 ? `Chunk IDs: ${topic.sourceChunkIds.join(", ")}` : null,
@@ -1730,7 +1730,11 @@ export async function extractAgendaItemsWithAi(
   });
 
   if (rows.length > 0) {
-    await db.insert(meetingsV2AgendaItems).values(rows);
+    if (new Set(rows.map(row => row.id)).size !== rows.length) throw new Error("Extraction produced duplicate agenda identifiers; review the printed item codes.");
+    await db.transaction(async tx => {
+      await tx.delete(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));
+      await tx.insert(meetingsV2AgendaItems).values(rows);
+    });
   }
 
   // Persist initial agenda approval state & transcript discrepancies to meetingsV2.settings

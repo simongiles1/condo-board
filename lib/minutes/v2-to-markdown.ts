@@ -178,6 +178,11 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   lines.push("");
 
   // 2. APPROVAL OF PREVIOUS MINUTES
+  const publicSpecialPresentations = publicOnly(doc.specialPresentations || []);
+  if (publicSpecialPresentations.length > 0) {
+    lines.push("## SPECIAL PRESENTATIONS", "", ...renderAgendaArray(publicSpecialPresentations));
+  }
+
   if ((doc.approvalOfPreviousMinutes || []).length > 0) {
     lines.push("## 2. APPROVAL OF PREVIOUS MINUTES");
     lines.push("");
@@ -189,12 +194,7 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
         lines.push(approval.summary, "");
       } else if (approval.amendmentsNoted) {
         lines.push(
-          `The Chair asked for any errors or omissions in the minutes of the Board meeting of ${prevDate} that were circulated previously for review. Several amendments were agreed to and incorporated into a clean copy of the minutes.`,
-        );
-        lines.push("");
-      } else {
-        lines.push(
-          `The Chair asked for any errors or omissions in the minutes of the Board meeting of ${prevDate} that were circulated previously for review. There being none, the minutes were accepted as presented.`,
+          `Amendments were noted to the minutes of ${prevDate}.`,
         );
         lines.push("");
       }
@@ -286,7 +286,7 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
       `The next meeting of the Board of Directors will be held${loc ? ` ${loc}` : ""}${d ? ` on ${d}` : ""}${t ? ` commencing at ${t.replace(/\.+$/, "")}.` : "."}`,
     );
   } else {
-    lines.push("The date of the next Board meeting is to be determined.");
+    lines.push("The date of the next Board meeting was not recorded.");
   }
   lines.push("");
 
@@ -298,7 +298,7 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
       `The meeting concluded at ${doc.termination.time.replace(/\.+$/, "")}.`,
     );
   } else {
-    lines.push("There being no further business to discuss, the meeting was concluded.");
+    lines.push("The adjournment time was not recorded.");
   }
   lines.push("");
 
@@ -311,14 +311,6 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
     lines.push("");
     lines.push(...renderAgendaArray(publicItems));
   });
-
-  // Special presentations (prepend-style sections if populated)
-  const publicSpecialPresentations = publicOnly((doc.specialPresentations || []));
-  if (publicSpecialPresentations.length > 0) {
-    lines.push("## SPECIAL PRESENTATIONS");
-    lines.push("");
-    lines.push(...renderAgendaArray(publicSpecialPresentations));
-  }
 
   if (hasAnyRestrictedItem(doc)) {
     const finRest = restrictedOnly((doc.financialMatters || []));

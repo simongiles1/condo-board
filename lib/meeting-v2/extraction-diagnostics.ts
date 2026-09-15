@@ -67,6 +67,7 @@ export type MeetingV2Settings = {
   agendaEvidence?: Record<string, import("./evidence-contract").CanonicalAgendaEvidence>;
   draftReadiness?: { ready: boolean; problems: string[]; checkedAt: string };
   userClarifications?: Record<string, Record<string, string>>;
+  clarificationHistory?: Array<{ sourceFingerprint: string; answers: Record<string, Record<string, string>>; archivedAt: string }>;
   replay?: { sourceMeetingId: string; fromStage: "agenda_review"; copiedAt: string };
   autonomyTemperature?: number;
   extractionRun?: MeetingV2ExtractionRun;

@@ -1401,6 +1401,8 @@ export function buildMeetingV2DraftArtifact(input: {
   const problems = draftReadiness(input.agendaItems, input.investigations, input.validations);
   if (problems.length) throw new Error(`Draft is not ready. ${problems.join(" ")}`);
   const draftItems = buildDraftInputItems(input);
+  const codes = draftItems.map(item => item.itemNumber).filter(Boolean);
+  if (new Set(codes).size !== codes.length) throw new Error("Draft is not ready. Duplicate agenda codes must be corrected before assembly.");
   if (draftItems.length === 0) {
     throw new Error("Validated agenda investigations are required before generating a draft.");
   }
@@ -1419,6 +1421,23 @@ export function buildMeetingV2DraftArtifact(input: {
     );
   }
   const finalDocument = validated.value;
+  const renderedIds: string[] = [];
+  const collectIds = (items: AgendaItemV2[]) => {
+    for (const item of items) {
+      if (item.sourceAgendaItemId) renderedIds.push(item.sourceAgendaItemId);
+      collectIds(item.subItems);
+    }
+  };
+  collectIds([...finalDocument.specialPresentations, ...finalDocument.financialMatters,
+    ...Object.values(finalDocument.managementReport).flat(), ...finalDocument.correspondence,
+    ...finalDocument.newOrOtherBusiness, ...finalDocument.postTerminationSections.flatMap(section => section.items)]);
+  renderedIds.push(...finalDocument.approvalOfPreviousMinutes.flatMap(item => item.sourceAgendaItemId ? [item.sourceAgendaItemId] : []));
+  const proceduralPaths = new Set(["heading", "call_to_order", "date_of_next_meeting", "termination"]);
+  for (const item of assembled.assemblyPlan.filter(item => !proceduralPaths.has(item.sectionPath))) {
+    if (renderedIds.filter(id => id === item.agendaItemId).length !== 1) {
+      throw new Error(`Draft is not ready. ${item.title} must appear exactly once in the assembled minutes.`);
+    }
+  }
   const structuralIssues = detectMinutesV2Issues(finalDocument);
 
   return {

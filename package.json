@@ -43,7 +43,7 @@
     "test:project-year-range": "npx tsx --test scripts/test-project-year-range.ts",
     "test:project-identity-review": "npx tsx --test scripts/test-project-identity-review.ts",
     "test:meeting-v2-duplicate": "npx tsx --test scripts/test-meeting-v2-duplicate.ts",
-    "test:meeting-v2-pipeline": "npx tsx --test scripts/test-meeting-v2-evidence-pipeline.ts scripts/test-meeting-v2-extraction-fixes.ts scripts/test-meeting-v2-investigation-reconcile.ts scripts/test-meeting-v2-span-edge-review.ts scripts/test-meeting-v2-gap-leaf-assignment.ts scripts/test-meeting-v2-duplicate.ts scripts/test-meeting-v2-alerts.ts scripts/test-meeting-v2-status-poll.ts",
+    "test:meeting-v2-pipeline": "npx tsx --test scripts/test-meeting-v2-evidence-pipeline.ts scripts/test-meeting-v2-extraction-fixes.ts scripts/test-meeting-v2-investigation-reconcile.ts scripts/test-meeting-v2-span-edge-review.ts scripts/test-meeting-v2-gap-leaf-assignment.ts scripts/test-meeting-v2-duplicate.ts scripts/test-meeting-v2-alerts.ts scripts/test-meeting-v2-status-poll.ts scripts/test-meeting-v2-pdf.tsx",
     "test:meeting-v2-alerts": "npx tsx --test scripts/test-meeting-v2-alerts.ts",
     "test:meeting-v2-investigation-reconcile": "npx tsx --test scripts/test-meeting-v2-investigation-reconcile.ts",
     "test:meeting-v2-status-poll": "npx tsx --test scripts/test-meeting-v2-status-poll.ts",

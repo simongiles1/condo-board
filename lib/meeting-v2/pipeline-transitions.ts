@@ -247,7 +247,7 @@ export async function loadMeetingV2PipelineTransitions(
         data: summarizeContextJson(context.contextJson),
       } satisfies PipelineTransitionStep;
     })
-    .filter((step): step is PipelineTransitionStep => Boolean(step));
+    .filter((step): step is NonNullable<typeof step> => step !== null);
 
   const investigationByAgendaId = new Map(
     investigations.map((investigation) => [investigation.agendaItemId, investigation] as const),
@@ -273,7 +273,7 @@ export async function loadMeetingV2PipelineTransitions(
         },
       } satisfies PipelineTransitionStep;
     })
-    .filter((step): step is PipelineTransitionStep => Boolean(step));
+    .filter((step): step is NonNullable<typeof step> => step !== null);
 
   const validateSteps: PipelineTransitionStep[] =
     validations.length > 0

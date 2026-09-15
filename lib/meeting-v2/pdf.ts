@@ -262,7 +262,8 @@ function extractMajorSectionHeading(
   }
 
   for (const line of lines.slice(0, 8)) {
-    const cleanLine = line.replace(/^#{1,6}\s+/, "").replace(/^\d+[.)]?\s+/, "").trim();
+    const cleanLine = line.replace(/^#{1,6}\s+/, "").trim();
+    const semanticLine = cleanLine.replace(/^\d+[.)]?\s+/, "");
     if (!cleanLine || cleanLine.startsWith("<!--") || cleanLine.length < 3) continue;
 
     if (SUBORDINATE_HEADER_RE.test(cleanLine)) continue;
@@ -274,7 +275,7 @@ function extractMajorSectionHeading(
     }
 
     // Check for named major sections
-    if (MAJOR_SECTION_RE.test(cleanLine) && cleanLine.length < 120) {
+    if (MAJOR_SECTION_RE.test(semanticLine) && cleanLine.length < 120) {
       if (cleanLine.toLowerCase().startsWith("call to order") && (raw.includes("Adjournment") || raw.includes("AGENDA"))) {
         return "Meeting Agenda";
       }

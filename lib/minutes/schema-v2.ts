@@ -176,10 +176,8 @@ export function filterAgendaItems(items: AgendaItemV2[] | undefined): AgendaItem
 }
 
 /**
- * Stable partition: items where `restricted` is falsy come first (in original
- * order); restricted items come last (in original order). Renderers rely on
- * this so public letter markers and addendum letter markers stay consistent
- * regardless of how the AI/editor ordered the array.
+ * Compatibility entry point. Preserve the complete agenda order; renderers
+ * assign positions before filtering restricted items into the addendum.
  */
 export function reorderRestrictedLast(items: AgendaItemV2[]): AgendaItemV2[] {
   // Kept for existing callers. Canonical agenda order must never depend on visibility.

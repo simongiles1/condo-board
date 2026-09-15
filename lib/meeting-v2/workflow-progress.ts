@@ -22,6 +22,17 @@ export const MEETING_V2_IDLE_PIPELINE_STATES = new Set([
 export const MEETING_V2_AWAITING_AGENDA_REVIEW_STEP =
   "Awaiting agenda review & approval";
 
+/** Stored pipeline step after validation when draft generation can proceed. */
+export const MEETING_V2_READY_FOR_REVIEW_STEP = "Ready for review";
+
+/** Stored pipeline step after validation when humans still need to resolve flags or questions. */
+export const MEETING_V2_VALIDATION_COMPLETE_REVIEW_STEP =
+  "Validation complete — corrections or review required";
+
+/** Integrity note used when validation rows exist but draftReadiness was never written. */
+export const MEETING_V2_VALIDATION_READINESS_UNCONFIRMED_NOTE =
+  "Validation readiness has not been confirmed for the current evidence.";
+
 export function isMeetingV2AwaitingHumanStep(
   currentStep: string | null | undefined,
 ): boolean {

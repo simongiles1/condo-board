@@ -8,8 +8,15 @@ import { describe, it } from "node:test";
 
 import {
   buildMeetingV2Alerts,
+  isExpectedMeetingV2PostValidationReviewDrift,
+  isMeetingV2DraftReadinessHoldNote,
   type MeetingV2ExtractionQuality,
 } from "../lib/meeting-v2/extraction-diagnostics";
+import {
+  MEETING_V2_READY_FOR_REVIEW_STEP,
+  MEETING_V2_VALIDATION_COMPLETE_REVIEW_STEP,
+  MEETING_V2_VALIDATION_READINESS_UNCONFIRMED_NOTE,
+} from "../lib/meeting-v2/workflow-progress";
 
 function quality(
   overrides: Partial<MeetingV2ExtractionQuality> = {},
@@ -205,6 +212,63 @@ describe("buildMeetingV2Alerts", () => {
     assert.ok(
       Date.parse(alerts[0]?.occurredAt ?? "") >=
         Date.parse(alerts[alerts.length - 1]?.occurredAt ?? ""),
+    );
+  });
+
+  it("does not treat a post-validation draft-readiness hold as a pipeline stop", () => {
+    const alerts = buildMeetingV2Alerts({
+      extractionQuality: quality({
+        likelyIncomplete: false,
+        issueCode: "none",
+        note: "Agenda extraction looks structurally complete.",
+      }),
+      integrityNote: MEETING_V2_VALIDATION_READINESS_UNCONFIRMED_NOTE,
+      isConsistent: true,
+      lastError: MEETING_V2_VALIDATION_READINESS_UNCONFIRMED_NOTE,
+      pipelineState: "investigated",
+      computedPipelineState: "validated",
+      pipelineActivelyRunning: false,
+      updatedAt: "2026-09-14T04:34:00.000Z",
+    });
+
+    assert.equal(alerts.some((alert) => alert.id === "pipeline-progress"), false);
+    assert.equal(alerts.some((alert) => alert.id === "last-error"), false);
+    assert.equal(alerts.some((alert) => alert.blocksPipeline), false);
+  });
+});
+
+describe("post-validation review drift", () => {
+  it("recognizes older investigated rows as finished validation, not a step mismatch", () => {
+    assert.equal(
+      isExpectedMeetingV2PostValidationReviewDrift({
+        storedPipelineState: "investigated",
+        storedCurrentStep: MEETING_V2_VALIDATION_COMPLETE_REVIEW_STEP,
+        computedPipelineState: "validated",
+        computedCurrentStep: MEETING_V2_VALIDATION_COMPLETE_REVIEW_STEP,
+      }),
+      true,
+    );
+    assert.equal(
+      isExpectedMeetingV2PostValidationReviewDrift({
+        storedPipelineState: "validated",
+        storedCurrentStep: MEETING_V2_READY_FOR_REVIEW_STEP,
+        computedPipelineState: "validated",
+        computedCurrentStep: MEETING_V2_VALIDATION_COMPLETE_REVIEW_STEP,
+      }),
+      true,
+    );
+    assert.equal(
+      isExpectedMeetingV2PostValidationReviewDrift({
+        storedPipelineState: "gathering_evidence",
+        storedCurrentStep: "Evidence gathering incomplete",
+        computedPipelineState: "validated",
+        computedCurrentStep: MEETING_V2_READY_FOR_REVIEW_STEP,
+      }),
+      false,
+    );
+    assert.equal(
+      isMeetingV2DraftReadinessHoldNote(MEETING_V2_VALIDATION_READINESS_UNCONFIRMED_NOTE),
+      true,
     );
   });
 });

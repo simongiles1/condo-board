@@ -1035,8 +1035,17 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     : pipelineHalted && displayState !== "failed"
       ? `Stopped · ${displayProgressState.currentLabel}`
       : displayProgressState.currentLabel;
-  const hasSuccessfulRun = displayState === "validated" || isAgendaApprovalPending;
-  const pipelineValidated = displayState === "validated";
+  const hasSuccessfulRun =
+    displayState === "validated" ||
+    isAgendaApprovalPending ||
+    (displayState === "investigated" &&
+      (status?.meeting.counts.agendaItems ?? 0) > 0 &&
+      (status?.meeting.counts.validations ?? 0) >= (status?.meeting.counts.agendaItems ?? 0));
+  const pipelineValidated =
+    displayState === "validated" ||
+    (displayState === "investigated" &&
+      (status?.meeting.counts.agendaItems ?? 0) > 0 &&
+      (status?.meeting.counts.validations ?? 0) >= (status?.meeting.counts.agendaItems ?? 0));
   const hasMeetingDocuments = Boolean(
     status?.sources.transcript?.available || status?.sources.boardPackage?.available,
   );
@@ -4040,7 +4049,11 @@ function AgendaReviewPanel({
     }
   }, [isPendingApproval]);
 
-  const canReviewItems = status.meeting.computedPipelineState === "validated";
+  const canReviewItems =
+    status.meeting.computedPipelineState === "validated" ||
+    (status.meeting.computedPipelineState === "investigated" &&
+      status.meeting.counts.agendaItems > 0 &&
+      status.meeting.counts.validations >= status.meeting.counts.agendaItems);
   const isPostAgendaPhase =
     canReviewItems && Boolean(status.meeting.agendaApproval?.approvedAt);
 

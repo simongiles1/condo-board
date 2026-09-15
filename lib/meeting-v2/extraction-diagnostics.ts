@@ -3,7 +3,12 @@ import { count, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2AgendaChunkSnapshots } from "@/lib/db/schema";
 import type { GoldStandardValidationUsageRun } from "@/lib/gemini/usage";
-import { MEETING_V2_PIPELINE_STALE_MS } from "@/lib/meeting-v2/workflow-progress";
+import {
+  MEETING_V2_PIPELINE_STALE_MS,
+  MEETING_V2_READY_FOR_REVIEW_STEP,
+  MEETING_V2_VALIDATION_COMPLETE_REVIEW_STEP,
+  MEETING_V2_VALIDATION_READINESS_UNCONFIRMED_NOTE,
+} from "@/lib/meeting-v2/workflow-progress";
 import type { TranscriptDiscrepancyKind } from "@/lib/meeting-v2/transcript-discrepancies";
 
 export type { TranscriptDiscrepancyKind } from "@/lib/meeting-v2/transcript-discrepancies";
@@ -575,6 +580,47 @@ export function isExpectedMeetingV2IntegrityMismatchDuringActiveRun(
   return isExpectedMeetingV2IntegrityMismatch(integrityNote, [pipelineState]);
 }
 
+const MEETING_V2_POST_VALIDATION_REVIEW_STEPS = new Set([
+  MEETING_V2_READY_FOR_REVIEW_STEP,
+  MEETING_V2_VALIDATION_COMPLETE_REVIEW_STEP,
+]);
+
+/** Older finalize wrote `investigated` + a readiness note when validation finished but draft was not ready. */
+export function isExpectedMeetingV2PostValidationReviewDrift(options: {
+  storedPipelineState: string;
+  storedCurrentStep?: string | null;
+  computedPipelineState: string;
+  computedCurrentStep: string;
+}): boolean {
+  if (options.computedPipelineState !== "validated") return false;
+  if (
+    options.storedPipelineState !== "investigated" &&
+    options.storedPipelineState !== "validated"
+  ) {
+    return false;
+  }
+  if (options.storedPipelineState === "investigated") return true;
+  const storedStep = options.storedCurrentStep?.trim() ?? "";
+  const computedStep = options.computedCurrentStep.trim();
+  if (!storedStep || storedStep === computedStep) return false;
+  return (
+    MEETING_V2_POST_VALIDATION_REVIEW_STEPS.has(storedStep) &&
+    MEETING_V2_POST_VALIDATION_REVIEW_STEPS.has(computedStep)
+  );
+}
+
+/** Notes that finalize used to persist as lastError even though the automated pipeline finished. */
+export function isMeetingV2DraftReadinessHoldNote(note: string | null | undefined): boolean {
+  const text = note?.trim() ?? "";
+  if (!text) return false;
+  return (
+    text === MEETING_V2_VALIDATION_READINESS_UNCONFIRMED_NOTE ||
+    text === "All current investigations passed validation." ||
+    text === MEETING_V2_VALIDATION_COMPLETE_REVIEW_STEP ||
+    text === MEETING_V2_READY_FOR_REVIEW_STEP
+  );
+}
+
 function isMeetingV2RecentlyTouched(updatedAt?: string | null): boolean {
   if (!updatedAt?.trim()) return false;
   const updatedMs = Date.parse(updatedAt);
@@ -621,10 +667,19 @@ export function buildMeetingV2Alerts(options: {
     extractionQuality,
     integrityNote,
     isConsistent,
-    lastError,
     pipelineState,
     pipelineActivelyRunning = false,
   } = options;
+  const computedPipelineState = options.computedPipelineState ?? "";
+  const lastErrorIsHold =
+    isMeetingV2DraftReadinessHoldNote(options.lastError) ||
+    (Boolean(options.lastError?.trim()) &&
+      options.lastError!.trim() === integrityNote.trim() &&
+      (pipelineState === "investigated" ||
+        pipelineState === "validated" ||
+        computedPipelineState === "validated" ||
+        computedPipelineState === "investigated"));
+  const lastError = lastErrorIsHold ? null : options.lastError;
   const apiError =
     extractionQuality.extractionRun?.apiError?.trim() ||
     (lastError && /deepseek/i.test(lastError) ? lastError : null);

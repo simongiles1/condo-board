@@ -40,6 +40,7 @@ import {
   buildMeetingV2Alerts,
   getMeetingV2AgendaChunkSnapshotCount,
   isDeepSeekKeyConfigured,
+  isExpectedMeetingV2PostValidationReviewDrift,
   readMeetingV2Settings,
   recordMeetingV2ExtractionRun,
   recordMeetingV2IngestUsage,
@@ -66,6 +67,9 @@ import {
   buildMeetingV2DisplayProgress,
   buildMeetingV2WorkflowProgress,
   isMeetingV2PipelineActivelyRunning,
+  MEETING_V2_READY_FOR_REVIEW_STEP,
+  MEETING_V2_VALIDATION_COMPLETE_REVIEW_STEP,
+  MEETING_V2_VALIDATION_READINESS_UNCONFIRMED_NOTE,
 } from "@/lib/meeting-v2/workflow-progress";
 import { buildMeetingV2DraftArtifact, buildMeetingFrame } from "@/lib/meeting-v2/draft-builder";
 import { chunkDocumentPages, chunkTranscriptSegments } from "@/lib/meeting-v2/chunking";
@@ -809,13 +813,18 @@ export function deriveMeetingV2ComputedStatus(
     };
   }
 
+  const ready = Boolean(settings?.draftReadiness?.ready);
   return {
-    pipelineState: settings?.draftReadiness?.ready ? "validated" : "investigated",
-    currentStep: settings?.draftReadiness?.ready ? "Ready for review" : "Validation complete — corrections or review required",
+    pipelineState: "validated",
+    currentStep: ready
+      ? MEETING_V2_READY_FOR_REVIEW_STEP
+      : MEETING_V2_VALIDATION_COMPLETE_REVIEW_STEP,
     progressPercent: 90,
-    isConsistent: Boolean(settings?.draftReadiness?.ready),
-    note: settings?.draftReadiness?.ready ? "All current investigations passed validation." :
-      settings?.draftReadiness?.problems.join(" ") || "Validation readiness has not been confirmed for the current evidence.",
+    isConsistent: true,
+    note: ready
+      ? "All current investigations passed validation."
+      : settings?.draftReadiness?.problems.join(" ") ||
+        MEETING_V2_VALIDATION_READINESS_UNCONFIRMED_NOTE,
   };
 }
 
@@ -3396,10 +3405,17 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
   let computedPipelineState = computed.pipelineState;
   let computedCurrentStep = computed.currentStep;
   let integrityNote = computed.note;
+  const postValidationReviewDrift = isExpectedMeetingV2PostValidationReviewDrift({
+    storedPipelineState: selectedMeeting.pipelineState,
+    storedCurrentStep: selectedMeeting.currentStep,
+    computedPipelineState,
+    computedCurrentStep,
+  });
   let isConsistent =
     computed.isConsistent &&
-    computedPipelineState === selectedMeeting.pipelineState &&
-    computedCurrentStep === (selectedMeeting.currentStep ?? computedCurrentStep);
+    (postValidationReviewDrift ||
+      (computedPipelineState === selectedMeeting.pipelineState &&
+        computedCurrentStep === (selectedMeeting.currentStep ?? computedCurrentStep)));
 
   if (pipelineNotStarted) {
     computedPipelineState = "created";
@@ -3636,18 +3652,13 @@ export async function finalizeMeetingV2PipelineStatus(meetingId: string): Promis
     );
     return;
   }
-  if (!computed.isConsistent || computed.pipelineState !== "validated") {
-    await updateMeetingV2Status(
-      meetingId,
-      computed.pipelineState,
-      computed.currentStep,
-      computed.progressPercent,
-      computed.note,
-    );
-    return;
-  }
-
-  await updateMeetingV2Status(meetingId, "validated", "Ready for review", 90, null);
+  await updateMeetingV2Status(
+    meetingId,
+    computed.pipelineState,
+    computed.currentStep,
+    computed.progressPercent,
+    computed.isConsistent ? null : computed.note,
+  );
 }
 
 export async function resetMeetingV2DerivedData(meetingId: string): Promise<void> {

@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 fact-resolution citation halt** — After agenda approval, investigation stopped the whole run when one fact’s quote was not a verbatim substring of the evidence (for example “minutes accepted as amended”). Unverifiable citations now become open questions after a retry, so the remaining items still investigate.
+
 - **Meetings V2 false pipeline-stop after validation** — Meetings that finished investigation/validation but still have open questions (or never stored `draftReadiness`) were flagged as a crashed run and lost the Agenda Review tabs. That human-review hold is now `validated` and consistent; older `investigated` rows keep review and compare instead of Resume/Restart.
 
 - **Meetings V2 ad-hoc section heading** — Extra transcript matters must sit under a synthesized **Ad-hoc items** heading at 4.E with lettered children (4.E.a). A model-assigned 4.E title (for example a toilet-hose quote) is demoted to a child instead of becoming the section name, and numbered 4.E.1 children are re-lettered.

@@ -109,6 +109,37 @@ describe("source precedence and loss prevention", () => {
   it("rejects invented quotations and malformed resolution JSON", () => {
     assert.throws(() => parseFactResolution({ facts: [{ ...resolution.facts[0], candidates: [{ value: "approved", sourceId: "transcript:165", quote: "The board approved Ambient Mechanical" }] }], unresolvedQuestions: [] }, evidence));
     assert.throws(() => parseFactResolution({}, evidence));
+    const salvaged = parseFactResolution(
+      {
+        facts: [{
+          ...resolution.facts[0],
+          field: "decision - minutes accepted as amended",
+          selected: 0,
+          candidates: [{ value: "minutes accepted as amended", sourceId: "transcript:165", quote: "The board approved Ambient Mechanical" }],
+        }],
+        unresolvedQuestions: [],
+      },
+      evidence,
+      { salvageUnverifiable: true },
+    );
+    assert.equal(salvaged.facts.length, 0);
+    assert.match(salvaged.unresolvedQuestions.join(" "), /minutes accepted as amended/);
+    const curlyQuote = parseFactResolution({
+      facts: [{
+        ...resolution.facts[0],
+        candidates: [{
+          value: "New Water Plumbing $163,000",
+          sourceId: "transcript:165",
+          quote: "The booster pump was approved at the previous meeting with New Water Plumbing for $163,000.",
+        }],
+        selected: 0,
+      }],
+      unresolvedQuestions: [],
+    }, [{
+      ...evidence[1],
+      text: "The booster pump was approved at the previous meeting with New Water Plumbing for $163,000",
+    }]);
+    assert.equal(curlyQuote.facts[0].selected, 0);
   });
   it("keeps late transcript corrections intact and labels unrelated keyword hits", () => {
     const segments = Array.from({ length: 730 }, (_, sequence) => ({ sequence, startTimestamp: "00:00:00", speakerLabel: "Speaker", text: sequence === 720 ? evidence[2].text : "Context ".repeat(220) }));
@@ -126,6 +157,34 @@ describe("source precedence and loss prevention", () => {
     assert.equal(calls, 2);
     assert.equal(result.attempts.length, 2);
     await assert.rejects(resolveAgendaFacts({ agenda: { title: "Pump", itemNumber: "4.B.1", itemType: "discussion_approval" }, sources: evidence }, (async () => ({ ...await complete(), text: "{" })) as Parameters<typeof resolveAgendaFacts>[1]), /Fact resolution failed/);
+  });
+  it("salvages paraphrased citations instead of aborting fact resolution", async () => {
+    const paraphrased = {
+      facts: [{
+        field: "decision - minutes accepted as amended",
+        scope: "current_decision" as const,
+        explanation: "Board accepted the prior minutes.",
+        selected: 0,
+        candidates: [{
+          value: "minutes accepted as amended",
+          sourceId: "transcript:165",
+          quote: "The board approved Ambient Mechanical",
+        }],
+      }],
+      unresolvedQuestions: [],
+    };
+    const complete = async () => ({
+      text: JSON.stringify(paraphrased),
+      modelName: "fixture",
+      finishReason: "stop",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cacheHitTokens: 0, cacheMissTokens: 1 },
+    });
+    const result = await resolveAgendaFacts({
+      agenda: { title: "Approval of minutes", itemNumber: "2", itemType: "discussion_approval" },
+      sources: evidence,
+    }, complete as Parameters<typeof resolveAgendaFacts>[1]);
+    assert.equal(result.facts.facts.length, 0);
+    assert.match(result.facts.unresolvedQuestions.join(" "), /minutes accepted as amended/);
   });
   it("retains topics, printed codes and earlier notes after a partial incremental response", () => {
     const a: Parameters<typeof normalizeWorkflowState>[1]["documentTopics"][number] = { title: "Pump", itemNumber: "4.B.1", sectionLabel: "Management", itemType: "discussion_approval", sourcePages: [4], sourceChunkIds: [], sourceTranscriptRanges: [[1, 2]], aliases: [], notes: ["Earlier discussion"], visibility: "PUBLIC", confidence: 1, sourceText: "", confidenceReason: null, evidenceStrength: "DIRECT", openQuestions: [], needsHumanReview: false, humanReviewReason: null };

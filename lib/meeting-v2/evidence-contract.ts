@@ -55,14 +55,52 @@ export function buildEvidenceSources(options: {
   return [...transcript, ...options.documents.map(d => ({ id: `document:${d.chunkId}`, kind: "document" as const, association: "direct" as const, text: d.text }))];
 }
 
-const clean = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+const clean = (s: string) =>
+  s
+    .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+function quoteSupportedBySource(sourceText: string, quote: string): boolean {
+  const q = clean(quote);
+  const s = clean(sourceText);
+  if (q.length < 8) return false;
+  if (s.includes(q)) return true;
+  const compactQuote = q.replace(/[^a-z0-9]+/g, "");
+  const compactSource = s.replace(/[^a-z0-9]+/g, "");
+  return compactQuote.length >= 12 && compactSource.includes(compactQuote);
+}
+
+function candidateIsVerifiable(
+  candidate: ResolvedFact["candidates"][number],
+  byId: Map<string, EvidenceSource>,
+): boolean {
+  const source = byId.get(candidate.sourceId);
+  return Boolean(
+    source &&
+      typeof candidate.value === "string" &&
+      candidate.value.trim() &&
+      typeof candidate.quote === "string" &&
+      quoteSupportedBySource(source.text, candidate.quote),
+  );
+}
 
 /** Validate shape and verbatim evidence links before a model's fact choices can be used. */
-export function parseFactResolution(raw: unknown, sources: EvidenceSource[]): FactResolution {
+export function parseFactResolution(
+  raw: unknown,
+  sources: EvidenceSource[],
+  options?: { salvageUnverifiable?: boolean },
+): FactResolution {
   const value = raw as FactResolution;
   if (!value || !Array.isArray(value.facts) || !Array.isArray(value.unresolvedQuestions) ||
       !value.unresolvedQuestions.every(q => typeof q === "string")) throw new Error("Fact resolution returned an invalid schema.");
   const byId = new Map(sources.map(s => [s.id, s]));
+  const salvage = Boolean(options?.salvageUnverifiable);
+  const unresolvedQuestions = [...value.unresolvedQuestions];
+  const facts: ResolvedFact[] = [];
   for (const fact of value.facts) {
     if (!fact || typeof fact.field !== "string" || typeof fact.explanation !== "string" ||
         !["package_proposal", "prior_approval", "current_decision", "discussion"].includes(fact.scope) ||
@@ -70,25 +108,50 @@ export function parseFactResolution(raw: unknown, sources: EvidenceSource[]): Fa
         (fact.selected !== null && (!Number.isInteger(fact.selected) || fact.selected < 0 || fact.selected >= fact.candidates.length))) {
       throw new Error("Fact resolution contains an invalid fact or selection.");
     }
-    for (const candidate of fact.candidates) {
-      const source = byId.get(candidate.sourceId);
-      if (!source || typeof candidate.value !== "string" || !candidate.value.trim() || typeof candidate.quote !== "string" ||
-          clean(candidate.quote).length < 8 || !clean(source.text).includes(clean(candidate.quote))) {
+    const kept: ResolvedFact["candidates"] = [];
+    const keptFromOriginal: number[] = [];
+    fact.candidates.forEach((candidate, index) => {
+      if (candidateIsVerifiable(candidate, byId)) {
+        kept.push(candidate);
+        keptFromOriginal.push(index);
+        return;
+      }
+      if (!salvage) {
         throw new Error(`Fact ${fact.field} has a missing or unverifiable citation.`);
       }
+    });
+    if (!kept.length) {
+      if (!salvage) {
+        throw new Error(`Fact ${fact.field} has a missing or unverifiable citation.`);
+      }
+      unresolvedQuestions.push(`Could not verify a citation for ${fact.field}.`);
+      continue;
     }
-    if (fact.selected !== null) {
-      const selected = byId.get(fact.candidates[fact.selected].sourceId)!;
-      if (selected.kind === "document" && fact.scope !== "package_proposal" &&
-          fact.candidates.some(c => ["transcript", "user"].includes(byId.get(c.sourceId)!.kind))) {
+    let selected =
+      fact.selected === null ? null : keptFromOriginal.indexOf(fact.selected);
+    if (selected !== null && selected < 0) {
+      selected = null;
+      if (salvage) unresolvedQuestions.push(`Could not verify the selected citation for ${fact.field}.`);
+    }
+    if (selected !== null) {
+      const selectedSource = byId.get(kept[selected].sourceId)!;
+      if (selectedSource.kind === "document" && fact.scope !== "package_proposal" &&
+          kept.some(c => ["transcript", "user"].includes(byId.get(c.sourceId)!.kind))) {
         throw new Error(`Fact ${fact.field} selects package evidence over meeting evidence.`);
       }
-      if (fact.scope === "current_decision" && selected.kind === "document") {
+      if (fact.scope === "current_decision" && selectedSource.kind === "document") {
         throw new Error(`Fact ${fact.field} treats a package proposal as a current decision.`);
       }
     }
+    facts.push({
+      field: fact.field,
+      scope: fact.scope,
+      candidates: kept,
+      selected,
+      explanation: fact.explanation,
+    });
   }
-  return value;
+  return { facts, unresolvedQuestions };
 }
 
 export const FACT_RESOLUTION_PROMPT = `Resolve the material facts for ONE agenda item before writing minutes. Return JSON only:

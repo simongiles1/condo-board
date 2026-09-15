@@ -12,13 +12,9 @@ import {
   combinationKeysFromRuns,
   enumerateSegmentCompareCombinations,
   formatSegmentCompareCombination,
-  formatSegmentCompareChoice,
   SAVED_AGENDA_COMPARE_ID,
-  SEGMENT_COMPARE_MODELS,
   SEGMENT_COMPARE_SAVED_REVIEW_KEY,
   segmentCompareCombinationKey,
-  type SegmentCompareModelId,
-  type SegmentCompareModelOption,
   type SegmentCompareRun,
   type SegmentCompareSlotChoice,
 } from "@/lib/meeting-v2/segment-compare-models";
@@ -28,7 +24,6 @@ import {
 } from "@/lib/transcript/section-overlay";
 
 type WorkspacePayload = {
-  models: SegmentCompareModelOption[];
   cues: MergedVttCue[];
   savedOverlays: TranscriptSectionOverlay[];
   runs: SegmentCompareRun[];
@@ -48,10 +43,17 @@ type Props = {
   onClose: () => void;
 };
 
-const DEFAULT_CHOICE: SegmentCompareSlotChoice = {
+const DEFAULT_WALK: SegmentCompareSlotChoice = {
   modelId: "deepseek-v4-flash",
   thinking: false,
 };
+
+const DEFAULT_EDGE: SegmentCompareSlotChoice = {
+  modelId: "deepseek-v4-flash",
+  thinking: false,
+};
+
+const DEFAULT_RUN_TARGET_KEY = segmentCompareCombinationKey(DEFAULT_WALK, DEFAULT_EDGE);
 
 function formatUsd(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -98,9 +100,11 @@ function CompareCombinationPicker({
   meetingId,
   runs,
   reviewedKeys,
+  runTargetKey,
   leftId,
   rightId,
   onReviewedKeysChange,
+  onRunTargetChange,
   onLeftChange,
   onRightChange,
   onDeleteRun,
@@ -109,9 +113,11 @@ function CompareCombinationPicker({
   meetingId: string;
   runs: SegmentCompareRun[];
   reviewedKeys: string[];
+  runTargetKey: string;
   leftId: string;
   rightId: string;
   onReviewedKeysChange: (keys: string[]) => void;
+  onRunTargetChange: (key: string, row: CombinationRow) => void;
   onLeftChange: (paneId: string) => void;
   onRightChange: (paneId: string) => void;
   onDeleteRun: (runId: string) => void;
@@ -186,36 +192,55 @@ function CompareCombinationPicker({
     return paneActive(run.id, side);
   }
 
-  const summary = `${paneTitle(leftId, runs)} · vs · ${paneTitle(rightId, runs)}`;
+  const runTargetRow =
+    combinationRows.find((row) => row.key === runTargetKey) ?? combinationRows[0];
+  const runTargetLabel = runTargetRow
+    ? formatSegmentCompareCombination(runTargetRow.walk, runTargetRow.edge)
+    : "Select combination";
   const reviewedCount = reviewedKeys.length;
 
   return (
-    <div className="relative" ref={panelRef}>
+    <div className="relative min-w-0 flex-1" ref={panelRef}>
       <button
         type="button"
-        className="flex w-full items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50"
+        className="flex w-full items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left hover:bg-slate-50"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
+        aria-haspopup="listbox"
       >
-        <span className="min-w-0 truncate font-medium">{summary}</span>
-        <span className="shrink-0 text-xs text-slate-500">
-          {reviewedCount} checked{savingReview ? " · saving…" : ""}
+        <span className="min-w-0">
+          <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Walk × edge combinations
+          </span>
+          <span className="mt-0.5 block truncate text-sm font-semibold text-slate-900">
+            Run target: {runTargetLabel}
+          </span>
+          <span className="mt-0.5 block truncate text-xs text-slate-600">
+            Panes: {paneTitle(leftId, runs)} vs {paneTitle(rightId, runs)}
+          </span>
+        </span>
+        <span className="shrink-0 pt-1 text-xs text-slate-500">
+          {reviewedCount} done · {open ? "▲" : "▼"}
+          {savingReview ? " · saving…" : ""}
         </span>
       </button>
       {open ? (
-        <div className="absolute left-0 right-0 z-20 mt-1 max-h-[min(24rem,70vh)] overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+        <div className="absolute left-0 right-0 z-30 mt-1 max-h-[min(28rem,70vh)] overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
           <p className="border-b border-slate-100 px-3 py-2 text-xs text-slate-600">
-            Check combinations you have reviewed. Pick <span className="font-semibold">L</span> /{" "}
-            <span className="font-semibold">R</span> for each pane. Saved agenda is the current
-            pipeline extract (typically V4 Flash walk and edge).
+            <span className="font-semibold">Done</span> tracks what you have reviewed.{" "}
+            <span className="font-semibold">Run</span> picks the walk×edge pair for{" "}
+            <span className="font-semibold">Run combination</span>.{" "}
+            <span className="font-semibold">L</span> / <span className="font-semibold">R</span> set
+            each pane. Saved agenda is the current pipeline extract (typically V4 Flash × V4 Flash).
           </p>
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="w-10 px-2 py-1.5 font-semibold">Done</th>
-                <th className="px-2 py-1.5 font-semibold">Source</th>
-                <th className="w-16 px-2 py-1.5 text-center font-semibold">L</th>
-                <th className="w-16 px-2 py-1.5 text-center font-semibold">R</th>
+                <th className="px-2 py-1.5 font-semibold">Walk × edge</th>
+                <th className="w-12 px-2 py-1.5 text-center font-semibold">Run</th>
+                <th className="w-12 px-2 py-1.5 text-center font-semibold">L</th>
+                <th className="w-12 px-2 py-1.5 text-center font-semibold">R</th>
               </tr>
             </thead>
             <tbody>
@@ -234,6 +259,7 @@ function CompareCombinationPicker({
                 <td className="px-2 py-1.5 align-top">
                   <span className="font-medium text-slate-900">Saved agenda (current extract)</span>
                 </td>
+                <td className="px-2 py-1.5 text-center align-top text-slate-300">—</td>
                 <td className="px-2 py-1.5 text-center align-top">
                   <PaneToggle
                     active={paneActive(SAVED_AGENDA_COMPARE_ID, "left")}
@@ -272,6 +298,15 @@ function CompareCombinationPicker({
                       ) : (
                         <div className="text-xs text-slate-400">Not run yet</div>
                       )}
+                    </td>
+                    <td className="px-2 py-1.5 text-center align-top">
+                      <input
+                        type="radio"
+                        name="segment-compare-run-target"
+                        checked={runTargetKey === row.key}
+                        onChange={() => onRunTargetChange(row.key, row)}
+                        aria-label={`Run ${label}`}
+                      />
                     </td>
                     <td className="px-2 py-1.5 text-center align-top">
                       <PaneToggle
@@ -423,56 +458,6 @@ function colorByCode(overlays: TranscriptSectionOverlay[]): Map<string, string> 
   return map;
 }
 
-function ModelSlotPicker({
-  label,
-  value,
-  models,
-  onChange,
-}: {
-  label: string;
-  value: SegmentCompareSlotChoice;
-  models: SegmentCompareModelOption[];
-  onChange: (next: SegmentCompareSlotChoice) => void;
-}) {
-  const selected = models.find((model) => model.id === value.modelId);
-  return (
-    <fieldset className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2">
-      <legend className="px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-        {label}
-      </legend>
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          className="min-w-[12rem] flex-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900"
-          value={value.modelId}
-          onChange={(event) =>
-            onChange({
-              ...value,
-              modelId: event.target.value as SegmentCompareModelId,
-            })
-          }
-        >
-          {models.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.label}
-            </option>
-          ))}
-        </select>
-        <label className="inline-flex items-center gap-1.5 text-sm text-slate-700">
-          <input
-            type="checkbox"
-            checked={value.thinking}
-            onChange={(event) => onChange({ ...value, thinking: event.target.checked })}
-          />
-          Thinking
-        </label>
-      </div>
-      {selected?.warning ? (
-        <p className="mt-1 text-xs text-amber-800">{selected.warning}</p>
-      ) : null}
-    </fieldset>
-  );
-}
-
 function CueCell({
   cue,
   meta,
@@ -552,8 +537,9 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<WorkspacePayload | null>(null);
-  const [walk, setWalk] = useState<SegmentCompareSlotChoice>(DEFAULT_CHOICE);
-  const [edge, setEdge] = useState<SegmentCompareSlotChoice>(DEFAULT_CHOICE);
+  const [runTargetKey, setRunTargetKey] = useState(DEFAULT_RUN_TARGET_KEY);
+  const [runWalkThinking, setRunWalkThinking] = useState(false);
+  const [runEdgeThinking, setRunEdgeThinking] = useState(false);
   const [leftId, setLeftId] = useState(SAVED_AGENDA_COMPARE_ID);
   const [rightId, setRightId] = useState(SAVED_AGENDA_COMPARE_ID);
   const [reviewedKeys, setReviewedKeys] = useState<string[]>([]);
@@ -609,10 +595,15 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     return () => window.clearInterval(timer);
   }, [open, meetingId, busy]);
 
-  const models = workspace?.models?.length ? workspace.models : SEGMENT_COMPARE_MODELS;
   const cues = workspace?.cues ?? [];
   const savedOverlays = workspace?.savedOverlays ?? [];
   const runs = workspace?.runs ?? [];
+
+  const combinationRows = useMemo(() => buildCombinationRows(runs), [runs]);
+  const runTargetRow = useMemo(
+    () => combinationRows.find((row) => row.key === runTargetKey) ?? combinationRows[0],
+    [combinationRows, runTargetKey],
+  );
 
   const paneOverlays = useMemo(() => {
     const byId = new Map<string, TranscriptSectionOverlay[]>();
@@ -639,9 +630,27 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     [cues, rightOverlays],
   );
 
+  function handleRunTargetChange(key: string, row: CombinationRow) {
+    setRunTargetKey(key);
+    setRunWalkThinking(row.walk.thinking);
+    setRunEdgeThinking(row.edge.thinking);
+  }
+
   async function handleRun() {
+    if (!runTargetRow) {
+      setError("Choose a walk × edge combination to run.");
+      return;
+    }
     setStarting(true);
     setError(null);
+    const walk: SegmentCompareSlotChoice = {
+      ...runTargetRow.walk,
+      thinking: runWalkThinking,
+    };
+    const edge: SegmentCompareSlotChoice = {
+      ...runTargetRow.edge,
+      thinking: runEdgeThinking,
+    };
     try {
       const response = await fetch(`/api/v2/meetings/${meetingId}/segment-compare`, {
         method: "POST",
@@ -697,18 +706,50 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
             Close
           </button>
         </div>
-        <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_1fr_auto]">
-          <ModelSlotPicker label="Overall segmenter (transcript walk)" value={walk} models={models} onChange={setWalk} />
-          <ModelSlotPicker label="Edge detection (span / gap judges)" value={edge} models={models} onChange={setEdge} />
-          <div className="flex items-end">
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+          <CompareCombinationPicker
+            meetingId={meetingId}
+            runs={runs}
+            reviewedKeys={reviewedKeys}
+            runTargetKey={runTargetKey}
+            leftId={leftId}
+            rightId={rightId}
+            onReviewedKeysChange={setReviewedKeys}
+            onRunTargetChange={handleRunTargetChange}
+            onLeftChange={setLeftId}
+            onRightChange={setRightId}
+            onDeleteRun={(runId) => void handleDelete(runId)}
+            onError={setError}
+          />
+          <div className="flex shrink-0 flex-col gap-2 sm:w-48">
             <button
               type="button"
-              disabled={starting || busy || loading || (workspace?.agendaItemCount ?? 0) === 0}
+              disabled={
+                starting || busy || loading || (workspace?.agendaItemCount ?? 0) === 0 || !runTargetRow
+              }
               onClick={() => void handleRun()}
-              className="w-full rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+              className="w-full rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {starting || busy ? "Running…" : "Run combination"}
             </button>
+            <div className="flex flex-wrap gap-3 text-sm text-slate-700">
+              <label className="inline-flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={runWalkThinking}
+                  onChange={(event) => setRunWalkThinking(event.target.checked)}
+                />
+                Walk thinking
+              </label>
+              <label className="inline-flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={runEdgeThinking}
+                  onChange={(event) => setRunEdgeThinking(event.target.checked)}
+                />
+                Edge thinking
+              </label>
+            </div>
           </div>
         </div>
         {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
@@ -716,26 +757,6 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
           <p className="mt-2 text-sm text-amber-800">Extract the agenda first so the walk has an outline to seed from.</p>
         ) : null}
       </header>
-
-      <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-2">
-        <label className="text-sm font-medium text-slate-700">
-          Compare panes &amp; progress
-          <div className="mt-1">
-            <CompareCombinationPicker
-              meetingId={meetingId}
-              runs={runs}
-              reviewedKeys={reviewedKeys}
-              leftId={leftId}
-              rightId={rightId}
-              onReviewedKeysChange={setReviewedKeys}
-              onLeftChange={setLeftId}
-              onRightChange={setRightId}
-              onDeleteRun={(runId) => void handleDelete(runId)}
-              onError={setError}
-            />
-          </div>
-        </label>
-      </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loading && !workspace ? (

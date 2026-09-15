@@ -32,6 +32,7 @@ import {
 import {
   estimateSegmentCompareCostUsd,
   formatSegmentCompareChoice,
+  segmentCompareCombinationKey,
   segmentCompareModel,
   type SegmentCompareRun,
   type SegmentCompareSlotChoice,
@@ -216,16 +217,47 @@ async function loadMeetingSettings(meetingId: string): Promise<{
   };
 }
 
-async function writeRuns(meetingId: string, runs: SegmentCompareRun[]): Promise<void> {
-  const { settings } = await loadMeetingSettings(meetingId);
+async function writeMeetingSettings(
+  meetingId: string,
+  settings: MeetingV2Settings,
+): Promise<void> {
   const db = getDb();
   await db
     .update(meetingsV2)
     .set({
-      settings: { ...settings, segmentCompareRuns: runs },
+      settings,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(meetingsV2.id, meetingId));
+}
+
+async function writeRuns(meetingId: string, runs: SegmentCompareRun[]): Promise<void> {
+  const { settings } = await loadMeetingSettings(meetingId);
+  await writeMeetingSettings(meetingId, { ...settings, segmentCompareRuns: runs });
+}
+
+export async function listSegmentCompareReviewedKeys(meetingId: string): Promise<string[]> {
+  const { settings } = await loadMeetingSettings(meetingId);
+  return settings.segmentCompareReviewedKeys ?? [];
+}
+
+export async function setSegmentCompareReviewedKeys(
+  meetingId: string,
+  keys: string[],
+): Promise<string[]> {
+  const { settings } = await loadMeetingSettings(meetingId);
+  const unique = [...new Set(keys)];
+  await writeMeetingSettings(meetingId, {
+    ...settings,
+    segmentCompareReviewedKeys: unique,
+  });
+  return unique;
+}
+
+async function addSegmentCompareReviewedKey(meetingId: string, key: string): Promise<void> {
+  const current = await listSegmentCompareReviewedKeys(meetingId);
+  if (current.includes(key)) return;
+  await setSegmentCompareReviewedKeys(meetingId, [...current, key]);
 }
 
 export async function listSegmentCompareRuns(meetingId: string): Promise<SegmentCompareRun[]> {
@@ -290,10 +322,11 @@ export async function loadSegmentCompareWorkspace(meetingId: string): Promise<{
   cues: MergedVttCue[];
   savedOverlays: TranscriptSectionOverlay[];
   runs: SegmentCompareRun[];
+  reviewedKeys: string[];
   agendaItemCount: number;
 }> {
   const db = getDb();
-  const [segments, agendaItems, runs] = await Promise.all([
+  const [segments, agendaItems, runs, reviewedKeys] = await Promise.all([
     db
       .select({
         startTimestamp: meetingsV2TranscriptSegments.startTimestamp,
@@ -315,11 +348,13 @@ export async function loadSegmentCompareWorkspace(meetingId: string): Promise<{
       .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId))
       .orderBy(asc(meetingsV2AgendaItems.sortOrder)),
     listSegmentCompareRuns(meetingId),
+    listSegmentCompareReviewedKeys(meetingId),
   ]);
   return {
     cues: transcriptSegmentsToCues(segments),
     savedOverlays: overlaysFromSavedAgenda(agendaItems),
     runs,
+    reviewedKeys,
     agendaItemCount: agendaItems.length,
   };
 }
@@ -495,6 +530,10 @@ export async function runSegmentCompareExperiment(options: {
     if (!completed) {
       throw new Error(`Segment compare run ${runId} disappeared during save.`);
     }
+    await addSegmentCompareReviewedKey(
+      meetingId,
+      segmentCompareCombinationKey(completed.walk, completed.edge),
+    );
     return completed;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

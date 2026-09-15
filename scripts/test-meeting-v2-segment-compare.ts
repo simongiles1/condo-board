@@ -11,8 +11,10 @@ import {
   transcriptSegmentsToCues,
 } from "../lib/meeting-v2/segment-compare";
 import {
+  enumerateSegmentCompareCombinations,
   formatSegmentCompareChoice,
   isSegmentCompareModelId,
+  segmentCompareCombinationKey,
   segmentCompareModel,
 } from "../lib/meeting-v2/segment-compare-models";
 import { pickSectionsForTime } from "../lib/transcript/section-overlay";
@@ -23,6 +25,15 @@ describe("segment compare catalog", () => {
     assert.equal(segmentCompareModel("deepseek-v4.1-flash").apiModel, "deepseek-flash");
     assert.equal(segmentCompareModel("gemini-3.8-flash").apiModel, "gemini-3.8-flash");
     assert.equal(isSegmentCompareModelId("gemini-3.7-flash"), false);
+  });
+
+  it("builds a stable combination key and 3×3 matrix", () => {
+    const key = segmentCompareCombinationKey(
+      { modelId: "deepseek-v4-flash", thinking: false },
+      { modelId: "gemini-3.8-flash", thinking: true },
+    );
+    assert.equal(key, "deepseek-v4-flash|0|gemini-3.8-flash|1");
+    assert.equal(enumerateSegmentCompareCombinations().length, 9);
   });
 
   it("labels thinking in the run title", () => {

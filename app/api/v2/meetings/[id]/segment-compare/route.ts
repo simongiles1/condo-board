@@ -5,6 +5,7 @@ import {
   deleteSegmentCompareRun,
   loadSegmentCompareWorkspace,
   queueSegmentCompareRun,
+  setSegmentCompareReviewedKeys,
 } from "@/lib/meeting-v2/segment-compare";
 import {
   SEGMENT_COMPARE_MODELS,
@@ -72,6 +73,28 @@ export async function POST(
     const status = /already in progress/i.test(message) ? 409 : 400;
     console.error("[v2/segment-compare POST]", error);
     return NextResponse.json({ error: message }, { status });
+  }
+}
+
+export async function PATCH(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const { id } = await params;
+    const body = (await req.json()) as { reviewedKeys?: unknown };
+    if (!Array.isArray(body.reviewedKeys)) {
+      return NextResponse.json({ error: "reviewedKeys must be an array" }, { status: 400 });
+    }
+    const reviewedKeys = body.reviewedKeys.filter((key): key is string => typeof key === "string");
+    const saved = await setSegmentCompareReviewedKeys(id, reviewedKeys);
+    return NextResponse.json({ reviewedKeys: saved });
+  } catch (error) {
+    console.error("[v2/segment-compare PATCH]", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to update reviewed combinations" },
+      { status: 500 },
+    );
   }
 }
 

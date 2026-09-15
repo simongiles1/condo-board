@@ -99,6 +99,8 @@ export type MeetingV2Settings = {
   };
   /** Temporary transcript-segmenter A/B runs. Does not rewrite agenda items. */
   segmentCompareRuns?: import("./segment-compare-models").SegmentCompareRun[];
+  /** Checked combinations in the segmenter compare lab (includes saved-agenda baseline). */
+  segmentCompareReviewedKeys?: string[];
 };
 
 export type MeetingV2ExtractionRun = {

@@ -67,6 +67,50 @@ export function formatSegmentCompareChoice(choice: SegmentCompareSlotChoice): st
   return `${model.label}${choice.thinking ? " · thinking" : ""}`;
 }
 
+export const SEGMENT_COMPARE_SAVED_REVIEW_KEY = "saved-agenda";
+
+/** Stable id for walk×edge (and per-slot thinking flags). */
+export function segmentCompareCombinationKey(
+  walk: SegmentCompareSlotChoice,
+  edge: SegmentCompareSlotChoice,
+): string {
+  return `${walk.modelId}|${walk.thinking ? 1 : 0}|${edge.modelId}|${edge.thinking ? 1 : 0}`;
+}
+
+export function formatSegmentCompareCombination(
+  walk: SegmentCompareSlotChoice,
+  edge: SegmentCompareSlotChoice,
+): string {
+  return `${formatSegmentCompareChoice(walk)} × ${formatSegmentCompareChoice(edge)}`;
+}
+
+/** Default lab matrix: each model on walk and edge, thinking off. */
+export function enumerateSegmentCompareCombinations(): Array<{
+  key: string;
+  walk: SegmentCompareSlotChoice;
+  edge: SegmentCompareSlotChoice;
+}> {
+  const slots: SegmentCompareSlotChoice[] = SEGMENT_COMPARE_MODEL_IDS.map((modelId) => ({
+    modelId,
+    thinking: false,
+  }));
+  const combos: Array<{
+    key: string;
+    walk: SegmentCompareSlotChoice;
+    edge: SegmentCompareSlotChoice;
+  }> = [];
+  for (const walk of slots) {
+    for (const edge of slots) {
+      combos.push({
+        key: segmentCompareCombinationKey(walk, edge),
+        walk,
+        edge,
+      });
+    }
+  }
+  return combos;
+}
+
 export type SegmentCompareRunStatus = "queued" | "running" | "completed" | "failed";
 
 export type SegmentCompareUsage = {
@@ -97,6 +141,30 @@ export type SegmentCompareRun = {
 };
 
 export const SAVED_AGENDA_COMPARE_ID = "saved-agenda";
+
+export function combinationKeysFromRuns(
+  runs: SegmentCompareRun[],
+): Array<{
+  key: string;
+  walk: SegmentCompareSlotChoice;
+  edge: SegmentCompareSlotChoice;
+}> {
+  const seen = new Set<string>();
+  const extras: Array<{
+    key: string;
+    walk: SegmentCompareSlotChoice;
+    edge: SegmentCompareSlotChoice;
+  }> = [];
+  for (const run of runs) {
+    const key = segmentCompareCombinationKey(run.walk, run.edge);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (run.walk.thinking || run.edge.thinking) {
+      extras.push({ key, walk: run.walk, edge: run.edge });
+    }
+  }
+  return extras;
+}
 
 export function estimateSegmentCompareCostUsd(
   apiModel: string,

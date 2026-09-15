@@ -269,13 +269,16 @@ function CompareCombinationPicker({
             Rows = walk model (plain + <span className="font-semibold">· think</span>). Columns =
             edge judges (plain + think).{" "}
             <span className="font-semibold">Done</span> after a lab run finishes. Costs show actual
-            spend when run; otherwise <span className="font-semibold">~</span> estimates from
+            spend when run (including failed runs with partial API use); otherwise{" "}
+            <span className="font-semibold">~</span> estimates from
             {costBaseline?.source === "v4_lab_run"
               ? " your completed V4×V4 lab tokens"
               : costBaseline
                 ? " pipeline extract walk tokens (edge scaled)"
                 : " extract data once the agenda exists"}
-            . <span className="font-semibold">V4 × V4</span> (no think) = saved extract.
+            . <span className="font-semibold">· think</span> cells use higher Gemini/DeepSeek
+            token allowances than plain. <span className="font-semibold">V4 × V4</span> (no think) =
+            saved extract.
           </p>
           <div className="overflow-x-auto">
           <table className="w-full min-w-[54rem] border-collapse text-xs">

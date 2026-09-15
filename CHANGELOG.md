@@ -18,6 +18,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V2 segmenter compare progress** — Walk and edge are chosen from a **6×6 matrix** (each model plus a **· think** row/column). The **V4 × V4** (no think) cell is the saved pipeline extract; **Done** is read-only after a lab run completes; **Run** / **L** / **R** live in each cell. Each cell shows **actual** lab cost when run, otherwise **~** estimates repriced from a V4×V4 lab run or pipeline extract tokens.
 
+- **Meetings V2 segmenter compare Gemini billing** — Depleted or overdrawn AI Studio credits surface as clear billing errors instead of misleading truncation-only text. **· think** matrix estimates use higher Gemini token multipliers. Failed runs persist partial walk/edge spend when the API was already called.
+
 - **Meetings V2 fact-resolution schema halt** — Investigation still aborted the remaining agenda items when one fact record had an invalid `selected` index or shape (`invalid fact or selection`). After a retry those records become open questions, and a single item failure no longer stops the rest of the run. The “investigations are missing” banner was the leftover of that halt.
 
 - **Meetings V2 fact-resolution citation halt** — After agenda approval, investigation stopped the whole run when one fact’s quote was not a verbatim substring of the evidence (for example “minutes accepted as amended”). Unverifiable citations now become open questions after a retry, so the remaining items still investigate.

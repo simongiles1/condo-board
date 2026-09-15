@@ -17,8 +17,15 @@ export type SegmentCompareCostBaseline = {
   source: "v4_lab_run" | "extract_plus_ratio";
 };
 
-const THINKING_OUTPUT_MULTIPLIER = 1.35;
-const THINKING_INPUT_MULTIPLIER = 1.05;
+/** DeepSeek thinking runs — modest uplift vs plain JSON. */
+const DEEPSEEK_THINKING_OUTPUT_MULTIPLIER = 2;
+const DEEPSEEK_THINKING_INPUT_MULTIPLIER = 1.05;
+/**
+ * Gemini `thinkingLevel: medium` bills many more output (thought) tokens than minimal.
+ * Estimates use a conservative uplift so thinking combos are not underpriced vs plain baselines.
+ */
+const GEMINI_THINKING_OUTPUT_MULTIPLIER = 6;
+const GEMINI_THINKING_INPUT_MULTIPLIER = 1.1;
 /** When only extract walk tokens exist, edge judges are approximated from walk volume. */
 const DEFAULT_EDGE_TO_WALK_INPUT_RATIO = 0.45;
 
@@ -44,6 +51,13 @@ function latestCompletedRunForKey(
   return matches[matches.length - 1] ?? null;
 }
 
+function latestRunForKey(runs: SegmentCompareRun[], key: string): SegmentCompareRun | null {
+  const matches = runs.filter(
+    (run) => segmentCompareCombinationKey(run.walk, run.edge) === key,
+  );
+  return matches[matches.length - 1] ?? null;
+}
+
 function scaleTokenUsage(base: TokenUsage, inputRatio: number): TokenUsage {
   const ratio = Math.max(0, inputRatio);
   return {
@@ -59,19 +73,40 @@ function scaleTokenUsage(base: TokenUsage, inputRatio: number): TokenUsage {
   };
 }
 
-function applyThinkingProfile(usage: TokenUsage, thinking: boolean): TokenUsage {
+function thinkingTokenMultipliers(
+  modelId: import("@/lib/meeting-v2/segment-compare-models").SegmentCompareModelId,
+): { input: number; output: number } {
+  const provider = segmentCompareModel(modelId).provider;
+  if (provider === "gemini") {
+    return {
+      input: GEMINI_THINKING_INPUT_MULTIPLIER,
+      output: GEMINI_THINKING_OUTPUT_MULTIPLIER,
+    };
+  }
+  return {
+    input: DEEPSEEK_THINKING_INPUT_MULTIPLIER,
+    output: DEEPSEEK_THINKING_OUTPUT_MULTIPLIER,
+  };
+}
+
+function applyThinkingProfile(
+  usage: TokenUsage,
+  thinking: boolean,
+  modelId: import("@/lib/meeting-v2/segment-compare-models").SegmentCompareModelId,
+): TokenUsage {
   if (!thinking) return usage;
-  const inputTokens = Math.round(usage.inputTokens * THINKING_INPUT_MULTIPLIER);
-  const outputTokens = Math.round(usage.outputTokens * THINKING_OUTPUT_MULTIPLIER);
+  const { input, output } = thinkingTokenMultipliers(modelId);
+  const inputTokens = Math.round(usage.inputTokens * input);
+  const outputTokens = Math.round(usage.outputTokens * output);
   return {
     inputTokens,
     outputTokens,
     totalTokens: inputTokens + outputTokens,
     cacheHitTokens: usage.cacheHitTokens
-      ? Math.round(usage.cacheHitTokens * THINKING_INPUT_MULTIPLIER)
+      ? Math.round(usage.cacheHitTokens * input)
       : undefined,
     cacheMissTokens: usage.cacheMissTokens
-      ? Math.round(usage.cacheMissTokens * THINKING_INPUT_MULTIPLIER)
+      ? Math.round(usage.cacheMissTokens * input)
       : undefined,
   };
 }
@@ -123,8 +158,8 @@ export function estimateSegmentCompareCombinationCostUsd(
   edge: SegmentCompareSlotChoice,
   baseline: SegmentCompareCostBaseline,
 ): number {
-  const walkUsage = applyThinkingProfile(baseline.walk, walk.thinking);
-  const edgeUsage = applyThinkingProfile(baseline.edge, edge.thinking);
+  const walkUsage = applyThinkingProfile(baseline.walk, walk.thinking, walk.modelId);
+  const edgeUsage = applyThinkingProfile(baseline.edge, edge.thinking, edge.modelId);
   const walkModel = segmentCompareModel(walk.modelId);
   const edgeModel = segmentCompareModel(edge.modelId);
   const billedAt = baseline.billedAtMs;
@@ -140,9 +175,17 @@ export function cellCostLabel(
   baseline: SegmentCompareCostBaseline | null,
 ): { text: string; isEstimate: boolean } {
   const key = segmentCompareCombinationKey(walk, edge);
-  const completed = latestCompletedRunForKey(runs, key);
-  if (completed?.totalCostUsd != null && Number.isFinite(completed.totalCostUsd)) {
-    return { text: formatCostUsd(completed.totalCostUsd), isEstimate: false };
+  const latest = latestRunForKey(runs, key);
+  if (latest?.totalCostUsd != null && Number.isFinite(latest.totalCostUsd)) {
+    if (latest.status === "failed") {
+      return {
+        text: `${formatCostUsd(latest.totalCostUsd)} spent`,
+        isEstimate: false,
+      };
+    }
+    if (latest.status === "completed") {
+      return { text: formatCostUsd(latest.totalCostUsd), isEstimate: false };
+    }
   }
   if (!baseline) {
     return { text: "—", isEstimate: false };

@@ -31,14 +31,21 @@ export function formatGeminiApiErrorMessage(error: unknown): string | null {
   if (/GEMINI_API_KEY is missing/i.test(message)) {
     return "GEMINI_API_KEY is not configured on this server.";
   }
-  if (/prepayment credits? (are )?depleted|prepayment credit/i.test(message)) {
-    return "Gemini prepaid credits are depleted. Add credits or enable billing in Google AI Studio, then try again.";
+  if (
+    /prepayment credits? (are )?depleted|prepayment credit|insufficient credits?|out of credits?|credit balance|negative balance|billing account|payment required|insufficient funds/i.test(
+      message,
+    )
+  ) {
+    return "Gemini prepaid credits are depleted or overdrawn. Add credits in Google AI Studio, then try again.";
   }
-  if (/exceeded its monthly spending cap/i.test(message)) {
+  if (/exceeded its monthly spending cap|spending cap|budget exceeded/i.test(message)) {
     return "Gemini monthly spending cap reached. Raise the cap in Google AI Studio, then try again.";
   }
-  if (/429\s*Too Many Requests|RESOURCE_EXHAUSTED/i.test(message)) {
-    return "Gemini rate limit hit. Wait a moment and try again.";
+  if (/429\s*Too Many Requests|RESOURCE_EXHAUSTED|quota exceeded|exceeded.*quota/i.test(message)) {
+    return "Gemini rate or quota limit hit (often billing-related). Check AI Studio credits and try again.";
+  }
+  if (/403|PERMISSION_DENIED|billing/i.test(message)) {
+    return "Gemini billing or permissions error. Check AI Studio credits and API access, then try again.";
   }
   if (/GoogleGenerativeAI/i.test(message)) {
     return "Gemini API error during comparison. Check server logs for details.";
@@ -148,14 +155,20 @@ export async function generateGeminiStructuredJson(options: {
     generationConfig,
   });
 
-  const result = await generativeModel.generateContent([options.userText]);
+  let result;
+  try {
+    result = await generativeModel.generateContent([options.userText]);
+  } catch (error) {
+    const friendly = formatGeminiApiErrorMessage(error);
+    throw new Error(friendly ?? (error instanceof Error ? error.message : String(error)));
+  }
   const parsed = parseGenerationResult(result.response, {
     modelName,
     step: "structured_json",
   });
   if (parsed.truncated && !options.allowTruncated) {
     throw new Error(
-      `Gemini output was truncated (maxOutputTokens=${maxOutputTokens}).`,
+      `Gemini output was truncated (maxOutputTokens=${maxOutputTokens}). With low AI Studio balance, failures can look like truncation — check billing.`,
     );
   }
   if (!parsed.text) {

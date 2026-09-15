@@ -91,12 +91,18 @@ describe("segment compare cost estimates", () => {
     );
     assert.ok(baseline);
     assert.equal(baseline?.source, "v4_lab_run");
-    const gemini = estimateSegmentCompareCombinationCostUsd(
+    const geminiPlain = estimateSegmentCompareCombinationCostUsd(
       { modelId: "gemini-3.8-flash", thinking: false },
       { modelId: "gemini-3.8-flash", thinking: false },
       baseline!,
     );
-    assert.ok(gemini > 0);
+    assert.ok(geminiPlain > 0);
+    const geminiThinkBoth = estimateSegmentCompareCombinationCostUsd(
+      { modelId: "gemini-3.8-flash", thinking: true },
+      { modelId: "gemini-3.8-flash", thinking: true },
+      baseline!,
+    );
+    assert.ok(geminiThinkBoth > geminiPlain * 2);
   });
 });
 

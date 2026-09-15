@@ -28,6 +28,7 @@ import {
   buildSegmentCompareCostBaseline,
   type SegmentCompareCostBaseline,
 } from "@/lib/meeting-v2/segment-compare-cost-estimates";
+import { formatGeminiApiErrorMessage } from "@/lib/gemini/client";
 import type { TokenUsage } from "@/lib/gemini/usage";
 import {
   assignRemainingHolesToAgenda,
@@ -394,6 +395,9 @@ export async function runSegmentCompareExperiment(options: {
     });
   };
 
+  const walkMeter = emptyMeter();
+  const edgeMeter = emptyMeter();
+
   try {
     await progress("Loading stored agenda outline");
     const db = getDb();
@@ -438,8 +442,6 @@ export async function runSegmentCompareExperiment(options: {
       throw new Error("No transcript segments found for this meeting.");
     }
 
-    const walkMeter = emptyMeter();
-    const edgeMeter = emptyMeter();
     const walkGenerate = meterJson(createSegmentationJsonFn(existing.walk), walkMeter);
     const edgeGenerate = meterJson(createSegmentationJsonFn(existing.edge), edgeMeter);
 
@@ -550,12 +552,24 @@ export async function runSegmentCompareExperiment(options: {
     }
     return completed;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const friendly = formatGeminiApiErrorMessage(error);
+    const message =
+      friendly ?? (error instanceof Error ? error.message : String(error));
+    const walkUsage =
+      walkMeter.totalTokens > 0 ? usageFromMeter(existing.walk, walkMeter) : null;
+    const edgeUsage =
+      edgeMeter.totalTokens > 0 ? usageFromMeter(existing.edge, edgeMeter) : null;
+    const partialUsd = (walkUsage?.costUsd ?? 0) + (edgeUsage?.costUsd ?? 0);
+    const totalCostUsd =
+      walkMeter.totalTokens > 0 || edgeMeter.totalTokens > 0 ? partialUsd : null;
     const failed = await patchSegmentCompareRun(meetingId, runId, {
       status: "failed",
       progressLabel: null,
       error: message,
       completedAt: new Date().toISOString(),
+      walkUsage,
+      edgeUsage,
+      totalCostUsd,
     });
     if (failed) return failed;
     throw error;

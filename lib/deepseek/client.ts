@@ -63,6 +63,11 @@ export async function generateDeepSeekJson(options: {
   temperature?: number;
   /** V4 thinking mode. Default true (API default). Prefer false for JSON extract. */
   thinking?: boolean;
+  /**
+   * When true, return non-empty truncated content (finish_reason=length) so the
+   * caller can salvage JSON. Default false: truncation is an error.
+   */
+  allowTruncated?: boolean;
   /** Abort the HTTP request after this many ms (default 120s). */
   requestTimeoutMs?: number;
 }): Promise<DeepSeekGenerationResult> {
@@ -120,7 +125,7 @@ export async function generateDeepSeekJson(options: {
     );
   }
 
-  if (finishReason === "length") {
+  if (finishReason === "length" && !options.allowTruncated) {
     throw new Error(
       `DeepSeek output was truncated (finish_reason=length, max_tokens=${maxTokens}, reasoning_tokens=${reasoningTokens}).`,
     );

@@ -105,7 +105,8 @@ Your job is to maintain two structured lists:
 
 Important rules:
 - Preserve existing valid topics. Update them carefully instead of rewriting blindly.
-- Keep unchanged topics compact and stable. Do not expand aliases, notes, or explanations on topics that this chunk did not materially affect.
+- Return only topics this chunk created or materially updated. Do not echo unchanged topics; the server keeps omitted topics as they are.
+- Keep aliases, notes, and explanations compact on topics you do update.
 - One real business matter should appear once.
 - A real topic is a board-level business matter, not just a document page or a paragraph.
 - Preserve the document's own wording when it already names the matter clearly. Do not rewrite titles into a cleaner or more polished version unless the package wording is obviously broken OCR.
@@ -140,7 +141,7 @@ If this chunk does not require any change, return:
   "status": "no_change"
 }
 
-Otherwise return strict JSON with this shape:
+Otherwise return a PATCH, not the full topic list. Include only documentTopics this chunk created or updated. Omitted topics stay unchanged. Never copy the current state back.
 {
   "documentTopics": [
     {
@@ -272,7 +273,7 @@ If this chunk does not require any change, return:
   "status": "no_change"
 }
 
-Otherwise return strict JSON with the same shape as before, including "discrepancies": [...] when applicable.
+Otherwise return a PATCH with the same topic object shape as the package task, including "discrepancies": [...] when applicable. Include only topics this chunk created or updated. Omitted topics stay unchanged. Never copy the current state back.
 
 Transcript rules:
 - Discussion Status: Any topic with verified audio discussion in this or previous chunks should have discussionStatus "discussed". If an agenda topic was not reached (e.g. meeting adjourned early or skipped), it remains "not_discussed".
@@ -365,7 +366,7 @@ function safeJsonParse(text: string): unknown {
   );
 }
 
-function tryBalanceTruncatedJson(text: string): unknown | null {
+export function tryBalanceTruncatedJson(text: string): unknown | null {
   const trimmed = text.trim();
   const firstBrace = trimmed.indexOf("{");
   if (firstBrace < 0) return null;
@@ -451,10 +452,42 @@ function isNoChangeResponse(value: unknown): boolean {
   );
 }
 
+const AGENDA_CHUNK_MAX_OUTPUT_TOKENS = 12288;
+const AGENDA_CHUNK_TRUNCATION_RETRY =
+  'Your previous response hit the output token limit. Return a PATCH only: topics this chunk created or updated. Do not echo unchanged topics. If nothing changed, return {"status":"no_change"}.';
+
+/** One chunk update. Retry once on length so a full-state echo cannot abort the walk. */
+async function completeAgendaChunk(options: {
+  systemInstruction: string;
+  userText: string;
+}) {
+  const request = {
+    systemInstruction: options.systemInstruction,
+    modelName: "deepseek-v4-flash",
+    maxOutputTokens: AGENDA_CHUNK_MAX_OUTPUT_TOKENS,
+    temperature: 0,
+    thinking: false,
+    allowTruncated: true,
+  };
+  const first = await generateDeepSeekJson({
+    ...request,
+    userText: options.userText,
+  });
+  if (first.finishReason !== "length") return first;
+  return generateDeepSeekJson({
+    ...request,
+    userText: `${options.userText}
+
+${AGENDA_CHUNK_TRUNCATION_RETRY}`,
+  });
+}
+
 async function parseWithRepair(text: string): Promise<unknown> {
   try {
     return safeJsonParse(text);
   } catch {
+    const balanced = tryBalanceTruncatedJson(text);
+    if (balanced) return balanced;
     const repaired = await generateDeepSeekJson({
       systemInstruction: "Repair invalid JSON into one valid JSON object.",
       userText: `Repair the following invalid JSON-like response into one valid JSON object.
@@ -467,13 +500,16 @@ Rules:
 INVALID RESPONSE
 ${text}`,
       modelName: "deepseek-v4-flash",
-      maxOutputTokens: 12288,
+      maxOutputTokens: AGENDA_CHUNK_MAX_OUTPUT_TOKENS,
       temperature: 0,
       thinking: false,
+      allowTruncated: true,
     });
     try {
       return safeJsonParse(repaired.text);
     } catch {
+      const repairedBalanced = tryBalanceTruncatedJson(repaired.text);
+      if (repairedBalanced) return repairedBalanced;
       throw new Error("Could not repair malformed JSON response.");
     }
   }
@@ -1492,7 +1528,7 @@ export async function extractAgendaItemsWithAi(
         total: totalChunks,
         label: `Extracting package chunk ${chunk.index + 1}/${packageChunks.length}`,
       });
-      const response = await generateDeepSeekJson({
+      const response = await completeAgendaChunk({
         systemInstruction: PACKAGE_SYSTEM_PROMPT,
         userText: buildPackageUserText({
           meetingId,
@@ -1503,10 +1539,6 @@ export async function extractAgendaItemsWithAi(
           pageNumbers: chunk.pageNumbers,
           chunkText: chunk.text,
         }),
-        modelName: "deepseek-v4-flash",
-        maxOutputTokens: 12288,
-        temperature: 0,
-        thinking: false,
       });
       const parsed = await parseWithRepair(response.text);
       const beforeStateJson = JSON.stringify(state);
@@ -1552,7 +1584,7 @@ export async function extractAgendaItemsWithAi(
       total: totalChunks,
       label: `Extracting transcript chunk ${chunk.transcriptIndex + 1}/${transcriptChunks.length}`,
     });
-    const response = await generateDeepSeekJson({
+    const response = await completeAgendaChunk({
       systemInstruction: TRANSCRIPT_SYSTEM_PROMPT,
       userText: buildTranscriptUserText({
         meetingId,
@@ -1563,10 +1595,6 @@ export async function extractAgendaItemsWithAi(
         sequenceRange: chunk.sequenceRange,
         chunkText: chunk.text,
       }),
-      modelName: "deepseek-v4-flash",
-      maxOutputTokens: 12288,
-      temperature: 0,
-      thinking: false,
     });
     const parsed = await parseWithRepair(response.text);
     const beforeStateJson = JSON.stringify(state);

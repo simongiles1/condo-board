@@ -24,6 +24,7 @@ import {
   normalizeTopic,
   normalizeDiscrepancies,
   normalizeWorkflowState,
+  tryBalanceTruncatedJson,
 } from "../lib/meeting-v2/agenda-ai";
 import {
   flattenBoardPackageAgenda,
@@ -398,6 +399,46 @@ describe("Dual-Source Agenda Extraction & Synthesis", () => {
 
     assert.equal(result.discrepancies?.length, 1);
     assert.equal(result.discrepancies?.[0].id, "disc-034-1");
+  });
+
+  it("salvages truncated patch JSON without dropping established topics", () => {
+    const pump = normalizeTopic({
+      title: "Booster Pump Replacement",
+      sectionLabel: "Management",
+      itemNumber: "4.B.1",
+      notes: ["Package line"],
+    });
+    const roof = normalizeTopic({
+      title: "Roof restoration",
+      sectionLabel: "Management",
+      itemNumber: "4.B.2",
+      notes: ["Package line"],
+    });
+    assert.ok(pump);
+    assert.ok(roof);
+
+    const truncated = `{
+  "documentTopics": [
+    {
+      "title": "Booster Pump Replacement",
+      "sectionLabel": "Management",
+      "itemNumber": "4.B.1",
+      "notes": ["Named in this chunk"],
+      "discussionStatus": "discussed"
+`;
+    const parsed = tryBalanceTruncatedJson(truncated);
+    assert.ok(parsed);
+
+    const result = normalizeWorkflowState(parsed, {
+      documentTopics: [pump, roof],
+      extraTopics: [],
+      uncertainties: [],
+    });
+    assert.equal(result.documentTopics.length, 2);
+    assert.equal(result.documentTopics[0].discussionStatus, "discussed");
+    assert.deepEqual(result.documentTopics[0].notes, ["Package line", "Named in this chunk"]);
+    assert.equal(result.documentTopics[1].itemNumber, "4.B.2");
+    assert.equal(result.documentTopics[1].discussionStatus, roof.discussionStatus);
   });
 });
 

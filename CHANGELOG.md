@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 fact-resolution schema halt** — Investigation still aborted the remaining agenda items when one fact record had an invalid `selected` index or shape (`invalid fact or selection`). After a retry those records become open questions, and a single item failure no longer stops the rest of the run. The “investigations are missing” banner was the leftover of that halt.
+
 - **Meetings V2 fact-resolution citation halt** — After agenda approval, investigation stopped the whole run when one fact’s quote was not a verbatim substring of the evidence (for example “minutes accepted as amended”). Unverifiable citations now become open questions after a retry, so the remaining items still investigate.
 
 - **Meetings V2 false pipeline-stop after validation** — Meetings that finished investigation/validation but still have open questions (or never stored `draftReadiness`) were flagged as a crashed run and lost the Agenda Review tabs. That human-review hold is now `validated` and consistent; older `investigated` rows keep review and compare instead of Resume/Restart.

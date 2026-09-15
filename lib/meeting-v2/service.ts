@@ -2882,6 +2882,7 @@ export async function investigateAgendaItems(
         reason: "Item confirmed not discussed during HITL agenda approval",
       });
     } else {
+      try {
         const resolved = await resolveAgendaFacts({ agenda: item, sources });
         factResolution = resolved.facts;
         factResolutionAttempts = resolved.attempts;
@@ -2901,6 +2902,26 @@ export async function investigateAgendaItems(
           requestTrace: aiResult.requestTrace,
           ...(reEvaluate ? { reEvaluate: true } : {}),
         });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        factResolution = { facts: [], unresolvedQuestions: [message] };
+        normalized = {
+          discussion_summary: `Automatic investigation could not finish for this item. ${message}`,
+          outcome: "UNCLEAR",
+          confidence: "INSUFFICIENT",
+          visibility: inferVisibility(item.title) === "in_camera" ? "RESTRICTED" : "PUBLIC",
+          decisions: [],
+          motion: null,
+          actions: [],
+          open_questions: [{ question: message, recommended_answer: "", confidence: "low" }],
+        };
+        modelName = "investigation_item_salvage";
+        usageJson = JSON.stringify({
+          skippedLlm: true,
+          reason: message,
+          ...(reEvaluate ? { reEvaluate: true } : {}),
+        });
+      }
     }
     // Proposed answers and revised notes remain model output, never edits to source evidence.
     usageJson = JSON.stringify({ ...safeJsonParse<Record<string, unknown>>(usageJson, {}),

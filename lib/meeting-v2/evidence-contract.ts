@@ -74,6 +74,8 @@ function quoteSupportedBySource(sourceText: string, quote: string): boolean {
   return compactQuote.length >= 12 && compactSource.includes(compactQuote);
 }
 
+const FACT_SCOPES = ["package_proposal", "prior_approval", "current_decision", "discussion"] as const;
+
 function candidateIsVerifiable(
   candidate: ResolvedFact["candidates"][number],
   byId: Map<string, EvidenceSource>,
@@ -88,25 +90,78 @@ function candidateIsVerifiable(
   );
 }
 
+function coerceSelectedIndex(selected: unknown, candidateCount: number): number | null | undefined {
+  if (selected === null) return null;
+  const numeric =
+    typeof selected === "number"
+      ? selected
+      : typeof selected === "string" && /^-?\d+$/.test(selected.trim())
+        ? Number(selected.trim())
+        : NaN;
+  if (!Number.isInteger(numeric)) return undefined;
+  if (numeric < 0 || numeric >= candidateCount) return undefined;
+  return numeric;
+}
+
+function coerceUnresolvedQuestions(raw: unknown, salvage: boolean): string[] {
+  if (!Array.isArray(raw)) {
+    if (salvage) return [];
+    throw new Error("Fact resolution returned an invalid schema.");
+  }
+  const questions: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry === "string") {
+      questions.push(entry);
+      continue;
+    }
+    if (
+      salvage &&
+      entry &&
+      typeof entry === "object" &&
+      typeof (entry as { question?: unknown }).question === "string"
+    ) {
+      questions.push((entry as { question: string }).question);
+      continue;
+    }
+    if (!salvage) throw new Error("Fact resolution returned an invalid schema.");
+  }
+  return questions;
+}
+
 /** Validate shape and verbatim evidence links before a model's fact choices can be used. */
 export function parseFactResolution(
   raw: unknown,
   sources: EvidenceSource[],
   options?: { salvageUnverifiable?: boolean },
 ): FactResolution {
-  const value = raw as FactResolution;
-  if (!value || !Array.isArray(value.facts) || !Array.isArray(value.unresolvedQuestions) ||
-      !value.unresolvedQuestions.every(q => typeof q === "string")) throw new Error("Fact resolution returned an invalid schema.");
-  const byId = new Map(sources.map(s => [s.id, s]));
   const salvage = Boolean(options?.salvageUnverifiable);
-  const unresolvedQuestions = [...value.unresolvedQuestions];
+  const value = raw as Partial<FactResolution> | null;
+  if (!value || !Array.isArray(value.facts)) {
+    throw new Error("Fact resolution returned an invalid schema.");
+  }
+  const byId = new Map(sources.map(s => [s.id, s]));
+  const unresolvedQuestions = coerceUnresolvedQuestions(value.unresolvedQuestions, salvage);
   const facts: ResolvedFact[] = [];
   for (const fact of value.facts) {
-    if (!fact || typeof fact.field !== "string" || typeof fact.explanation !== "string" ||
-        !["package_proposal", "prior_approval", "current_decision", "discussion"].includes(fact.scope) ||
-        !Array.isArray(fact.candidates) || !fact.candidates.length ||
-        (fact.selected !== null && (!Number.isInteger(fact.selected) || fact.selected < 0 || fact.selected >= fact.candidates.length))) {
-      throw new Error("Fact resolution contains an invalid fact or selection.");
+    const field = typeof fact?.field === "string" ? fact.field : "unknown field";
+    const shapeOk = Boolean(
+      fact &&
+        typeof fact.field === "string" &&
+        typeof fact.explanation === "string" &&
+        FACT_SCOPES.includes(fact.scope as (typeof FACT_SCOPES)[number]) &&
+        Array.isArray(fact.candidates) &&
+        fact.candidates.length,
+    );
+    if (!shapeOk) {
+      if (!salvage) throw new Error("Fact resolution contains an invalid fact or selection.");
+      unresolvedQuestions.push(`Could not use a malformed fact record for ${field}.`);
+      continue;
+    }
+    let originalSelected = coerceSelectedIndex(fact.selected ?? null, fact.candidates.length);
+    if (originalSelected === undefined) {
+      if (!salvage) throw new Error("Fact resolution contains an invalid fact or selection.");
+      originalSelected = null;
+      unresolvedQuestions.push(`Could not use the selected index for ${fact.field}.`);
     }
     const kept: ResolvedFact["candidates"] = [];
     const keptFromOriginal: number[] = [];
@@ -127,25 +182,37 @@ export function parseFactResolution(
       unresolvedQuestions.push(`Could not verify a citation for ${fact.field}.`);
       continue;
     }
-    let selected =
-      fact.selected === null ? null : keptFromOriginal.indexOf(fact.selected);
+    let selected = originalSelected === null ? null : keptFromOriginal.indexOf(originalSelected);
     if (selected !== null && selected < 0) {
       selected = null;
       if (salvage) unresolvedQuestions.push(`Could not verify the selected citation for ${fact.field}.`);
     }
     if (selected !== null) {
       const selectedSource = byId.get(kept[selected].sourceId)!;
-      if (selectedSource.kind === "document" && fact.scope !== "package_proposal" &&
-          kept.some(c => ["transcript", "user"].includes(byId.get(c.sourceId)!.kind))) {
-        throw new Error(`Fact ${fact.field} selects package evidence over meeting evidence.`);
-      }
-      if (fact.scope === "current_decision" && selectedSource.kind === "document") {
-        throw new Error(`Fact ${fact.field} treats a package proposal as a current decision.`);
+      const prefersMeetingEvidence =
+        selectedSource.kind === "document" &&
+        fact.scope !== "package_proposal" &&
+        kept.some(c => ["transcript", "user"].includes(byId.get(c.sourceId)!.kind));
+      const packageAsDecision = fact.scope === "current_decision" && selectedSource.kind === "document";
+      if (prefersMeetingEvidence || packageAsDecision) {
+        if (!salvage) {
+          throw new Error(
+            prefersMeetingEvidence
+              ? `Fact ${fact.field} selects package evidence over meeting evidence.`
+              : `Fact ${fact.field} treats a package proposal as a current decision.`,
+          );
+        }
+        selected = null;
+        unresolvedQuestions.push(
+          prefersMeetingEvidence
+            ? `Could not accept package evidence over meeting evidence for ${fact.field}.`
+            : `Could not treat a package proposal as a current decision for ${fact.field}.`,
+        );
       }
     }
     facts.push({
       field: fact.field,
-      scope: fact.scope,
+      scope: fact.scope as ResolvedFact["scope"],
       candidates: kept,
       selected,
       explanation: fact.explanation,

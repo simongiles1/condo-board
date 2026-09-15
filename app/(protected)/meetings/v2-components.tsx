@@ -18,6 +18,7 @@ import {
 } from "@/components/AiUsageDialog";
 import { DeleteMeetingButton } from "@/components/DeleteMeetingButton";
 import { DuplicateMeetingV2Dialog, DuplicateMeetingMenuIcon } from "@/components/DuplicateMeetingV2Dialog";
+import { RenameMeetingV2Dialog, RenameMeetingMenuIcon } from "@/components/RenameMeetingV2Dialog";
 import { MEETING_V2_DUPLICATE_NOT_READY_MESSAGE } from "@/lib/meeting-v2/duplicate-meeting-shared";
 import {
   AgendaApprovalConfirmDialog,
@@ -1174,6 +1175,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 onOpenUsage={() => setUsageDialogOpen(true)}
                 onOpenPdfTemplate={() => setPdfTemplateDialogOpen(true)}
                 onSourcesPulled={() => void refreshStatus()}
+                onWorkspaceRenamed={() => void refreshStatus()}
                 autonomyTemperature={autonomyTemperature}
                 onAutonomyChange={setAutonomyTemperature}
                 hasDraftPdf={Boolean(status?.latestDraft)}
@@ -1412,6 +1414,7 @@ function MeetingWorkspaceMoreMenu({
   onOpenUsage,
   onOpenPdfTemplate,
   onSourcesPulled,
+  onWorkspaceRenamed,
   autonomyTemperature,
   onAutonomyChange,
   hasDraftPdf,
@@ -1428,6 +1431,7 @@ function MeetingWorkspaceMoreMenu({
   onOpenUsage: () => void;
   onOpenPdfTemplate: () => void;
   onSourcesPulled: () => void;
+  onWorkspaceRenamed: () => void;
   autonomyTemperature: number;
   onAutonomyChange: (value: number) => void;
   hasDraftPdf: boolean;
@@ -1435,6 +1439,8 @@ function MeetingWorkspaceMoreMenu({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const validated = validationScore !== null;
   const compareLabel = validated
@@ -1599,6 +1605,21 @@ function MeetingWorkspaceMoreMenu({
           <button
             role="menuitem"
             type="button"
+            onClick={() => {
+              closeMenu();
+              setRenameOpen(true);
+            }}
+            className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+          >
+            <RenameMeetingMenuIcon className="h-5 w-5 shrink-0 text-slate-500" />
+            <span>
+              <span className="block font-medium text-slate-900">Rename workspace</span>
+              <span className="block text-xs text-slate-500">Change the display name for this meeting</span>
+            </span>
+          </button>
+          <button
+            role="menuitem"
+            type="button"
             disabled={!canDuplicate}
             title={canDuplicate ? undefined : MEETING_V2_DUPLICATE_NOT_READY_MESSAGE}
             onClick={() => {
@@ -1618,21 +1639,44 @@ function MeetingWorkspaceMoreMenu({
               </span>
             </span>
           </button>
-          <DeleteMeetingButton
-            meetingId={meetingId}
-            meetingTitle={meetingTitle}
-            redirectTo="/operations/meetings"
-            apiVersion="v2"
-            presentation="menuItem"
-            onMenuOpen={closeMenu}
-          />
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              closeMenu();
+              setDeleteOpen(true);
+            }}
+            className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50"
+          >
+            <DeleteMeetingMenuTrashIcon className="h-4 w-4 shrink-0" />
+            <span>
+              <span className="block font-medium">Delete workspace</span>
+              <span className="block text-xs text-red-600/80">Permanently remove this meeting</span>
+            </span>
+          </button>
         </div>
       ) : null}
+      <RenameMeetingV2Dialog
+        open={renameOpen}
+        meetingId={meetingId}
+        meetingTitle={meetingTitle}
+        onClose={() => setRenameOpen(false)}
+        onRenamed={onWorkspaceRenamed}
+      />
       <DuplicateMeetingV2Dialog
         open={duplicateOpen}
         meetingId={meetingId}
         meetingTitle={meetingTitle}
         onClose={() => setDuplicateOpen(false)}
+      />
+      <DeleteMeetingButton
+        meetingId={meetingId}
+        meetingTitle={meetingTitle}
+        redirectTo="/operations/meetings"
+        apiVersion="v2"
+        presentation="dialogOnly"
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
       />
     </div>
   );
@@ -1644,6 +1688,25 @@ function EllipsisVerticalIcon() {
       <circle cx="12" cy="5" r="1.75" />
       <circle cx="12" cy="12" r="1.75" />
       <circle cx="12" cy="19" r="1.75" />
+    </svg>
+  );
+}
+
+function DeleteMeetingMenuTrashIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.75}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+      />
     </svg>
   );
 }

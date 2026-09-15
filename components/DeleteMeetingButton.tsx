@@ -13,8 +13,11 @@ type Props = {
   /** Which meeting API to call. Defaults to legacy v1 meetings. */
   apiVersion?: "v1" | "v2";
   tone?: "default" | "inverse";
-  presentation?: "icon" | "menuItem";
+  presentation?: "icon" | "menuItem" | "dialogOnly";
   onMenuOpen?: () => void;
+  /** Controlled dialog (required when the trigger unmounts with a closing menu). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 };
 
 export function DeleteMeetingButton({
@@ -25,11 +28,24 @@ export function DeleteMeetingButton({
   tone = "default",
   presentation = "icon",
   onMenuOpen,
+  open: openControlled,
+  onOpenChange,
 }: Props) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const [openUncontrolled, setOpenUncontrolled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isControlled = openControlled !== undefined;
+  const open = isControlled ? openControlled : openUncontrolled;
+
+  function setOpen(next: boolean) {
+    if (isControlled) {
+      onOpenChange?.(next);
+    } else {
+      setOpenUncontrolled(next);
+    }
+  }
 
   async function confirmDelete() {
     setError(null);
@@ -76,7 +92,7 @@ export function DeleteMeetingButton({
 
   return (
     <>
-      {presentation === "menuItem" ? (
+      {presentation === "dialogOnly" ? null : presentation === "menuItem" ? (
         <button
           type="button"
           role="menuitem"

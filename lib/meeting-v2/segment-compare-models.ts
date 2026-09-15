@@ -96,6 +96,22 @@ export function segmentCompareModelShortLabel(id: SegmentCompareModelId): string
   }
 }
 
+/** Walk or edge axis: each catalog model with and without thinking. */
+export function segmentCompareMatrixSlots(): SegmentCompareSlotChoice[] {
+  return SEGMENT_COMPARE_MODEL_IDS.flatMap((modelId) => [
+    { modelId, thinking: false },
+    { modelId, thinking: true },
+  ]);
+}
+
+export function segmentCompareSlotShortLabel(choice: SegmentCompareSlotChoice): string {
+  const base = segmentCompareModelShortLabel(choice.modelId);
+  return choice.thinking ? `${base} · think` : base;
+}
+
+export const SEGMENT_COMPARE_MATRIX_CELL_COUNT =
+  segmentCompareMatrixSlots().length * segmentCompareMatrixSlots().length;
+
 export function formatSegmentCompareCombination(
   walk: SegmentCompareSlotChoice,
   edge: SegmentCompareSlotChoice,

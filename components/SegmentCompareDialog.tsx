@@ -9,15 +9,14 @@ import {
 import type { MergedVttCue } from "@/lib/parsers/vtt";
 import { formatVttTimestamp } from "@/lib/parsers/vtt";
 import {
-  combinationKeysFromRuns,
   formatSegmentCompareCombination,
   SAVED_AGENDA_COMPARE_ID,
   SAVED_EXTRACT_COMBINATION_KEY,
-  SEGMENT_COMPARE_MODEL_IDS,
+  SEGMENT_COMPARE_MATRIX_CELL_COUNT,
   SEGMENT_COMPARE_SAVED_REVIEW_KEY,
   segmentCompareCombinationKey,
-  segmentCompareModelShortLabel,
-  type SegmentCompareModelId,
+  segmentCompareMatrixSlots,
+  segmentCompareSlotShortLabel,
   type SegmentCompareRun,
   type SegmentCompareSlotChoice,
 } from "@/lib/meeting-v2/segment-compare-models";
@@ -88,24 +87,17 @@ function paneTitle(paneId: string, runs: SegmentCompareRun[]): string {
   return run ? runLabel(run) : "Unknown source";
 }
 
-function buildCombinationRows(runs: SegmentCompareRun[]): CombinationRow[] {
+function buildCombinationRows(): CombinationRow[] {
+  const slots = segmentCompareMatrixSlots();
   const rows: CombinationRow[] = [];
-  for (const walkId of SEGMENT_COMPARE_MODEL_IDS) {
-    for (const edgeId of SEGMENT_COMPARE_MODEL_IDS) {
-      const walk: SegmentCompareSlotChoice = { modelId: walkId, thinking: false };
-      const edge: SegmentCompareSlotChoice = { modelId: edgeId, thinking: false };
+  for (const walk of slots) {
+    for (const edge of slots) {
       rows.push({
         key: segmentCompareCombinationKey(walk, edge),
         walk,
         edge,
       });
     }
-  }
-  const seen = new Set(rows.map((row) => row.key));
-  for (const extra of combinationKeysFromRuns(runs)) {
-    if (seen.has(extra.key)) continue;
-    seen.add(extra.key);
-    rows.push(extra);
   }
   return rows;
 }
@@ -160,7 +152,8 @@ function CompareCombinationPicker({
   const [open, setOpen] = useState(false);
   const [savingReview, setSavingReview] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
-  const combinationRows = useMemo(() => buildCombinationRows(runs), [runs]);
+  const combinationRows = useMemo(() => buildCombinationRows(), []);
+  const matrixSlots = useMemo(() => segmentCompareMatrixSlots(), []);
   const activeRuns = runs.filter((run) => run.status !== "completed");
 
   useEffect(() => {
@@ -227,25 +220,13 @@ function CompareCombinationPicker({
     return paneActive(paneId, side);
   }
 
-  const thinkingRows = useMemo(
-    () => combinationKeysFromRuns(runs),
-    [runs],
-  );
-
-  const runTargetRow =
-    combinationRows.find((row) => row.key === runTargetKey) ??
-    thinkingRows.find((row) => row.key === runTargetKey);
+  const runTargetRow = combinationRows.find((row) => row.key === runTargetKey);
   const runTargetLabel = runTargetRow
     ? formatSegmentCompareCombination(runTargetRow.walk, runTargetRow.edge)
     : "Select combination";
   const reviewedCount = normalizeReviewedKeys(reviewedKeys).length;
 
-  function matrixCell(
-    walkId: SegmentCompareModelId,
-    edgeId: SegmentCompareModelId,
-  ): CombinationRow {
-    const walk: SegmentCompareSlotChoice = { modelId: walkId, thinking: false };
-    const edge: SegmentCompareSlotChoice = { modelId: edgeId, thinking: false };
+  function combinationRow(walk: SegmentCompareSlotChoice, edge: SegmentCompareSlotChoice): CombinationRow {
     return {
       key: segmentCompareCombinationKey(walk, edge),
       walk,
@@ -254,7 +235,7 @@ function CompareCombinationPicker({
   }
 
   return (
-    <div className="relative min-w-0 flex-1 sm:max-w-md" ref={panelRef}>
+    <div className="relative min-w-0 flex-1 sm:max-w-lg" ref={panelRef}>
       <button
         type="button"
         className="flex w-full items-start justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left hover:bg-slate-50"
@@ -271,41 +252,45 @@ function CompareCombinationPicker({
           </span>
         </span>
         <span className="shrink-0 pt-1 text-xs text-slate-500">
-          {reviewedCount}/9 done · {open ? "▲" : "▼"}
+          {reviewedCount}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT} done · {open ? "▲" : "▼"}
         </span>
       </button>
       {open ? (
-        <div className="absolute left-0 z-30 mt-1 w-max max-w-[min(100vw-2rem,22rem)] rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+        <div className="absolute left-0 z-30 mt-1 max-w-[min(100vw-1rem,40rem)] overflow-x-auto rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
           <p className="mb-2 text-[11px] leading-snug text-slate-600">
-            Rows = transcript walk model. Columns = edge judges.{" "}
-            <span className="font-semibold">V4 × V4</span> holds the saved pipeline extract.
+            Rows = walk model (plain + <span className="font-semibold">· think</span>). Columns =
+            edge judges (plain + think).{" "}
+            <span className="font-semibold">V4 × V4</span> (no think) = saved pipeline extract.{" "}
+            <span className="font-semibold">L</span> / <span className="font-semibold">R</span> put
+            that cell on the left or right compare pane (both can highlight on one cell if both panes
+            use the same source).
           </p>
-          <table className="w-full border-collapse text-[11px]">
+          <table className="w-full min-w-[28rem] border-collapse text-[10px]">
             <thead>
               <tr>
                 <th className="border border-slate-200 bg-slate-50 px-1 py-1 text-left font-semibold text-slate-600">
                   Walk ↓ Edge →
                 </th>
-                {SEGMENT_COMPARE_MODEL_IDS.map((edgeId) => (
+                {matrixSlots.map((edge, edgeIndex) => (
                   <th
-                    key={edgeId}
-                    className="border border-slate-200 bg-slate-50 px-1 py-1 text-center font-semibold text-slate-700"
+                    key={`edge-${edgeIndex}`}
+                    className="border border-slate-200 bg-slate-50 px-0.5 py-1 text-center font-semibold leading-tight text-slate-700"
                   >
-                    {segmentCompareModelShortLabel(edgeId)}
+                    {segmentCompareSlotShortLabel(edge)}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {SEGMENT_COMPARE_MODEL_IDS.map((walkId) => (
-                <tr key={walkId}>
+              {matrixSlots.map((walk, walkIndex) => (
+                <tr key={`walk-${walkIndex}`}>
                   <th
-                    className="border border-slate-200 bg-slate-50 px-1.5 py-1 text-left font-semibold text-slate-700"
+                    className="border border-slate-200 bg-slate-50 px-1 py-1 text-left font-semibold leading-tight text-slate-700"
                   >
-                    {segmentCompareModelShortLabel(walkId)}
+                    {segmentCompareSlotShortLabel(walk)}
                   </th>
-                  {SEGMENT_COMPARE_MODEL_IDS.map((edgeId) => {
-                    const row = matrixCell(walkId, edgeId);
+                  {matrixSlots.map((edge, edgeIndex) => {
+                    const row = combinationRow(walk, edge);
                     const completed = latestCompletedRunForKey(runs, row.key);
                     const isSavedCell = row.key === SAVED_EXTRACT_COMBINATION_KEY;
                     const label = formatSegmentCompareCombination(row.walk, row.edge);
@@ -380,34 +365,6 @@ function CompareCombinationPicker({
               ))}
             </tbody>
           </table>
-          {thinkingRows.length > 0 ? (
-            <div className="mt-2 border-t border-slate-100 pt-2">
-              <p className="mb-1 text-[10px] font-semibold uppercase text-slate-500">
-                Thinking runs
-              </p>
-              <ul className="space-y-1 text-[11px] text-slate-600">
-                {thinkingRows.map((row) => (
-                  <li key={row.key} className="flex flex-wrap items-center gap-2">
-                    <span>{formatSegmentCompareCombination(row.walk, row.edge)}</span>
-                    <input
-                      type="radio"
-                      name="segment-compare-run-target"
-                      checked={runTargetKey === row.key}
-                      onChange={() => onRunTargetChange(row.key, row)}
-                    />
-                    <label className="inline-flex items-center gap-1">
-                      <input
-                        type="checkbox"
-                        checked={isCombinationReviewed(row.key, reviewedKeys)}
-                        onChange={(event) => toggleReviewed(row.key, event.target.checked)}
-                      />
-                      Done
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
           {activeRuns.length > 0 ? (
             <ul className="mt-2 border-t border-slate-200 pt-2 text-[11px] text-slate-600">
               {activeRuns.map((run) => (
@@ -622,8 +579,6 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<WorkspacePayload | null>(null);
   const [runTargetKey, setRunTargetKey] = useState(DEFAULT_RUN_TARGET_KEY);
-  const [runWalkThinking, setRunWalkThinking] = useState(false);
-  const [runEdgeThinking, setRunEdgeThinking] = useState(false);
   const [leftId, setLeftId] = useState(SAVED_AGENDA_COMPARE_ID);
   const [rightId, setRightId] = useState(SAVED_AGENDA_COMPARE_ID);
   const [reviewedKeys, setReviewedKeys] = useState<string[]>([]);
@@ -692,7 +647,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   const savedOverlays = workspace?.savedOverlays ?? [];
   const runs = workspace?.runs ?? [];
 
-  const combinationRows = useMemo(() => buildCombinationRows(runs), [runs]);
+  const combinationRows = useMemo(() => buildCombinationRows(), []);
   const runTargetRow = useMemo(
     () => combinationRows.find((row) => row.key === runTargetKey) ?? combinationRows[0],
     [combinationRows, runTargetKey],
@@ -723,10 +678,8 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     [cues, rightOverlays],
   );
 
-  function handleRunTargetChange(key: string, row: CombinationRow) {
+  function handleRunTargetChange(key: string, _row: CombinationRow) {
     setRunTargetKey(key);
-    setRunWalkThinking(row.walk.thinking);
-    setRunEdgeThinking(row.edge.thinking);
   }
 
   async function handleRun() {
@@ -736,19 +689,11 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     }
     setStarting(true);
     setError(null);
-    const walk: SegmentCompareSlotChoice = {
-      ...runTargetRow.walk,
-      thinking: runWalkThinking,
-    };
-    const edge: SegmentCompareSlotChoice = {
-      ...runTargetRow.edge,
-      thinking: runEdgeThinking,
-    };
     try {
       const response = await fetch(`/api/v2/meetings/${meetingId}/segment-compare`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ walk, edge }),
+        body: JSON.stringify({ walk: runTargetRow.walk, edge: runTargetRow.edge }),
       });
       const payload = (await response.json()) as { run?: SegmentCompareRun; error?: string };
       if (!response.ok) {
@@ -825,24 +770,6 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
             >
               {starting || busy ? "Running…" : "Run combination"}
             </button>
-            <div className="flex flex-wrap gap-3 text-sm text-slate-700">
-              <label className="inline-flex items-center gap-1.5">
-                <input
-                  type="checkbox"
-                  checked={runWalkThinking}
-                  onChange={(event) => setRunWalkThinking(event.target.checked)}
-                />
-                Walk thinking
-              </label>
-              <label className="inline-flex items-center gap-1.5">
-                <input
-                  type="checkbox"
-                  checked={runEdgeThinking}
-                  onChange={(event) => setRunEdgeThinking(event.target.checked)}
-                />
-                Edge thinking
-              </label>
-            </div>
           </div>
         </div>
         {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}

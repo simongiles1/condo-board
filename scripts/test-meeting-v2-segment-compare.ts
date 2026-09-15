@@ -15,7 +15,9 @@ import {
   formatSegmentCompareChoice,
   isSegmentCompareModelId,
   segmentCompareCombinationKey,
+  segmentCompareMatrixSlots,
   segmentCompareModel,
+  SEGMENT_COMPARE_MATRIX_CELL_COUNT,
 } from "../lib/meeting-v2/segment-compare-models";
 import { pickSectionsForTime } from "../lib/transcript/section-overlay";
 
@@ -34,6 +36,8 @@ describe("segment compare catalog", () => {
     );
     assert.equal(key, "deepseek-v4-flash|0|gemini-3.8-flash|1");
     assert.equal(enumerateSegmentCompareCombinations().length, 9);
+    assert.equal(segmentCompareMatrixSlots().length, 6);
+    assert.equal(SEGMENT_COMPARE_MATRIX_CELL_COUNT, 36);
   });
 
   it("labels thinking in the run title", () => {

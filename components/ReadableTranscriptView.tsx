@@ -37,7 +37,7 @@ export function speakerBackgroundColor(speaker: string): string {
   return `hsl(${hue} 42% 95%)`;
 }
 
-const SECTION_BORDER_COLORS = [
+export const SECTION_BORDER_COLORS = [
   "#7f1d1d",
   "#2563eb",
   "#047857",

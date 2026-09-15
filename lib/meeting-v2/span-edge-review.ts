@@ -9,6 +9,7 @@ import {
   parseDiscussionTimestampRanges,
   type TimestampRange,
 } from "@/lib/meeting-v2/agenda-outline";
+import type { SegmentationJsonFn } from "@/lib/meeting-v2/segment-json";
 
 /** Forward look-ahead per loop. A 6-minute hole takes about four loops. */
 export const SPAN_EDGE_WINDOW_SECONDS = 120;
@@ -235,15 +236,18 @@ function parseJudgeJson(text: string): { action: "extend" | "stop" | "move_start
   }
 }
 
-export async function defaultSpanEdgeJudge(input: {
-  topic: SpanReviewTopic;
-  direction: "forward" | "backward" | "trim_start";
-  windowStartSeconds: number;
-  windowEndSeconds: number;
-  cues: SpanReviewCue[];
-  nextForeignTitle: string | null;
-  unmatchedLaterLeaves: Array<{ itemNumber?: string; title: string }>;
-}): Promise<{ action: "extend" | "stop" | "move_start"; atSeconds: number | null }> {
+async function runSpanEdgeJudge(
+  input: {
+    topic: SpanReviewTopic;
+    direction: "forward" | "backward" | "trim_start";
+    windowStartSeconds: number;
+    windowEndSeconds: number;
+    cues: SpanReviewCue[];
+    nextForeignTitle: string | null;
+    unmatchedLaterLeaves: Array<{ itemNumber?: string; title: string }>;
+  },
+  generate: SegmentationJsonFn,
+): Promise<{ action: "extend" | "stop" | "move_start"; atSeconds: number | null }> {
   const code = input.topic.itemNumber ? `${input.topic.itemNumber} — ` : "";
   const foreign = input.nextForeignTitle
     ? `The next extracted item nearby is "${input.nextForeignTitle}". Do not start that item on assent or wrap-up of the current item.`
@@ -305,15 +309,47 @@ If they belong to the previous item (assent / wrap-up / unmute), return:
 CUES:
 ${formatCuesForPrompt(input.cues)}`;
 
-  const response = await generateDeepSeekJson({
+  const response = await generate({
     systemInstruction: SPAN_EDGE_SYSTEM_PROMPT,
     userText,
-    modelName: "deepseek-v4-flash",
     maxOutputTokens: 512,
     temperature: 0,
-    thinking: false,
   });
   return parseJudgeJson(response.text);
+}
+
+const defaultSpanEdgeJson: SegmentationJsonFn = async (options) => {
+  const result = await generateDeepSeekJson({
+    systemInstruction: options.systemInstruction,
+    userText: options.userText,
+    modelName: "deepseek-v4-flash",
+    maxOutputTokens: options.maxOutputTokens,
+    temperature: options.temperature,
+    thinking: false,
+    allowTruncated: options.allowTruncated,
+  });
+  return {
+    text: result.text,
+    modelName: result.modelName,
+    usage: result.usage,
+    finishReason: result.finishReason,
+  };
+};
+
+export function createSpanEdgeJudge(generate: SegmentationJsonFn): SpanEdgeJudge {
+  return (input) => runSpanEdgeJudge(input, generate);
+}
+
+export async function defaultSpanEdgeJudge(input: {
+  topic: SpanReviewTopic;
+  direction: "forward" | "backward" | "trim_start";
+  windowStartSeconds: number;
+  windowEndSeconds: number;
+  cues: SpanReviewCue[];
+  nextForeignTitle: string | null;
+  unmatchedLaterLeaves: Array<{ itemNumber?: string; title: string }>;
+}): Promise<{ action: "extend" | "stop" | "move_start"; atSeconds: number | null }> {
+  return runSpanEdgeJudge(input, defaultSpanEdgeJson);
 }
 
 async function growOneSpan(options: {

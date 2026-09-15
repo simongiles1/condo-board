@@ -5,6 +5,7 @@ import { MINUTES_PIPELINE_VERSION, stableAgendaId } from "./evidence-contract";
 import { and, asc, eq } from "drizzle-orm";
 
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
+import type { SegmentationJsonFn } from "@/lib/meeting-v2/segment-json";
 import { getDb } from "@/lib/db";
 import {
   meetingsV2,
@@ -46,7 +47,7 @@ import {
   extendFloorThroughLifecycleHoles,
 } from "@/lib/meeting-v2/gap-leaf-assignment";
 
-type WorkflowTopic = {
+export type WorkflowTopic = {
   title: string;
   sectionLabel: string;
   itemType: string;
@@ -80,7 +81,7 @@ type WorkflowDiscrepancy = {
   clarificationQuestion: string;
 };
 
-type WorkflowState = {
+export type WorkflowState = {
   documentTopics: WorkflowTopic[];
   extraTopics: WorkflowTopic[];
   uncertainties: string[];
@@ -319,7 +320,7 @@ const PACKAGE_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}
 
 ${PACKAGE_TASK}`;
 
-const TRANSCRIPT_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}
+export const TRANSCRIPT_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}
 
 ${TRANSCRIPT_TASK}`;
 
@@ -444,7 +445,7 @@ export function tryBalanceTruncatedJson(text: string): unknown | null {
   }
 }
 
-function isNoChangeResponse(value: unknown): boolean {
+export function isNoChangeResponse(value: unknown): boolean {
   return (
     Boolean(value) &&
     typeof value === "object" &&
@@ -457,25 +458,43 @@ const AGENDA_CHUNK_MAX_OUTPUT_TOKENS = 12288;
 const AGENDA_CHUNK_TRUNCATION_RETRY =
   'Your previous response hit the output token limit. Return a PATCH only: topics this chunk created or updated. Do not echo unchanged topics. If nothing changed, return {"status":"no_change"}.';
 
+const defaultAgendaChunkJson: SegmentationJsonFn = async (options) => {
+  const result = await generateDeepSeekJson({
+    systemInstruction: options.systemInstruction,
+    userText: options.userText,
+    modelName: "deepseek-v4-flash",
+    maxOutputTokens: options.maxOutputTokens,
+    temperature: options.temperature,
+    thinking: false,
+    allowTruncated: options.allowTruncated,
+  });
+  return {
+    text: result.text,
+    modelName: result.modelName,
+    usage: result.usage,
+    finishReason: result.finishReason,
+  };
+};
+
 /** One chunk update. Retry once on length so a full-state echo cannot abort the walk. */
-async function completeAgendaChunk(options: {
+export async function completeAgendaChunk(options: {
   systemInstruction: string;
   userText: string;
+  generate?: SegmentationJsonFn;
 }) {
+  const generate = options.generate ?? defaultAgendaChunkJson;
   const request = {
     systemInstruction: options.systemInstruction,
-    modelName: "deepseek-v4-flash",
     maxOutputTokens: AGENDA_CHUNK_MAX_OUTPUT_TOKENS,
     temperature: 0,
-    thinking: false,
-    allowTruncated: true,
+    allowTruncated: true as const,
   };
-  const first = await generateDeepSeekJson({
+  const first = await generate({
     ...request,
     userText: options.userText,
   });
   if (first.finishReason !== "length") return first;
-  return generateDeepSeekJson({
+  return generate({
     ...request,
     userText: `${options.userText}
 
@@ -483,13 +502,16 @@ ${AGENDA_CHUNK_TRUNCATION_RETRY}`,
   });
 }
 
-async function parseWithRepair(text: string): Promise<unknown> {
+export async function parseWithRepair(
+  text: string,
+  generate: SegmentationJsonFn = defaultAgendaChunkJson,
+): Promise<unknown> {
   try {
     return safeJsonParse(text);
   } catch {
     const balanced = tryBalanceTruncatedJson(text);
     if (balanced) return balanced;
-    const repaired = await generateDeepSeekJson({
+    const repaired = await generate({
       systemInstruction: "Repair invalid JSON into one valid JSON object.",
       userText: `Repair the following invalid JSON-like response into one valid JSON object.
 
@@ -500,10 +522,8 @@ Rules:
 
 INVALID RESPONSE
 ${text}`,
-      modelName: "deepseek-v4-flash",
       maxOutputTokens: AGENDA_CHUNK_MAX_OUTPUT_TOKENS,
       temperature: 0,
-      thinking: false,
       allowTruncated: true,
     });
     try {
@@ -1003,7 +1023,7 @@ function preserveTranscriptProvenance(next: WorkflowTopic[], previous: WorkflowT
   });
 }
 
-function sortTopics(topics: WorkflowTopic[]): WorkflowTopic[] {
+export function sortTopics(topics: WorkflowTopic[]): WorkflowTopic[] {
   return topics
     .map((topic, originalIndex) => ({ topic, originalIndex }))
     .sort((left, right) => {
@@ -1344,7 +1364,7 @@ ${upcoming}
 Walk cues in order. Operations: (1) OPEN a new span / move the floor, (2) ENRICH the floor item, (3) CHANGE LIFECYCLE of the floor item. Assent does not open the next outline item.`;
 }
 
-function buildTranscriptUserText(options: {
+export function buildTranscriptUserText(options: {
   meetingId: string;
   state: WorkflowState;
   chunkIndex: number;

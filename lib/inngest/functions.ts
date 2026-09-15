@@ -31,6 +31,7 @@ import {
   updateMeetingV2Status,
   validateAgendaItemInvestigations,
 } from "@/lib/meeting-v2/service";
+import { runSegmentCompareExperiment } from "@/lib/meeting-v2/segment-compare";
 
 export const runMeetingV2Pipeline = inngest.createFunction(
   {
@@ -363,5 +364,21 @@ export const reevaluateAgendaItem = inngest.createFunction(
       await rerunAgendaItem(meetingId, itemId);
     });
     return { success: true, meetingId, itemId };
+  },
+);
+
+export const runMeetingV2SegmentCompare = inngest.createFunction(
+  {
+    id: "run-meeting-v2-segment-compare",
+    retries: 0,
+    concurrency: { limit: 1, key: "event.data.meetingId", scope: "env" },
+    triggers: [{ event: "meeting-v2/segment-compare.start" }],
+  },
+  async ({ event, step }) => {
+    const { meetingId, runId } = event.data as { meetingId: string; runId: string };
+    const result = await step.run("segment-compare", async () => {
+      return runSegmentCompareExperiment({ meetingId, runId });
+    });
+    return { success: result.status === "completed", meetingId, runId, status: result.status };
   },
 );

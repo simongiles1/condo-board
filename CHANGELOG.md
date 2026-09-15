@@ -6,6 +6,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Meetings V2 segmenter compare lab** — Temporary full-page tool on the meeting More menu. Pick a model for the transcript walk (overall segmenter) and a model for span-edge / gap judges, with a thinking toggle. Each combination is a stored run with token cost. Side-by-side panes share one scroll; cue rows stay aligned and only the section boxes differ. Runs do not rewrite saved agenda items. Models: DeepSeek V4 Flash, DeepSeek V4.1 Flash (`deepseek-flash`), Gemini 3.8 Flash.
+
 ### Fixed
 
 - **Meetings V2 fact-resolution schema halt** — Investigation still aborted the remaining agenda items when one fact record had an invalid `selected` index or shape (`invalid fact or selection`). After a retry those records become open questions, and a single item failure no longer stops the rest of the run. The “investigations are missing” banner was the leftover of that halt.

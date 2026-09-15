@@ -97,6 +97,8 @@ export type MeetingV2Settings = {
     totalPages: number;
     recordedAt: string;
   };
+  /** Temporary transcript-segmenter A/B runs. Does not rewrite agenda items. */
+  segmentCompareRuns?: import("./segment-compare-models").SegmentCompareRun[];
 };
 
 export type MeetingV2ExtractionRun = {

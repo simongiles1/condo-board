@@ -6,6 +6,7 @@ import {
   parseDiscussionTimestampRanges,
   type TimestampRange,
 } from "@/lib/meeting-v2/agenda-outline";
+import type { SegmentationJsonFn } from "@/lib/meeting-v2/segment-json";
 import {
   applyTopicClockSpans,
   cuesInWindow,
@@ -147,14 +148,21 @@ Rules:
 - Only OPEN itemNumbers from the unmatched list.
 - Return JSON only.`;
 
-async function defaultGapJudge(input: {
-  floor: SpanReviewTopic;
-  unmatched: SpanReviewTopic[];
-  rightTitle: string | null;
-  windowStartSeconds: number;
-  windowEndSeconds: number;
-  cues: SpanReviewCue[];
-}): Promise<GapJudgeDecision> {
+async function runGapJudge(
+  input: {
+    floor: SpanReviewTopic;
+    unmatched: SpanReviewTopic[];
+    rightTitle: string | null;
+    windowStartSeconds: number;
+    windowEndSeconds: number;
+    cues: SpanReviewCue[];
+  },
+  generate: SegmentationJsonFn,
+  systemInstruction: string,
+  unmatchedHeading: string,
+  exampleItemNumber: string,
+  instructionBlock: string,
+): Promise<GapJudgeDecision> {
   const unmatchedList =
     input.unmatched.length === 0
       ? "(none)"
@@ -165,14 +173,13 @@ async function defaultGapJudge(input: {
 NEXT RANGED ITEM: ${input.rightTitle ?? "(end of transcript)"}
 WINDOW: ${formatClockFromSeconds(input.windowStartSeconds)} – ${formatClockFromSeconds(input.windowEndSeconds)}
 
-UNMATCHED PACKAGE LEAVES IN THIS HOLE:
+${unmatchedHeading}
 ${unmatchedList}
 
-If wrap-up of the floor continues, set extendFloorTo to the last cue still on the floor.
-If an unmatched leaf is named, add an opens entry. Overlap with the floor is allowed.
+${instructionBlock}
 
 Return:
-{"extendFloorTo":"HH:MM:SS"|null,"opens":[{"itemNumber":"4.D.h","startTimestamp":"HH:MM:SS","endTimestamp":"HH:MM:SS"}]}
+{"extendFloorTo":"HH:MM:SS"|null,"opens":[{"itemNumber":"${exampleItemNumber}","startTimestamp":"HH:MM:SS","endTimestamp":"HH:MM:SS"}]}
 
 CUES:
 ${input.cues
@@ -182,15 +189,82 @@ ${input.cues
   )
   .join("\n")}`;
 
-  const response = await generateDeepSeekJson({
-    systemInstruction: GAP_SYSTEM_PROMPT,
+  const response = await generate({
+    systemInstruction,
     userText,
-    modelName: "deepseek-v4-flash",
     maxOutputTokens: 700,
     temperature: 0,
-    thinking: false,
   });
   return parseGapJudgeJson(response.text);
+}
+
+const defaultGapJson: SegmentationJsonFn = async (options) => {
+  const result = await generateDeepSeekJson({
+    systemInstruction: options.systemInstruction,
+    userText: options.userText,
+    modelName: "deepseek-v4-flash",
+    maxOutputTokens: options.maxOutputTokens,
+    temperature: options.temperature,
+    thinking: false,
+    allowTruncated: options.allowTruncated,
+  });
+  return {
+    text: result.text,
+    modelName: result.modelName,
+    usage: result.usage,
+    finishReason: result.finishReason,
+  };
+};
+
+const OUTLINE_HOLE_INSTRUCTIONS = `If wrap-up of the floor continues, set extendFloorTo to the last cue still on the floor.
+If an unmatched leaf is named, add an opens entry. Overlap with the floor is allowed.`;
+
+const REMAINING_HOLE_INSTRUCTIONS = `If wrap-up of the floor continues (including "move to the next item" and unmute without naming the next matter), set extendFloorTo to the last cue still on the floor.
+If an unassigned leaf is what this window is about, add an opens entry. Overlap with the floor is allowed.
+If speakers have already named the next ranged item, return empty opens and null extendFloorTo.`;
+
+async function defaultGapJudge(input: {
+  floor: SpanReviewTopic;
+  unmatched: SpanReviewTopic[];
+  rightTitle: string | null;
+  windowStartSeconds: number;
+  windowEndSeconds: number;
+  cues: SpanReviewCue[];
+}): Promise<GapJudgeDecision> {
+  return runGapJudge(
+    input,
+    defaultGapJson,
+    GAP_SYSTEM_PROMPT,
+    "UNMATCHED PACKAGE LEAVES IN THIS HOLE:",
+    "4.D.h",
+    OUTLINE_HOLE_INSTRUCTIONS,
+  );
+}
+
+export function createGapHoleJudge(
+  generate: SegmentationJsonFn,
+  kind: "outline" | "remaining" = "outline",
+): GapHoleJudge {
+  if (kind === "remaining") {
+    return (input) =>
+      runGapJudge(
+        input,
+        generate,
+        REMAINING_HOLE_SYSTEM_PROMPT,
+        "UNASSIGNED AGENDA LEAVES (may be discussed out of outline order in this hole):",
+        "5",
+        REMAINING_HOLE_INSTRUCTIONS,
+      );
+  }
+  return (input) =>
+    runGapJudge(
+      input,
+      generate,
+      GAP_SYSTEM_PROMPT,
+      "UNMATCHED PACKAGE LEAVES IN THIS HOLE:",
+      "4.D.h",
+      OUTLINE_HOLE_INSTRUCTIONS,
+    );
 }
 
 function topicIndex(topics: SpanReviewTopic[], itemNumber: string): number {
@@ -344,43 +418,14 @@ async function defaultRemainingHoleJudge(input: {
   windowEndSeconds: number;
   cues: SpanReviewCue[];
 }): Promise<GapJudgeDecision> {
-  const unmatchedList =
-    input.unmatched.length === 0
-      ? "(none)"
-      : input.unmatched
-          .map((topic) => `${topic.itemNumber ?? "?"} — ${topic.title}`)
-          .join("\n");
-  const userText = `FLOOR ITEM: ${input.floor.itemNumber ?? "?"} — ${input.floor.title}
-NEXT RANGED ITEM: ${input.rightTitle ?? "(end of transcript)"}
-WINDOW: ${formatClockFromSeconds(input.windowStartSeconds)} – ${formatClockFromSeconds(input.windowEndSeconds)}
-
-UNASSIGNED AGENDA LEAVES (may be discussed out of outline order in this hole):
-${unmatchedList}
-
-If wrap-up of the floor continues (including "move to the next item" and unmute without naming the next matter), set extendFloorTo to the last cue still on the floor.
-If an unassigned leaf is what this window is about, add an opens entry. Overlap with the floor is allowed.
-If speakers have already named the next ranged item, return empty opens and null extendFloorTo.
-
-Return:
-{"extendFloorTo":"HH:MM:SS"|null,"opens":[{"itemNumber":"5","startTimestamp":"HH:MM:SS","endTimestamp":"HH:MM:SS"}]}
-
-CUES:
-${input.cues
-  .map(
-    (cue) =>
-      `${cue.startTimestamp} seq=${cue.sequence} ${cue.speaker.trim() || "Unknown"}: ${cue.text}`,
-  )
-  .join("\n")}`;
-
-  const response = await generateDeepSeekJson({
-    systemInstruction: REMAINING_HOLE_SYSTEM_PROMPT,
-    userText,
-    modelName: "deepseek-v4-flash",
-    maxOutputTokens: 700,
-    temperature: 0,
-    thinking: false,
-  });
-  return parseGapJudgeJson(response.text);
+  return runGapJudge(
+    input,
+    defaultGapJson,
+    REMAINING_HOLE_SYSTEM_PROMPT,
+    "UNASSIGNED AGENDA LEAVES (may be discussed out of outline order in this hole):",
+    "5",
+    REMAINING_HOLE_INSTRUCTIONS,
+  );
 }
 
 /**

@@ -12,6 +12,7 @@ import {
 import { MinutesStructuredEditor } from "@/components/MinutesStructuredEditor";
 import { AttendeesEditorDialog } from "@/components/AttendeesEditorDialog";
 import { MeetingDocumentsDialog } from "@/components/MeetingDocumentsDialog";
+import { SegmentCompareDialog } from "@/components/SegmentCompareDialog";
 import { PullMeetingSourcesButton } from "@/components/PullMeetingSourcesButton";
 import {
   AiUsageDialog,
@@ -591,6 +592,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   }, [isAgendaApprovalPending]);
   const [autonomyTemperature, setAutonomyTemperature] = useState(0.8);
   const [documentsDialogOpen, setDocumentsDialogOpen] = useState(false);
+  const [segmentCompareOpen, setSegmentCompareOpen] = useState(false);
   const [usageDialogOpen, setUsageDialogOpen] = useState(false);
   const [usageStages, setUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
@@ -1182,6 +1184,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                 sourcesMissing={!pipelineSourcesReady}
                 onCompare={handleValidationBadgeClick}
                 onOpenDocuments={() => setDocumentsDialogOpen(true)}
+                onOpenSegmentCompare={() => setSegmentCompareOpen(true)}
                 onOpenUsage={() => setUsageDialogOpen(true)}
                 onOpenPdfTemplate={() => setPdfTemplateDialogOpen(true)}
                 onSourcesPulled={() => void refreshStatus()}
@@ -1357,6 +1360,11 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         agendaItems={status?.items}
         onClose={() => setDocumentsDialogOpen(false)}
       />
+      <SegmentCompareDialog
+        open={segmentCompareOpen}
+        meetingId={meetingId}
+        onClose={() => setSegmentCompareOpen(false)}
+      />
       <AiUsageDialog
         open={usageDialogOpen}
         stages={usageStages}
@@ -1421,6 +1429,7 @@ function MeetingWorkspaceMoreMenu({
   sourcesMissing,
   onCompare,
   onOpenDocuments,
+  onOpenSegmentCompare,
   onOpenUsage,
   onOpenPdfTemplate,
   onSourcesPulled,
@@ -1438,6 +1447,7 @@ function MeetingWorkspaceMoreMenu({
   sourcesMissing: boolean;
   onCompare: () => void;
   onOpenDocuments: () => void;
+  onOpenSegmentCompare: () => void;
   onOpenUsage: () => void;
   onOpenPdfTemplate: () => void;
   onSourcesPulled: () => void;
@@ -1571,6 +1581,23 @@ function MeetingWorkspaceMoreMenu({
               </span>
             </button>
           ) : null}
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              closeMenu();
+              onOpenSegmentCompare();
+            }}
+            className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+          >
+            <DocumentsCompareIcon className="h-5 w-5 shrink-0 text-slate-500" />
+            <span>
+              <span className="block font-medium text-slate-900">Segmenter compare</span>
+              <span className="block text-xs text-slate-500">
+                Side-by-side walk vs edge-model experiments
+              </span>
+            </span>
+          </button>
           <button
             role="menuitem"
             type="button"

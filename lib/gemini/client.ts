@@ -115,6 +115,55 @@ function parseGenerationResult(
   };
 }
 
+/**
+ * Structured JSON for segmentation experiments. Gemini 3 uses thinkingLevel.
+ * Thinking off maps to minimal; on maps to medium.
+ */
+export async function generateGeminiStructuredJson(options: {
+  systemInstruction: string;
+  userText: string;
+  modelName: string;
+  maxOutputTokens?: number;
+  temperature?: number;
+  thinking?: boolean;
+  allowTruncated?: boolean;
+}): Promise<GeminiGenerationResult> {
+  const client = new GoogleGenerativeAI(requireApiKey());
+  const modelName = options.modelName.trim();
+  const maxOutputTokens = options.maxOutputTokens ?? 4096;
+  const thinkingLevel = options.thinking ? "medium" : "minimal";
+  const generationConfig = {
+    ...buildGenerationConfig({
+      modelName,
+      maxOutputTokens,
+      temperature: options.temperature ?? 0,
+    }),
+    responseMimeType: "application/json",
+    thinkingConfig: { thinkingLevel },
+  } as GenerationConfig;
+
+  const generativeModel = client.getGenerativeModel({
+    model: modelName,
+    systemInstruction: options.systemInstruction,
+    generationConfig,
+  });
+
+  const result = await generativeModel.generateContent([options.userText]);
+  const parsed = parseGenerationResult(result.response, {
+    modelName,
+    step: "structured_json",
+  });
+  if (parsed.truncated && !options.allowTruncated) {
+    throw new Error(
+      `Gemini output was truncated (maxOutputTokens=${maxOutputTokens}).`,
+    );
+  }
+  if (!parsed.text) {
+    throw new Error("Gemini returned empty content.");
+  }
+  return parsed;
+}
+
 export async function generateWithSystemPrompt(options: {
   systemInstruction: string;
   userText: string;

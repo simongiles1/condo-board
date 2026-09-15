@@ -20,6 +20,7 @@ export const MODEL_LIST_PRICING_USD_PER_MILLION: Record<
   "gemini-3.5-flash": { input: 1.5, output: 9 },
   "gemini-3.6-flash": { input: 1.5, output: 7.5 },
   "gemini-3.7-flash": { input: 1.5, output: 7.5 },
+  "gemini-3.8-flash": { input: 1.5, output: 7.5 },
   /** Input-only billing; output dimension vectors are not token-billed. */
   "gemini-embedding-001": { input: 0.15, output: 0 },
 };
@@ -36,12 +37,14 @@ export const GEMINI_FLASH_INTRO_UNTIL_MS = Date.parse(
 const GEMINI_FLASH_INTRO_PRICING: Record<string, ModelTokenPricing> = {
   "gemini-3.6-flash": { input: 0.75, output: 3.75 },
   "gemini-3.7-flash": { input: 0.75, output: 3.75 },
+  "gemini-3.8-flash": { input: 0.75, output: 3.75 },
 };
 
 const MODEL_PRICING_ALIASES: Array<{
   match: RegExp;
   id: string;
 }> = [
+  { match: /gemini-3\.8-flash/i, id: "gemini-3.8-flash" },
   { match: /gemini-3\.7-flash/i, id: "gemini-3.7-flash" },
   { match: /gemini-3\.6-flash/i, id: "gemini-3.6-flash" },
   { match: /gemini-3\.5-flash/i, id: "gemini-3.5-flash" },

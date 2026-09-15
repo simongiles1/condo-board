@@ -30,8 +30,8 @@ describe("Gemini Flash intro pricing window", () => {
     assert.equal(geminiFlashIntroPricingActive(AFTER_INTRO_MS), false);
   });
 
-  it("prices 3.6 and 3.7 Flash the same (50% off list through 2026)", () => {
-    for (const id of ["gemini-3.6-flash", "gemini-3.7-flash"] as const) {
+  it("prices 3.6, 3.7, and 3.8 Flash the same (50% off list through 2026)", () => {
+    for (const id of ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"] as const) {
       assert.deepEqual(listPricingForModel(id), FLASH_LIST);
       assert.deepEqual(billedPricingForModel(id, INTRO_MS), FLASH_INTRO);
       assert.deepEqual(billedPricingForModel(id, AFTER_INTRO_MS), FLASH_LIST);
@@ -55,9 +55,9 @@ describe("formatUsdPerMillion", () => {
 });
 
 describe("estimateCostUsd intro rates", () => {
-  it("bills 3.6 and 3.7 Flash at $0.75/$3.75 during the intro window", () => {
+  it("bills 3.6, 3.7, and 3.8 Flash at $0.75/$3.75 during the intro window", () => {
     const usage = { inputTokens: 1_000_000, outputTokens: 1_000_000 };
-    for (const id of ["gemini-3.6-flash", "gemini-3.7-flash"] as const) {
+    for (const id of ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"] as const) {
       assert.equal(estimateCostUsd(id, usage, INTRO_MS), 0.75 + 3.75);
       assert.equal(estimateCostUsd(id, usage, AFTER_INTRO_MS), 1.5 + 7.5);
     }

@@ -14,7 +14,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V2 segmenter compare boxes** — Side-by-side panes now draw full section borders (top, sides, bottom) with a single agenda label at the start of each segment, matching the transcript section overlay, while cue rows stay aligned across panes.
 
-- **Meetings V2 segmenter compare progress** — The two walk/edge model dropdowns are replaced by one **Walk × edge combinations** menu: 3×3 matrix with **Done** checkboxes (persisted per meeting), **Run** target selection, **L/R** pane picks, and run cost when a combination has completed.
+- **Meetings V2 segmenter compare progress** — Walk and edge models are chosen from a compact **3×3 matrix** (walk on rows, edge on columns). The **V4 Flash × V4 Flash** cell is the saved pipeline extract; **Done** / **Run** / **L** / **R** live in each cell. Review progress persists per meeting.
 
 - **Meetings V2 fact-resolution schema halt** — Investigation still aborted the remaining agenda items when one fact record had an invalid `selected` index or shape (`invalid fact or selection`). After a retry those records become open questions, and a single item failure no longer stops the rest of the run. The “investigations are missing” banner was the leftover of that halt.
 

@@ -10,11 +10,14 @@ import type { MergedVttCue } from "@/lib/parsers/vtt";
 import { formatVttTimestamp } from "@/lib/parsers/vtt";
 import {
   combinationKeysFromRuns,
-  enumerateSegmentCompareCombinations,
   formatSegmentCompareCombination,
   SAVED_AGENDA_COMPARE_ID,
+  SAVED_EXTRACT_COMBINATION_KEY,
+  SEGMENT_COMPARE_MODEL_IDS,
   SEGMENT_COMPARE_SAVED_REVIEW_KEY,
   segmentCompareCombinationKey,
+  segmentCompareModelShortLabel,
+  type SegmentCompareModelId,
   type SegmentCompareRun,
   type SegmentCompareSlotChoice,
 } from "@/lib/meeting-v2/segment-compare-models";
@@ -86,7 +89,18 @@ function paneTitle(paneId: string, runs: SegmentCompareRun[]): string {
 }
 
 function buildCombinationRows(runs: SegmentCompareRun[]): CombinationRow[] {
-  const rows = enumerateSegmentCompareCombinations();
+  const rows: CombinationRow[] = [];
+  for (const walkId of SEGMENT_COMPARE_MODEL_IDS) {
+    for (const edgeId of SEGMENT_COMPARE_MODEL_IDS) {
+      const walk: SegmentCompareSlotChoice = { modelId: walkId, thinking: false };
+      const edge: SegmentCompareSlotChoice = { modelId: edgeId, thinking: false };
+      rows.push({
+        key: segmentCompareCombinationKey(walk, edge),
+        walk,
+        edge,
+      });
+    }
+  }
   const seen = new Set(rows.map((row) => row.key));
   for (const extra of combinationKeysFromRuns(runs)) {
     if (seen.has(extra.key)) continue;
@@ -94,6 +108,26 @@ function buildCombinationRows(runs: SegmentCompareRun[]): CombinationRow[] {
     rows.push(extra);
   }
   return rows;
+}
+
+function normalizeReviewedKeys(keys: string[]): string[] {
+  const set = new Set(keys);
+  if (set.has(SEGMENT_COMPARE_SAVED_REVIEW_KEY)) {
+    set.delete(SEGMENT_COMPARE_SAVED_REVIEW_KEY);
+    set.add(SAVED_EXTRACT_COMBINATION_KEY);
+  }
+  return [...set];
+}
+
+function isCombinationReviewed(key: string, reviewedKeys: string[]): boolean {
+  return normalizeReviewedKeys(reviewedKeys).includes(key);
+}
+
+function paneIdForCombination(key: string, runs: SegmentCompareRun[]): string | null {
+  const completed = latestCompletedRunForKey(runs, key);
+  if (completed) return completed.id;
+  if (key === SAVED_EXTRACT_COMBINATION_KEY) return SAVED_AGENDA_COMPARE_ID;
+  return null;
 }
 
 function CompareCombinationPicker({
@@ -161,9 +195,10 @@ function CompareCombinationPicker({
   }
 
   function toggleReviewed(key: string, checked: boolean) {
+    const normalized = normalizeReviewedKeys(reviewedKeys);
     const next = checked
-      ? [...new Set([...reviewedKeys, key])]
-      : reviewedKeys.filter((entry) => entry !== key);
+      ? [...new Set([...normalized, key])]
+      : normalized.filter((entry) => entry !== key);
     onReviewedKeysChange(next);
     void persistReviewedKeys(next);
   }
@@ -174,12 +209,12 @@ function CompareCombinationPicker({
   }
 
   function assignCombination(side: "left" | "right", key: string) {
-    const run = latestCompletedRunForKey(runs, key);
-    if (!run) {
-      onError("Run this combination first to show it in a pane.");
+    const paneId = paneIdForCombination(key, runs);
+    if (!paneId) {
+      onError("Run this combination in the lab first, or use the V4 × V4 cell for the saved extract.");
       return;
     }
-    assignPane(side, run.id);
+    assignPane(side, paneId);
   }
 
   function paneActive(paneId: string, side: "left" | "right"): boolean {
@@ -187,159 +222,202 @@ function CompareCombinationPicker({
   }
 
   function combinationPaneActive(key: string, side: "left" | "right"): boolean {
-    const run = latestCompletedRunForKey(runs, key);
-    if (!run) return false;
-    return paneActive(run.id, side);
+    const paneId = paneIdForCombination(key, runs);
+    if (!paneId) return false;
+    return paneActive(paneId, side);
   }
 
+  const thinkingRows = useMemo(
+    () => combinationKeysFromRuns(runs),
+    [runs],
+  );
+
   const runTargetRow =
-    combinationRows.find((row) => row.key === runTargetKey) ?? combinationRows[0];
+    combinationRows.find((row) => row.key === runTargetKey) ??
+    thinkingRows.find((row) => row.key === runTargetKey);
   const runTargetLabel = runTargetRow
     ? formatSegmentCompareCombination(runTargetRow.walk, runTargetRow.edge)
     : "Select combination";
-  const reviewedCount = reviewedKeys.length;
+  const reviewedCount = normalizeReviewedKeys(reviewedKeys).length;
+
+  function matrixCell(
+    walkId: SegmentCompareModelId,
+    edgeId: SegmentCompareModelId,
+  ): CombinationRow {
+    const walk: SegmentCompareSlotChoice = { modelId: walkId, thinking: false };
+    const edge: SegmentCompareSlotChoice = { modelId: edgeId, thinking: false };
+    return {
+      key: segmentCompareCombinationKey(walk, edge),
+      walk,
+      edge,
+    };
+  }
 
   return (
-    <div className="relative min-w-0 flex-1" ref={panelRef}>
+    <div className="relative min-w-0 flex-1 sm:max-w-md" ref={panelRef}>
       <button
         type="button"
-        className="flex w-full items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left hover:bg-slate-50"
+        className="flex w-full items-start justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left hover:bg-slate-50"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        aria-haspopup="listbox"
+        aria-haspopup="dialog"
       >
         <span className="min-w-0">
           <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Walk × edge combinations
+            Walk × edge matrix
           </span>
           <span className="mt-0.5 block truncate text-sm font-semibold text-slate-900">
-            Run target: {runTargetLabel}
-          </span>
-          <span className="mt-0.5 block truncate text-xs text-slate-600">
-            Panes: {paneTitle(leftId, runs)} vs {paneTitle(rightId, runs)}
+            Run: {runTargetLabel}
           </span>
         </span>
         <span className="shrink-0 pt-1 text-xs text-slate-500">
-          {reviewedCount} done · {open ? "▲" : "▼"}
-          {savingReview ? " · saving…" : ""}
+          {reviewedCount}/9 done · {open ? "▲" : "▼"}
         </span>
       </button>
       {open ? (
-        <div className="absolute left-0 right-0 z-30 mt-1 max-h-[min(28rem,70vh)] overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-          <p className="border-b border-slate-100 px-3 py-2 text-xs text-slate-600">
-            <span className="font-semibold">Done</span> tracks what you have reviewed.{" "}
-            <span className="font-semibold">Run</span> picks the walk×edge pair for{" "}
-            <span className="font-semibold">Run combination</span>.{" "}
-            <span className="font-semibold">L</span> / <span className="font-semibold">R</span> set
-            each pane. Saved agenda is the current pipeline extract (typically V4 Flash × V4 Flash).
+        <div className="absolute left-0 z-30 mt-1 w-max max-w-[min(100vw-2rem,22rem)] rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+          <p className="mb-2 text-[11px] leading-snug text-slate-600">
+            Rows = transcript walk model. Columns = edge judges.{" "}
+            <span className="font-semibold">V4 × V4</span> holds the saved pipeline extract.
           </p>
-          <table className="w-full text-left text-sm">
-            <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+          <table className="w-full border-collapse text-[11px]">
+            <thead>
               <tr>
-                <th className="w-10 px-2 py-1.5 font-semibold">Done</th>
-                <th className="px-2 py-1.5 font-semibold">Walk × edge</th>
-                <th className="w-12 px-2 py-1.5 text-center font-semibold">Run</th>
-                <th className="w-12 px-2 py-1.5 text-center font-semibold">L</th>
-                <th className="w-12 px-2 py-1.5 text-center font-semibold">R</th>
+                <th className="border border-slate-200 bg-slate-50 px-1 py-1 text-left font-semibold text-slate-600">
+                  Walk ↓ Edge →
+                </th>
+                {SEGMENT_COMPARE_MODEL_IDS.map((edgeId) => (
+                  <th
+                    key={edgeId}
+                    className="border border-slate-200 bg-slate-50 px-1 py-1 text-center font-semibold text-slate-700"
+                  >
+                    {segmentCompareModelShortLabel(edgeId)}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              <tr className="border-t border-slate-100">
-                <td className="px-2 py-1.5 align-top">
-                  <input
-                    type="checkbox"
-                    checked={reviewedKeys.includes(SEGMENT_COMPARE_SAVED_REVIEW_KEY)}
-                    disabled={savingReview}
-                    onChange={(event) =>
-                      toggleReviewed(SEGMENT_COMPARE_SAVED_REVIEW_KEY, event.target.checked)
-                    }
-                    aria-label="Mark saved agenda reviewed"
-                  />
-                </td>
-                <td className="px-2 py-1.5 align-top">
-                  <span className="font-medium text-slate-900">Saved agenda (current extract)</span>
-                </td>
-                <td className="px-2 py-1.5 text-center align-top text-slate-300">—</td>
-                <td className="px-2 py-1.5 text-center align-top">
-                  <PaneToggle
-                    active={paneActive(SAVED_AGENDA_COMPARE_ID, "left")}
-                    label="Set left pane to saved agenda"
-                    onClick={() => assignPane("left", SAVED_AGENDA_COMPARE_ID)}
-                  />
-                </td>
-                <td className="px-2 py-1.5 text-center align-top">
-                  <PaneToggle
-                    active={paneActive(SAVED_AGENDA_COMPARE_ID, "right")}
-                    label="Set right pane to saved agenda"
-                    onClick={() => assignPane("right", SAVED_AGENDA_COMPARE_ID)}
-                  />
-                </td>
-              </tr>
-              {combinationRows.map((row) => {
-                const completed = latestCompletedRunForKey(runs, row.key);
-                const label = formatSegmentCompareCombination(row.walk, row.edge);
-                return (
-                  <tr key={row.key} className="border-t border-slate-100">
-                    <td className="px-2 py-1.5 align-top">
-                      <input
-                        type="checkbox"
-                        checked={reviewedKeys.includes(row.key)}
-                        disabled={savingReview}
-                        onChange={(event) => toggleReviewed(row.key, event.target.checked)}
-                        aria-label={`Mark ${label} reviewed`}
-                      />
-                    </td>
-                    <td className="px-2 py-1.5 align-top">
-                      <div className="font-medium text-slate-900">{label}</div>
-                      {completed ? (
-                        <div className="text-xs text-slate-500">
-                          Run · {formatUsd(completed.totalCostUsd)}
+              {SEGMENT_COMPARE_MODEL_IDS.map((walkId) => (
+                <tr key={walkId}>
+                  <th
+                    className="border border-slate-200 bg-slate-50 px-1.5 py-1 text-left font-semibold text-slate-700"
+                  >
+                    {segmentCompareModelShortLabel(walkId)}
+                  </th>
+                  {SEGMENT_COMPARE_MODEL_IDS.map((edgeId) => {
+                    const row = matrixCell(walkId, edgeId);
+                    const completed = latestCompletedRunForKey(runs, row.key);
+                    const isSavedCell = row.key === SAVED_EXTRACT_COMBINATION_KEY;
+                    const label = formatSegmentCompareCombination(row.walk, row.edge);
+                    const paneReady = paneIdForCombination(row.key, runs) !== null;
+                    return (
+                      <td
+                        key={row.key}
+                        className={`border border-slate-200 p-1 align-top ${
+                          runTargetKey === row.key ? "bg-teal-50 ring-1 ring-inset ring-teal-600" : ""
+                        }`}
+                      >
+                        <div className="flex flex-col gap-1">
+                          <label className="flex items-center gap-1 text-slate-700">
+                            <input
+                              type="checkbox"
+                              className="h-3 w-3"
+                              checked={isCombinationReviewed(row.key, reviewedKeys)}
+                              disabled={savingReview}
+                              onChange={(event) =>
+                                toggleReviewed(row.key, event.target.checked)
+                              }
+                              aria-label={`Reviewed ${label}`}
+                            />
+                            <span>Done</span>
+                          </label>
+                          {isSavedCell ? (
+                            <span className="rounded bg-amber-50 px-1 py-0.5 text-[10px] font-semibold text-amber-900">
+                              Saved extract
+                            </span>
+                          ) : null}
+                          {completed ? (
+                            <span className="text-slate-500">Lab {formatUsd(completed.totalCostUsd)}</span>
+                          ) : isSavedCell ? null : (
+                            <span className="text-slate-400">No lab run</span>
+                          )}
+                          <label className="flex items-center gap-1 text-slate-700">
+                            <input
+                              type="radio"
+                              name="segment-compare-run-target"
+                              className="h-3 w-3"
+                              checked={runTargetKey === row.key}
+                              onChange={() => onRunTargetChange(row.key, row)}
+                              aria-label={`Run target ${label}`}
+                            />
+                            <span>Run</span>
+                          </label>
+                          <div className="flex gap-0.5">
+                            <PaneToggle
+                              compact
+                              active={combinationPaneActive(row.key, "left")}
+                              disabled={!paneReady}
+                              label={`Left pane: ${label}`}
+                              onClick={() => assignCombination("left", row.key)}
+                            >
+                              L
+                            </PaneToggle>
+                            <PaneToggle
+                              compact
+                              active={combinationPaneActive(row.key, "right")}
+                              disabled={!paneReady}
+                              label={`Right pane: ${label}`}
+                              onClick={() => assignCombination("right", row.key)}
+                            >
+                              R
+                            </PaneToggle>
+                          </div>
                         </div>
-                      ) : (
-                        <div className="text-xs text-slate-400">Not run yet</div>
-                      )}
-                    </td>
-                    <td className="px-2 py-1.5 text-center align-top">
-                      <input
-                        type="radio"
-                        name="segment-compare-run-target"
-                        checked={runTargetKey === row.key}
-                        onChange={() => onRunTargetChange(row.key, row)}
-                        aria-label={`Run ${label}`}
-                      />
-                    </td>
-                    <td className="px-2 py-1.5 text-center align-top">
-                      <PaneToggle
-                        active={combinationPaneActive(row.key, "left")}
-                        disabled={!completed}
-                        label={`Set left pane to ${label}`}
-                        onClick={() => assignCombination("left", row.key)}
-                      />
-                    </td>
-                    <td className="px-2 py-1.5 text-center align-top">
-                      <PaneToggle
-                        active={combinationPaneActive(row.key, "right")}
-                        disabled={!completed}
-                        label={`Set right pane to ${label}`}
-                        onClick={() => assignCombination("right", row.key)}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
             </tbody>
           </table>
+          {thinkingRows.length > 0 ? (
+            <div className="mt-2 border-t border-slate-100 pt-2">
+              <p className="mb-1 text-[10px] font-semibold uppercase text-slate-500">
+                Thinking runs
+              </p>
+              <ul className="space-y-1 text-[11px] text-slate-600">
+                {thinkingRows.map((row) => (
+                  <li key={row.key} className="flex flex-wrap items-center gap-2">
+                    <span>{formatSegmentCompareCombination(row.walk, row.edge)}</span>
+                    <input
+                      type="radio"
+                      name="segment-compare-run-target"
+                      checked={runTargetKey === row.key}
+                      onChange={() => onRunTargetChange(row.key, row)}
+                    />
+                    <label className="inline-flex items-center gap-1">
+                      <input
+                        type="checkbox"
+                        checked={isCombinationReviewed(row.key, reviewedKeys)}
+                        onChange={(event) => toggleReviewed(row.key, event.target.checked)}
+                      />
+                      Done
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {activeRuns.length > 0 ? (
-            <ul className="border-t border-slate-200 px-3 py-2 text-xs text-slate-600">
+            <ul className="mt-2 border-t border-slate-200 pt-2 text-[11px] text-slate-600">
               {activeRuns.map((run) => (
                 <li key={run.id} className="flex items-center justify-between gap-2 py-0.5">
                   <span>
                     {runLabel(run)} · {run.progressLabel ?? run.status}
-                    {run.error ? ` · ${run.error}` : ""}
                   </span>
                   <button
                     type="button"
-                    className="shrink-0 text-slate-500 underline hover:text-slate-800"
+                    className="shrink-0 underline"
                     onClick={() => onDeleteRun(run.id)}
                   >
                     Remove
@@ -359,11 +437,15 @@ function PaneToggle({
   disabled,
   label,
   onClick,
+  compact,
+  children,
 }: {
   active: boolean;
   disabled?: boolean;
   label: string;
   onClick: () => void;
+  compact?: boolean;
+  children?: string;
 }) {
   return (
     <button
@@ -373,13 +455,15 @@ function PaneToggle({
       aria-label={label}
       aria-pressed={active}
       onClick={onClick}
-      className={`min-w-[2rem] rounded border px-1.5 py-0.5 text-xs font-semibold ${
+      className={`rounded border font-semibold ${
+        compact ? "min-w-[1.4rem] px-1 py-0.5 text-[10px]" : "min-w-[2rem] px-1.5 py-0.5 text-xs"
+      } ${
         active
           ? "border-teal-700 bg-teal-700 text-white"
           : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
       } disabled:cursor-not-allowed disabled:opacity-40`}
     >
-      {active ? "●" : "○"}
+      {children ?? (active ? "●" : "○")}
     </button>
   );
 }
@@ -554,7 +638,16 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
       throw new Error(payload.error || "Failed to load segment compare");
     }
     setWorkspace(payload);
-    setReviewedKeys(payload.reviewedKeys ?? []);
+    let reviewed = normalizeReviewedKeys(payload.reviewedKeys ?? []);
+    if (payload.agendaItemCount > 0 && reviewed.length === 0) {
+      reviewed = [SAVED_EXTRACT_COMBINATION_KEY];
+      void fetch(`/api/v2/meetings/${meetingId}/segment-compare`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewedKeys: reviewed }),
+      }).catch(() => undefined);
+    }
+    setReviewedKeys(reviewed);
     return payload;
   }
 
@@ -570,7 +663,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         const latest = completed[completed.length - 1];
         setLeftId(SAVED_AGENDA_COMPARE_ID);
         setRightId(latest?.id ?? SAVED_AGENDA_COMPARE_ID);
-        setReviewedKeys(payload.reviewedKeys ?? []);
+        setReviewedKeys(normalizeReviewedKeys(payload.reviewedKeys ?? []));
       })
       .catch((caught) => {
         if (!cancelled) setError(caught instanceof Error ? caught.message : String(caught));

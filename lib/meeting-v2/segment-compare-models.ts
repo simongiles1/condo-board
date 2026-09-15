@@ -77,6 +77,25 @@ export function segmentCompareCombinationKey(
   return `${walk.modelId}|${walk.thinking ? 1 : 0}|${edge.modelId}|${edge.thinking ? 1 : 0}`;
 }
 
+/** Pipeline extract is segmented with V4 Flash walk + V4 Flash edge judges. */
+export const SAVED_EXTRACT_COMBINATION_KEY = segmentCompareCombinationKey(
+  { modelId: "deepseek-v4-flash", thinking: false },
+  { modelId: "deepseek-v4-flash", thinking: false },
+);
+
+export function segmentCompareModelShortLabel(id: SegmentCompareModelId): string {
+  switch (id) {
+    case "deepseek-v4-flash":
+      return "V4 Flash";
+    case "deepseek-v4.1-flash":
+      return "V4.1 Flash";
+    case "gemini-3.8-flash":
+      return "Gemini 3.8";
+    default:
+      return id;
+  }
+}
+
 export function formatSegmentCompareCombination(
   walk: SegmentCompareSlotChoice,
   edge: SegmentCompareSlotChoice,

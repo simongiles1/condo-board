@@ -14,6 +14,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V2 segmenter compare boxes** — Side-by-side panes now draw full section borders (top, sides, bottom) with a single agenda label at the start of each segment, matching the transcript section overlay, while cue rows stay aligned across panes.
 
+- **Meetings V2 segmenter compare lab failures** — Failed runs show **Failed** plus the server error in the matrix; L/R stay off until a run completes but remain clickable for an explanation. Status polling no longer replaces the real error with **Failed to fetch**; panes are not pointed at empty failed runs.
+
 - **Meetings V2 segmenter compare progress** — Walk and edge are chosen from a **6×6 matrix** (each model plus a **· think** row/column). The **V4 × V4** (no think) cell is the saved pipeline extract; **Done** is read-only after a lab run completes; **Run** / **L** / **R** live in each cell. Each cell shows **actual** lab cost when run, otherwise **~** estimates repriced from a V4×V4 lab run or pipeline extract tokens.
 
 - **Meetings V2 fact-resolution schema halt** — Investigation still aborted the remaining agenda items when one fact record had an invalid `selected` index or shape (`invalid fact or selection`). After a retry those records become open questions, and a single item failure no longer stops the rest of the run. The “investigations are missing” banner was the leftover of that halt.

@@ -82,6 +82,26 @@ function latestCompletedRunForKey(
   return matches[matches.length - 1] ?? null;
 }
 
+function latestRunForKey(runs: SegmentCompareRun[], key: string): SegmentCompareRun | null {
+  const matches = runs.filter(
+    (run) => segmentCompareCombinationKey(run.walk, run.edge) === key,
+  );
+  return matches[matches.length - 1] ?? null;
+}
+
+function normalizePaneRunId(paneId: string, runs: SegmentCompareRun[]): string {
+  if (paneId === SAVED_AGENDA_COMPARE_ID) return paneId;
+  const run = runs.find((entry) => entry.id === paneId);
+  return run?.status === "completed" ? paneId : SAVED_AGENDA_COMPARE_ID;
+}
+
+function describeFetchError(caught: unknown): string {
+  if (caught instanceof TypeError && caught.message === "Failed to fetch") {
+    return "Lost connection to the server while checking lab status. The run may still have finished—use Refresh status or reopen this dialog.";
+  }
+  return caught instanceof Error ? caught.message : String(caught);
+}
+
 function paneTitle(paneId: string, runs: SegmentCompareRun[]): string {
   if (paneId === SAVED_AGENDA_COMPARE_ID) {
     return "Saved agenda (current extract)";
@@ -167,12 +187,35 @@ function CompareCombinationPicker({
   }
 
   function assignCombination(side: "left" | "right", key: string) {
+    const latest = latestRunForKey(runs, key);
+    if (latest?.status === "failed") {
+      onError(latest.error || "This lab run failed. Remove it below and try again.");
+      return;
+    }
+    if (latest && (latest.status === "queued" || latest.status === "running")) {
+      onError("Wait for the lab run to finish before assigning this cell to a pane.");
+      return;
+    }
     const paneId = paneIdForCombination(key, runs);
     if (!paneId) {
       onError("Run this combination in the lab first, or use the V4 × V4 cell for the saved extract.");
       return;
     }
     assignPane(side, paneId);
+  }
+
+  function paneToggleHint(key: string, side: "left" | "right", label: string): string {
+    const latest = latestRunForKey(runs, key);
+    if (latest?.status === "failed") {
+      return latest.error || "Lab run failed — remove it and retry.";
+    }
+    if (latest && (latest.status === "queued" || latest.status === "running")) {
+      return "Lab run in progress…";
+    }
+    if (!paneIdForCombination(key, runs)) {
+      return "Run this combination in the lab first, or use V4 × V4 for the saved extract.";
+    }
+    return `${side === "left" ? "Left" : "Right"} pane: ${label}`;
   }
 
   function paneActive(paneId: string, side: "left" | "right"): boolean {
@@ -267,7 +310,12 @@ function CompareCombinationPicker({
                   </th>
                   {matrixSlots.map((edge, edgeIndex) => {
                     const row = combinationRow(walk, edge);
-                    const completed = latestCompletedRunForKey(runs, row.key);
+                    const latest = latestRunForKey(runs, row.key);
+                    const completed =
+                      latest?.status === "completed" ? latest : null;
+                    const failed = latest?.status === "failed" ? latest : null;
+                    const inFlight =
+                      latest?.status === "queued" || latest?.status === "running";
                     const isSavedCell = row.key === SAVED_EXTRACT_COMBINATION_KEY;
                     const label = formatSegmentCompareCombination(row.walk, row.edge);
                     const paneReady = paneIdForCombination(row.key, runs) !== null;
@@ -284,11 +332,30 @@ function CompareCombinationPicker({
                             <span className="whitespace-nowrap text-[11px] font-semibold text-teal-800">
                               Done
                             </span>
+                          ) : failed ? (
+                            <span
+                              className="whitespace-nowrap text-[11px] font-semibold text-red-700"
+                              title={failed.error ?? undefined}
+                            >
+                              Failed
+                            </span>
+                          ) : inFlight ? (
+                            <span className="whitespace-nowrap text-[11px] font-medium text-slate-600">
+                              {latest?.progressLabel ?? "Running…"}
+                            </span>
                           ) : (
                             <span className="whitespace-nowrap text-[11px] text-slate-400">
                               Not run
                             </span>
                           )}
+                          {failed?.error ? (
+                            <span
+                              className="line-clamp-2 text-[10px] leading-tight text-red-600"
+                              title={failed.error}
+                            >
+                              {failed.error}
+                            </span>
+                          ) : null}
                           {isSavedCell ? (
                             <span className="whitespace-nowrap rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-900">
                               Saved extract
@@ -318,8 +385,8 @@ function CompareCombinationPicker({
                               <PaneToggle
                                 compact
                                 active={combinationPaneActive(row.key, "left")}
-                                disabled={!paneReady}
-                                label={`Left pane: ${label}`}
+                                dimmed={!paneReady}
+                                label={paneToggleHint(row.key, "left", label)}
                                 onClick={() => assignCombination("left", row.key)}
                               >
                                 L
@@ -327,8 +394,8 @@ function CompareCombinationPicker({
                               <PaneToggle
                                 compact
                                 active={combinationPaneActive(row.key, "right")}
-                                disabled={!paneReady}
-                                label={`Right pane: ${label}`}
+                                dimmed={!paneReady}
+                                label={paneToggleHint(row.key, "right", label)}
                                 onClick={() => assignCombination("right", row.key)}
                               >
                                 R
@@ -348,8 +415,9 @@ function CompareCombinationPicker({
             <ul className="mt-2 border-t border-slate-200 pt-2 text-[11px] text-slate-600">
               {activeRuns.map((run) => (
                 <li key={run.id} className="flex items-center justify-between gap-2 py-0.5">
-                  <span>
+                  <span className={run.status === "failed" ? "text-red-700" : undefined}>
                     {runLabel(run)} · {run.progressLabel ?? run.status}
+                    {run.error ? ` — ${run.error}` : ""}
                   </span>
                   <button
                     type="button"
@@ -371,6 +439,7 @@ function CompareCombinationPicker({
 function PaneToggle({
   active,
   disabled,
+  dimmed,
   label,
   onClick,
   compact,
@@ -378,6 +447,7 @@ function PaneToggle({
 }: {
   active: boolean;
   disabled?: boolean;
+  dimmed?: boolean;
   label: string;
   onClick: () => void;
   compact?: boolean;
@@ -397,7 +467,7 @@ function PaneToggle({
         active
           ? "border-teal-700 bg-teal-700 text-white"
           : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-      } disabled:cursor-not-allowed disabled:opacity-40`}
+      } ${dimmed && !active ? "opacity-45" : ""} disabled:cursor-not-allowed disabled:opacity-40`}
     >
       {children ?? (active ? "●" : "○")}
     </button>
@@ -561,17 +631,25 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   const [leftId, setLeftId] = useState(SAVED_AGENDA_COMPARE_ID);
   const [rightId, setRightId] = useState(SAVED_AGENDA_COMPARE_ID);
   const [starting, setStarting] = useState(false);
+  const [pollWarning, setPollWarning] = useState<string | null>(null);
 
-  async function refresh() {
-    const response = await fetch(`/api/v2/meetings/${meetingId}/segment-compare`, {
-      cache: "no-store",
-    });
-    const payload = (await response.json()) as WorkspacePayload & { error?: string };
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to load segment compare");
+  async function refresh(): Promise<WorkspacePayload> {
+    try {
+      const response = await fetch(`/api/v2/meetings/${meetingId}/segment-compare`, {
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as WorkspacePayload & { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to load segment compare");
+      }
+      setWorkspace(payload);
+      setLeftId((id) => normalizePaneRunId(id, payload.runs));
+      setRightId((id) => normalizePaneRunId(id, payload.runs));
+      setPollWarning(null);
+      return payload;
+    } catch (caught) {
+      throw new Error(describeFetchError(caught));
     }
-    setWorkspace(payload);
-    return payload;
   }
 
   useEffect(() => {
@@ -588,7 +666,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         setRightId(latest?.id ?? SAVED_AGENDA_COMPARE_ID);
       })
       .catch((caught) => {
-        if (!cancelled) setError(caught instanceof Error ? caught.message : String(caught));
+        if (!cancelled) setError(describeFetchError(caught));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -603,12 +681,29 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   useEffect(() => {
     if (!open || !busy) return;
     const timer = window.setInterval(() => {
-      void refresh().catch((caught) => {
-        setError(caught instanceof Error ? caught.message : String(caught));
-      });
+      void refresh()
+        .then((payload) => {
+          const stillBusy = payload.runs.some(
+            (run) => run.status === "queued" || run.status === "running",
+          );
+          if (!stillBusy) {
+            const latest = latestRunForKey(
+              payload.runs,
+              runTargetKey,
+            );
+            if (latest?.status === "failed" && latest.error) {
+              setError(latest.error);
+            }
+          }
+        })
+        .catch((caught) => {
+          setPollWarning(
+            caught instanceof Error ? caught.message : String(caught),
+          );
+        });
     }, 2500);
     return () => window.clearInterval(timer);
-  }, [open, meetingId, busy]);
+  }, [open, meetingId, busy, runTargetKey]);
 
   const cues = workspace?.cues ?? [];
   const savedOverlays = workspace?.savedOverlays ?? [];
@@ -668,9 +763,8 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         throw new Error(payload.error || "Failed to start run");
       }
       await refresh();
-      if (payload.run?.id) setRightId(payload.run.id);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(describeFetchError(caught));
     } finally {
       setStarting(false);
     }
@@ -747,6 +841,20 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
           </div>
         </div>
         {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+        {pollWarning && !error ? (
+          <p className="mt-2 text-sm text-amber-800">{pollWarning}</p>
+        ) : null}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="text-sm text-slate-600 underline hover:text-slate-900"
+            onClick={() => {
+              void refresh().catch((caught) => setError(describeFetchError(caught)));
+            }}
+          >
+            Refresh status
+          </button>
+        </div>
         {(workspace?.agendaItemCount ?? 0) === 0 ? (
           <p className="mt-2 text-sm text-amber-800">Extract the agenda first so the walk has an outline to seed from.</p>
         ) : null}

@@ -700,7 +700,6 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
             runTargetKey={runTargetKey}
             leftId={leftId}
             rightId={rightId}
-            onReviewedKeysChange={setReviewedKeys}
             onRunTargetChange={handleRunTargetChange}
             onLeftChange={setLeftId}
             onRightChange={setRightId}

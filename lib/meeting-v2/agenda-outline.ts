@@ -174,8 +174,103 @@ export type AdHocPlacement = {
   sectionMissing: boolean;
 };
 
+export const AD_HOC_SECTION_TITLE = "Ad-hoc items";
+
+export function isAdHocSectionTitle(title: string | null | undefined): boolean {
+  return (
+    (title || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[-–—_]/g, " ")
+      .replace(/\s+/g, " ") === "ad hoc items"
+  );
+}
+
+export function occupiesAdHocSection(
+  itemNumber: string | null | undefined,
+  sectionCode: string,
+): boolean {
+  const code = (itemNumber || "").trim().toLowerCase();
+  if (!code) return false;
+  const section = sectionCode.trim().toLowerCase();
+  return code === section || code.startsWith(`${section}.`);
+}
+
+type AdHocPlanItem = { itemNumber?: string | null; title?: string | null };
+
+function asAdHocPlanItem(
+  entry: string | null | undefined | AdHocPlanItem,
+): { itemNumber: string; title: string } {
+  if (typeof entry === "string" || entry == null) {
+    return { itemNumber: (entry || "").trim(), title: "" };
+  }
+  return {
+    itemNumber: (entry.itemNumber || "").trim(),
+    title: entry.title || "",
+  };
+}
+
+function hasAdHocSectionHeading(
+  items: Array<{ itemNumber: string; title: string }>,
+  sectionCode: string,
+): boolean {
+  const section = sectionCode.toLowerCase();
+  return items.some((item) => {
+    if (item.itemNumber.toLowerCase() !== section) return false;
+    return isAdHocSectionTitle(item.title) || !item.title.trim();
+  });
+}
+
+export function partitionAdHocOccupants<T extends { itemNumber?: string | null; title?: string | null }>(
+  items: T[],
+  sectionCode: string,
+): { heading: T | undefined; leaves: T[]; rest: T[] } {
+  let heading: T | undefined;
+  const leaves: T[] = [];
+  const rest: T[] = [];
+  for (const item of items) {
+    const code = (item.itemNumber || "").trim();
+    if (isAdHocSectionTitle(item.title) && code.toLowerCase() === sectionCode.toLowerCase()) {
+      heading = heading ?? item;
+      continue;
+    }
+    if (occupiesAdHocSection(code, sectionCode)) {
+      leaves.push(item);
+      continue;
+    }
+    rest.push(item);
+  }
+  return { heading, leaves, rest };
+}
+
+export function ensureAdHocSectionOutline<T extends { itemNumber?: string | null; title?: string | null }>(
+  items: T[],
+  createHeading: (sectionCode: string) => T,
+  extraLeaves: T[] = [],
+): T[] {
+  const pmReportNumber = inferPropertyManagementReportNumber(items) || "4";
+  const sectionCode = `${pmReportNumber}.E`;
+  const { heading, leaves: occupying, rest } = partitionAdHocOccupants(items, sectionCode);
+  const leaves = [...occupying, ...extraLeaves.filter((topic) => (topic.title || "").trim())];
+  if (leaves.length === 0) return items;
+
+  const placement = planAdHocPlacement(
+    [...rest, ...(heading ? [heading] : [])],
+    leaves.length,
+    pmReportNumber,
+  );
+  if (!placement) return items;
+
+  const numberedLeaves = leaves.map((leaf, index) => ({
+    ...leaf,
+    itemNumber: placement.nextItemCodes[index],
+  }));
+  const section = heading ?? createHeading(placement.sectionCode);
+  return [...rest, { ...section, itemNumber: placement.sectionCode }, ...numberedLeaves];
+}
+
 export function planAdHocPlacement(
-  existingItemNumbers: Array<string | null | undefined>,
+  existingItems: Array<string | null | undefined | AdHocPlanItem>,
   newItemCount: number,
   pmReportNumber?: string | null,
 ): AdHocPlacement | null {
@@ -183,14 +278,17 @@ export function planAdHocPlacement(
   if (!resolvedPm) return null;
 
   const sectionCode = `${resolvedPm}.E`;
-  const existing = existingItemNumbers
-    .map((value) => (value || "").trim())
-    .filter((value) => value === sectionCode || value.toLowerCase().startsWith(`${sectionCode.toLowerCase()}.`));
+  const items = existingItems.map(asAdHocPlanItem);
+  const existing = items.filter(
+    (item) =>
+      item.itemNumber === sectionCode ||
+      item.itemNumber.toLowerCase().startsWith(`${sectionCode.toLowerCase()}.`),
+  );
 
   const usedLetters = new Set(
     existing
-      .filter((value) => value.toLowerCase() !== sectionCode.toLowerCase())
-      .map((value) => parseAgendaItemCode(value).segments.at(-1))
+      .filter((item) => item.itemNumber.toLowerCase() !== sectionCode.toLowerCase())
+      .map((item) => parseAgendaItemCode(item.itemNumber).segments.at(-1))
       .filter((segment): segment is OutlineSegment => segment?.kind === "letter")
       .map((segment) => segment.raw.toLowerCase()),
   );
@@ -207,7 +305,7 @@ export function planAdHocPlacement(
   return {
     sectionCode,
     nextItemCodes,
-    sectionMissing: !existing.some((value) => value === sectionCode),
+    sectionMissing: !hasAdHocSectionHeading(items, sectionCode),
   };
 }
 

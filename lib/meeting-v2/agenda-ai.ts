@@ -33,6 +33,7 @@ import {
   mergeClosedIntervals,
   parentAgendaItemCode,
   parseDiscussionTimestampRanges,
+  partitionAdHocOccupants,
   planAdHocPlacement,
 } from "@/lib/meeting-v2/agenda-outline";
 import {
@@ -254,7 +255,7 @@ Use the transcript chunk to:
   - parent ranges must cover their children as the merged list of those spans: item 4 includes all of 4.A/4.B/..., 4.B includes 4.B.1/4.B.2/..., and a child range stays inside that parent coverage (a later pickup of the same matter may extend both)
 - when this chunk continues a topic already marked discussed, extend or append its sourceTranscriptRanges and discussionTimestampRange. Never replace earlier ranges with only this chunk.
 - add aliases or notes when the transcript uses shorthand
-- add extraTopics ONLY for genuinely new board business matters discussed in the transcript but not on the agenda (itemType "ad_hoc_discussion" or "extra_topic", discussionStatus "ad_hoc"). Those extraTopics will be nested under a synthesized Property Management Report section 4.E.
+- add extraTopics ONLY for genuinely new board business matters discussed in the transcript but not on the agenda (itemType "ad_hoc_discussion" or "extra_topic", discussionStatus "ad_hoc"). Do not assign itemNumber 4.E to an extra topic. Leave extra topic itemNumbers empty; the server creates a heading titled "Ad-hoc items" at 4.E and letters the extras 4.E.a, 4.E.b.
 - detect unaligned discussion discrepancies:
   - if there is substantial discussion in this chunk that does not map to any recognized agenda item, add an entry to "discrepancies":
     {
@@ -1039,22 +1040,28 @@ function emptyAdHocSectionTopic(itemNumber: string): WorkflowTopic {
   };
 }
 
-function applyAdHocOutlinePlacement(state: WorkflowState): WorkflowState {
+export function applyAdHocOutlinePlacement(state: WorkflowState): WorkflowState {
   const extraTopics = state.extraTopics.filter((topic) => topic.title.trim());
-  if (extraTopics.length === 0) return state;
-
   const pmReportNumber =
     inferPropertyManagementReportNumber(state.documentTopics) || "4";
+  const sectionCode = `${pmReportNumber}.E`;
+  const { heading, leaves: occupying, rest } = partitionAdHocOccupants(
+    state.documentTopics,
+    sectionCode,
+  );
+  const leaves = [...occupying, ...extraTopics];
+  if (leaves.length === 0) return state;
+
   const placement = planAdHocPlacement(
-    state.documentTopics.map((topic) => topic.itemNumber),
-    extraTopics.length,
+    [...rest, ...(heading ? [heading] : [])],
+    leaves.length,
     pmReportNumber,
   );
   if (!placement) return state;
 
-  const numberedExtra = extraTopics.map((topic, index) => ({
+  const numberedExtra = leaves.map((topic, index) => ({
     ...topic,
-    itemNumber: topic.itemNumber || placement.nextItemCodes[index],
+    itemNumber: placement.nextItemCodes[index],
     sectionLabel:
       topic.sectionLabel && topic.sectionLabel !== "Unknown"
         ? topic.sectionLabel
@@ -1064,11 +1071,9 @@ function applyAdHocOutlinePlacement(state: WorkflowState): WorkflowState {
       topic.itemType === "other" || !topic.itemType ? "ad_hoc_discussion" : topic.itemType,
   }));
 
-  const documentTopics =
-    placement.sectionMissing &&
-    !state.documentTopics.some((topic) => topic.itemNumber === placement.sectionCode)
-      ? [...state.documentTopics, emptyAdHocSectionTopic(placement.sectionCode)]
-      : state.documentTopics;
+  const documentTopics = heading
+    ? [...rest, { ...heading, itemNumber: placement.sectionCode }]
+    : [...rest, emptyAdHocSectionTopic(placement.sectionCode)];
 
   return {
     ...state,

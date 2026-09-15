@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 ad-hoc section heading** — Extra transcript matters must sit under a synthesized **Ad-hoc items** heading at 4.E with lettered children (4.E.a). A model-assigned 4.E title (for example a toilet-hose quote) is demoted to a child instead of becoming the section name, and numbered 4.E.1 children are re-lettered.
+
 - **Meetings V2 agenda extraction truncated** — Long meetings hit DeepSeek `max_tokens=12288` (`finish_reason=length`) during the transcript chunk walk because each chunk asked the model to echo the entire topic list. Extraction aborted with zero agenda items. Chunk responses are now patches (touched topics only; the server already merged omissions as keep), truncated JSON is salvaged locally, and a truncated call retries once instead of failing the pipeline.
 
 - **Automatic email sync time** — The daily schedule was interpreted as UTC on the server, so 7:00 p.m. in Email Settings ran at 3:00 p.m. Eastern. Cron now uses America/Toronto (Eastern, including daylight saving).

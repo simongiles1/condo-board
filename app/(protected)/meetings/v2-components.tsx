@@ -73,6 +73,7 @@ import {
   filterAgendaItemsPreservingAncestors,
   inferPropertyManagementReportNumber,
   planAdHocPlacement,
+  ensureAdHocSectionOutline,
   type AgendaListMarker,
   type AgendaOutlineNode as OutlineTreeNode,
 } from "@/lib/meeting-v2/agenda-outline";
@@ -2446,13 +2447,23 @@ function mergeAdHocItemsIntoReview(
     discussionStatus: "discussed" | "ad_hoc";
   }>,
 ): AgendaReviewItem[] {
-  if (newItems.length === 0) return items;
-  const placement = planAdHocPlacement(
-    items.map((item) => item.itemNumber),
-    newItems.length,
-    inferPropertyManagementReportNumber(items),
+  const normalized = ensureAdHocSectionOutline(items, (sectionCode) =>
+    syntheticReviewItem({
+      id: "synthetic-adhoc-section",
+      title: "Ad-hoc items",
+      itemNumber: sectionCode,
+      sectionLabel: "Property Management Report",
+      discussionStatus: "ad_hoc",
+    }),
   );
-  if (!placement) return items;
+  if (newItems.length === 0) return normalized;
+
+  const placement = planAdHocPlacement(
+    normalized,
+    newItems.length,
+    inferPropertyManagementReportNumber(normalized),
+  );
+  if (!placement) return normalized;
 
   const extras: AgendaReviewItem[] = [];
   if (placement.sectionMissing) {
@@ -2477,7 +2488,7 @@ function mergeAdHocItemsIntoReview(
       }),
     );
   });
-  return [...items, ...extras];
+  return [...normalized, ...extras];
 }
 
 function buildAgendaOutline(items: MeetingV2Status["items"]): AgendaOutlineNode[] {
@@ -3439,7 +3450,7 @@ function HitlAgendaApprovalWorkspace({
   const adHocPlacement = useMemo(
     () =>
       planAdHocPlacement(
-        status.items.map((item) => item.itemNumber),
+        status.items,
         newItems.length,
         inferPropertyManagementReportNumber(status.items),
       ),

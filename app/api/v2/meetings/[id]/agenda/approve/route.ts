@@ -11,6 +11,7 @@ import { canonicalDiscussionTiming, withCanonicalDiscussionTiming } from "@/lib/
 import {
   inferPropertyManagementReportNumber,
   planAdHocPlacement,
+  ensureAdHocSectionOutline,
 } from "@/lib/meeting-v2/agenda-outline";
 import type {
   AgendaItemDiscussionStatus,
@@ -107,7 +108,40 @@ export async function POST(
       .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId))
       .orderBy(asc(meetingsV2AgendaItems.sortOrder));
 
-    let nextSort = existingItems.length;
+    const existingById = new Map(existingItems.map((item) => [item.id, item]));
+    const normalizedExisting = ensureAdHocSectionOutline(existingItems, (sectionCode) => ({
+      id: randomUUID(),
+      meetingV2Id: meetingId,
+      sourceArtifactId: existingItems[0]?.sourceArtifactId ?? null,
+      sourceSectionId: null,
+      sectionLabel: "Property Management Report",
+      title: "Ad-hoc items",
+      normalizedTitle: normalize("Ad-hoc items"),
+      itemNumber: sectionCode,
+      itemType: "ad_hoc_discussion",
+      sourcePagesJson: "[]",
+      sourceText:
+        "Discussion status: ad_hoc\nSynthesized section for transcript-only matters not on the official agenda.",
+      sortOrder: existingItems.length,
+      createdAt: new Date().toISOString(),
+    }));
+    for (const item of normalizedExisting) {
+      const prior = existingById.get(item.id);
+      if (!prior) {
+        await db.insert(meetingsV2AgendaItems).values(item);
+        continue;
+      }
+      if (prior.itemNumber !== item.itemNumber) {
+        await db
+          .update(meetingsV2AgendaItems)
+          .set({ itemNumber: item.itemNumber })
+          .where(
+            and(eq(meetingsV2AgendaItems.meetingV2Id, meetingId), eq(meetingsV2AgendaItems.id, item.id)),
+          );
+      }
+    }
+
+    let nextSort = normalizedExisting.length;
     const finalItemStatuses: Record<string, AgendaItemDiscussionStatus> = {
       ...(meeting.settings?.agendaApproval?.itemStatuses || {}),
       ...(body.itemStatuses || {}),
@@ -132,9 +166,9 @@ export async function POST(
 
     const pendingNewItems = (body.newItems || []).filter((item) => item.title?.trim());
     const placement = planAdHocPlacement(
-      existingItems.map((item) => item.itemNumber),
+      normalizedExisting,
       pendingNewItems.length,
-      inferPropertyManagementReportNumber(existingItems),
+      inferPropertyManagementReportNumber(normalizedExisting),
     );
 
     if (placement?.sectionMissing && pendingNewItems.length > 0) {

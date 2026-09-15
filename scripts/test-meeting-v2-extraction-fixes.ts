@@ -20,6 +20,7 @@ import {
 import { chunkDocumentPages } from "../lib/meeting-v2/chunking";
 import { parseVttToMergedCues, mergedCuesToSegmentRows } from "../lib/meeting-v2/transcript";
 import {
+  applyAdHocOutlinePlacement,
   inferTranscriptFloorPointer,
   normalizeTopic,
   normalizeDiscrepancies,
@@ -38,6 +39,7 @@ import {
   filterAgendaItemsPreservingAncestors,
   parseDiscussionTimestampRanges,
   planAdHocPlacement,
+  ensureAdHocSectionOutline,
 } from "../lib/meeting-v2/agenda-outline";
 import {
   buildTranscriptSectionOverlays,
@@ -629,6 +631,82 @@ describe("Hierarchical board-package agenda outline", () => {
     assert.equal(placement.sectionMissing, true);
     assert.deepEqual(placement.nextItemCodes, ["4.E.a", "4.E.b"]);
     assert.ok(compareAgendaItemCodes("4.E.a", "5") < 0);
+
+    const occupied = planAdHocPlacement(
+      [
+        { itemNumber: "4", title: "Property Management Report" },
+        { itemNumber: "4.E", title: "Toilet Hose Replacement - Material and Labour Quotes" },
+      ],
+      2,
+      "4",
+    );
+    assert.equal(occupied?.sectionMissing, true);
+
+    const labeled = planAdHocPlacement(
+      [
+        { itemNumber: "4", title: "Property Management Report" },
+        { itemNumber: "4.E", title: "Ad-hoc items" },
+      ],
+      2,
+      "4",
+    );
+    assert.equal(labeled?.sectionMissing, false);
+  });
+
+  it("keeps 4.E titled Ad-hoc items and letters meeting-specific extras", () => {
+    const repaired = ensureAdHocSectionOutline(
+      [
+        { id: "4", itemNumber: "4", title: "Property Management Report" },
+        { id: "hose", itemNumber: "4.E", title: "Toilet Hose Replacement - Material and Labour Quotes" },
+        { id: "tmg", itemNumber: "4.E.1", title: "TMG Annual Licensing Fee Renewal" },
+        { id: "hvac", itemNumber: "4.E.2", title: "Quarterly HVAC Oversight with Trace Consulting Group" },
+        { id: "5", itemNumber: "5", title: "Date and time of the next Board Meeting" },
+      ],
+      (sectionCode) => ({ id: "adhoc", itemNumber: sectionCode, title: "Ad-hoc items" }),
+    );
+    assert.deepEqual(
+      repaired.map((item) => `${item.itemNumber} ${item.title}`),
+      [
+        "4 Property Management Report",
+        "5 Date and time of the next Board Meeting",
+        "4.E Ad-hoc items",
+        "4.E.a Toilet Hose Replacement - Material and Labour Quotes",
+        "4.E.b TMG Annual Licensing Fee Renewal",
+        "4.E.c Quarterly HVAC Oversight with Trace Consulting Group",
+      ],
+    );
+
+    const hose = normalizeTopic({
+      title: "Toilet Hose Replacement - Material and Labour Quotes",
+      sectionLabel: "Property Management Report",
+      itemNumber: "4.E",
+      itemType: "ad_hoc_discussion",
+    });
+    const tmg = normalizeTopic({
+      title: "TMG Annual Licensing Fee Renewal",
+      sectionLabel: "Property Management Report",
+      itemNumber: "4.E.1",
+      itemType: "ad_hoc_discussion",
+    });
+    const pm = normalizeTopic({
+      title: "Property Management Report",
+      sectionLabel: "Property Management Report",
+      itemNumber: "4",
+    });
+    assert.ok(hose);
+    assert.ok(tmg);
+    assert.ok(pm);
+    const placed = applyAdHocOutlinePlacement({
+      documentTopics: [pm, hose],
+      extraTopics: [tmg],
+      uncertainties: [],
+    });
+    assert.equal(placed.documentTopics.some((topic) => topic.title === "Ad-hoc items" && topic.itemNumber === "4.E"), true);
+    assert.deepEqual(
+      placed.extraTopics.map((topic) => topic.itemNumber),
+      ["4.E.a", "4.E.b"],
+    );
+    assert.equal(placed.extraTopics[0].title, hose.title);
   });
 
   it("expands parent transcript ranges to cover descendants", () => {

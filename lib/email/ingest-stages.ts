@@ -1,7 +1,7 @@
 import {
   formatGmailQuotaDetail,
   parseGmailQuotaSnapshot,
-} from "@/lib/gmail/quota";
+} from "@/lib/gmail/quota-snapshot";
 
 export const INGEST_STAGES = [
   "a_ingest",

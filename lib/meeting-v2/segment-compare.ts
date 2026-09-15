@@ -32,7 +32,6 @@ import {
 import {
   estimateSegmentCompareCostUsd,
   formatSegmentCompareChoice,
-  segmentCompareCombinationKey,
   segmentCompareModel,
   type SegmentCompareRun,
   type SegmentCompareSlotChoice,
@@ -252,12 +251,6 @@ export async function setSegmentCompareReviewedKeys(
     segmentCompareReviewedKeys: unique,
   });
   return unique;
-}
-
-async function addSegmentCompareReviewedKey(meetingId: string, key: string): Promise<void> {
-  const current = await listSegmentCompareReviewedKeys(meetingId);
-  if (current.includes(key)) return;
-  await setSegmentCompareReviewedKeys(meetingId, [...current, key]);
 }
 
 export async function listSegmentCompareRuns(meetingId: string): Promise<SegmentCompareRun[]> {
@@ -530,10 +523,6 @@ export async function runSegmentCompareExperiment(options: {
     if (!completed) {
       throw new Error(`Segment compare run ${runId} disappeared during save.`);
     }
-    await addSegmentCompareReviewedKey(
-      meetingId,
-      segmentCompareCombinationKey(completed.walk, completed.edge),
-    );
     return completed;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

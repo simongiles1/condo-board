@@ -493,6 +493,7 @@ export async function runSegmentCompareExperiment(options: {
     let finalTopics = applyAgendaHierarchyCorrections(
       sortTopics([...placed.documentTopics, ...placed.extraTopics]).map((topic, index) => ({
         ...topic,
+        id: `topic-${index}`,
         itemNumber: topic.itemNumber || String(index + 1),
       })),
     );

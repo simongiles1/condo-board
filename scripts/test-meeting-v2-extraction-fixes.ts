@@ -751,6 +751,30 @@ describe("Hierarchical board-package agenda outline", () => {
     );
   });
 
+  it("does not copy the last outline code onto every topic when ids are missing", () => {
+    const corrected = applyAgendaHierarchyCorrections([
+      {
+        id: "",
+        itemNumber: "2",
+        title: "Review and Approval of Minutes of June 10, 2026",
+        discussionTimestampRange: "00:05:00 - 00:08:00",
+      },
+      {
+        id: "",
+        itemNumber: "6",
+        title: "Adjournment",
+        discussionTimestampRange: null,
+      },
+    ]);
+
+    assert.equal(
+      corrected.find((item) => item.title?.startsWith("Review and Approval of Minutes"))
+        ?.itemNumber,
+      "2",
+    );
+    assert.equal(corrected.find((item) => item.title === "Adjournment")?.itemNumber, "6");
+  });
+
   it("keeps disjoint discussion spans instead of filling the gap", () => {
     const corrected = applyAgendaHierarchyCorrections([
       {

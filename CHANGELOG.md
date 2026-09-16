@@ -16,6 +16,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 segmenter compare item numbers** — Lab walk×edge runs forgot per-topic ids before hierarchy timing merge, so every overlay inherited the last outline code (item 6). Minutes and other leaves kept their real codes; re-run a combination to refresh stored boxes.
+
 - **Meetings V2 segmenter compare boxes** — Side-by-side panes now draw full section borders (top, sides, bottom) with a single agenda label at the start of each segment, matching the transcript section overlay, while cue rows stay aligned across panes.
 
 - **Meetings V2 segmenter compare lab failures** — Failed runs show **Failed** plus the server error in the matrix; L/R stay off until a run completes but remain clickable for an explanation. Status polling no longer replaces the real error with **Failed to fetch**; panes are not pointed at empty failed runs.

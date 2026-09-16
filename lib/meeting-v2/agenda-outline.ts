@@ -485,7 +485,12 @@ export function decorateAgendaOutlineTree<T extends AgendaOutlineSourceItem>(
 export function applyAgendaHierarchyCorrections<
   T extends AgendaOutlineSourceItem & { discussionTimestampRange?: string | null },
 >(items: T[]): T[] {
-  const copies = items.map((item) => ({ ...item }));
+  // Timing/number writeback is keyed by item.id. Duplicate or missing ids
+  // would copy the last walked node (often item 6 Adjournment) onto every row.
+  const copies = items.map((item, index) => ({
+    ...item,
+    id: item.id?.trim() || `outline-${index}`,
+  }));
   const tree = buildAgendaOutlineTree(copies);
   decorateAgendaOutlineTree(tree, {
     items: copies,

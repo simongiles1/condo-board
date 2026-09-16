@@ -141,7 +141,84 @@ function paneIdForCombination(key: string, runs: SegmentCompareRun[]): string | 
   return null;
 }
 
-function CompareCombinationPicker({
+const SAVED_EXTRACT_WALK: SegmentCompareSlotChoice = {
+  modelId: "deepseek-v4-flash",
+  thinking: false,
+};
+
+const SAVED_EXTRACT_EDGE: SegmentCompareSlotChoice = {
+  modelId: "deepseek-v4-flash",
+  thinking: false,
+};
+
+function paneCombination(
+  paneId: string,
+  runs: SegmentCompareRun[],
+): { walk: SegmentCompareSlotChoice; edge: SegmentCompareSlotChoice } {
+  if (paneId === SAVED_AGENDA_COMPARE_ID) {
+    return { walk: SAVED_EXTRACT_WALK, edge: SAVED_EXTRACT_EDGE };
+  }
+  const run = runs.find((entry) => entry.id === paneId);
+  if (!run) {
+    return { walk: SAVED_EXTRACT_WALK, edge: SAVED_EXTRACT_EDGE };
+  }
+  return { walk: run.walk, edge: run.edge };
+}
+
+function MatrixEditIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      aria-hidden
+    >
+      <path
+        d="M15.98 2.22a2.25 2.25 0 012.83 2.83l-9.4 9.4a2 2 0 01-.878.506l-3.84 1.067a.5.5 0 01-.62-.62l1.067-3.84a2 2 0 01.506-.878l9.4-9.4zM4.5 13.5l1.06 1.06M13.94 4.06l1.06 1.06"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
+  );
+}
+
+function ComparePaneColumnHeader({
+  kind,
+  choice,
+  onEdit,
+}: {
+  kind: "walk" | "edge";
+  choice: SegmentCompareSlotChoice;
+  onEdit: () => void;
+}) {
+  const title = kind === "walk" ? "Walk model" : "Edge model";
+  return (
+    <div
+      className="flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2.5 shadow-[0_1px_0_0_rgba(15,23,42,0.06)]"
+    >
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+        {title}
+      </span>
+      <span className="min-w-0 truncate text-sm font-semibold text-slate-900">
+        {segmentCompareSlotShortLabel(choice)}
+      </span>
+      <button
+        type="button"
+        className="ml-auto shrink-0 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+        aria-label={`Change ${title.toLowerCase()} (walk × edge matrix)`}
+        onClick={onEdit}
+      >
+        <MatrixEditIcon className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+function CompareCombinationMatrix({
   runs,
   costBaseline,
   runTargetKey,
@@ -164,22 +241,8 @@ function CompareCombinationPicker({
   onDeleteRun: (runId: string) => void;
   onError: (message: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const combinationRows = useMemo(() => buildCombinationRows(), []);
   const matrixSlots = useMemo(() => segmentCompareMatrixSlots(), []);
   const activeRuns = runs.filter((run) => run.status !== "completed");
-
-  useEffect(() => {
-    if (!open) return;
-    function onPointerDown(event: MouseEvent) {
-      if (!panelRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onPointerDown);
-    return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [open]);
 
   function assignPane(side: "left" | "right", paneId: string) {
     if (side === "left") onLeftChange(paneId);
@@ -228,12 +291,6 @@ function CompareCombinationPicker({
     return paneActive(paneId, side);
   }
 
-  const runTargetRow = combinationRows.find((row) => row.key === runTargetKey);
-  const runTargetLabel = runTargetRow
-    ? formatSegmentCompareCombination(runTargetRow.walk, runTargetRow.edge)
-    : "Select combination";
-  const completedCount = countCompletedLabCombinations(runs);
-
   function combinationRow(walk: SegmentCompareSlotChoice, edge: SegmentCompareSlotChoice): CombinationRow {
     return {
       key: segmentCompareCombinationKey(walk, edge),
@@ -243,28 +300,7 @@ function CompareCombinationPicker({
   }
 
   return (
-    <div className="relative z-10 min-w-0 flex-1" ref={panelRef}>
-      <button
-        type="button"
-        className="flex w-full items-start justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left hover:bg-slate-50"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-      >
-        <span className="min-w-0">
-          <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Walk × edge matrix
-          </span>
-          <span className="mt-0.5 block truncate text-sm font-semibold text-slate-900">
-            Run: {runTargetLabel}
-          </span>
-        </span>
-        <span className="shrink-0 pt-1 text-xs text-slate-500">
-          {completedCount}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT} lab runs done · {open ? "▲" : "▼"}
-        </span>
-      </button>
-      {open ? (
-        <div className="absolute left-0 z-30 mt-1 w-[min(calc(100vw-2rem),58rem)] max-w-none rounded-lg border border-slate-200 bg-white p-3 shadow-lg">
+    <>
           <p className="mb-3 text-xs leading-relaxed text-slate-600">
             Rows = walk model (plain + <span className="font-semibold">· think</span>). Columns =
             edge judges (plain + think).{" "}
@@ -433,8 +469,138 @@ function CompareCombinationPicker({
               ))}
             </ul>
           ) : null}
+    </>
+  );
+}
+
+function CompareCombinationMatrixModal({
+  open,
+  onClose,
+  runs,
+  costBaseline,
+  runTargetKey,
+  leftId,
+  rightId,
+  onRunTargetChange,
+  onLeftChange,
+  onRightChange,
+  onDeleteRun,
+  onError,
+}: {
+  open: boolean;
+  onClose: () => void;
+  runs: SegmentCompareRun[];
+  costBaseline: SegmentCompareCostBaseline | null;
+  runTargetKey: string;
+  leftId: string;
+  rightId: string;
+  onRunTargetChange: (key: string, row: CombinationRow) => void;
+  onLeftChange: (paneId: string) => void;
+  onRightChange: (paneId: string) => void;
+  onDeleteRun: (runId: string) => void;
+  onError: (message: string) => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 pt-[max(1rem,10vh)]"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="segment-compare-matrix-title"
+        className="w-[min(calc(100vw-2rem),58rem)] max-w-none rounded-lg border border-slate-200 bg-white p-4 shadow-xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <h3
+              id="segment-compare-matrix-title"
+              className="text-base font-semibold text-slate-900"
+            >
+              Walk × edge matrix
+            </h3>
+            <p className="mt-0.5 text-xs text-slate-600">
+              Pick a combination to run, or assign completed cells to the left and right panes.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="shrink-0 rounded-lg border border-slate-200 px-2.5 py-1 text-sm font-medium text-slate-800 hover:bg-slate-50"
+            onClick={onClose}
+          >
+            Close
+          </button>
         </div>
-      ) : null}
+        <CompareCombinationMatrix
+          runs={runs}
+          costBaseline={costBaseline}
+          runTargetKey={runTargetKey}
+          leftId={leftId}
+          rightId={rightId}
+          onRunTargetChange={onRunTargetChange}
+          onLeftChange={onLeftChange}
+          onRightChange={onRightChange}
+          onDeleteRun={onDeleteRun}
+          onError={onError}
+        />
+      </div>
+    </div>
+  );
+}
+
+function CompareCombinationPicker({
+  runs,
+  runTargetKey,
+  onOpenMatrix,
+}: {
+  runs: SegmentCompareRun[];
+  runTargetKey: string;
+  onOpenMatrix: () => void;
+}) {
+  const combinationRows = useMemo(() => buildCombinationRows(), []);
+  const runTargetRow = combinationRows.find((row) => row.key === runTargetKey);
+  const runTargetLabel = runTargetRow
+    ? formatSegmentCompareCombination(runTargetRow.walk, runTargetRow.edge)
+    : "Select combination";
+  const completedCount = countCompletedLabCombinations(runs);
+
+  return (
+    <div className="relative z-10 min-w-0 flex-1">
+      <div className="flex w-full items-start justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+        <span className="min-w-0">
+          <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Walk × edge matrix
+          </span>
+          <span className="mt-0.5 block truncate text-sm font-semibold text-slate-900">
+            Run: {runTargetLabel}
+          </span>
+        </span>
+        <button
+          type="button"
+          className="shrink-0 pt-1 text-xs font-medium text-teal-800 underline hover:text-teal-950"
+          onClick={onOpenMatrix}
+        >
+          {completedCount}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT} lab runs done · Change
+        </button>
+      </div>
     </div>
   );
 }
@@ -635,6 +801,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   const [rightId, setRightId] = useState(SAVED_AGENDA_COMPARE_ID);
   const [starting, setStarting] = useState(false);
   const [pollWarning, setPollWarning] = useState<string | null>(null);
+  const [matrixOpen, setMatrixOpen] = useState(false);
 
   async function refresh(): Promise<WorkspacePayload> {
     try {
@@ -744,6 +911,15 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     [cues, rightOverlays],
   );
 
+  const leftPaneCombo = useMemo(
+    () => paneCombination(leftId, runs),
+    [leftId, runs],
+  );
+  const rightPaneCombo = useMemo(
+    () => paneCombination(rightId, runs),
+    [rightId, runs],
+  );
+
   function handleRunTargetChange(key: string, _row: CombinationRow) {
     setRunTargetKey(key);
   }
@@ -812,15 +988,8 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         <div className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-end">
           <CompareCombinationPicker
             runs={runs}
-            costBaseline={costBaseline}
             runTargetKey={runTargetKey}
-            leftId={leftId}
-            rightId={rightId}
-            onRunTargetChange={handleRunTargetChange}
-            onLeftChange={setLeftId}
-            onRightChange={setRightId}
-            onDeleteRun={(runId) => void handleDelete(runId)}
-            onError={setError}
+            onOpenMatrix={() => setMatrixOpen(true)}
           />
           <div className="flex shrink-0 flex-col gap-2 sm:w-48">
             <button
@@ -867,16 +1036,45 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         {loading && !workspace ? (
           <p className="p-6 text-sm text-slate-600">Loading transcript…</p>
         ) : (
-          <div className="grid grid-cols-2">
-            {cues.map((cue, index) => (
-              <div key={`${cue.start}-${index}`} className="contents">
-                <CueCell cue={cue} meta={leftCueMeta[index]} colors={colors} cueIndex={index} />
-                <CueCell cue={cue} meta={rightCueMeta[index]} colors={colors} cueIndex={index} />
-              </div>
-            ))}
-          </div>
+          <>
+            <div className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200">
+              <ComparePaneColumnHeader
+                kind="walk"
+                choice={leftPaneCombo.walk}
+                onEdit={() => setMatrixOpen(true)}
+              />
+              <ComparePaneColumnHeader
+                kind="edge"
+                choice={rightPaneCombo.edge}
+                onEdit={() => setMatrixOpen(true)}
+              />
+            </div>
+            <div className="grid grid-cols-2">
+              {cues.map((cue, index) => (
+                <div key={`${cue.start}-${index}`} className="contents">
+                  <CueCell cue={cue} meta={leftCueMeta[index]} colors={colors} cueIndex={index} />
+                  <CueCell cue={cue} meta={rightCueMeta[index]} colors={colors} cueIndex={index} />
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
+
+      <CompareCombinationMatrixModal
+        open={matrixOpen}
+        onClose={() => setMatrixOpen(false)}
+        runs={runs}
+        costBaseline={costBaseline}
+        runTargetKey={runTargetKey}
+        leftId={leftId}
+        rightId={rightId}
+        onRunTargetChange={handleRunTargetChange}
+        onLeftChange={setLeftId}
+        onRightChange={setRightId}
+        onDeleteRun={(runId) => void handleDelete(runId)}
+        onError={setError}
+      />
     </div>
   );
 }

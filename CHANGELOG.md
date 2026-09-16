@@ -6,6 +6,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Meetings V2 segmenter compare matrix** — The 6×6 walk×edge grid opens in a modal (from each pane’s walk/edge header edit control or **Change** in the toolbar) instead of a dropdown. Sticky column headers label the left pane’s walk model and the right pane’s edge model.
+
 ### Added
 
 - **Meetings V2 segmenter compare lab** — Temporary full-page tool on the meeting More menu. Pick a model for the transcript walk (overall segmenter) and a model for span-edge / gap judges, with a thinking toggle. Each combination is a stored run with token cost. Side-by-side panes share one scroll; cue rows stay aligned and only the section boxes differ. Runs do not rewrite saved agenda items. Models: DeepSeek V4 Flash, DeepSeek V4.1 Flash (`deepseek-flash`), Gemini 3.8 Flash.

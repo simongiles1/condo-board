@@ -186,30 +186,45 @@ function MatrixEditIcon({ className }: { className?: string }) {
   );
 }
 
+function paneCombinationShortLabel(
+  paneId: string,
+  runs: SegmentCompareRun[],
+): string {
+  const { walk, edge } = paneCombination(paneId, runs);
+  const combo = `${segmentCompareSlotShortLabel(walk)} × ${segmentCompareSlotShortLabel(edge)}`;
+  if (paneId === SAVED_AGENDA_COMPARE_ID) {
+    return `${combo} · saved extract`;
+  }
+  return combo;
+}
+
 function ComparePaneColumnHeader({
-  kind,
-  choice,
+  side,
+  paneId,
+  runs,
   onEdit,
 }: {
-  kind: "walk" | "edge";
-  choice: SegmentCompareSlotChoice;
+  side: "left" | "right";
+  paneId: string;
+  runs: SegmentCompareRun[];
   onEdit: () => void;
 }) {
-  const title = kind === "walk" ? "Walk model" : "Edge model";
+  const sideLabel = side === "left" ? "Left pane" : "Right pane";
+  const combinationLabel = paneCombinationShortLabel(paneId, runs);
   return (
     <div
       className="flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2.5 shadow-[0_1px_0_0_rgba(15,23,42,0.06)]"
     >
       <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-        {title}
+        {sideLabel}
       </span>
-      <span className="min-w-0 truncate text-sm font-semibold text-slate-900">
-        {segmentCompareSlotShortLabel(choice)}
+      <span className="min-w-0 truncate text-sm font-semibold text-slate-900" title={combinationLabel}>
+        {combinationLabel}
       </span>
       <button
         type="button"
         className="ml-auto shrink-0 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
-        aria-label={`Change ${title.toLowerCase()} (walk × edge matrix)`}
+        aria-label={`Change ${sideLabel.toLowerCase()} (walk × edge matrix)`}
         onClick={onEdit}
       >
         <MatrixEditIcon className="h-4 w-4" />
@@ -368,9 +383,18 @@ function CompareCombinationMatrix({
                       >
                         <div className="flex min-w-[6.75rem] flex-col gap-1.5">
                           {completed ? (
-                            <span className="whitespace-nowrap text-[11px] font-semibold text-teal-800">
-                              Done
-                            </span>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="whitespace-nowrap text-[11px] font-semibold text-teal-800">
+                                Done
+                              </span>
+                              <button
+                                type="button"
+                                className="shrink-0 text-[10px] font-medium text-slate-600 underline hover:text-slate-900"
+                                onClick={() => onDeleteRun(completed.id)}
+                              >
+                                Remove
+                              </button>
+                            </div>
                           ) : failed ? (
                             <span
                               className="whitespace-nowrap text-[11px] font-semibold text-red-700"
@@ -911,15 +935,6 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     [cues, rightOverlays],
   );
 
-  const leftPaneCombo = useMemo(
-    () => paneCombination(leftId, runs),
-    [leftId, runs],
-  );
-  const rightPaneCombo = useMemo(
-    () => paneCombination(rightId, runs),
-    [rightId, runs],
-  );
-
   function handleRunTargetChange(key: string, _row: CombinationRow) {
     setRunTargetKey(key);
   }
@@ -1039,13 +1054,15 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
           <>
             <div className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200">
               <ComparePaneColumnHeader
-                kind="walk"
-                choice={leftPaneCombo.walk}
+                side="left"
+                paneId={leftId}
+                runs={runs}
                 onEdit={() => setMatrixOpen(true)}
               />
               <ComparePaneColumnHeader
-                kind="edge"
-                choice={rightPaneCombo.edge}
+                side="right"
+                paneId={rightId}
+                runs={runs}
                 onEdit={() => setMatrixOpen(true)}
               />
             </div>

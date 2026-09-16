@@ -186,45 +186,47 @@ function MatrixEditIcon({ className }: { className?: string }) {
   );
 }
 
-function paneCombinationShortLabel(
-  paneId: string,
-  runs: SegmentCompareRun[],
-): string {
-  const { walk, edge } = paneCombination(paneId, runs);
-  const combo = `${segmentCompareSlotShortLabel(walk)} × ${segmentCompareSlotShortLabel(edge)}`;
-  if (paneId === SAVED_AGENDA_COMPARE_ID) {
-    return `${combo} · saved extract`;
-  }
-  return combo;
-}
-
 function ComparePaneColumnHeader({
-  side,
   paneId,
   runs,
   onEdit,
 }: {
-  side: "left" | "right";
   paneId: string;
   runs: SegmentCompareRun[];
   onEdit: () => void;
 }) {
-  const sideLabel = side === "left" ? "Left pane" : "Right pane";
-  const combinationLabel = paneCombinationShortLabel(paneId, runs);
+  const { walk, edge } = paneCombination(paneId, runs);
+  const walkLabel = segmentCompareSlotShortLabel(walk);
+  const edgeLabel = segmentCompareSlotShortLabel(edge);
+  const saved = paneId === SAVED_AGENDA_COMPARE_ID;
+
   return (
     <div
-      className="flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2.5 shadow-[0_1px_0_0_rgba(15,23,42,0.06)]"
+      className="flex items-start gap-2 border-b border-slate-200 bg-white px-3 py-2.5 shadow-[0_1px_0_0_rgba(15,23,42,0.06)]"
     >
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-        {sideLabel}
-      </span>
-      <span className="min-w-0 truncate text-sm font-semibold text-slate-900" title={combinationLabel}>
-        {combinationLabel}
-      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+          <span className="text-sm text-slate-900">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              Walk
+            </span>
+            <span className="ml-1.5 font-semibold">{walkLabel}</span>
+          </span>
+          <span className="text-sm text-slate-900">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              Edge
+            </span>
+            <span className="ml-1.5 font-semibold">{edgeLabel}</span>
+          </span>
+        </div>
+        {saved ? (
+          <span className="mt-0.5 block text-[11px] font-semibold text-amber-900">Saved extract</span>
+        ) : null}
+      </div>
       <button
         type="button"
-        className="ml-auto shrink-0 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
-        aria-label={`Change ${sideLabel.toLowerCase()} (walk × edge matrix)`}
+        className="shrink-0 rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+        aria-label="Change combinations (walk × edge matrix)"
         onClick={onEdit}
       >
         <MatrixEditIcon className="h-4 w-4" />
@@ -503,8 +505,12 @@ function CompareCombinationMatrixModal({
   runs,
   costBaseline,
   runTargetKey,
+  runTargetRow,
   leftId,
   rightId,
+  runDisabled,
+  runBusy,
+  onRun,
   onRunTargetChange,
   onLeftChange,
   onRightChange,
@@ -516,8 +522,12 @@ function CompareCombinationMatrixModal({
   runs: SegmentCompareRun[];
   costBaseline: SegmentCompareCostBaseline | null;
   runTargetKey: string;
+  runTargetRow: CombinationRow | undefined;
   leftId: string;
   rightId: string;
+  runDisabled: boolean;
+  runBusy: boolean;
+  onRun: () => void;
   onRunTargetChange: (key: string, row: CombinationRow) => void;
   onLeftChange: (paneId: string) => void;
   onRightChange: (paneId: string) => void;
@@ -525,6 +535,10 @@ function CompareCombinationMatrixModal({
   onError: (message: string) => void;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const completedCount = countCompletedLabCombinations(runs);
+  const runTargetLabel = runTargetRow
+    ? formatSegmentCompareCombination(runTargetRow.walk, runTargetRow.edge)
+    : null;
 
   useEffect(() => {
     if (!open) return;
@@ -562,7 +576,10 @@ function CompareCombinationMatrixModal({
               Walk × edge matrix
             </h3>
             <p className="mt-0.5 text-xs text-slate-600">
-              Pick a combination to run, or assign completed cells to the left and right panes.
+              {completedCount}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT} lab runs done. Choose{" "}
+              <span className="font-semibold">Run</span> on a cell, assign{" "}
+              <span className="font-semibold">L</span>/<span className="font-semibold">R</span> to
+              panes.
             </p>
           </div>
           <button
@@ -585,45 +602,32 @@ function CompareCombinationMatrixModal({
           onDeleteRun={onDeleteRun}
           onError={onError}
         />
-      </div>
-    </div>
-  );
-}
-
-function CompareCombinationPicker({
-  runs,
-  runTargetKey,
-  onOpenMatrix,
-}: {
-  runs: SegmentCompareRun[];
-  runTargetKey: string;
-  onOpenMatrix: () => void;
-}) {
-  const combinationRows = useMemo(() => buildCombinationRows(), []);
-  const runTargetRow = combinationRows.find((row) => row.key === runTargetKey);
-  const runTargetLabel = runTargetRow
-    ? formatSegmentCompareCombination(runTargetRow.walk, runTargetRow.edge)
-    : "Select combination";
-  const completedCount = countCompletedLabCombinations(runs);
-
-  return (
-    <div className="relative z-10 min-w-0 flex-1">
-      <div className="flex w-full items-start justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5">
-        <span className="min-w-0">
-          <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Walk × edge matrix
-          </span>
-          <span className="mt-0.5 block truncate text-sm font-semibold text-slate-900">
-            Run: {runTargetLabel}
-          </span>
-        </span>
-        <button
-          type="button"
-          className="shrink-0 pt-1 text-xs font-medium text-teal-800 underline hover:text-teal-950"
-          onClick={onOpenMatrix}
-        >
-          {completedCount}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT} lab runs done · Change
-        </button>
+        <div className="mt-4 flex flex-col gap-2 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="min-w-0 text-xs text-slate-600">
+            {runTargetLabel ? (
+              <>
+                Run target: <span className="font-semibold text-slate-900">{runTargetLabel}</span>
+              </>
+            ) : (
+              "Select a cell with the Run radio."
+            )}
+          </p>
+          <div className="flex shrink-0 flex-col items-stretch gap-1 sm:min-w-[11rem] sm:items-end">
+            <button
+              type="button"
+              disabled={runDisabled}
+              onClick={onRun}
+              className="rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {runBusy ? "Running…" : "Run combination"}
+            </button>
+            {runTargetRow ? (
+              <p className="text-center text-[11px] text-slate-600 sm:text-right">
+                Est. {cellCostLabel(runTargetRow.walk, runTargetRow.edge, runs, costBaseline).text}
+              </p>
+            ) : null}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1000,38 +1004,19 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
             Close
           </button>
         </div>
-        <div className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-end">
-          <CompareCombinationPicker
-            runs={runs}
-            runTargetKey={runTargetKey}
-            onOpenMatrix={() => setMatrixOpen(true)}
-          />
-          <div className="flex shrink-0 flex-col gap-2 sm:w-48">
-            <button
-              type="button"
-              disabled={
-                starting || busy || loading || (workspace?.agendaItemCount ?? 0) === 0 || !runTargetRow
-              }
-              onClick={() => void handleRun()}
-              className="w-full rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {starting || busy ? "Running…" : "Run combination"}
-            </button>
-            {runTargetRow ? (
-              <p className="text-center text-[11px] text-slate-600">
-                Est.{" "}
-                {
-                  cellCostLabel(runTargetRow.walk, runTargetRow.edge, runs, costBaseline).text
-                }
-              </p>
-            ) : null}
-          </div>
-        </div>
         {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
         {pollWarning && !error ? (
           <p className="mt-2 text-sm text-amber-800">{pollWarning}</p>
         ) : null}
-        <div className="mt-2 flex flex-wrap items-center gap-2">
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+          <button
+            type="button"
+            className="text-sm font-medium text-teal-800 underline hover:text-teal-950"
+            onClick={() => setMatrixOpen(true)}
+          >
+            Combinations ({countCompletedLabCombinations(runs)}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT}{" "}
+            done)
+          </button>
           <button
             type="button"
             className="text-sm text-slate-600 underline hover:text-slate-900"
@@ -1054,13 +1039,11 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
           <>
             <div className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200">
               <ComparePaneColumnHeader
-                side="left"
                 paneId={leftId}
                 runs={runs}
                 onEdit={() => setMatrixOpen(true)}
               />
               <ComparePaneColumnHeader
-                side="right"
                 paneId={rightId}
                 runs={runs}
                 onEdit={() => setMatrixOpen(true)}
@@ -1084,8 +1067,14 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         runs={runs}
         costBaseline={costBaseline}
         runTargetKey={runTargetKey}
+        runTargetRow={runTargetRow}
         leftId={leftId}
         rightId={rightId}
+        runDisabled={
+          starting || busy || loading || (workspace?.agendaItemCount ?? 0) === 0 || !runTargetRow
+        }
+        runBusy={starting || Boolean(busy)}
+        onRun={() => void handleRun()}
         onRunTargetChange={handleRunTargetChange}
         onLeftChange={setLeftId}
         onRightChange={setRightId}

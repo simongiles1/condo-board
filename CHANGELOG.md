@@ -8,7 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Meetings V2 segmenter compare matrix** — The 6×6 walk×edge grid opens in a modal (from each pane header edit control or **Change** in the toolbar) instead of a dropdown. Sticky pane headers show the full walk × edge pair per side (not walk-only left / edge-only right). **Done** cells include **Remove** so a finished run can be cleared and re-run.
+- **Meetings V2 segmenter compare matrix** — The 6×6 grid lives in a modal (**Combinations** link or pane edit). **Run combination** and cost estimate are in that modal; pane headers label **Walk** and **Edge** per side. **Done** cells include **Remove** to clear and re-run.
 
 ### Added
 

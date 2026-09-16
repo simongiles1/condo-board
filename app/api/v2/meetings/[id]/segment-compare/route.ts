@@ -2,10 +2,12 @@ import { NextResponse } from "next/server";
 
 import { inngest } from "@/lib/inngest/client";
 import {
+  applyGoldStandardToMinutesPipeline,
   deleteSegmentCompareRun,
   loadSegmentCompareWorkspace,
   queueSegmentCompareRun,
   setSegmentCompareReviewedKeys,
+  setSegmentGoldStandard,
 } from "@/lib/meeting-v2/segment-compare";
 import {
   SEGMENT_COMPARE_MODELS,
@@ -54,7 +56,23 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-    const body = (await req.json()) as { walk?: unknown; edge?: unknown };
+    const body = (await req.json()) as {
+      walk?: unknown;
+      edge?: unknown;
+      action?: unknown;
+    };
+    if (body.action === "run-pipeline-from-gold") {
+      const applied = await applyGoldStandardToMinutesPipeline(id);
+      try {
+        await inngest.send({
+          name: "meeting-v2/pipeline.start",
+          data: { meetingId: id },
+        });
+      } catch (error) {
+        throw error;
+      }
+      return NextResponse.json({ ok: true, ...applied }, { status: 202 });
+    }
     const walk = parseChoice(body.walk, "Segmenter");
     const edge = parseChoice(body.edge, "Edge detection");
     const run = await queueSegmentCompareRun({ meetingId: id, walk, edge });
@@ -70,7 +88,11 @@ export async function POST(
     return NextResponse.json({ run }, { status: 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start segment compare";
-    const status = /already in progress/i.test(message) ? 409 : 400;
+    const status = /already in progress/i.test(message)
+      ? 409
+      : /gold-standard/i.test(message)
+        ? 400
+        : 400;
     console.error("[v2/segment-compare POST]", error);
     return NextResponse.json({ error: message }, { status });
   }
@@ -82,7 +104,20 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
-    const body = (await req.json()) as { reviewedKeys?: unknown };
+    const body = (await req.json()) as { reviewedKeys?: unknown; goldSpans?: unknown };
+    if (Array.isArray(body.goldSpans)) {
+      const spans = body.goldSpans.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") return [];
+        const record = entry as Record<string, unknown>;
+        if (typeof record.agendaItemId !== "string") return [];
+        const startSeconds = Number(record.startSeconds);
+        const endSeconds = Number(record.endSeconds);
+        if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds)) return [];
+        return [{ agendaItemId: record.agendaItemId, startSeconds, endSeconds }];
+      });
+      const goldStandard = await setSegmentGoldStandard(id, spans);
+      return NextResponse.json({ goldStandard });
+    }
     if (!Array.isArray(body.reviewedKeys)) {
       return NextResponse.json({ error: "reviewedKeys must be an array" }, { status: 400 });
     }

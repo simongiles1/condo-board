@@ -8,9 +8,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Meetings V2 segmenter compare matrix** — The 6×6 grid lives in a modal (**Combinations** link or pane edit). **Run combination** and cost estimate are in that modal; pane headers label **Walk** and **Edge** per side. **Done** cells include **Remove** to clear and re-run.
+- **Meetings V2 segmenter compare matrix** — The 6×6 grid lives in a modal (**Combinations** link or pane edit). Click a cell to choose the run target; **Run combination** / **Rerun combination** opens a confirmation with DeepSeek peak/off-peak context and account balance when a DeepSeek slot is selected. In-flight cells show compact **Walk *n*/*total*** / **Edge *n*/*total*** progress (no model names), spend-to-date, and **Est.** projected total (color only, no extra labels). Pane headers label **Walk** and **Edge** per side. **Done** cells include **Remove** to clear before a fresh run.
 
 ### Added
+
+- **Meetings V2 segment gold standard** — Segmenter compare can toggle **Gold standard** mode: transcript on the left, agenda concepts on the right. Select a leaf item, then click the first and last cues of that discussion. Labels persist on the meeting. Completed lab cells show **Gold *n*%** mean time-span overlap versus those labels. **Run minutes pipeline from gold** writes the spans onto agenda evidence, clears post-extract work, and resumes evidence → investigation → validation as if segmentation were perfect.
 
 - **Meetings V2 segmenter compare lab** — Temporary full-page tool on the meeting More menu. Pick a model for the transcript walk (overall segmenter) and a model for span-edge / gap judges, with a thinking toggle. Each combination is a stored run with token cost. Side-by-side panes share one scroll; cue rows stay aligned and only the section boxes differ. Runs do not rewrite saved agenda items. Models: DeepSeek V4 Flash, DeepSeek V4.1 Flash (`deepseek-flash`), Gemini 3.8 Flash.
 

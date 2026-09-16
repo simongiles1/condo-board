@@ -10,6 +10,7 @@ import type { MergedVttCue } from "@/lib/parsers/vtt";
 import { formatVttTimestamp } from "@/lib/parsers/vtt";
 import {
   cellCostLabel,
+  cellRunningCostDisplay,
   type SegmentCompareCostBaseline,
 } from "@/lib/meeting-v2/segment-compare-cost-estimates";
 import {
@@ -24,9 +25,21 @@ import {
   type SegmentCompareSlotChoice,
 } from "@/lib/meeting-v2/segment-compare-models";
 import {
+  cueSeconds,
+  formatGoldScorePercent,
+  GOLD_STANDARD_COMPARE_ID,
+  mergeGoldSpans,
+  overlaysFromGoldSpans,
+  scoreOverlaysAgainstGold,
+  type AgendaConceptRow,
+  type SegmentGoldSpan,
+  type SegmentGoldStandard,
+} from "@/lib/meeting-v2/segment-gold-standard";
+import {
   groupCuesByTranscriptSections,
   type TranscriptSectionOverlay,
 } from "@/lib/transcript/section-overlay";
+import { SegmentCompareRunConfirmDialog } from "@/components/SegmentCompareRunConfirmDialog";
 
 type WorkspacePayload = {
   cues: MergedVttCue[];
@@ -34,6 +47,9 @@ type WorkspacePayload = {
   runs: SegmentCompareRun[];
   agendaItemCount: number;
   costBaseline: SegmentCompareCostBaseline | null;
+  agendaConcepts: AgendaConceptRow[];
+  goldStandard: SegmentGoldStandard | null;
+  goldOverlays: TranscriptSectionOverlay[];
 };
 
 type CombinationRow = {
@@ -70,6 +86,17 @@ function runLabel(run: SegmentCompareRun): string {
   return formatSegmentCompareCombination(run.walk, run.edge);
 }
 
+/** Matrix cells: stage + step only (model names live in row/column headers). */
+function compactMatrixProgressLabel(label: string | null | undefined): string {
+  if (!label) return "Running…";
+  if (/^(Walk|Edge) \d+\/\d+$/.test(label)) return label;
+  const walkLegacy = label.match(/Walk .+ · chunk (\d+)\/(\d+)/);
+  if (walkLegacy) return `Walk ${walkLegacy[1]}/${walkLegacy[2]}`;
+  if (label === "Loading stored agenda outline" || label === "Loading") return "Loading";
+  if (label === "Queued") return "Queued";
+  return label;
+}
+
 function latestCompletedRunForKey(
   runs: SegmentCompareRun[],
   key: string,
@@ -90,7 +117,7 @@ function latestRunForKey(runs: SegmentCompareRun[], key: string): SegmentCompare
 }
 
 function normalizePaneRunId(paneId: string, runs: SegmentCompareRun[]): string {
-  if (paneId === SAVED_AGENDA_COMPARE_ID) return paneId;
+  if (paneId === SAVED_AGENDA_COMPARE_ID || paneId === GOLD_STANDARD_COMPARE_ID) return paneId;
   const run = runs.find((entry) => entry.id === paneId);
   return run?.status === "completed" ? paneId : SAVED_AGENDA_COMPARE_ID;
 }
@@ -100,14 +127,6 @@ function describeFetchError(caught: unknown): string {
     return "Lost connection to the server while checking lab status. The run may still have finished—use Refresh status or reopen this dialog.";
   }
   return caught instanceof Error ? caught.message : String(caught);
-}
-
-function paneTitle(paneId: string, runs: SegmentCompareRun[]): string {
-  if (paneId === SAVED_AGENDA_COMPARE_ID) {
-    return "Saved agenda (current extract)";
-  }
-  const run = runs.find((entry) => entry.id === paneId);
-  return run ? runLabel(run) : "Unknown source";
 }
 
 function buildCombinationRows(): CombinationRow[] {
@@ -154,7 +173,8 @@ const SAVED_EXTRACT_EDGE: SegmentCompareSlotChoice = {
 function paneCombination(
   paneId: string,
   runs: SegmentCompareRun[],
-): { walk: SegmentCompareSlotChoice; edge: SegmentCompareSlotChoice } {
+): { walk: SegmentCompareSlotChoice; edge: SegmentCompareSlotChoice } | null {
+  if (paneId === GOLD_STANDARD_COMPARE_ID) return null;
   if (paneId === SAVED_AGENDA_COMPARE_ID) {
     return { walk: SAVED_EXTRACT_WALK, edge: SAVED_EXTRACT_EDGE };
   }
@@ -195,33 +215,36 @@ function ComparePaneColumnHeader({
   runs: SegmentCompareRun[];
   onEdit: () => void;
 }) {
-  const { walk, edge } = paneCombination(paneId, runs);
-  const walkLabel = segmentCompareSlotShortLabel(walk);
-  const edgeLabel = segmentCompareSlotShortLabel(edge);
-  const saved = paneId === SAVED_AGENDA_COMPARE_ID;
+  const combination = paneCombination(paneId, runs);
 
   return (
     <div
       className="flex items-start gap-2 border-b border-slate-200 bg-white px-3 py-2.5 shadow-[0_1px_0_0_rgba(15,23,42,0.06)]"
     >
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-          <span className="text-sm text-slate-900">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Walk
+        {combination ? (
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <span className="text-sm text-slate-900">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Walk
+              </span>
+              <span className="ml-1.5 font-semibold">{segmentCompareSlotShortLabel(combination.walk)}</span>
             </span>
-            <span className="ml-1.5 font-semibold">{walkLabel}</span>
-          </span>
-          <span className="text-sm text-slate-900">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Edge
+            <span className="text-sm text-slate-900">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Edge
+              </span>
+              <span className="ml-1.5 font-semibold">{segmentCompareSlotShortLabel(combination.edge)}</span>
             </span>
-            <span className="ml-1.5 font-semibold">{edgeLabel}</span>
-          </span>
-        </div>
-        {saved ? (
-          <span className="mt-0.5 block text-[11px] font-semibold text-amber-900">Saved extract</span>
-        ) : null}
+          </div>
+        ) : (
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+              Gold standard
+            </p>
+            <p className="text-sm font-semibold text-slate-900">Human transcript spans</p>
+          </div>
+        )}
       </div>
       <button
         type="button"
@@ -246,6 +269,8 @@ function CompareCombinationMatrix({
   onRightChange,
   onDeleteRun,
   onError,
+  goldOverlays,
+  savedOverlays,
 }: {
   runs: SegmentCompareRun[];
   costBaseline: SegmentCompareCostBaseline | null;
@@ -257,6 +282,8 @@ function CompareCombinationMatrix({
   onRightChange: (paneId: string) => void;
   onDeleteRun: (runId: string) => void;
   onError: (message: string) => void;
+  goldOverlays: TranscriptSectionOverlay[];
+  savedOverlays: TranscriptSectionOverlay[];
 }) {
   const matrixSlots = useMemo(() => segmentCompareMatrixSlots(), []);
   const activeRuns = runs.filter((run) => run.status !== "completed");
@@ -372,16 +399,41 @@ function CompareCombinationMatrix({
                     const failed = latest?.status === "failed" ? latest : null;
                     const inFlight =
                       latest?.status === "queued" || latest?.status === "running";
-                    const isSavedCell = row.key === SAVED_EXTRACT_COMBINATION_KEY;
                     const label = formatSegmentCompareCombination(row.walk, row.edge);
                     const paneReady = paneIdForCombination(row.key, runs) !== null;
                     const cost = cellCostLabel(row.walk, row.edge, runs, costBaseline);
+                    const runningCost =
+                      inFlight && latest
+                        ? cellRunningCostDisplay(latest, row.walk, row.edge, costBaseline)
+                        : null;
+                    const predictedOverlays =
+                      completed?.overlays ??
+                      (row.key === SAVED_EXTRACT_COMBINATION_KEY ? savedOverlays : []);
+                    const goldScore =
+                      goldOverlays.length === 0
+                        ? null
+                        : completed || row.key === SAVED_EXTRACT_COMBINATION_KEY
+                          ? formatGoldScorePercent(
+                              scoreOverlaysAgainstGold(predictedOverlays, goldOverlays),
+                            )
+                          : null;
                     return (
                       <td
                         key={row.key}
-                        className={`border border-slate-200 p-2 align-top ${
+                        role="button"
+                        tabIndex={0}
+                        className={`cursor-pointer border border-slate-200 p-2 align-top hover:bg-slate-50/80 ${
                           runTargetKey === row.key ? "bg-teal-50 ring-1 ring-inset ring-teal-600" : ""
                         }`}
+                        onClick={() => onRunTargetChange(row.key, row)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onRunTargetChange(row.key, row);
+                          }
+                        }}
+                        aria-label={`Select ${label} to run`}
+                        aria-pressed={runTargetKey === row.key}
                       >
                         <div className="flex min-w-[6.75rem] flex-col gap-1.5">
                           {completed ? (
@@ -392,7 +444,10 @@ function CompareCombinationMatrix({
                               <button
                                 type="button"
                                 className="shrink-0 text-[10px] font-medium text-slate-600 underline hover:text-slate-900"
-                                onClick={() => onDeleteRun(completed.id)}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  onDeleteRun(completed.id);
+                                }}
                               >
                                 Remove
                               </button>
@@ -406,7 +461,7 @@ function CompareCombinationMatrix({
                             </span>
                           ) : inFlight ? (
                             <span className="whitespace-nowrap text-[11px] font-medium text-slate-600">
-                              {latest?.progressLabel ?? "Running…"}
+                              {compactMatrixProgressLabel(latest?.progressLabel)}
                             </span>
                           ) : (
                             <span className="whitespace-nowrap text-[11px] text-slate-400">
@@ -421,51 +476,66 @@ function CompareCombinationMatrix({
                               {failed.error}
                             </span>
                           ) : null}
-                          {isSavedCell ? (
-                            <span className="whitespace-nowrap rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-900">
-                              Saved extract
+                          {runningCost ? (
+                            <div className="flex flex-col gap-0.5">
+                              {runningCost.spentText ? (
+                                <span className="whitespace-nowrap font-mono text-[11px] font-semibold text-teal-900">
+                                  {runningCost.spentText}
+                                </span>
+                              ) : null}
+                              {runningCost.estimatedText ? (
+                                <span className="whitespace-nowrap font-mono text-[11px] text-slate-500">
+                                  {runningCost.estimatedText}
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <span
+                              className={`whitespace-nowrap font-medium ${
+                                cost.isEstimate ? "text-slate-500" : "text-slate-800"
+                              }`}
+                              title={
+                                cost.isEstimate
+                                  ? "Estimated from baseline token profile"
+                                  : "Actual lab run cost"
+                              }
+                            >
+                              {cost.text}
+                            </span>
+                          )}
+                          {goldScore ? (
+                            <span
+                              className="whitespace-nowrap text-[11px] font-semibold text-amber-800"
+                              title="Mean time-span overlap versus the human gold standard"
+                            >
+                              Gold {goldScore}
                             </span>
                           ) : null}
-                          <span
-                            className={`whitespace-nowrap font-medium ${
-                              cost.isEstimate ? "text-slate-500" : "text-slate-800"
-                            }`}
-                            title={cost.isEstimate ? "Estimated from baseline token profile" : "Actual lab run cost"}
-                          >
-                            {cost.text}
-                          </span>
-                          <div className="flex items-center justify-between gap-1">
-                            <label className="flex items-center gap-1.5 whitespace-nowrap text-slate-700">
-                              <input
-                                type="radio"
-                                name="segment-compare-run-target"
-                                className="h-3 w-3"
-                                checked={runTargetKey === row.key}
-                                onChange={() => onRunTargetChange(row.key, row)}
-                                aria-label={`Run target ${label}`}
-                              />
-                              <span>Run</span>
-                            </label>
-                            <div className="flex shrink-0 gap-0.5">
-                              <PaneToggle
-                                compact
-                                active={combinationPaneActive(row.key, "left")}
-                                dimmed={!paneReady}
-                                label={paneToggleHint(row.key, "left", label)}
-                                onClick={() => assignCombination("left", row.key)}
-                              >
-                                L
-                              </PaneToggle>
-                              <PaneToggle
-                                compact
-                                active={combinationPaneActive(row.key, "right")}
-                                dimmed={!paneReady}
-                                label={paneToggleHint(row.key, "right", label)}
-                                onClick={() => assignCombination("right", row.key)}
-                              >
-                                R
-                              </PaneToggle>
-                            </div>
+                          <div className="flex justify-end gap-0.5">
+                            <PaneToggle
+                              compact
+                              active={combinationPaneActive(row.key, "left")}
+                              dimmed={!paneReady}
+                              label={paneToggleHint(row.key, "left", label)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                assignCombination("left", row.key);
+                              }}
+                            >
+                              L
+                            </PaneToggle>
+                            <PaneToggle
+                              compact
+                              active={combinationPaneActive(row.key, "right")}
+                              dimmed={!paneReady}
+                              label={paneToggleHint(row.key, "right", label)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                assignCombination("right", row.key);
+                              }}
+                            >
+                              R
+                            </PaneToggle>
                           </div>
                         </div>
                       </td>
@@ -510,12 +580,14 @@ function CompareCombinationMatrixModal({
   rightId,
   runDisabled,
   runBusy,
-  onRun,
+  onRequestRun,
   onRunTargetChange,
   onLeftChange,
   onRightChange,
   onDeleteRun,
   onError,
+  goldOverlays,
+  savedOverlays,
 }: {
   open: boolean;
   onClose: () => void;
@@ -527,18 +599,23 @@ function CompareCombinationMatrixModal({
   rightId: string;
   runDisabled: boolean;
   runBusy: boolean;
-  onRun: () => void;
+  onRequestRun: () => void;
   onRunTargetChange: (key: string, row: CombinationRow) => void;
   onLeftChange: (paneId: string) => void;
   onRightChange: (paneId: string) => void;
   onDeleteRun: (runId: string) => void;
   onError: (message: string) => void;
+  goldOverlays: TranscriptSectionOverlay[];
+  savedOverlays: TranscriptSectionOverlay[];
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const completedCount = countCompletedLabCombinations(runs);
   const runTargetLabel = runTargetRow
     ? formatSegmentCompareCombination(runTargetRow.walk, runTargetRow.edge)
     : null;
+  const runTargetCompleted =
+    runTargetRow != null &&
+    latestRunForKey(runs, runTargetRow.key)?.status === "completed";
 
   useEffect(() => {
     if (!open) return;
@@ -576,10 +653,9 @@ function CompareCombinationMatrixModal({
               Walk × edge matrix
             </h3>
             <p className="mt-0.5 text-xs text-slate-600">
-              {completedCount}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT} lab runs done. Choose{" "}
-              <span className="font-semibold">Run</span> on a cell, assign{" "}
-              <span className="font-semibold">L</span>/<span className="font-semibold">R</span> to
-              panes.
+              {completedCount}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT} lab runs done. Click a cell to
+              select it, assign <span className="font-semibold">L</span>/
+              <span className="font-semibold">R</span> to panes.
             </p>
           </div>
           <button
@@ -601,6 +677,8 @@ function CompareCombinationMatrixModal({
           onRightChange={onRightChange}
           onDeleteRun={onDeleteRun}
           onError={onError}
+          goldOverlays={goldOverlays}
+          savedOverlays={savedOverlays}
         />
         <div className="mt-4 flex flex-col gap-2 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="min-w-0 text-xs text-slate-600">
@@ -609,17 +687,17 @@ function CompareCombinationMatrixModal({
                 Run target: <span className="font-semibold text-slate-900">{runTargetLabel}</span>
               </>
             ) : (
-              "Select a cell with the Run radio."
+              "Click a cell to choose what to run."
             )}
           </p>
           <div className="flex shrink-0 flex-col items-stretch gap-1 sm:min-w-[11rem] sm:items-end">
             <button
               type="button"
               disabled={runDisabled}
-              onClick={onRun}
+              onClick={onRequestRun}
               className="rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {runBusy ? "Running…" : "Run combination"}
+              {runBusy ? "Running…" : runTargetCompleted ? "Rerun combination" : "Run combination"}
             </button>
             {runTargetRow ? (
               <p className="text-center text-[11px] text-slate-600 sm:text-right">
@@ -646,7 +724,7 @@ function PaneToggle({
   disabled?: boolean;
   dimmed?: boolean;
   label: string;
-  onClick: () => void;
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   compact?: boolean;
   children?: string;
 }) {
@@ -820,6 +898,8 @@ function CueCell({
   pairedRow,
   colors,
   cueIndex,
+  onCueClick,
+  pending,
 }: {
   cue: MergedVttCue;
   meta: CueSegmentMeta;
@@ -827,6 +907,8 @@ function CueCell({
   pairedRow: PairedCueRowLayout;
   colors: Map<string, string>;
   cueIndex: number;
+  onCueClick?: (cueIndex: number) => void;
+  pending?: boolean;
 }) {
   const { sections, position, showLabel } = meta;
   const hasSection = sections.length > 0;
@@ -849,12 +931,15 @@ function CueCell({
       className={`min-h-full px-1 ${pairedRow.segmentGapBefore ? "mt-3" : ""}`}
     >
       <article
-        className={`px-2.5 py-1 ${segmentBorderClass(position, hasSection)}`}
+        className={`px-2.5 py-1 ${segmentBorderClass(position, hasSection)} ${
+          onCueClick ? "cursor-pointer hover:ring-1 hover:ring-amber-500" : ""
+        } ${pending ? "ring-1 ring-amber-600" : ""}`}
         style={{
           borderColor: hasSection ? borderColor : undefined,
           backgroundColor: speakerBackgroundColor(cue.speaker),
         }}
         title={hasSection ? overlapTitle : undefined}
+        onClick={onCueClick ? () => onCueClick(cueIndex) : undefined}
       >
         {pairedRow.reserveLabelRow && labelSource ? (
           <SegmentLabelRow meta={labelSource} colors={colors} visible={showLabel} />
@@ -883,6 +968,14 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   const [starting, setStarting] = useState(false);
   const [pollWarning, setPollWarning] = useState<string | null>(null);
   const [matrixOpen, setMatrixOpen] = useState(false);
+  const [runConfirmOpen, setRunConfirmOpen] = useState(false);
+  const [goldMode, setGoldMode] = useState(false);
+  const [goldSpans, setGoldSpans] = useState<SegmentGoldSpan[]>([]);
+  const [selectedConceptId, setSelectedConceptId] = useState<string | null>(null);
+  const [pendingStartIndex, setPendingStartIndex] = useState<number | null>(null);
+  const [pipelineConfirmOpen, setPipelineConfirmOpen] = useState(false);
+  const [pipelineBusy, setPipelineBusy] = useState(false);
+  const goldDirtyRef = useRef(false);
 
   async function refresh(): Promise<WorkspacePayload> {
     try {
@@ -894,6 +987,9 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         throw new Error(payload.error || "Failed to load segment compare");
       }
       setWorkspace(payload);
+      if (!goldDirtyRef.current) {
+        setGoldSpans(payload.goldStandard?.spans ?? []);
+      }
       setLeftId((id) => normalizePaneRunId(id, payload.runs));
       setRightId((id) => normalizePaneRunId(id, payload.runs));
       setPollWarning(null);
@@ -913,7 +1009,16 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         if (cancelled) return;
         const completed = payload.runs.filter((run) => run.status === "completed");
         const latest = completed[completed.length - 1];
-        setLeftId(SAVED_AGENDA_COMPARE_ID);
+        goldDirtyRef.current = false;
+        setGoldSpans(payload.goldStandard?.spans ?? []);
+        setGoldMode(false);
+        setSelectedConceptId(null);
+        setPendingStartIndex(null);
+        setLeftId(
+          (payload.goldOverlays?.length ?? 0) > 0
+            ? GOLD_STANDARD_COMPARE_ID
+            : SAVED_AGENDA_COMPARE_ID,
+        );
         setRightId(latest?.id ?? SAVED_AGENDA_COMPARE_ID);
       })
       .catch((caught) => {
@@ -960,32 +1065,44 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   const savedOverlays = workspace?.savedOverlays ?? [];
   const runs = workspace?.runs ?? [];
   const costBaseline = workspace?.costBaseline ?? null;
+  const agendaConcepts = workspace?.agendaConcepts ?? [];
+  const liveGoldOverlays = useMemo(
+    () => overlaysFromGoldSpans(agendaConcepts, goldSpans),
+    [agendaConcepts, goldSpans],
+  );
 
   const combinationRows = useMemo(() => buildCombinationRows(), []);
   const runTargetRow = useMemo(
     () => combinationRows.find((row) => row.key === runTargetKey) ?? combinationRows[0],
     [combinationRows, runTargetKey],
   );
+  const runTargetCompleted =
+    runTargetRow != null &&
+    latestRunForKey(runs, runTargetRow.key)?.status === "completed";
+  const runTargetEstimate = runTargetRow
+    ? cellCostLabel(runTargetRow.walk, runTargetRow.edge, runs, costBaseline)
+    : null;
 
   const paneOverlays = useMemo(() => {
     const byId = new Map<string, TranscriptSectionOverlay[]>();
     byId.set(SAVED_AGENDA_COMPARE_ID, savedOverlays);
+    byId.set(GOLD_STANDARD_COMPARE_ID, liveGoldOverlays);
     for (const run of runs) {
       byId.set(run.id, run.overlays ?? []);
     }
     return byId;
-  }, [runs, savedOverlays]);
+  }, [runs, savedOverlays, liveGoldOverlays]);
 
   const leftOverlays = paneOverlays.get(leftId) ?? [];
   const rightOverlays = paneOverlays.get(rightId) ?? [];
   const colors = useMemo(
-    () => colorByCode([...leftOverlays, ...rightOverlays, ...savedOverlays]),
-    [leftOverlays, rightOverlays, savedOverlays],
+    () => colorByCode([...leftOverlays, ...rightOverlays, ...savedOverlays, ...liveGoldOverlays]),
+    [leftOverlays, rightOverlays, savedOverlays, liveGoldOverlays],
   );
 
   const leftCueMeta = useMemo(
-    () => buildCueSegmentMeta(cues, leftOverlays),
-    [cues, leftOverlays],
+    () => buildCueSegmentMeta(cues, goldMode ? liveGoldOverlays : leftOverlays),
+    [cues, goldMode, liveGoldOverlays, leftOverlays],
   );
   const rightCueMeta = useMemo(
     () => buildCueSegmentMeta(cues, rightOverlays),
@@ -1014,6 +1131,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         throw new Error(payload.error || "Failed to start run");
       }
       await refresh();
+      setRunConfirmOpen(false);
     } catch (caught) {
       setError(describeFetchError(caught));
     } finally {
@@ -1037,6 +1155,130 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     if (rightId === runId) setRightId(fallback);
   }
 
+  useEffect(() => {
+    if (!open || !goldDirtyRef.current) return;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await fetch(`/api/v2/meetings/${meetingId}/segment-compare`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ goldSpans }),
+          });
+          const payload = (await response.json()) as {
+            goldStandard?: SegmentGoldStandard;
+            error?: string;
+          };
+          if (!response.ok) {
+            throw new Error(payload.error || "Failed to save gold standard");
+          }
+          goldDirtyRef.current = false;
+          if (payload.goldStandard) {
+            setGoldSpans(payload.goldStandard.spans);
+          }
+        } catch (caught) {
+          setError(describeFetchError(caught));
+        }
+      })();
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [goldSpans, meetingId, open]);
+
+  useEffect(() => {
+    if (!goldMode) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setPendingStartIndex(null);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [goldMode]);
+
+  function commitGoldSpans(next: SegmentGoldSpan[]) {
+    goldDirtyRef.current = true;
+    setGoldSpans(mergeGoldSpans(next));
+  }
+
+  function handleSelectConcept(concept: AgendaConceptRow) {
+    if (!concept.isLeaf) {
+      setError("Set spans on leaf agenda items. Parent items inherit their children.");
+      return;
+    }
+    setError(null);
+    setSelectedConceptId(concept.id);
+    setPendingStartIndex(null);
+  }
+
+  function handleGoldCueClick(cueIndex: number) {
+    if (!selectedConceptId) {
+      setError("Select an agenda concept first, then click the start and end of its discussion.");
+      return;
+    }
+    setError(null);
+    if (pendingStartIndex == null) {
+      setPendingStartIndex(cueIndex);
+      return;
+    }
+    const startCue = cues[Math.min(pendingStartIndex, cueIndex)];
+    const endCue = cues[Math.max(pendingStartIndex, cueIndex)];
+    if (!startCue || !endCue) return;
+    commitGoldSpans([
+      ...goldSpans,
+      {
+        agendaItemId: selectedConceptId,
+        startSeconds: cueSeconds(startCue.start),
+        endSeconds: cueSeconds(endCue.end),
+      },
+    ]);
+    setPendingStartIndex(null);
+  }
+
+  function clearConceptSpans(conceptId: string) {
+    commitGoldSpans(goldSpans.filter((span) => span.agendaItemId !== conceptId));
+    if (selectedConceptId === conceptId) setPendingStartIndex(null);
+  }
+
+  async function handleRunPipelineFromGold() {
+    setPipelineBusy(true);
+    setError(null);
+    try {
+      if (goldDirtyRef.current) {
+        const saveResponse = await fetch(`/api/v2/meetings/${meetingId}/segment-compare`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ goldSpans }),
+        });
+        const savePayload = (await saveResponse.json()) as { error?: string };
+        if (!saveResponse.ok) {
+          throw new Error(savePayload.error || "Failed to save gold standard");
+        }
+        goldDirtyRef.current = false;
+      }
+      const response = await fetch(`/api/v2/meetings/${meetingId}/segment-compare`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run-pipeline-from-gold" }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to start minutes pipeline");
+      }
+      setPipelineConfirmOpen(false);
+      onClose();
+    } catch (caught) {
+      setError(describeFetchError(caught));
+    } finally {
+      setPipelineBusy(false);
+    }
+  }
+
+  const labeledLeafCount = new Set(goldSpans.map((span) => span.agendaItemId)).size;
+  const leafCount = agendaConcepts.filter((concept) => concept.isLeaf).length;
+  const selectedConcept = agendaConcepts.find((concept) => concept.id === selectedConceptId) ?? null;
+  const pendingCueIndexes =
+    goldMode && pendingStartIndex != null
+      ? new Set([pendingStartIndex])
+      : new Set<number>();
+
   if (!open) return null;
 
   return (
@@ -1046,7 +1288,9 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Segmenter compare</h2>
             <p className="text-sm text-slate-600">
-              Temporary A/B lab. Same transcript, shared scroll. Does not rewrite the saved agenda.
+              {goldMode
+                ? "Select a leaf concept, then click the first and last transcript cues of that discussion."
+                : "Temporary A/B lab. Same transcript, shared scroll. Lab runs do not rewrite the saved agenda."}
             </p>
           </div>
           <button
@@ -1064,12 +1308,32 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
           <button
             type="button"
-            className="text-sm font-medium text-teal-800 underline hover:text-teal-950"
-            onClick={() => setMatrixOpen(true)}
+            className={`text-sm font-medium underline ${
+              goldMode ? "text-amber-900 hover:text-amber-950" : "text-slate-600 hover:text-slate-900"
+            }`}
+            onClick={() => {
+              setGoldMode((current) => {
+                const next = !current;
+                if (next) {
+                  setPendingStartIndex(null);
+                  setLeftId(GOLD_STANDARD_COMPARE_ID);
+                }
+                return next;
+              });
+            }}
           >
-            Combinations ({countCompletedLabCombinations(runs)}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT}{" "}
-            done)
+            {goldMode ? "Exit gold standard" : "Gold standard"}
           </button>
+          {goldMode ? null : (
+            <button
+              type="button"
+              className="text-sm font-medium text-teal-800 underline hover:text-teal-950"
+              onClick={() => setMatrixOpen(true)}
+            >
+              Combinations ({countCompletedLabCombinations(runs)}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT}{" "}
+              done)
+            </button>
+          )}
           <button
             type="button"
             className="text-sm text-slate-600 underline hover:text-slate-900"
@@ -1079,6 +1343,30 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
           >
             Refresh status
           </button>
+          {liveGoldOverlays.length > 0 && !goldMode ? (
+            <button
+              type="button"
+              className="text-sm text-amber-800 underline hover:text-amber-950"
+              onClick={() => setLeftId(GOLD_STANDARD_COMPARE_ID)}
+            >
+              Show gold on left
+            </button>
+          ) : null}
+          {goldMode ? (
+            <span className="text-sm text-slate-600">
+              {labeledLeafCount}/{leafCount} leaves labeled
+            </span>
+          ) : null}
+          {goldMode ? (
+            <button
+              type="button"
+              disabled={goldSpans.length === 0 || pipelineBusy}
+              className="text-sm font-medium text-teal-800 underline hover:text-teal-950 disabled:cursor-not-allowed disabled:text-slate-400"
+              onClick={() => setPipelineConfirmOpen(true)}
+            >
+              Run minutes pipeline from gold
+            </button>
+          ) : null}
         </div>
         {(workspace?.agendaItemCount ?? 0) === 0 ? (
           <p className="mt-2 text-sm text-amber-800">Extract the agenda first so the walk has an outline to seed from.</p>
@@ -1090,45 +1378,141 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
           <p className="p-6 text-sm text-slate-600">Loading transcript…</p>
         ) : (
           <>
-            <div className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200">
-              <ComparePaneColumnHeader
-                paneId={leftId}
-                runs={runs}
-                onEdit={() => setMatrixOpen(true)}
-              />
-              <ComparePaneColumnHeader
-                paneId={rightId}
-                runs={runs}
-                onEdit={() => setMatrixOpen(true)}
-              />
-            </div>
-            <div className="grid grid-cols-2">
-              {cues.map((cue, index) => {
-                const leftMeta = leftCueMeta[index];
-                const rightMeta = rightCueMeta[index];
-                const pairedRow = buildPairedCueRowLayout(leftMeta, rightMeta, index);
-                return (
-                  <div key={`${cue.start}-${index}`} className="contents">
-                    <CueCell
-                      cue={cue}
-                      meta={leftMeta}
-                      partnerMeta={rightMeta}
-                      pairedRow={pairedRow}
-                      colors={colors}
-                      cueIndex={index}
-                    />
-                    <CueCell
-                      cue={cue}
-                      meta={rightMeta}
-                      partnerMeta={leftMeta}
-                      pairedRow={pairedRow}
-                      colors={colors}
-                      cueIndex={index}
-                    />
+            {goldMode ? (
+              <div className="grid min-h-full grid-cols-[minmax(0,1fr)_18rem]">
+                <div>
+                  <div className="sticky top-0 z-10 border-b border-slate-200 bg-white px-3 py-2.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                      Transcript
+                    </p>
+                    <p className="text-sm text-slate-700">
+                      {selectedConcept
+                        ? pendingStartIndex == null
+                          ? `Click the start of ${selectedConcept.code} — ${selectedConcept.title}`
+                          : `Click the end of ${selectedConcept.code} — ${selectedConcept.title}`
+                        : "Select a concept, then mark start and end cues."}
+                    </p>
                   </div>
-                );
-              })}
-            </div>
+                  {cues.map((cue, index) => {
+                    const goldMeta = leftCueMeta[index] ?? {
+                      sections: [],
+                      position: "solo" as const,
+                      showLabel: false,
+                      segmentStartsAtCue: false,
+                    };
+                    const pairedRow = buildPairedCueRowLayout(goldMeta, goldMeta, index);
+                    return (
+                      <CueCell
+                        key={`${cue.start}-${index}`}
+                        cue={cue}
+                        meta={goldMeta}
+                        partnerMeta={goldMeta}
+                        pairedRow={pairedRow}
+                        colors={colors}
+                        cueIndex={index}
+                        onCueClick={handleGoldCueClick}
+                        pending={pendingCueIndexes.has(index)}
+                      />
+                    );
+                  })}
+                </div>
+                <aside className="sticky top-0 h-[calc(100vh-8rem)] overflow-y-auto border-l border-slate-200 bg-white">
+                  <div className="border-b border-slate-200 px-3 py-2.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Agenda concepts
+                    </p>
+                  </div>
+                  <ul className="p-2">
+                    {agendaConcepts.map((concept) => {
+                      const labeled = goldSpans.some((span) => span.agendaItemId === concept.id);
+                      const selected = selectedConceptId === concept.id;
+                      return (
+                        <li key={concept.id}>
+                          <div
+                            className={`flex items-start gap-1 rounded-md ${
+                              selected ? "bg-amber-50" : ""
+                            }`}
+                            style={{ paddingLeft: `${concept.depth * 0.75 + 0.25}rem` }}
+                          >
+                            <button
+                              type="button"
+                              disabled={!concept.isLeaf}
+                              className={`min-w-0 flex-1 rounded-md px-2 py-1.5 text-left text-sm ${
+                                concept.isLeaf
+                                  ? "hover:bg-slate-50"
+                                  : "cursor-default text-slate-500"
+                              } ${selected ? "font-semibold text-amber-950" : "text-slate-800"}`}
+                              onClick={() => handleSelectConcept(concept)}
+                            >
+                              <span className="font-mono text-[11px] text-slate-500">
+                                {concept.code}
+                              </span>{" "}
+                              {concept.title}
+                              {labeled ? (
+                                <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                                  Set
+                                </span>
+                              ) : null}
+                            </button>
+                            {concept.isLeaf && labeled ? (
+                              <button
+                                type="button"
+                                className="shrink-0 px-1.5 py-1 text-[10px] text-slate-500 underline hover:text-slate-800"
+                                onClick={() => clearConceptSpans(concept.id)}
+                              >
+                                Clear
+                              </button>
+                            ) : null}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </aside>
+              </div>
+            ) : (
+              <>
+                <div className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200">
+                  <ComparePaneColumnHeader
+                    paneId={leftId}
+                    runs={runs}
+                    onEdit={() => setMatrixOpen(true)}
+                  />
+                  <ComparePaneColumnHeader
+                    paneId={rightId}
+                    runs={runs}
+                    onEdit={() => setMatrixOpen(true)}
+                  />
+                </div>
+                <div className="grid grid-cols-2">
+                  {cues.map((cue, index) => {
+                    const leftMeta = leftCueMeta[index];
+                    const rightMeta = rightCueMeta[index];
+                    const pairedRow = buildPairedCueRowLayout(leftMeta, rightMeta, index);
+                    return (
+                      <div key={`${cue.start}-${index}`} className="contents">
+                        <CueCell
+                          cue={cue}
+                          meta={leftMeta}
+                          partnerMeta={rightMeta}
+                          pairedRow={pairedRow}
+                          colors={colors}
+                          cueIndex={index}
+                        />
+                        <CueCell
+                          cue={cue}
+                          meta={rightMeta}
+                          partnerMeta={leftMeta}
+                          pairedRow={pairedRow}
+                          colors={colors}
+                          cueIndex={index}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </>
         )}
       </div>
@@ -1146,13 +1530,81 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
           starting || busy || loading || (workspace?.agendaItemCount ?? 0) === 0 || !runTargetRow
         }
         runBusy={starting || Boolean(busy)}
-        onRun={() => void handleRun()}
+        onRequestRun={() => setRunConfirmOpen(true)}
         onRunTargetChange={handleRunTargetChange}
         onLeftChange={setLeftId}
         onRightChange={setRightId}
         onDeleteRun={(runId) => void handleDelete(runId)}
         onError={setError}
+        goldOverlays={liveGoldOverlays}
+        savedOverlays={savedOverlays}
       />
+
+      {pipelineConfirmOpen ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/40"
+            onClick={() => setPipelineConfirmOpen(false)}
+            disabled={pipelineBusy}
+            aria-label="Close dialog"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="gold-pipeline-confirm-title"
+            className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-xl"
+          >
+            <h2 id="gold-pipeline-confirm-title" className="text-lg font-semibold text-slate-900">
+              Run minutes from gold-standard spans?
+            </h2>
+            <p className="mt-2 text-sm text-slate-600">
+              This writes your labeled transcript ranges onto the saved agenda, clears
+              evidence/investigation/validation for this meeting, approves the agenda, and starts
+              the rest of the minutes pipeline as if segmentation were perfect.
+            </p>
+            <p className="mt-2 text-sm text-slate-800">
+              {labeledLeafCount} leaf concept{labeledLeafCount === 1 ? "" : "s"} labeled.
+            </p>
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setPipelineConfirmOpen(false)}
+                disabled={pipelineBusy}
+                className="rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-300 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleRunPipelineFromGold()}
+                disabled={pipelineBusy}
+                className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {pipelineBusy ? "Starting…" : "Run pipeline"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {runTargetRow ? (
+        <SegmentCompareRunConfirmDialog
+          open={runConfirmOpen}
+          rerun={runTargetCompleted}
+          combinationLabel={formatSegmentCompareCombination(runTargetRow.walk, runTargetRow.edge)}
+          estimatedCostLabel={
+            runTargetEstimate
+              ? runTargetEstimate.text.replace(/^~/, "")
+              : null
+          }
+          walk={runTargetRow.walk}
+          edge={runTargetRow.edge}
+          busy={starting}
+          onCancel={() => setRunConfirmOpen(false)}
+          onConfirm={() => void handleRun()}
+        />
+      ) : null}
     </div>
   );
 }

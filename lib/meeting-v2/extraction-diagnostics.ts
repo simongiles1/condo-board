@@ -101,6 +101,8 @@ export type MeetingV2Settings = {
   segmentCompareRuns?: import("./segment-compare-models").SegmentCompareRun[];
   /** Checked combinations in the segmenter compare lab (includes saved-agenda baseline). */
   segmentCompareReviewedKeys?: string[];
+  /** Human-labeled transcript spans for agenda leaves, used to score lab runs. */
+  segmentGoldStandard?: import("./segment-gold-standard").SegmentGoldStandard | null;
 };
 
 export type MeetingV2ExtractionRun = {

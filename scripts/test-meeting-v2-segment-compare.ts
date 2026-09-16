@@ -12,7 +12,9 @@ import {
 } from "../lib/meeting-v2/segment-compare";
 import {
   buildSegmentCompareCostBaseline,
+  cellRunningCostDisplay,
   estimateSegmentCompareCombinationCostUsd,
+  extrapolateSegmentCompareRunTotalCostUsd,
 } from "../lib/meeting-v2/segment-compare-cost-estimates";
 import {
   enumerateSegmentCompareCombinations,
@@ -28,6 +30,13 @@ import {
   thinkingAwareMaxOutputTokens,
 } from "../lib/meeting-v2/segment-json";
 import { pickSectionsForTime } from "../lib/transcript/section-overlay";
+import {
+  agendaConceptRows,
+  overlaysFromGoldSpans,
+  scoreOverlaysAgainstGold,
+  sequenceRangesForTimeSpans,
+  unionChildSequenceRanges,
+} from "../lib/meeting-v2/segment-gold-standard";
 
 describe("segment compare catalog", () => {
   it("maps picker ids to API slugs", () => {
@@ -139,6 +148,34 @@ describe("segment compare cost estimates", () => {
     );
     assert.ok(geminiThinkBoth > geminiPlain * 2);
   });
+
+  it("extrapolates in-flight spend from walk step counters", () => {
+    assert.equal(
+      extrapolateSegmentCompareRunTotalCostUsd(0.21, "Walk 7/21"),
+      0.63,
+    );
+    const display = cellRunningCostDisplay(
+      {
+        id: "run-live",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        completedAt: null,
+        status: "running",
+        progressLabel: "Walk 7/21",
+        error: null,
+        walk: { modelId: "deepseek-v4-flash", thinking: false },
+        edge: { modelId: "deepseek-v4-flash", thinking: false },
+        overlays: [],
+        walkUsage: null,
+        edgeUsage: null,
+        totalCostUsd: 0.21,
+      },
+      { modelId: "deepseek-v4-flash", thinking: false },
+      { modelId: "deepseek-v4-flash", thinking: false },
+      null,
+    );
+    assert.equal(display.spentText, "$0.210");
+    assert.equal(display.estimatedText, "Est. $0.630");
+  });
 });
 
 describe("segment compare overlays", () => {
@@ -209,5 +246,58 @@ describe("segment compare overlays", () => {
     const second = pickSectionsForTime(50, overlays, 52);
     assert.equal(first[0]?.code, "2");
     assert.equal(second[0]?.code, "4.A.1");
+  });
+});
+
+describe("segment gold standard", () => {
+  it("scores identical overlays at 100% IoU", () => {
+    const gold = overlaysFromGoldSpans(
+      [{ id: "a", code: "4.A.1", title: "Booster", isLeaf: true, depth: 2 }],
+      [{ agendaItemId: "a", startSeconds: 40, endSeconds: 110 }],
+    );
+    const score = scoreOverlaysAgainstGold(gold, gold);
+    assert.equal(score?.meanIou, 1);
+  });
+
+  it("scores a half-overlap as 1/3 IoU", () => {
+    const gold = overlaysFromGoldSpans(
+      [{ id: "a", code: "2", title: "Minutes", isLeaf: true, depth: 0 }],
+      [{ agendaItemId: "a", startSeconds: 0, endSeconds: 100 }],
+    );
+    const predicted = overlaysFromGoldSpans(
+      [{ id: "x", code: "2", title: "Minutes", isLeaf: true, depth: 0 }],
+      [{ agendaItemId: "x", startSeconds: 50, endSeconds: 150 }],
+    );
+    const score = scoreOverlaysAgainstGold(predicted, gold);
+    assert.ok(score);
+    assert.ok(Math.abs(score.meanIou - 50 / 150) < 1e-9);
+  });
+
+  it("maps overlapping cues to closed sequence ranges", () => {
+    const ranges = sequenceRangesForTimeSpans(
+      [{ startSeconds: 10, endSeconds: 25 }],
+      [
+        { sequence: 1, startTimestamp: "00:00:00.000", endTimestamp: "00:00:08.000" },
+        { sequence: 2, startTimestamp: "00:00:09.000", endTimestamp: "00:00:14.000" },
+        { sequence: 3, startTimestamp: "00:00:15.000", endTimestamp: "00:00:22.000" },
+        { sequence: 4, startTimestamp: "00:00:30.000", endTimestamp: "00:00:40.000" },
+      ],
+    );
+    assert.deepEqual(ranges, [[2, 3]]);
+  });
+
+  it("unions leaf ranges onto parent outline items", () => {
+    const items = [
+      { id: "parent", itemNumber: "4", title: "Projects" },
+      { id: "child", itemNumber: "4.A", title: "Booster" },
+    ];
+    const rows = agendaConceptRows(items);
+    assert.equal(rows.find((row) => row.id === "parent")?.isLeaf, false);
+    assert.equal(rows.find((row) => row.id === "child")?.isLeaf, true);
+    const unioned = unionChildSequenceRanges(
+      items,
+      new Map([["child", [[10, 20] as [number, number]]]]),
+    );
+    assert.deepEqual(unioned.get("parent"), [[10, 20]]);
   });
 });

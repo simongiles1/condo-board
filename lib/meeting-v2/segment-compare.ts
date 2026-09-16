@@ -24,6 +24,21 @@ import {
 } from "@/lib/meeting-v2/agenda-ai";
 import { loadMeetingV2AiUsageStages } from "@/lib/meeting-v2/ai-usage";
 import type { MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
+import { canonicalDiscussionTiming, withCanonicalDiscussionTiming } from "@/lib/meeting-v2/canonical-timing";
+import type { CanonicalAgendaEvidence } from "@/lib/meeting-v2/evidence-contract";
+import { resolveMeetingV2SegmentMilestonePercent } from "@/lib/meeting-v2/pipeline-segment-timing";
+import { resetMeetingV2PostExtractData, updateMeetingV2Status } from "@/lib/meeting-v2/service";
+import {
+  agendaConceptRows,
+  mergeGoldSpans,
+  normalizeSegmentGoldStandard,
+  overlaysFromGoldSpans,
+  sequenceRangesForTimeSpans,
+  unionChildSequenceRanges,
+  type AgendaConceptRow,
+  type SegmentGoldStandard,
+  type SegmentGoldSpan,
+} from "@/lib/meeting-v2/segment-gold-standard";
 import {
   buildSegmentCompareCostBaseline,
   type SegmentCompareCostBaseline,
@@ -35,10 +50,10 @@ import {
   assignUnmatchedLeavesInHoles,
   createGapHoleJudge,
   extendFloorThroughLifecycleHoles,
+  findTranscriptHoles,
 } from "@/lib/meeting-v2/gap-leaf-assignment";
 import {
   estimateSegmentCompareCostUsd,
-  formatSegmentCompareChoice,
   segmentCompareModel,
   type SegmentCompareRun,
   type SegmentCompareSlotChoice,
@@ -48,7 +63,10 @@ import { createSegmentationJsonFn, type SegmentationJsonFn } from "@/lib/meeting
 import {
   createSpanEdgeJudge,
   reviewTranscriptTopicSpans,
+  SPAN_EDGE_MAX_ROUNDS,
   transcriptSegmentsToReviewCues,
+  type SpanReviewCue,
+  type SpanReviewTopic,
 } from "@/lib/meeting-v2/span-edge-review";
 import type { MergedVttCue } from "@/lib/parsers/vtt";
 import {
@@ -56,9 +74,26 @@ import {
   discussionTimingFromSourceText,
   type TranscriptSectionOverlay,
 } from "@/lib/transcript/section-overlay";
-import type { TokenUsage } from "@/lib/gemini/usage";
 
 const MAX_STORED_RUNS = 20;
+
+function estimateEdgeProgressSteps(topics: SpanReviewTopic[], cues: SpanReviewCue[]): number {
+  const holes = findTranscriptHoles(topics, cues);
+  const unmatchedHoleCount = holes.filter((hole) => hole.unmatched.length > 0).length;
+  return SPAN_EDGE_MAX_ROUNDS + unmatchedHoleCount + holes.length;
+}
+
+function createPhaseStepProgress(
+  emit: (label: string) => Promise<void>,
+  phase: "Walk" | "Edge",
+  total: number,
+) {
+  let step = 0;
+  return async () => {
+    step += 1;
+    await emit(`${phase} ${step}/${Math.max(total, step)}`);
+  };
+}
 
 type MeteredUsage = TokenUsage & { billedAtMs: number };
 
@@ -340,9 +375,12 @@ export async function loadSegmentCompareWorkspace(meetingId: string): Promise<{
   reviewedKeys: string[];
   agendaItemCount: number;
   costBaseline: SegmentCompareCostBaseline | null;
+  agendaConcepts: AgendaConceptRow[];
+  goldStandard: SegmentGoldStandard | null;
+  goldOverlays: TranscriptSectionOverlay[];
 }> {
   const db = getDb();
-  const [segments, agendaItems, runs, reviewedKeys, extractWalkUsage] = await Promise.all([
+  const [segments, agendaItems, runs, reviewedKeys, extractWalkUsage, { settings }] = await Promise.all([
     db
       .select({
         startTimestamp: meetingsV2TranscriptSegments.startTimestamp,
@@ -366,7 +404,12 @@ export async function loadSegmentCompareWorkspace(meetingId: string): Promise<{
     listSegmentCompareRuns(meetingId),
     listSegmentCompareReviewedKeys(meetingId),
     loadExtractWalkTokenUsage(meetingId),
+    loadMeetingSettings(meetingId),
   ]);
+  const agendaConcepts = agendaConceptRows(agendaItems);
+  const allowedIds = new Set(agendaConcepts.map((concept) => concept.id));
+  const goldStandard = normalizeSegmentGoldStandard(settings.segmentGoldStandard, allowedIds);
+  const goldOverlays = overlaysFromGoldSpans(agendaConcepts, goldStandard?.spans ?? []);
   const costBaseline = buildSegmentCompareCostBaseline(runs, extractWalkUsage);
   return {
     cues: transcriptSegmentsToCues(segments),
@@ -375,6 +418,146 @@ export async function loadSegmentCompareWorkspace(meetingId: string): Promise<{
     reviewedKeys,
     agendaItemCount: agendaItems.length,
     costBaseline,
+    agendaConcepts,
+    goldStandard,
+    goldOverlays,
+  };
+}
+
+export async function setSegmentGoldStandard(
+  meetingId: string,
+  spans: SegmentGoldSpan[],
+): Promise<SegmentGoldStandard> {
+  const db = getDb();
+  const agendaItems = await db
+    .select({
+      id: meetingsV2AgendaItems.id,
+      title: meetingsV2AgendaItems.title,
+      itemNumber: meetingsV2AgendaItems.itemNumber,
+    })
+    .from(meetingsV2AgendaItems)
+    .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));
+  const allowedIds = new Set(agendaItems.map((item) => item.id));
+  const goldStandard: SegmentGoldStandard = {
+    updatedAt: new Date().toISOString(),
+    spans: mergeGoldSpans(spans.filter((span) => allowedIds.has(span.agendaItemId))),
+  };
+  const { settings } = await loadMeetingSettings(meetingId);
+  await writeMeetingSettings(meetingId, { ...settings, segmentGoldStandard: goldStandard });
+  return goldStandard;
+}
+
+export async function applyGoldStandardToMinutesPipeline(meetingId: string): Promise<{
+  spanCount: number;
+  labeledLeafCount: number;
+}> {
+  const db = getDb();
+  const { settings } = await loadMeetingSettings(meetingId);
+  const gold = normalizeSegmentGoldStandard(settings.segmentGoldStandard);
+  if (!gold || gold.spans.length === 0) {
+    throw new Error("Label at least one gold-standard span before running the minutes pipeline.");
+  }
+
+  const [agendaItems, segments] = await Promise.all([
+    db
+      .select()
+      .from(meetingsV2AgendaItems)
+      .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId))
+      .orderBy(asc(meetingsV2AgendaItems.sortOrder)),
+    db
+      .select({
+        sequence: meetingsV2TranscriptSegments.sequence,
+        startTimestamp: meetingsV2TranscriptSegments.startTimestamp,
+        endTimestamp: meetingsV2TranscriptSegments.endTimestamp,
+      })
+      .from(meetingsV2TranscriptSegments)
+      .where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId))
+      .orderBy(asc(meetingsV2TranscriptSegments.sequence)),
+  ]);
+  if (agendaItems.length === 0) {
+    throw new Error("Extract the agenda before applying gold-standard spans.");
+  }
+  if (segments.length === 0) {
+    throw new Error("No transcript segments found for this meeting.");
+  }
+
+  const concepts = agendaConceptRows(agendaItems);
+  const leafIds = new Set(concepts.filter((concept) => concept.isLeaf).map((concept) => concept.id));
+  const spansByItem = new Map<string, SegmentGoldSpan[]>();
+  for (const span of gold.spans) {
+    if (!leafIds.has(span.agendaItemId)) continue;
+    const list = spansByItem.get(span.agendaItemId) ?? [];
+    list.push(span);
+    spansByItem.set(span.agendaItemId, list);
+  }
+
+  const leafRanges = new Map<string, Array<[number, number]>>();
+  for (const [itemId, spans] of spansByItem) {
+    leafRanges.set(itemId, sequenceRangesForTimeSpans(spans, segments));
+  }
+  const rangesById = unionChildSequenceRanges(agendaItems, leafRanges);
+  const priorEvidence = settings.agendaEvidence ?? {};
+  const agendaEvidence: Record<string, CanonicalAgendaEvidence> = {};
+  const itemStatuses: Record<string, "discussed" | "not_discussed" | "ad_hoc"> = {
+    ...(settings.agendaApproval?.itemStatuses ?? {}),
+  };
+
+  for (const item of agendaItems) {
+    const prior = priorEvidence[item.id];
+    const ranges = rangesById.get(item.id) ?? [];
+    agendaEvidence[item.id] = {
+      itemNumber: item.itemNumber,
+      sourceTranscriptRanges: ranges,
+      sourceChunkIds: prior?.sourceChunkIds ?? [],
+      aliases: prior?.aliases ?? [],
+      notes: prior?.notes ?? [],
+      visibility: prior?.visibility,
+    };
+    const existingStatus = itemStatuses[item.id];
+    if (existingStatus === "ad_hoc") {
+      continue;
+    }
+    itemStatuses[item.id] = ranges.length > 0 ? "discussed" : "not_discussed";
+  }
+
+  for (const item of agendaItems) {
+    const timing = canonicalDiscussionTiming(agendaEvidence[item.id].sourceTranscriptRanges, segments);
+    await db
+      .update(meetingsV2AgendaItems)
+      .set({ sourceText: withCanonicalDiscussionTiming(item.sourceText, timing) })
+      .where(eq(meetingsV2AgendaItems.id, item.id));
+  }
+
+  await writeMeetingSettings(meetingId, {
+    ...settings,
+    agendaEvidence,
+    draftReadiness: {
+      ready: false,
+      problems: ["Gold-standard transcript spans were applied. Re-run evidence, investigation, and validation."],
+      checkedAt: new Date().toISOString(),
+    },
+    agendaApproval: {
+      status: "approved",
+      approvedAt: new Date().toISOString(),
+      itemStatuses,
+      excludedItemIds: settings.agendaApproval?.excludedItemIds ?? [],
+      discrepancies: settings.agendaApproval?.discrepancies ?? [],
+    },
+  });
+
+  await resetMeetingV2PostExtractData(meetingId);
+  const evidenceStartPercent = await resolveMeetingV2SegmentMilestonePercent("evidence", "start");
+  await updateMeetingV2Status(
+    meetingId,
+    "gathering_evidence",
+    "Gold-standard spans applied. Assembling evidence context...",
+    evidenceStartPercent,
+    null,
+  );
+
+  return {
+    spanCount: gold.spans.length,
+    labeledLeafCount: spansByItem.size,
   };
 }
 
@@ -389,9 +572,17 @@ export async function runSegmentCompareExperiment(options: {
   }
 
   const progress = async (label: string) => {
+    const partialWalk =
+      walkMeter.totalTokens > 0 ? usageFromMeter(existing.walk, walkMeter) : null;
+    const partialEdge =
+      edgeMeter.totalTokens > 0 ? usageFromMeter(existing.edge, edgeMeter) : null;
+    const partialUsd = (partialWalk?.costUsd ?? 0) + (partialEdge?.costUsd ?? 0);
     await patchSegmentCompareRun(meetingId, runId, {
       status: "running",
       progressLabel: label,
+      walkUsage: partialWalk,
+      edgeUsage: partialEdge,
+      totalCostUsd: partialUsd > 0 ? partialUsd : null,
     });
   };
 
@@ -399,7 +590,7 @@ export async function runSegmentCompareExperiment(options: {
   const edgeMeter = emptyMeter();
 
   try {
-    await progress("Loading stored agenda outline");
+    await progress("Loading");
     const db = getDb();
     const [agendaItems, storedChunks, transcriptSegments] = await Promise.all([
       db
@@ -460,10 +651,9 @@ export async function runSegmentCompareExperiment(options: {
       };
     });
 
+    const walkProgress = createPhaseStepProgress(progress, "Walk", transcriptChunks.length);
     for (const chunk of transcriptChunks) {
-      await progress(
-        `Walk ${formatSegmentCompareChoice(existing.walk)} · chunk ${chunk.transcriptIndex + 1}/${transcriptChunks.length}`,
-      );
+      await walkProgress();
       const response = await completeAgendaChunk({
         systemInstruction: TRANSCRIPT_SYSTEM_PROMPT,
         userText: buildTranscriptUserText({
@@ -503,24 +693,28 @@ export async function runSegmentCompareExperiment(options: {
     const outlineGapJudge = createGapHoleJudge(edgeGenerate, "outline");
     const remainingGapJudge = createGapHoleJudge(edgeGenerate, "remaining");
 
-    await progress(`Edge ${formatSegmentCompareChoice(existing.edge)} · span review`);
+    const edgeProgress = createPhaseStepProgress(
+      progress,
+      "Edge",
+      estimateEdgeProgressSteps(finalTopics, cues),
+    );
     const reviewed = await reviewTranscriptTopicSpans({
       topics: finalTopics,
       cues,
       judge: edgeJudge,
-      onProgress: progress,
+      onProgress: edgeProgress,
     });
     const gapped = await assignUnmatchedLeavesInHoles({
       topics: reviewed,
       cues,
       judge: outlineGapJudge,
-      onProgress: progress,
+      onProgress: edgeProgress,
     });
     const leftover = await assignRemainingHolesToAgenda({
       topics: gapped,
       cues,
       judge: remainingGapJudge,
-      onProgress: progress,
+      onProgress: edgeProgress,
     });
     const wrapped = extendFloorThroughLifecycleHoles({
       topics: leftover,

@@ -194,8 +194,65 @@ export function cellCostLabel(
   return { text: `~${formatCostUsd(estimate)}`, isEstimate: true };
 }
 
-function formatCostUsd(value: number): string {
+export function formatSegmentCompareCostUsd(value: number): string {
   if (value < 0.01) return `$${value.toFixed(4)}`;
   if (value < 1) return `$${value.toFixed(3)}`;
   return `$${value.toFixed(2)}`;
+}
+
+function formatCostUsd(value: number): string {
+  return formatSegmentCompareCostUsd(value);
+}
+
+export function parseSegmentCompareProgressStep(
+  progressLabel: string | null | undefined,
+): { step: number; total: number } | null {
+  if (!progressLabel) return null;
+  const match = progressLabel.match(/^(?:Walk|Edge) (\d+)\/(\d+)$/);
+  if (!match) return null;
+  const step = Number(match[1]);
+  const total = Number(match[2]);
+  if (!Number.isFinite(step) || !Number.isFinite(total) || step <= 0 || total <= 0) {
+    return null;
+  }
+  return { step, total };
+}
+
+/** Linear extrapolation from spend so far and Walk/Edge step counters. */
+export function extrapolateSegmentCompareRunTotalCostUsd(
+  spentUsd: number,
+  progressLabel: string | null | undefined,
+): number | null {
+  if (!Number.isFinite(spentUsd) || spentUsd <= 0) return null;
+  const progress = parseSegmentCompareProgressStep(progressLabel);
+  if (!progress) return null;
+  return spentUsd * (progress.total / progress.step);
+}
+
+export function cellRunningCostDisplay(
+  run: SegmentCompareRun,
+  walk: SegmentCompareSlotChoice,
+  edge: SegmentCompareSlotChoice,
+  baseline: SegmentCompareCostBaseline | null,
+): { spentText: string | null; estimatedText: string | null } {
+  if (run.status !== "queued" && run.status !== "running") {
+    return { spentText: null, estimatedText: null };
+  }
+
+  const spentUsd = run.totalCostUsd;
+  const spentText =
+    spentUsd != null && Number.isFinite(spentUsd) && spentUsd > 0
+      ? formatCostUsd(spentUsd)
+      : null;
+
+  let estimatedUsd = extrapolateSegmentCompareRunTotalCostUsd(spentUsd ?? 0, run.progressLabel);
+  if (estimatedUsd == null && baseline) {
+    estimatedUsd = estimateSegmentCompareCombinationCostUsd(walk, edge, baseline);
+  }
+  const estimatedText =
+    estimatedUsd != null && Number.isFinite(estimatedUsd)
+      ? `Est. ${formatCostUsd(estimatedUsd)}`
+      : null;
+
+  return { spentText, estimatedText };
 }

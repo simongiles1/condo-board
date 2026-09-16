@@ -23,6 +23,10 @@ import {
   segmentCompareModel,
   SEGMENT_COMPARE_MATRIX_CELL_COUNT,
 } from "../lib/meeting-v2/segment-compare-models";
+import {
+  DEEPSEEK_THINKING_OUTPUT_CAP,
+  thinkingAwareMaxOutputTokens,
+} from "../lib/meeting-v2/segment-json";
 import { pickSectionsForTime } from "../lib/transcript/section-overlay";
 
 describe("segment compare catalog", () => {
@@ -49,6 +53,37 @@ describe("segment compare catalog", () => {
       formatSegmentCompareChoice({ modelId: "gemini-3.8-flash", thinking: true }),
       "Gemini 3.8 Flash · thinking",
     );
+  });
+
+  it("leaves non-thinking output budgets unchanged", () => {
+    assert.equal(
+      thinkingAwareMaxOutputTokens({
+        requested: 12288,
+        thinking: false,
+        provider: "deepseek",
+      }),
+      12288,
+    );
+  });
+
+  it("raises DeepSeek thinking max_tokens so reasoning cannot exhaust JSON", () => {
+    const raised = thinkingAwareMaxOutputTokens({
+      requested: 12288,
+      thinking: true,
+      provider: "deepseek",
+    });
+    assert.ok((raised ?? 0) > 12288);
+    assert.ok((raised ?? 0) <= DEEPSEEK_THINKING_OUTPUT_CAP);
+  });
+
+  it("raises tiny Gemini thinking judge budgets past 512", () => {
+    const raised = thinkingAwareMaxOutputTokens({
+      requested: 512,
+      thinking: true,
+      provider: "gemini",
+    });
+    assert.ok((raised ?? 0) > 512);
+    assert.ok((raised ?? 0) >= 2048);
   });
 });
 

@@ -16,9 +16,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 segmenter compare thinking truncation** — DeepSeek **· think** walk×edge cells failed with empty content because reasoning used the whole `max_tokens=12288` budget before any JSON. Gemini **· think** edge judges failed the same way at `maxOutputTokens=512`. Lab thinking calls now add output-token headroom (DeepSeek up to 32,768; Gemini judges get at least +2,048) and DeepSeek thinking waits up to five minutes per call.
+
 - **Meetings V2 segmenter compare item numbers** — Lab walk×edge runs forgot per-topic ids before hierarchy timing merge, so every overlay inherited the last outline code (item 6). Minutes and other leaves kept their real codes; re-run a combination to refresh stored boxes.
 
-- **Meetings V2 segmenter compare boxes** — Side-by-side panes now draw full section borders (top, sides, bottom) with a single agenda label at the start of each segment, matching the transcript section overlay, while cue rows stay aligned across panes.
+- **Meetings V2 segmenter compare boxes** — Side-by-side panes now draw full section borders (top, sides, bottom) with a single agenda label at the start of each segment, matching the transcript section overlay, while cue rows stay aligned across panes. An agenda label on one pane reserves the same label height (and segment gap) on the matching cue row in the other pane.
+
 
 - **Meetings V2 segmenter compare lab failures** — Failed runs show **Failed** plus the server error in the matrix; L/R stay off until a run completes but remain clickable for an explanation. Status polling no longer replaces the real error with **Failed to fetch**; panes are not pointed at empty failed runs.
 

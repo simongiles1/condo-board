@@ -745,18 +745,90 @@ function colorByCode(overlays: TranscriptSectionOverlay[]): Map<string, string> 
   return map;
 }
 
+type PairedCueRowLayout = {
+  reserveLabelRow: boolean;
+  segmentGapBefore: boolean;
+};
+
+function buildPairedCueRowLayout(
+  left: CueSegmentMeta,
+  right: CueSegmentMeta,
+  cueIndex: number,
+): PairedCueRowLayout {
+  return {
+    reserveLabelRow: left.showLabel || right.showLabel,
+    segmentGapBefore:
+      cueIndex > 0 && (left.segmentStartsAtCue || right.segmentStartsAtCue),
+  };
+}
+
+function SegmentLabelRow({
+  meta,
+  colors,
+  visible,
+}: {
+  meta: CueSegmentMeta;
+  colors: Map<string, string>;
+  visible: boolean;
+}) {
+  const { sections } = meta;
+  if (sections.length === 0) return null;
+
+  const primary = sections[0];
+  const borderColor =
+    colors.get(primary.code.trim().toLowerCase() || primary.id) ?? "#cbd5e1";
+  const isOverlap = sections.length > 1;
+  const overlapTitle = isOverlap
+    ? `Overlap: ${sections.map(sectionLabel).join(" · ")}`
+    : sectionLabel(primary);
+
+  return (
+    <div
+      className={`mb-1 flex flex-wrap justify-center gap-1 ${
+        visible ? "" : "pointer-events-none invisible"
+      }`}
+      aria-hidden={!visible}
+    >
+      {isOverlap ? (
+        <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+          Overlap
+        </span>
+      ) : null}
+      {sections.map((section) => {
+        const sectionColor =
+          colors.get(section.code.trim().toLowerCase() || section.id) ?? borderColor;
+        const label = sectionLabel(section);
+        return (
+          <span
+            key={`${section.id}-${section.startSeconds}`}
+            className="max-w-[95%] truncate rounded-full border bg-white px-2.5 py-0.5 text-xs font-semibold shadow-sm"
+            style={{ borderColor: sectionColor, color: sectionColor }}
+            title={overlapTitle}
+          >
+            {label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function CueCell({
   cue,
   meta,
+  partnerMeta,
+  pairedRow,
   colors,
   cueIndex,
 }: {
   cue: MergedVttCue;
   meta: CueSegmentMeta;
+  partnerMeta: CueSegmentMeta;
+  pairedRow: PairedCueRowLayout;
   colors: Map<string, string>;
   cueIndex: number;
 }) {
-  const { sections, position, showLabel, segmentStartsAtCue } = meta;
+  const { sections, position, showLabel } = meta;
   const hasSection = sections.length > 0;
   const primary = sections[0];
   const color = primary
@@ -770,9 +842,11 @@ function CueCell({
       ? sectionLabel(primary)
       : "Unassigned";
 
+  const labelSource = showLabel ? meta : partnerMeta.showLabel ? partnerMeta : null;
+
   return (
     <div
-      className={`min-h-full px-1 ${segmentStartsAtCue && cueIndex > 0 ? "mt-3" : ""}`}
+      className={`min-h-full px-1 ${pairedRow.segmentGapBefore ? "mt-3" : ""}`}
     >
       <article
         className={`px-2.5 py-1 ${segmentBorderClass(position, hasSection)}`}
@@ -782,29 +856,8 @@ function CueCell({
         }}
         title={hasSection ? overlapTitle : undefined}
       >
-        {showLabel ? (
-          <div className="mb-1 flex flex-wrap justify-center gap-1">
-            {isOverlap ? (
-              <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                Overlap
-              </span>
-            ) : null}
-            {sections.map((section) => {
-              const sectionColor =
-                colors.get(section.code.trim().toLowerCase() || section.id) ?? borderColor;
-              const label = sectionLabel(section);
-              return (
-                <span
-                  key={`${section.id}-${section.startSeconds}`}
-                  className="max-w-[95%] truncate rounded-full border bg-white px-2.5 py-0.5 text-xs font-semibold shadow-sm"
-                  style={{ borderColor: sectionColor, color: sectionColor }}
-                  title={overlapTitle}
-                >
-                  {label}
-                </span>
-              );
-            })}
-          </div>
+        {pairedRow.reserveLabelRow && labelSource ? (
+          <SegmentLabelRow meta={labelSource} colors={colors} visible={showLabel} />
         ) : null}
         <div className="flex items-baseline justify-between gap-3">
           <span className="text-sm font-semibold text-slate-900">
@@ -1050,12 +1103,31 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
               />
             </div>
             <div className="grid grid-cols-2">
-              {cues.map((cue, index) => (
-                <div key={`${cue.start}-${index}`} className="contents">
-                  <CueCell cue={cue} meta={leftCueMeta[index]} colors={colors} cueIndex={index} />
-                  <CueCell cue={cue} meta={rightCueMeta[index]} colors={colors} cueIndex={index} />
-                </div>
-              ))}
+              {cues.map((cue, index) => {
+                const leftMeta = leftCueMeta[index];
+                const rightMeta = rightCueMeta[index];
+                const pairedRow = buildPairedCueRowLayout(leftMeta, rightMeta, index);
+                return (
+                  <div key={`${cue.start}-${index}`} className="contents">
+                    <CueCell
+                      cue={cue}
+                      meta={leftMeta}
+                      partnerMeta={rightMeta}
+                      pairedRow={pairedRow}
+                      colors={colors}
+                      cueIndex={index}
+                    />
+                    <CueCell
+                      cue={cue}
+                      meta={rightMeta}
+                      partnerMeta={leftMeta}
+                      pairedRow={pairedRow}
+                      colors={colors}
+                      cueIndex={index}
+                    />
+                  </div>
+                );
+              })}
             </div>
           </>
         )}

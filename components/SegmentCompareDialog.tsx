@@ -28,10 +28,15 @@ import {
   cueSeconds,
   formatGoldScorePercent,
   GOLD_STANDARD_COMPARE_ID,
+  goldCueIndexFromBoxes,
+  goldResizeHandlesAtCue,
+  goldSpanBorderRoleAtIndex,
   mergeGoldSpans,
   overlaysFromGoldSpans,
   scoreOverlaysAgainstGold,
   type AgendaConceptRow,
+  type GoldResizeHandles,
+  type GoldSpanBorderRole,
   type SegmentGoldSpan,
   type SegmentGoldStandard,
 } from "@/lib/meeting-v2/segment-gold-standard";
@@ -114,6 +119,12 @@ function latestRunForKey(runs: SegmentCompareRun[], key: string): SegmentCompare
     (run) => segmentCompareCombinationKey(run.walk, run.edge) === key,
   );
   return matches[matches.length - 1] ?? null;
+}
+
+function defaultGoldReferencePaneId(runs: SegmentCompareRun[]): string {
+  const completed = runs.filter((run) => run.status === "completed");
+  const latest = completed[completed.length - 1];
+  return latest?.id ?? SAVED_AGENDA_COMPARE_ID;
 }
 
 function normalizePaneRunId(paneId: string, runs: SegmentCompareRun[]): string {
@@ -254,6 +265,37 @@ function ComparePaneColumnHeader({
       >
         <MatrixEditIcon className="h-4 w-4" />
       </button>
+    </div>
+  );
+}
+
+function GoldLabelColumnHeader({
+  selectedConcept,
+  pendingStartIndex,
+  selectedConceptHasSpan,
+}: {
+  selectedConcept: AgendaConceptRow | null;
+  pendingStartIndex: number | null;
+  selectedConceptHasSpan: boolean;
+}) {
+  return (
+    <div
+      className="flex items-start gap-2 border-b border-slate-200 bg-white px-3 py-2.5 shadow-[0_1px_0_0_rgba(15,23,42,0.06)]"
+    >
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+          Gold standard
+        </p>
+        <p className="text-sm text-slate-700">
+          {selectedConcept
+            ? pendingStartIndex == null
+              ? selectedConceptHasSpan
+                ? `Drag the top or bottom edge of ${selectedConcept.code}. Hover an edge to see which span it belongs to. Click a cue to replace the span — including inside another item.`
+                : `Click the start of ${selectedConcept.code} — ${selectedConcept.title}. You can start inside another item's span.`
+              : `Click the end of ${selectedConcept.code} — ${selectedConcept.title}`
+            : "Select a concept, then mark start and end cues."}
+        </p>
+      </div>
     </div>
   );
 }
@@ -811,6 +853,62 @@ function segmentBorderClass(position: CueSegmentMeta["position"], hasSection: bo
   }
 }
 
+type GoldRangeBorderRole = GoldSpanBorderRole;
+
+function cueGoldRangeBorderRole(
+  index: number,
+  startIndex: number | null,
+  hoverIndex: number | null,
+): GoldRangeBorderRole {
+  if (startIndex == null) return "none";
+  if (hoverIndex == null) {
+    return index === startIndex ? "first" : "none";
+  }
+  const lo = Math.min(startIndex, hoverIndex);
+  const hi = Math.max(startIndex, hoverIndex);
+  if (index < lo || index > hi) return "none";
+  if (lo === hi) return "solo";
+  if (index === lo) return "first";
+  if (index === hi) return "last";
+  return "middle";
+}
+
+const GOLD_RANGE_STROKE_PX = 2;
+const GOLD_RANGE_STROKE_COLOR = "#d97706";
+
+/** Inset box-shadow strokes avoid layout shift from border-width. */
+function goldRangeInsetBoxShadow(role: GoldRangeBorderRole): string | undefined {
+  const w = GOLD_RANGE_STROKE_PX;
+  const c = GOLD_RANGE_STROKE_COLOR;
+  switch (role) {
+    case "solo":
+      return `inset 0 0 0 ${w}px ${c}`;
+    case "first":
+      return `inset 0 ${w}px 0 0 ${c}, inset ${w}px 0 0 0 ${c}, inset -${w}px 0 0 0 ${c}`;
+    case "middle":
+      return `inset ${w}px 0 0 0 ${c}, inset -${w}px 0 0 0 ${c}`;
+    case "last":
+      return `inset 0 -${w}px 0 0 ${c}, inset ${w}px 0 0 0 ${c}, inset -${w}px 0 0 0 ${c}`;
+    default:
+      return undefined;
+  }
+}
+
+function goldRangeRadiusClass(role: GoldRangeBorderRole): string {
+  switch (role) {
+    case "solo":
+      return "rounded-lg";
+    case "first":
+      return "rounded-t-lg";
+    case "middle":
+      return "";
+    case "last":
+      return "rounded-b-lg";
+    default:
+      return "";
+  }
+}
+
 function colorByCode(overlays: TranscriptSectionOverlay[]): Map<string, string> {
   const map = new Map<string, string>();
   let cursor = 0;
@@ -838,6 +936,31 @@ function buildPairedCueRowLayout(
     segmentGapBefore:
       cueIndex > 0 && (left.segmentStartsAtCue || right.segmentStartsAtCue),
   };
+}
+
+function cueEndSeconds(cue: MergedVttCue): number {
+  return cueSeconds(cue.end ?? cue.start);
+}
+
+type GoldHandleHover = {
+  edge: "start" | "end";
+  agendaItemId: string;
+};
+
+function goldCueIndexAtClientY(clientY: number, edge: "start" | "end"): number | null {
+  const rows = [...document.querySelectorAll<HTMLElement>("[data-gold-cue-index]")];
+  return goldCueIndexFromBoxes(
+    clientY,
+    edge,
+    rows.map((row) => {
+      const rect = row.getBoundingClientRect();
+      return {
+        index: Number(row.dataset.goldCueIndex),
+        top: rect.top,
+        bottom: rect.bottom,
+      };
+    }),
+  );
 }
 
 function SegmentLabelRow({
@@ -899,7 +1022,14 @@ function CueCell({
   colors,
   cueIndex,
   onCueClick,
-  pending,
+  goldRangeRole = "none",
+  goldActiveSpanRole = "none",
+  onGoldRangeHover,
+  goldResizeHandles = { startAgendaItemId: null, endAgendaItemId: null },
+  goldHandleHover = null,
+  onGoldHandleHover,
+  onGoldResizePointerDown,
+  goldCueRow = false,
 }: {
   cue: MergedVttCue;
   meta: CueSegmentMeta;
@@ -908,7 +1038,19 @@ function CueCell({
   colors: Map<string, string>;
   cueIndex: number;
   onCueClick?: (cueIndex: number) => void;
-  pending?: boolean;
+  goldRangeRole?: GoldRangeBorderRole;
+  goldActiveSpanRole?: GoldRangeBorderRole;
+  onGoldRangeHover?: (cueIndex: number) => void;
+  goldResizeHandles?: GoldResizeHandles;
+  goldHandleHover?: GoldHandleHover | null;
+  onGoldHandleHover?: (target: GoldHandleHover | null) => void;
+  onGoldResizePointerDown?: (
+    edge: "start" | "end",
+    agendaItemId: string,
+    cueIndex: number,
+    event: React.PointerEvent,
+  ) => void;
+  goldCueRow?: boolean;
 }) {
   const { sections, position, showLabel } = meta;
   const hasSection = sections.length > 0;
@@ -925,22 +1067,94 @@ function CueCell({
       : "Unassigned";
 
   const labelSource = showLabel ? meta : partnerMeta.showLabel ? partnerMeta : null;
+  const inGoldRange = goldRangeRole !== "none";
+  const highlightRole = inGoldRange ? goldRangeRole : goldActiveSpanRole;
+  const sectionBorderClass =
+    highlightRole !== "none" ? "" : segmentBorderClass(position, hasSection);
+  const goldInsetShadow = goldRangeInsetBoxShadow(highlightRole);
+
+  const interactive = Boolean(onCueClick);
+  const startAgendaItemId = goldResizeHandles.startAgendaItemId;
+  const endAgendaItemId = goldResizeHandles.endAgendaItemId;
+  const showStartHandle = Boolean(onGoldResizePointerDown && startAgendaItemId);
+  const showEndHandle = Boolean(onGoldResizePointerDown && endAgendaItemId);
+  const startHandleCoversLabel =
+    showStartHandle && Boolean(labelSource) && pairedRow.reserveLabelRow;
+  const startHandleHot =
+    goldHandleHover?.edge === "start" && goldHandleHover.agendaItemId === startAgendaItemId;
+  const endHandleHot =
+    goldHandleHover?.edge === "end" && goldHandleHover.agendaItemId === endAgendaItemId;
 
   return (
     <div
-      className={`min-h-full px-1 ${pairedRow.segmentGapBefore ? "mt-3" : ""}`}
+      className={`px-1 ${pairedRow.segmentGapBefore ? "pt-3" : ""} ${
+        interactive && !showStartHandle && !showEndHandle ? "cursor-pointer" : ""
+      }`}
+      onClick={onCueClick ? () => onCueClick(cueIndex) : undefined}
+      onMouseEnter={onGoldRangeHover ? () => onGoldRangeHover(cueIndex) : undefined}
     >
       <article
-        className={`px-2.5 py-1 ${segmentBorderClass(position, hasSection)} ${
-          onCueClick ? "cursor-pointer hover:ring-1 hover:ring-amber-500" : ""
-        } ${pending ? "ring-1 ring-amber-600" : ""}`}
+        className={`relative overflow-visible px-2.5 py-1 ${sectionBorderClass} ${goldRangeRadiusClass(highlightRole)} ${
+          interactive && highlightRole === "none" && !showStartHandle && !showEndHandle
+            ? "hover:ring-2 hover:ring-inset hover:ring-amber-500/80"
+            : ""
+        }`}
+        data-gold-cue-index={goldCueRow ? cueIndex : undefined}
         style={{
-          borderColor: hasSection ? borderColor : undefined,
+          borderColor: highlightRole !== "none" ? undefined : hasSection ? borderColor : undefined,
           backgroundColor: speakerBackgroundColor(cue.speaker),
+          boxShadow: goldInsetShadow,
         }}
         title={hasSection ? overlapTitle : undefined}
-        onClick={onCueClick ? () => onCueClick(cueIndex) : undefined}
       >
+        {showStartHandle ? (
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Drag to adjust span start"
+            className={`absolute inset-x-0 top-0 z-30 cursor-ns-resize ${
+              startHandleCoversLabel ? "h-14" : "h-5"
+            }`}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              onGoldResizePointerDown!("start", startAgendaItemId!, cueIndex, event);
+            }}
+            onClick={(event) => event.stopPropagation()}
+            onMouseEnter={() =>
+              onGoldHandleHover?.({ edge: "start", agendaItemId: startAgendaItemId! })
+            }
+            onMouseLeave={() => onGoldHandleHover?.(null)}
+          >
+            <div
+              className={`pointer-events-none absolute inset-x-0 top-0 ${
+                startHandleHot ? "h-1 bg-amber-600" : "h-0.5 bg-amber-500/70"
+              }`}
+            />
+          </div>
+        ) : null}
+        {showEndHandle ? (
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Drag to adjust span end"
+            className="absolute inset-x-0 bottom-0 z-30 h-5 cursor-ns-resize"
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              onGoldResizePointerDown!("end", endAgendaItemId!, cueIndex, event);
+            }}
+            onClick={(event) => event.stopPropagation()}
+            onMouseEnter={() =>
+              onGoldHandleHover?.({ edge: "end", agendaItemId: endAgendaItemId! })
+            }
+            onMouseLeave={() => onGoldHandleHover?.(null)}
+          >
+            <div
+              className={`pointer-events-none absolute inset-x-0 bottom-0 ${
+                endHandleHot ? "h-1 bg-amber-600" : "h-0.5 bg-amber-500/70"
+              }`}
+            />
+          </div>
+        ) : null}
         {pairedRow.reserveLabelRow && labelSource ? (
           <SegmentLabelRow meta={labelSource} colors={colors} visible={showLabel} />
         ) : null}
@@ -970,9 +1184,17 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   const [matrixOpen, setMatrixOpen] = useState(false);
   const [runConfirmOpen, setRunConfirmOpen] = useState(false);
   const [goldMode, setGoldMode] = useState(false);
+  const [goldReferencePaneId, setGoldReferencePaneId] = useState(SAVED_AGENDA_COMPARE_ID);
   const [goldSpans, setGoldSpans] = useState<SegmentGoldSpan[]>([]);
   const [selectedConceptId, setSelectedConceptId] = useState<string | null>(null);
   const [pendingStartIndex, setPendingStartIndex] = useState<number | null>(null);
+  const [pendingHoverIndex, setPendingHoverIndex] = useState<number | null>(null);
+  const [goldResize, setGoldResize] = useState<{
+    edge: "start" | "end";
+    agendaItemId: string;
+    originCueIndex: number;
+  } | null>(null);
+  const [goldHandleHover, setGoldHandleHover] = useState<GoldHandleHover | null>(null);
   const [pipelineConfirmOpen, setPipelineConfirmOpen] = useState(false);
   const [pipelineBusy, setPipelineBusy] = useState(false);
   const goldDirtyRef = useRef(false);
@@ -1095,19 +1317,51 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
 
   const leftOverlays = paneOverlays.get(leftId) ?? [];
   const rightOverlays = paneOverlays.get(rightId) ?? [];
-  const colors = useMemo(
-    () => colorByCode([...leftOverlays, ...rightOverlays, ...savedOverlays, ...liveGoldOverlays]),
-    [leftOverlays, rightOverlays, savedOverlays, liveGoldOverlays],
+  const goldReferenceOverlays = useMemo(
+    () => paneOverlays.get(goldReferencePaneId) ?? savedOverlays,
+    [paneOverlays, goldReferencePaneId, savedOverlays],
   );
+  const colors = useMemo(() => {
+    const overlaySets = goldMode
+      ? [goldReferenceOverlays, liveGoldOverlays]
+      : [leftOverlays, rightOverlays, savedOverlays, liveGoldOverlays];
+    return colorByCode(overlaySets.flat());
+  }, [
+    goldMode,
+    goldReferenceOverlays,
+    leftOverlays,
+    rightOverlays,
+    savedOverlays,
+    liveGoldOverlays,
+  ]);
 
   const leftCueMeta = useMemo(
-    () => buildCueSegmentMeta(cues, goldMode ? liveGoldOverlays : leftOverlays),
-    [cues, goldMode, liveGoldOverlays, leftOverlays],
+    () => buildCueSegmentMeta(cues, leftOverlays),
+    [cues, leftOverlays],
   );
   const rightCueMeta = useMemo(
     () => buildCueSegmentMeta(cues, rightOverlays),
     [cues, rightOverlays],
   );
+  const goldReferenceCueMeta = useMemo(
+    () => buildCueSegmentMeta(cues, goldReferenceOverlays),
+    [cues, goldReferenceOverlays],
+  );
+  const goldLabelCueMeta = useMemo(
+    () => buildCueSegmentMeta(cues, liveGoldOverlays),
+    [cues, liveGoldOverlays],
+  );
+  const goldCoverageByItem = useMemo(() => {
+    const map = new Map<string, boolean[]>();
+    const ids = new Set(goldSpans.map((span) => span.agendaItemId));
+    for (const id of ids) {
+      map.set(
+        id,
+        goldLabelCueMeta.map((meta) => meta.sections.some((section) => section.id === id)),
+      );
+    }
+    return map;
+  }, [goldSpans, goldLabelCueMeta]);
 
   function handleRunTargetChange(key: string, _row: CombinationRow) {
     setRunTargetKey(key);
@@ -1187,7 +1441,10 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   useEffect(() => {
     if (!goldMode) return;
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setPendingStartIndex(null);
+      if (event.key === "Escape") {
+        setPendingStartIndex(null);
+        setPendingHoverIndex(null);
+      }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
@@ -1206,9 +1463,67 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     setError(null);
     setSelectedConceptId(concept.id);
     setPendingStartIndex(null);
+    setPendingHoverIndex(null);
+    setGoldHandleHover(null);
   }
 
+  function applyGoldResizeAtCue(
+    agendaItemId: string,
+    edge: "start" | "end",
+    cueIndex: number,
+  ) {
+    const span = goldSpans.find((entry) => entry.agendaItemId === agendaItemId);
+    const cue = cues[cueIndex];
+    if (!span || !cue) return;
+    const currentLo = Math.min(span.startSeconds, span.endSeconds);
+    const currentHi = Math.max(span.startSeconds, span.endSeconds);
+    const nextLo =
+      edge === "start" ? Math.min(cueSeconds(cue.start), currentHi) : currentLo;
+    const nextHi =
+      edge === "end" ? Math.max(cueEndSeconds(cue), currentLo) : currentHi;
+    commitGoldSpans(
+      goldSpans.map((entry) =>
+        entry.agendaItemId === agendaItemId
+          ? { ...entry, startSeconds: nextLo, endSeconds: nextHi }
+          : entry,
+      ),
+    );
+  }
+
+  function handleGoldResizePointerDown(
+    edge: "start" | "end",
+    agendaItemId: string,
+    cueIndex: number,
+    event: React.PointerEvent,
+  ) {
+    if (pendingStartIndex != null) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setGoldHandleHover({ edge, agendaItemId });
+    setGoldResize({ edge, agendaItemId, originCueIndex: cueIndex });
+  }
+
+  useEffect(() => {
+    if (!goldResize) return;
+    const { agendaItemId, edge, originCueIndex } = goldResize;
+    function onPointerMove(event: PointerEvent) {
+      const cueIndex = goldCueIndexAtClientY(event.clientY, edge) ?? originCueIndex;
+      applyGoldResizeAtCue(agendaItemId, edge, cueIndex);
+    }
+    function onPointerUp() {
+      setGoldResize(null);
+      setGoldHandleHover(null);
+    }
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+  }, [goldResize, goldSpans, cues]);
+
   function handleGoldCueClick(cueIndex: number) {
+    if (goldResize) return;
     if (!selectedConceptId) {
       setError("Select an agenda concept first, then click the start and end of its discussion.");
       return;
@@ -1216,25 +1531,30 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     setError(null);
     if (pendingStartIndex == null) {
       setPendingStartIndex(cueIndex);
+      setPendingHoverIndex(null);
       return;
     }
     const startCue = cues[Math.min(pendingStartIndex, cueIndex)];
     const endCue = cues[Math.max(pendingStartIndex, cueIndex)];
     if (!startCue || !endCue) return;
     commitGoldSpans([
-      ...goldSpans,
+      ...goldSpans.filter((span) => span.agendaItemId !== selectedConceptId),
       {
         agendaItemId: selectedConceptId,
         startSeconds: cueSeconds(startCue.start),
-        endSeconds: cueSeconds(endCue.end),
+        endSeconds: cueEndSeconds(endCue),
       },
     ]);
     setPendingStartIndex(null);
+    setPendingHoverIndex(null);
   }
 
   function clearConceptSpans(conceptId: string) {
     commitGoldSpans(goldSpans.filter((span) => span.agendaItemId !== conceptId));
-    if (selectedConceptId === conceptId) setPendingStartIndex(null);
+    if (selectedConceptId === conceptId) {
+      setPendingStartIndex(null);
+      setPendingHoverIndex(null);
+    }
   }
 
   async function handleRunPipelineFromGold() {
@@ -1274,11 +1594,6 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
   const labeledLeafCount = new Set(goldSpans.map((span) => span.agendaItemId)).size;
   const leafCount = agendaConcepts.filter((concept) => concept.isLeaf).length;
   const selectedConcept = agendaConcepts.find((concept) => concept.id === selectedConceptId) ?? null;
-  const pendingCueIndexes =
-    goldMode && pendingStartIndex != null
-      ? new Set([pendingStartIndex])
-      : new Set<number>();
-
   if (!open) return null;
 
   return (
@@ -1289,7 +1604,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
             <h2 className="text-lg font-semibold text-slate-900">Segmenter compare</h2>
             <p className="text-sm text-slate-600">
               {goldMode
-                ? "Select a leaf concept, then click the first and last transcript cues of that discussion."
+                ? "Compare a lab run on the left to your gold labels on the right. Use Combinations to change the reference walk × edge."
                 : "Temporary A/B lab. Same transcript, shared scroll. Lab runs do not rewrite the saved agenda."}
             </p>
           </div>
@@ -1316,7 +1631,12 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                 const next = !current;
                 if (next) {
                   setPendingStartIndex(null);
-                  setLeftId(GOLD_STANDARD_COMPARE_ID);
+                  setPendingHoverIndex(null);
+                  setGoldReferencePaneId(
+                    leftId === GOLD_STANDARD_COMPARE_ID
+                      ? defaultGoldReferencePaneId(runs)
+                      : leftId,
+                  );
                 }
                 return next;
               });
@@ -1324,16 +1644,14 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
           >
             {goldMode ? "Exit gold standard" : "Gold standard"}
           </button>
-          {goldMode ? null : (
-            <button
-              type="button"
-              className="text-sm font-medium text-teal-800 underline hover:text-teal-950"
-              onClick={() => setMatrixOpen(true)}
-            >
-              Combinations ({countCompletedLabCombinations(runs)}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT}{" "}
-              done)
-            </button>
-          )}
+          <button
+            type="button"
+            className="text-sm font-medium text-teal-800 underline hover:text-teal-950"
+            onClick={() => setMatrixOpen(true)}
+          >
+            {goldMode ? "Reference combination" : "Combinations"} (
+            {countCompletedLabCombinations(runs)}/{SEGMENT_COMPARE_MATRIX_CELL_COUNT} done)
+          </button>
           <button
             type="button"
             className="text-sm text-slate-600 underline hover:text-slate-900"
@@ -1379,42 +1697,115 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         ) : (
           <>
             {goldMode ? (
-              <div className="grid min-h-full grid-cols-[minmax(0,1fr)_18rem]">
-                <div>
-                  <div className="sticky top-0 z-10 border-b border-slate-200 bg-white px-3 py-2.5">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
-                      Transcript
-                    </p>
-                    <p className="text-sm text-slate-700">
-                      {selectedConcept
-                        ? pendingStartIndex == null
-                          ? `Click the start of ${selectedConcept.code} — ${selectedConcept.title}`
-                          : `Click the end of ${selectedConcept.code} — ${selectedConcept.title}`
-                        : "Select a concept, then mark start and end cues."}
-                    </p>
+              <div className="grid min-h-full grid-cols-[minmax(0,2fr)_36rem] items-start">
+                <div className="min-w-0">
+                  <div className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200">
+                    <ComparePaneColumnHeader
+                      paneId={goldReferencePaneId}
+                      runs={runs}
+                      onEdit={() => setMatrixOpen(true)}
+                    />
+                    <GoldLabelColumnHeader
+                      selectedConcept={selectedConcept}
+                      pendingStartIndex={pendingStartIndex}
+                      selectedConceptHasSpan={
+                        selectedConceptId != null &&
+                        goldSpans.some((span) => span.agendaItemId === selectedConceptId)
+                      }
+                    />
                   </div>
-                  {cues.map((cue, index) => {
-                    const goldMeta = leftCueMeta[index] ?? {
-                      sections: [],
-                      position: "solo" as const,
-                      showLabel: false,
-                      segmentStartsAtCue: false,
-                    };
-                    const pairedRow = buildPairedCueRowLayout(goldMeta, goldMeta, index);
-                    return (
-                      <CueCell
-                        key={`${cue.start}-${index}`}
-                        cue={cue}
-                        meta={goldMeta}
-                        partnerMeta={goldMeta}
-                        pairedRow={pairedRow}
-                        colors={colors}
-                        cueIndex={index}
-                        onCueClick={handleGoldCueClick}
-                        pending={pendingCueIndexes.has(index)}
-                      />
-                    );
-                  })}
+                  <div className="grid grid-cols-2">
+                    {cues.map((cue, index) => {
+                      const referenceMeta = goldReferenceCueMeta[index] ?? {
+                        sections: [],
+                        position: "solo" as const,
+                        showLabel: false,
+                        segmentStartsAtCue: false,
+                      };
+                      const labelMeta = goldLabelCueMeta[index] ?? {
+                        sections: [],
+                        position: "solo" as const,
+                        showLabel: false,
+                        segmentStartsAtCue: false,
+                      };
+                      const goldRangeRole = cueGoldRangeBorderRole(
+                        index,
+                        pendingStartIndex,
+                        pendingHoverIndex,
+                      );
+                      const selectedConceptHasSpan =
+                        selectedConceptId != null &&
+                        goldSpans.some((span) => span.agendaItemId === selectedConceptId);
+                      const suppressHandles =
+                        pendingStartIndex != null ||
+                        (selectedConceptId != null && !selectedConceptHasSpan);
+                      const goldResizeHandles = goldResizeHandlesAtCue({
+                        cueIndex: index,
+                        coverageByItem: goldCoverageByItem,
+                        preferredAgendaItemId: selectedConceptId,
+                        suppressHandles,
+                      });
+                      const highlightItemId =
+                        goldHandleHover?.agendaItemId ??
+                        (selectedConceptHasSpan ? selectedConceptId : null);
+                      const highlightCovered = highlightItemId
+                        ? goldCoverageByItem.get(highlightItemId)
+                        : undefined;
+                      const goldActiveSpanRole = highlightCovered
+                        ? goldSpanBorderRoleAtIndex(index, highlightCovered)
+                        : "none";
+                      const basePairedRow = buildPairedCueRowLayout(
+                        referenceMeta,
+                        labelMeta,
+                        index,
+                      );
+                      const pairedRow: PairedCueRowLayout = {
+                        reserveLabelRow: basePairedRow.reserveLabelRow,
+                        // Extra padding at a span handoff punches a hole in both
+                        // columns and makes the next cue's hit box swallow the
+                        // previous cue's bottom resize handle.
+                        segmentGapBefore: false,
+                      };
+                      return (
+                        <div key={`${cue.start}-${index}`} className="contents">
+                          <CueCell
+                            cue={cue}
+                            meta={referenceMeta}
+                            partnerMeta={labelMeta}
+                            pairedRow={pairedRow}
+                            colors={colors}
+                            cueIndex={index}
+                          />
+                          <CueCell
+                            cue={cue}
+                            meta={labelMeta}
+                            partnerMeta={referenceMeta}
+                            pairedRow={pairedRow}
+                            colors={colors}
+                            cueIndex={index}
+                            onCueClick={handleGoldCueClick}
+                            goldRangeRole={goldRangeRole}
+                            goldActiveSpanRole={goldActiveSpanRole}
+                            onGoldRangeHover={
+                              pendingStartIndex != null
+                                ? (hoverIndex) => setPendingHoverIndex(hoverIndex)
+                                : undefined
+                            }
+                            goldResizeHandles={goldResizeHandles}
+                            goldHandleHover={goldHandleHover}
+                            onGoldHandleHover={(target) => {
+                              if (target) setGoldHandleHover(target);
+                              else if (!goldResize) setGoldHandleHover(null);
+                            }}
+                            onGoldResizePointerDown={
+                              pendingStartIndex == null ? handleGoldResizePointerDown : undefined
+                            }
+                            goldCueRow
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
                 <aside className="sticky top-0 h-[calc(100vh-8rem)] overflow-y-auto border-l border-slate-200 bg-white">
                   <div className="border-b border-slate-200 px-3 py-2.5">
@@ -1429,27 +1820,45 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                       return (
                         <li key={concept.id}>
                           <div
-                            className={`flex items-start gap-1 rounded-md ${
-                              selected ? "bg-amber-50" : ""
+                            className={`relative flex items-start gap-1 rounded-md ${
+                              labeled ? "bg-teal-50" : ""
+                            } ${
+                              concept.isLeaf
+                                ? labeled
+                                  ? "hover:bg-teal-100"
+                                  : "hover:bg-slate-50"
+                                : ""
+                            } ${
+                              selected
+                                ? "after:pointer-events-none after:absolute after:inset-0 after:rounded-md after:shadow-[inset_0_0_0_2px_#d97706]"
+                                : ""
                             }`}
                             style={{ paddingLeft: `${concept.depth * 0.75 + 0.25}rem` }}
                           >
                             <button
                               type="button"
                               disabled={!concept.isLeaf}
-                              className={`min-w-0 flex-1 rounded-md px-2 py-1.5 text-left text-sm ${
-                                concept.isLeaf
-                                  ? "hover:bg-slate-50"
-                                  : "cursor-default text-slate-500"
-                              } ${selected ? "font-semibold text-amber-950" : "text-slate-800"}`}
+                              className={`min-w-0 flex-1 px-2 py-1.5 text-left text-sm ${
+                                concept.isLeaf ? "" : "cursor-default text-slate-500"
+                              } ${
+                                selected
+                                  ? "font-semibold text-amber-950"
+                                  : labeled
+                                    ? "font-medium text-teal-950"
+                                    : "text-slate-800"
+                              }`}
                               onClick={() => handleSelectConcept(concept)}
                             >
-                              <span className="font-mono text-[11px] text-slate-500">
+                              <span
+                                className={`font-mono text-[11px] ${
+                                  labeled ? "text-teal-700" : "text-slate-500"
+                                }`}
+                              >
                                 {concept.code}
                               </span>{" "}
                               {concept.title}
                               {labeled ? (
-                                <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                                <span className="ml-1.5 rounded bg-teal-200/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-900">
                                   Set
                                 </span>
                               ) : null}
@@ -1524,16 +1933,16 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         costBaseline={costBaseline}
         runTargetKey={runTargetKey}
         runTargetRow={runTargetRow}
-        leftId={leftId}
-        rightId={rightId}
+        leftId={goldMode ? goldReferencePaneId : leftId}
+        rightId={goldMode ? goldReferencePaneId : rightId}
         runDisabled={
           starting || busy || loading || (workspace?.agendaItemCount ?? 0) === 0 || !runTargetRow
         }
         runBusy={starting || Boolean(busy)}
         onRequestRun={() => setRunConfirmOpen(true)}
         onRunTargetChange={handleRunTargetChange}
-        onLeftChange={setLeftId}
-        onRightChange={setRightId}
+        onLeftChange={goldMode ? setGoldReferencePaneId : setLeftId}
+        onRightChange={goldMode ? setGoldReferencePaneId : setRightId}
         onDeleteRun={(runId) => void handleDelete(runId)}
         onError={setError}
         goldOverlays={liveGoldOverlays}

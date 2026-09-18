@@ -1063,6 +1063,80 @@ describe("transcript section overlay", () => {
       ],
     );
   });
+
+  it("does not paint the next VTT cue when it only touches the span end instant", () => {
+    const groups = groupCuesByTranscriptSections(
+      [
+        { start: "00:15:41.000", end: "00:15:44.000" },
+        { start: "00:15:44.000", end: "00:15:49.000" },
+        { start: "00:15:49.000", end: "00:15:58.000" },
+        { start: "00:16:32.000", end: "00:16:35.000" },
+        { start: "00:16:35.000", end: "00:16:39.000" },
+      ],
+      [
+        {
+          id: "a",
+          code: "4.A.1",
+          title: "Steam Room",
+          startSeconds: 941,
+          endSeconds: 949,
+        },
+        {
+          id: "b",
+          code: "4.B.1",
+          title: "Booster Pump",
+          startSeconds: 949,
+          endSeconds: 995,
+        },
+      ],
+    );
+
+    assert.deepEqual(
+      groups.map((group) => ({
+        codes: group.sections.map((section) => section.code),
+        cues: group.cueIndexes,
+      })),
+      [
+        { codes: ["4.A.1"], cues: [0, 1] },
+        { codes: ["4.B.1"], cues: [2, 3] },
+        { codes: [], cues: [4] },
+      ],
+    );
+  });
+
+  it("does not paint adjacent cues with conversational cross-talk bleed into the span", () => {
+    // Real meeting audio: Faye Perkins finishes speaking 0.24s after Bonnie starts,
+    // and Shawna interrupts 1.36s before Bonnie stops.
+    const groups = groupCuesByTranscriptSections(
+      [
+        { start: "00:15:44.614", end: "00:15:49.654" }, // cue 0 (Faye)
+        { start: "00:15:49.414", end: "00:15:58.614" }, // cue 1 (Bonnie)
+        { start: "00:16:32.054", end: "00:16:36.374" }, // cue 2 (Bonnie)
+        { start: "00:16:35.014", end: "00:16:38.934" }, // cue 3 (Shawna)
+      ],
+      [
+        {
+          id: "b",
+          code: "4.B.1",
+          title: "Booster Pump",
+          startSeconds: 949.414,
+          endSeconds: 996.374,
+        },
+      ],
+    );
+
+    assert.deepEqual(
+      groups.map((group) => ({
+        codes: group.sections.map((section) => section.code),
+        cues: group.cueIndexes,
+      })),
+      [
+        { codes: [], cues: [0] },
+        { codes: ["4.B.1"], cues: [1, 2] },
+        { codes: [], cues: [3] },
+      ],
+    );
+  });
 });
 
 describe("inferTranscriptFloorPointer", () => {

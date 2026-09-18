@@ -354,18 +354,23 @@ export async function queueSegmentCompareRun(options: {
 }
 
 async function loadExtractWalkTokenUsage(meetingId: string): Promise<TokenUsage | null> {
-  const stages = await loadMeetingV2AiUsageStages(meetingId);
-  const extract = stages.find((stage) => stage.id === "extract");
-  if (!extract || extract.notApplicable || extract.inputTokens <= 0) {
+  try {
+    const stages = await loadMeetingV2AiUsageStages(meetingId);
+    const extract = stages.find((stage) => stage.id === "extract");
+    if (!extract || extract.notApplicable || extract.inputTokens <= 0) {
+      return null;
+    }
+    return {
+      inputTokens: extract.inputTokens,
+      outputTokens: extract.outputTokens,
+      totalTokens: extract.totalTokens,
+      cacheHitTokens: extract.cacheHitTokens,
+      cacheMissTokens: extract.cacheMissTokens,
+    };
+  } catch (error) {
+    console.warn("[segment-compare] extract walk usage unavailable", error);
     return null;
   }
-  return {
-    inputTokens: extract.inputTokens,
-    outputTokens: extract.outputTokens,
-    totalTokens: extract.totalTokens,
-    cacheHitTokens: extract.cacheHitTokens,
-    cacheMissTokens: extract.cacheMissTokens,
-  };
 }
 
 export async function loadSegmentCompareWorkspace(meetingId: string): Promise<{
@@ -380,7 +385,7 @@ export async function loadSegmentCompareWorkspace(meetingId: string): Promise<{
   goldOverlays: TranscriptSectionOverlay[];
 }> {
   const db = getDb();
-  const [segments, agendaItems, runs, reviewedKeys, extractWalkUsage, { settings }] = await Promise.all([
+  const [segments, agendaItems, { settings }] = await Promise.all([
     db
       .select({
         startTimestamp: meetingsV2TranscriptSegments.startTimestamp,
@@ -401,11 +406,11 @@ export async function loadSegmentCompareWorkspace(meetingId: string): Promise<{
       .from(meetingsV2AgendaItems)
       .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId))
       .orderBy(asc(meetingsV2AgendaItems.sortOrder)),
-    listSegmentCompareRuns(meetingId),
-    listSegmentCompareReviewedKeys(meetingId),
-    loadExtractWalkTokenUsage(meetingId),
     loadMeetingSettings(meetingId),
   ]);
+  const runs = settings.segmentCompareRuns ?? [];
+  const reviewedKeys = settings.segmentCompareReviewedKeys ?? [];
+  const extractWalkUsage = await loadExtractWalkTokenUsage(meetingId);
   const agendaConcepts = agendaConceptRows(agendaItems);
   const allowedIds = new Set(agendaConcepts.map((concept) => concept.id));
   const goldStandard = normalizeSegmentGoldStandard(settings.segmentGoldStandard, allowedIds);

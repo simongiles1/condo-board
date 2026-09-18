@@ -208,6 +208,95 @@ export function cueSeconds(timestamp: string): number {
   return parseVttTimestampMs(timestamp) / 1000;
 }
 
+/** Map a pointer Y to a cue when dragging a gold-span start or end handle. */
+export function goldCueIndexFromBoxes(
+  clientY: number,
+  edge: "start" | "end",
+  boxes: Array<{ index: number; top: number; bottom: number }>,
+): number | null {
+  const indexed = boxes
+    .filter((entry) => Number.isFinite(entry.index))
+    .sort((left, right) => left.index - right.index);
+  if (indexed.length === 0) return null;
+
+  const containing = indexed.filter(
+    ({ top, bottom }) => clientY >= top && clientY <= bottom,
+  );
+  if (containing.length > 0) {
+    const indexes = containing.map((entry) => entry.index);
+    // Shared pixel on two stacked boxes: keep end on the upper cue, start on the lower.
+    return edge === "end" ? Math.min(...indexes) : Math.max(...indexes);
+  }
+
+  const above = [...indexed].reverse().find((entry) => clientY > entry.bottom);
+  const below = indexed.find((entry) => clientY < entry.top);
+  // Padding between boxes is not a cue. End-drag stays on the cue above;
+  // start-drag stays on the cue below so a few pixels off the handle cannot jump a row.
+  if (edge === "end") return above?.index ?? below?.index ?? null;
+  return below?.index ?? above?.index ?? null;
+}
+
+export type GoldSpanEdge = "start" | "end" | "both" | "none";
+export type GoldSpanBorderRole = "none" | "solo" | "first" | "middle" | "last";
+
+export type GoldResizeHandles = {
+  startAgendaItemId: string | null;
+  endAgendaItemId: string | null;
+};
+
+/** Per-item first/last cue, so nested or identical spans are not collapsed to the overlay group box. */
+export function goldSpanEdgeAtIndex(index: number, covered: boolean[]): GoldSpanEdge {
+  if (!covered[index]) return "none";
+  const prev = index > 0 && covered[index - 1];
+  const next = index < covered.length - 1 && covered[index + 1];
+  if (!prev && !next) return "both";
+  if (!prev) return "start";
+  if (!next) return "end";
+  return "none";
+}
+
+export function goldSpanBorderRoleAtIndex(index: number, covered: boolean[]): GoldSpanBorderRole {
+  if (!covered[index]) return "none";
+  const prev = index > 0 && covered[index - 1];
+  const next = index < covered.length - 1 && covered[index + 1];
+  if (!prev && !next) return "solo";
+  if (!prev) return "first";
+  if (!next) return "last";
+  return "middle";
+}
+
+function pickResizeItemId(candidates: string[], preferredId: string | null): string | null {
+  if (candidates.length === 0) return null;
+  if (preferredId && candidates.includes(preferredId)) return preferredId;
+  return candidates[0] ?? null;
+}
+
+/**
+ * Resize hit targets for one cue. When the selected leaf has no span yet, suppress
+ * every handle so a click can start an overlapping range inside an existing box.
+ */
+export function goldResizeHandlesAtCue(options: {
+  cueIndex: number;
+  coverageByItem: Map<string, boolean[]>;
+  preferredAgendaItemId: string | null;
+  suppressHandles: boolean;
+}): GoldResizeHandles {
+  if (options.suppressHandles) {
+    return { startAgendaItemId: null, endAgendaItemId: null };
+  }
+  const startCandidates: string[] = [];
+  const endCandidates: string[] = [];
+  for (const [agendaItemId, covered] of options.coverageByItem) {
+    const edge = goldSpanEdgeAtIndex(options.cueIndex, covered);
+    if (edge === "start" || edge === "both") startCandidates.push(agendaItemId);
+    if (edge === "end" || edge === "both") endCandidates.push(agendaItemId);
+  }
+  return {
+    startAgendaItemId: pickResizeItemId(startCandidates, options.preferredAgendaItemId),
+    endAgendaItemId: pickResizeItemId(endCandidates, options.preferredAgendaItemId),
+  };
+}
+
 export function sequenceRangesForTimeSpans(
   spans: Array<{ startSeconds: number; endSeconds: number }>,
   segments: Array<{ sequence: number; startTimestamp: string; endTimestamp: string }>,
@@ -216,11 +305,19 @@ export function sequenceRangesForTimeSpans(
   for (const span of spans) {
     const start = Math.min(span.startSeconds, span.endSeconds);
     const end = Math.max(span.startSeconds, span.endSeconds);
+    const spanDur = end - start;
     const matched = segments
       .filter((segment) => {
         const segmentStart = cueSeconds(segment.startTimestamp);
         const segmentEnd = cueSeconds(segment.endTimestamp);
-        return segmentStart <= end && segmentEnd >= start;
+        const segDur = Math.max(0.001, segmentEnd - segmentStart);
+        const interStart = Math.max(segmentStart, start);
+        const interEnd = Math.min(segmentEnd, end);
+        const inter = interEnd - interStart;
+        if (inter <= 0) return false;
+        const segMid = (segmentStart + segmentEnd) / 2;
+        if (segMid >= start && segMid <= end) return true;
+        return inter >= segDur * 0.5 || (spanDur > 0 && inter >= spanDur * 0.5);
       })
       .map((segment) => segment.sequence);
     if (matched.length === 0) continue;

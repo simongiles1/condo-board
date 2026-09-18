@@ -36,6 +36,10 @@ import {
   scoreOverlaysAgainstGold,
   sequenceRangesForTimeSpans,
   unionChildSequenceRanges,
+  goldCueIndexFromBoxes,
+  goldResizeHandlesAtCue,
+  goldSpanBorderRoleAtIndex,
+  goldSpanEdgeAtIndex,
 } from "../lib/meeting-v2/segment-gold-standard";
 
 describe("segment compare catalog", () => {
@@ -286,6 +290,30 @@ describe("segment gold standard", () => {
     assert.deepEqual(ranges, [[2, 3]]);
   });
 
+  it("excludes a transcript segment that only touches the span end instant", () => {
+    const ranges = sequenceRangesForTimeSpans(
+      [{ startSeconds: 9, endSeconds: 14 }],
+      [
+        { sequence: 2, startTimestamp: "00:00:09.000", endTimestamp: "00:00:14.000" },
+        { sequence: 3, startTimestamp: "00:00:14.000", endTimestamp: "00:00:22.000" },
+      ],
+    );
+    assert.deepEqual(ranges, [[2, 2]]);
+  });
+
+  it("excludes cross-talk boundary segments when mapping spans to sequence ranges", () => {
+    const ranges = sequenceRangesForTimeSpans(
+      [{ startSeconds: 949.414, endSeconds: 996.374 }],
+      [
+        { sequence: 183, startTimestamp: "00:15:44.614", endTimestamp: "00:15:49.654" }, // ends 0.24s after span start
+        { sequence: 184, startTimestamp: "00:15:49.414", endTimestamp: "00:15:58.614" },
+        { sequence: 189, startTimestamp: "00:16:32.054", endTimestamp: "00:16:36.374" },
+        { sequence: 190, startTimestamp: "00:16:35.014", endTimestamp: "00:16:38.934" }, // starts 1.36s before span end
+      ],
+    );
+    assert.deepEqual(ranges, [[184, 189]]);
+  });
+
   it("unions leaf ranges onto parent outline items", () => {
     const items = [
       { id: "parent", itemNumber: "4", title: "Projects" },
@@ -299,5 +327,79 @@ describe("segment gold standard", () => {
       new Map([["child", [[10, 20] as [number, number]]]]),
     );
     assert.deepEqual(unioned.get("parent"), [[10, 20]]);
+  });
+
+  it("keeps an end-edge drag on the upper cue when the pointer is in the gap below it", () => {
+    const boxes = [
+      { index: 10, top: 100, bottom: 140 },
+      { index: 11, top: 152, bottom: 192 },
+    ];
+    assert.equal(goldCueIndexFromBoxes(140, "end", boxes), 10);
+    assert.equal(goldCueIndexFromBoxes(145, "end", boxes), 10);
+    assert.equal(goldCueIndexFromBoxes(152, "end", boxes), 11);
+  });
+
+  it("keeps a start-edge drag on the lower cue when the pointer is in the gap above it", () => {
+    const boxes = [
+      { index: 10, top: 100, bottom: 140 },
+      { index: 11, top: 152, bottom: 192 },
+    ];
+    assert.equal(goldCueIndexFromBoxes(152, "start", boxes), 11);
+    assert.equal(goldCueIndexFromBoxes(145, "start", boxes), 11);
+    assert.equal(goldCueIndexFromBoxes(140, "start", boxes), 10);
+  });
+
+  it("treats nested and identical gold spans as separate first/last edges", () => {
+    const outer = [true, true, true, true];
+    const inner = [false, true, true, false];
+    assert.equal(goldSpanEdgeAtIndex(0, outer), "start");
+    assert.equal(goldSpanEdgeAtIndex(1, outer), "none");
+    assert.equal(goldSpanEdgeAtIndex(1, inner), "start");
+    assert.equal(goldSpanEdgeAtIndex(2, inner), "end");
+    assert.equal(goldSpanBorderRoleAtIndex(1, inner), "first");
+    assert.equal(goldSpanBorderRoleAtIndex(2, inner), "last");
+    const same = [true, true, true];
+    assert.equal(goldSpanEdgeAtIndex(0, same), "start");
+    assert.equal(goldSpanEdgeAtIndex(2, same), "end");
+  });
+
+  it("suppresses resize handles so an unlabeled leaf can be clicked inside another span", () => {
+    const coverageByItem = new Map([
+      ["a", [true, true, true]],
+    ]);
+    assert.deepEqual(
+      goldResizeHandlesAtCue({
+        cueIndex: 0,
+        coverageByItem,
+        preferredAgendaItemId: "b",
+        suppressHandles: true,
+      }),
+      { startAgendaItemId: null, endAgendaItemId: null },
+    );
+  });
+
+  it("splits coincident abutting edges onto the two items that own them", () => {
+    const coverageByItem = new Map([
+      ["a", [true, true, false, false]],
+      ["b", [false, false, true, true]],
+    ]);
+    assert.deepEqual(
+      goldResizeHandlesAtCue({
+        cueIndex: 1,
+        coverageByItem,
+        preferredAgendaItemId: null,
+        suppressHandles: false,
+      }),
+      { startAgendaItemId: null, endAgendaItemId: "a" },
+    );
+    assert.deepEqual(
+      goldResizeHandlesAtCue({
+        cueIndex: 2,
+        coverageByItem,
+        preferredAgendaItemId: null,
+        suppressHandles: false,
+      }),
+      { startAgendaItemId: "b", endAgendaItemId: null },
+    );
   });
 });

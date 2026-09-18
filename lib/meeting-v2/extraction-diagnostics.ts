@@ -359,12 +359,33 @@ export async function recordMeetingV2ExtractionRun(
 export async function getMeetingV2AgendaChunkSnapshotCount(
   meetingId: string,
 ): Promise<number> {
-  const db = getDb();
-  const rows = await db
-    .select({ value: count() })
-    .from(meetingsV2AgendaChunkSnapshots)
-    .where(eq(meetingsV2AgendaChunkSnapshots.meetingV2Id, meetingId));
-  return rows[0]?.value ?? 0;
+  try {
+    const db = getDb();
+    const rows = await db
+      .select({ value: count() })
+      .from(meetingsV2AgendaChunkSnapshots)
+      .where(eq(meetingsV2AgendaChunkSnapshots.meetingV2Id, meetingId));
+    return rows[0]?.value ?? 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const cause =
+      error instanceof Error && error.cause instanceof Error
+        ? error.cause.message
+        : "";
+    const text = `${message} ${cause}`;
+    if (
+      text.includes('relation "meetings_v2_agenda_chunk_snapshots" does not exist') ||
+      (text.includes("undefined_table") &&
+        text.includes("meetings_v2_agenda_chunk_snapshots"))
+    ) {
+      console.warn(
+        "[extraction-diagnostics] agenda chunk snapshots unavailable",
+        error,
+      );
+      return 0;
+    }
+    throw error;
+  }
 }
 
 export function analyzeExtractionQuality(options: {

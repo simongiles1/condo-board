@@ -95,7 +95,38 @@ function cueOverlapsSection(
   endSeconds: number,
   section: TranscriptSectionOverlay,
 ): boolean {
-  return startSeconds <= section.endSeconds && endSeconds >= section.startSeconds;
+  const sectionStart = Math.min(section.startSeconds, section.endSeconds);
+  const sectionEnd = Math.max(section.startSeconds, section.endSeconds);
+  const cueStart = Math.min(startSeconds, endSeconds);
+  const cueEnd = Math.max(startSeconds, endSeconds);
+
+  // Instant span (0 duration): cue must contain the instant.
+  if (sectionEnd <= sectionStart) {
+    return cueStart <= sectionStart && cueEnd >= sectionStart;
+  }
+
+  // Instant cue (no end time provided): start must fall within [sectionStart, sectionEnd].
+  if (cueEnd <= cueStart) {
+    return cueStart >= sectionStart && cueStart <= sectionEnd;
+  }
+
+  const interStart = Math.max(cueStart, sectionStart);
+  const interEnd = Math.min(cueEnd, sectionEnd);
+  const inter = interEnd - interStart;
+  if (inter <= 0) return false;
+
+  const cueDur = cueEnd - cueStart;
+  const sectionDur = sectionEnd - sectionStart;
+
+  // Conversational diarization timestamps commonly bleed across speaker turns by
+  // 0.1s - 1.5s when people interject or speak concurrently. A cue belongs to a
+  // section when its midpoint falls within the section, or when the intersection
+  // covers at least half of the cue (or half of a very short section).
+  const cueMid = (cueStart + cueEnd) / 2;
+  if (cueMid >= sectionStart && cueMid <= sectionEnd) return true;
+  if (inter >= cueDur * 0.5) return true;
+  if (inter >= sectionDur * 0.5) return true;
+  return false;
 }
 
 export function pickSectionsForTime(

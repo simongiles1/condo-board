@@ -39,6 +39,54 @@ function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
   }
 }
 
+function errorText(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current != null && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof Error) {
+      parts.push(current.message);
+      current = current.cause;
+      continue;
+    }
+    parts.push(String(current));
+    break;
+  }
+  return parts.join(" ");
+}
+
+function isMissingAgendaChunkSnapshotsTable(error: unknown): boolean {
+  const text = errorText(error);
+  return (
+    text.includes('relation "meetings_v2_agenda_chunk_snapshots" does not exist') ||
+    (text.includes("undefined_table") &&
+      text.includes("meetings_v2_agenda_chunk_snapshots"))
+  );
+}
+
+async function loadAgendaChunkSnapshotUsageRows(
+  meetingId: string,
+): Promise<Array<{ usageJson: string | null; createdAt: string }>> {
+  try {
+    const db = getDb();
+    return await db
+      .select({
+        usageJson: meetingsV2AgendaChunkSnapshots.usageJson,
+        createdAt: meetingsV2AgendaChunkSnapshots.createdAt,
+      })
+      .from(meetingsV2AgendaChunkSnapshots)
+      .where(eq(meetingsV2AgendaChunkSnapshots.meetingV2Id, meetingId));
+  } catch (error) {
+    if (!isMissingAgendaChunkSnapshotsTable(error)) throw error;
+    console.warn(
+      "[ai-usage] agenda chunk snapshots unavailable; continuing without extract snapshot costs",
+      error,
+    );
+    return [];
+  }
+}
+
 function readTokenUsage(value: unknown): TokenUsage | null {
   if (!value || typeof value !== "object") return null;
 
@@ -231,54 +279,49 @@ export async function loadMeetingV2AiUsageStages(
   meetingId: string,
 ): Promise<AiUsageStageRow[]> {
   const db = getDb();
-  const [legacyMeeting, v2Meeting, chunkSnapshots, investigations, documentPages, drafts, validationCountRow] =
-    await Promise.all([
-      db
-        .select({ aiUsageJson: meetings.aiUsageJson })
-        .from(meetings)
-        .where(eq(meetings.id, meetingId)),
-      db
-        .select({
-          settings: meetingsV2.settings,
-          updatedAt: meetingsV2.updatedAt,
-        })
-        .from(meetingsV2)
-        .where(eq(meetingsV2.id, meetingId)),
-      db
-        .select({
-          usageJson: meetingsV2AgendaChunkSnapshots.usageJson,
-          createdAt: meetingsV2AgendaChunkSnapshots.createdAt,
-        })
-        .from(meetingsV2AgendaChunkSnapshots)
-        .where(eq(meetingsV2AgendaChunkSnapshots.meetingV2Id, meetingId)),
-      db
-        .select({
-          modelName: meetingsV2AgendaItemInvestigations.modelName,
-          usageJson: meetingsV2AgendaItemInvestigations.usageJson,
-          createdAt: meetingsV2AgendaItemInvestigations.createdAt,
-        })
-        .from(meetingsV2AgendaItemInvestigations)
-        .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
-      db
-        .select({
-          extractedText: meetingsV2DocumentPages.extractedText,
-        })
-        .from(meetingsV2DocumentPages)
-        .where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
-      db
-        .select({
-          modelName: meetingsV2MinutesDrafts.modelName,
-          usageJson: meetingsV2MinutesDrafts.usageJson,
-        })
-        .from(meetingsV2MinutesDrafts)
-        .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId))
-        .orderBy(desc(meetingsV2MinutesDrafts.createdAt))
-        .limit(1),
-      db
-        .select({ value: count() })
-        .from(meetingsV2ValidationResults)
-        .where(eq(meetingsV2ValidationResults.meetingV2Id, meetingId)),
-    ]);
+  const [legacyMeeting, v2Meeting, chunkSnapshots] = await Promise.all([
+    db
+      .select({ aiUsageJson: meetings.aiUsageJson })
+      .from(meetings)
+      .where(eq(meetings.id, meetingId)),
+    db
+      .select({
+        settings: meetingsV2.settings,
+        updatedAt: meetingsV2.updatedAt,
+      })
+      .from(meetingsV2)
+      .where(eq(meetingsV2.id, meetingId)),
+    loadAgendaChunkSnapshotUsageRows(meetingId),
+  ]);
+  const [investigations, documentPages, drafts, validationCountRow] = await Promise.all([
+    db
+      .select({
+        modelName: meetingsV2AgendaItemInvestigations.modelName,
+        usageJson: meetingsV2AgendaItemInvestigations.usageJson,
+        createdAt: meetingsV2AgendaItemInvestigations.createdAt,
+      })
+      .from(meetingsV2AgendaItemInvestigations)
+      .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
+    db
+      .select({
+        extractedText: meetingsV2DocumentPages.extractedText,
+      })
+      .from(meetingsV2DocumentPages)
+      .where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
+    db
+      .select({
+        modelName: meetingsV2MinutesDrafts.modelName,
+        usageJson: meetingsV2MinutesDrafts.usageJson,
+      })
+      .from(meetingsV2MinutesDrafts)
+      .where(eq(meetingsV2MinutesDrafts.meetingV2Id, meetingId))
+      .orderBy(desc(meetingsV2MinutesDrafts.createdAt))
+      .limit(1),
+    db
+      .select({ value: count() })
+      .from(meetingsV2ValidationResults)
+      .where(eq(meetingsV2ValidationResults.meetingV2Id, meetingId)),
+  ]);
 
   const usageByStageId = new Map<string, AiUsageStageRow>();
 

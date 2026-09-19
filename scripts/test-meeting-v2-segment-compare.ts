@@ -40,6 +40,10 @@ import {
   goldResizeHandlesAtCue,
   goldSpanBorderRoleAtIndex,
   goldSpanEdgeAtIndex,
+  addGoldSpanReplacingOverlaps,
+  buildGoldLabelCueSegmentMeta,
+  goldSpanFromCueIndexRange,
+  resolveGoldSpanCueIndices,
 } from "../lib/meeting-v2/segment-gold-standard";
 
 describe("segment compare catalog", () => {
@@ -277,6 +281,91 @@ describe("segment gold standard", () => {
     assert.ok(Math.abs(score.meanIou - 50 / 150) < 1e-9);
   });
 
+  it("labels a single clicked cue row without time-overlap bleed on the next row", () => {
+    const cues = transcriptSegmentsToCues([
+      {
+        startTimestamp: "00:10:00.000",
+        endTimestamp: "00:10:05.000",
+        speakerLabel: "Haider",
+        text: "First line",
+      },
+      {
+        startTimestamp: "00:10:04.500",
+        endTimestamp: "00:10:09.000",
+        speakerLabel: "Paul",
+        text: "Second line",
+      },
+    ]);
+    const concepts = [{ id: "b", code: "4.B.5", title: "Topic", isLeaf: true, depth: 2 }];
+    const span = goldSpanFromCueIndexRange("b", 0, 0, cues);
+    const meta = buildGoldLabelCueSegmentMeta(cues, concepts, [span]);
+    assert.equal(meta[0]?.sections[0]?.code, "4.B.5");
+    assert.equal(meta[1]?.sections.length, 0);
+  });
+
+  it("keeps disjoint spans for the same agenda item when labeling again", () => {
+    const cues = transcriptSegmentsToCues([
+      {
+        startTimestamp: "00:05:00.000",
+        endTimestamp: "00:05:05.000",
+        speakerLabel: "A",
+        text: "first visit",
+      },
+      {
+        startTimestamp: "00:08:00.000",
+        endTimestamp: "00:08:05.000",
+        speakerLabel: "B",
+        text: "other topic",
+      },
+      {
+        startTimestamp: "00:12:00.000",
+        endTimestamp: "00:12:05.000",
+        speakerLabel: "A",
+        text: "revisit",
+      },
+    ]);
+    const first = goldSpanFromCueIndexRange("leaf", 0, 0, cues);
+    const second = goldSpanFromCueIndexRange("leaf", 2, 2, cues);
+    const merged = addGoldSpanReplacingOverlaps([first], second, cues);
+    assert.equal(merged.length, 2);
+    assert.equal(merged.every((span) => span.agendaItemId === "leaf"), true);
+    const meta = buildGoldLabelCueSegmentMeta(
+      cues,
+      [{ id: "leaf", code: "4.A.1", title: "T", isLeaf: true, depth: 0 }],
+      merged,
+    );
+    assert.equal(meta[0]?.sections.length, 1);
+    assert.equal(meta[1]?.sections.length, 0);
+    assert.equal(meta[2]?.sections.length, 1);
+  });
+
+  it("shrinks a span to one cue row when dragging the end handle up", () => {
+    const cues = transcriptSegmentsToCues([
+      {
+        startTimestamp: "00:10:00.000",
+        endTimestamp: "00:10:05.000",
+        speakerLabel: "Haider",
+        text: "A",
+      },
+      {
+        startTimestamp: "00:10:05.500",
+        endTimestamp: "00:10:10.000",
+        speakerLabel: "Paul",
+        text: "B",
+      },
+    ]);
+    const span = goldSpanFromCueIndexRange("b", 0, 1, cues);
+    const shrunk = goldSpanFromCueIndexRange(
+      "b",
+      resolveGoldSpanCueIndices(span, cues).lo,
+      0,
+      cues,
+    );
+    assert.equal(shrunk.endCueIndex, 0);
+    const meta = buildGoldLabelCueSegmentMeta(cues, [{ id: "b", code: "4.B.5", title: "T", isLeaf: true, depth: 0 }], [shrunk]);
+    assert.equal(meta.filter((row) => row.sections.length > 0).length, 1);
+  });
+
   it("maps overlapping cues to closed sequence ranges", () => {
     const ranges = sequenceRangesForTimeSpans(
       [{ startSeconds: 10, endSeconds: 25 }],
@@ -347,6 +436,15 @@ describe("segment gold standard", () => {
     assert.equal(goldCueIndexFromBoxes(152, "start", boxes), 11);
     assert.equal(goldCueIndexFromBoxes(145, "start", boxes), 11);
     assert.equal(goldCueIndexFromBoxes(140, "start", boxes), 10);
+  });
+
+  it("maps dead space below a long cue box to that cue row when resizing the span end", () => {
+    const boxes = [
+      { index: 4, top: 400, bottom: 600 },
+      { index: 5, top: 600, bottom: 630 },
+    ];
+    assert.equal(goldCueIndexFromBoxes(580, "end", boxes), 4);
+    assert.equal(goldCueIndexFromBoxes(610, "start", boxes), 5);
   });
 
   it("treats nested and identical gold spans as separate first/last edges", () => {

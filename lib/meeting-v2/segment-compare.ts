@@ -474,6 +474,8 @@ export async function applyGoldStandardToMinutesPipeline(meetingId: string): Pro
         sequence: meetingsV2TranscriptSegments.sequence,
         startTimestamp: meetingsV2TranscriptSegments.startTimestamp,
         endTimestamp: meetingsV2TranscriptSegments.endTimestamp,
+        speakerLabel: meetingsV2TranscriptSegments.speakerLabel,
+        text: meetingsV2TranscriptSegments.text,
       })
       .from(meetingsV2TranscriptSegments)
       .where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId))
@@ -496,9 +498,16 @@ export async function applyGoldStandardToMinutesPipeline(meetingId: string): Pro
     spansByItem.set(span.agendaItemId, list);
   }
 
+  const segmentRows = segments.map(({ sequence, startTimestamp, endTimestamp }) => ({
+    sequence,
+    startTimestamp,
+    endTimestamp,
+  }));
+  const pipelineCues = transcriptSegmentsToCues(segments);
+
   const leafRanges = new Map<string, Array<[number, number]>>();
   for (const [itemId, spans] of spansByItem) {
-    leafRanges.set(itemId, sequenceRangesForTimeSpans(spans, segments));
+    leafRanges.set(itemId, sequenceRangesForTimeSpans(spans, segmentRows, pipelineCues));
   }
   const rangesById = unionChildSequenceRanges(agendaItems, leafRanges);
   const priorEvidence = settings.agendaEvidence ?? {};

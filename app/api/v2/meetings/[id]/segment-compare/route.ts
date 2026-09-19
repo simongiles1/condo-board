@@ -113,7 +113,18 @@ export async function PATCH(
         const startSeconds = Number(record.startSeconds);
         const endSeconds = Number(record.endSeconds);
         if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds)) return [];
-        return [{ agendaItemId: record.agendaItemId, startSeconds, endSeconds }];
+        const startCueIndex = Number(record.startCueIndex);
+        const endCueIndex = Number(record.endCueIndex);
+        return [
+          {
+            agendaItemId: record.agendaItemId,
+            startSeconds,
+            endSeconds,
+            ...(Number.isFinite(startCueIndex) && Number.isFinite(endCueIndex)
+              ? { startCueIndex, endCueIndex }
+              : {}),
+          },
+        ];
       });
       const goldStandard = await setSegmentGoldStandard(id, spans);
       return NextResponse.json({ goldStandard });

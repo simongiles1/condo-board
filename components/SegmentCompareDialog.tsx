@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   SECTION_BORDER_COLORS,
@@ -30,8 +30,14 @@ import {
   GOLD_STANDARD_COMPARE_ID,
   goldCueIndexFromBoxes,
   goldResizeHandlesAtCue,
+  addGoldSpanReplacingOverlaps,
+  buildGoldLabelCueSegmentMeta,
+  findGoldSpanForEdge,
+  goldCueCoverageForSpan,
+  goldSpanFromCueIndexRange,
   goldSpanBorderRoleAtIndex,
   mergeGoldSpans,
+  resolveGoldSpanCueIndices,
   overlaysFromGoldSpans,
   scoreOverlaysAgainstGold,
   type AgendaConceptRow,
@@ -938,6 +944,133 @@ function buildPairedCueRowLayout(
   };
 }
 
+type CompareSegmentGroup = {
+  cueIndexes: number[];
+  sections: TranscriptSectionOverlay[];
+};
+
+function buildSegmentGroupsFromMeta(meta: CueSegmentMeta[]): CompareSegmentGroup[] {
+  const groups: CompareSegmentGroup[] = [];
+  for (let index = 0; index < meta.length; index += 1) {
+    if (meta[index].segmentStartsAtCue || groups.length === 0) {
+      groups.push({ cueIndexes: [index], sections: meta[index].sections });
+    } else {
+      groups[groups.length - 1].cueIndexes.push(index);
+    }
+  }
+  return groups;
+}
+
+function StickySegmentLabelRow({
+  meta,
+  colors,
+}: {
+  meta: CueSegmentMeta;
+  colors: Map<string, string>;
+}) {
+  return (
+    <div className="sticky z-[5] -mx-0.5 mb-1 flex justify-center bg-gradient-to-b from-white from-50% to-transparent px-0.5 pt-0.5 [top:var(--compare-pane-header-offset,3.25rem)]">
+      <SegmentLabelRow meta={meta} colors={colors} visible />
+    </div>
+  );
+}
+
+type ComparePairedCueGridProps = {
+  cues: MergedVttCue[];
+  leftMeta: CueSegmentMeta[];
+  rightMeta: CueSegmentMeta[];
+  colors: Map<string, string>;
+  renderCueCell: (args: {
+    cueIndex: number;
+    side: "left" | "right";
+    meta: CueSegmentMeta;
+    partnerMeta: CueSegmentMeta;
+    pairedRow: PairedCueRowLayout;
+    segmentLabelAbove: boolean;
+  }) => ReactNode;
+  pairedRowForIndex?: (cueIndex: number, base: PairedCueRowLayout) => PairedCueRowLayout;
+};
+
+function ComparePairedCueGrid({
+  cues,
+  leftMeta,
+  rightMeta,
+  colors,
+  renderCueCell,
+  pairedRowForIndex,
+}: ComparePairedCueGridProps) {
+  const leftGroups = buildSegmentGroupsFromMeta(leftMeta);
+  const rightGroups = buildSegmentGroupsFromMeta(rightMeta);
+
+  function renderColumn(
+    column: 1 | 2,
+    groups: CompareSegmentGroup[],
+    meta: CueSegmentMeta[],
+    partnerMeta: CueSegmentMeta[],
+    side: "left" | "right",
+  ) {
+    return groups.map((group) => {
+      const start = group.cueIndexes[0];
+      const end = group.cueIndexes[group.cueIndexes.length - 1];
+      return (
+        <div
+          key={`${side}-${start}-${end}`}
+          className={`${column === 1 ? "col-start-1" : "col-start-2"} grid min-w-0 grid-rows-subgrid`}
+          style={{ gridRow: `${start + 1} / ${end + 2}` }}
+        >
+          {group.cueIndexes.map((cueIndex, offset) => {
+            const cueMeta = meta[cueIndex];
+            const cuePartnerMeta = partnerMeta[cueIndex];
+            const basePairedRow = buildPairedCueRowLayout(cueMeta, cuePartnerMeta, cueIndex);
+            const pairedRow = pairedRowForIndex?.(cueIndex, basePairedRow) ?? basePairedRow;
+            const labelSource = cueMeta.showLabel
+              ? cueMeta
+              : cuePartnerMeta.showLabel
+                ? cuePartnerMeta
+                : null;
+            const showStickyLabel = offset === 0 && cueMeta.showLabel && group.sections.length > 0;
+            const showInvisibleLabel =
+              pairedRow.reserveLabelRow && Boolean(labelSource) && !showStickyLabel;
+            const segmentLabelAbove = showStickyLabel || showInvisibleLabel;
+
+            return (
+              <div
+                key={cueIndex}
+                className="flex min-h-0 min-w-0 flex-col self-stretch"
+                data-gold-cue-index={side === "right" ? cueIndex : undefined}
+              >
+                {showStickyLabel ? (
+                  <StickySegmentLabelRow meta={cueMeta} colors={colors} />
+                ) : showInvisibleLabel && labelSource ? (
+                  <SegmentLabelRow meta={labelSource} colors={colors} visible={false} />
+                ) : null}
+                {renderCueCell({
+                  cueIndex,
+                  side,
+                  meta: cueMeta,
+                  partnerMeta: cuePartnerMeta,
+                  pairedRow,
+                  segmentLabelAbove,
+                })}
+              </div>
+            );
+          })}
+        </div>
+      );
+    });
+  }
+
+  return (
+    <div
+      className="grid grid-cols-2"
+      style={{ gridTemplateRows: `repeat(${cues.length}, auto)` }}
+    >
+      {renderColumn(1, leftGroups, leftMeta, rightMeta, "left")}
+      {renderColumn(2, rightGroups, rightMeta, leftMeta, "right")}
+    </div>
+  );
+}
+
 function cueEndSeconds(cue: MergedVttCue): number {
   return cueSeconds(cue.end ?? cue.start);
 }
@@ -1030,6 +1163,7 @@ function CueCell({
   onGoldHandleHover,
   onGoldResizePointerDown,
   goldCueRow = false,
+  segmentLabelAbove = false,
 }: {
   cue: MergedVttCue;
   meta: CueSegmentMeta;
@@ -1051,6 +1185,7 @@ function CueCell({
     event: React.PointerEvent,
   ) => void;
   goldCueRow?: boolean;
+  segmentLabelAbove?: boolean;
 }) {
   const { sections, position, showLabel } = meta;
   const hasSection = sections.length > 0;
@@ -1067,6 +1202,7 @@ function CueCell({
       : "Unassigned";
 
   const labelSource = showLabel ? meta : partnerMeta.showLabel ? partnerMeta : null;
+  const inlineLabel = !segmentLabelAbove && pairedRow.reserveLabelRow && labelSource;
   const inGoldRange = goldRangeRole !== "none";
   const highlightRole = inGoldRange ? goldRangeRole : goldActiveSpanRole;
   const sectionBorderClass =
@@ -1079,7 +1215,7 @@ function CueCell({
   const showStartHandle = Boolean(onGoldResizePointerDown && startAgendaItemId);
   const showEndHandle = Boolean(onGoldResizePointerDown && endAgendaItemId);
   const startHandleCoversLabel =
-    showStartHandle && Boolean(labelSource) && pairedRow.reserveLabelRow;
+    showStartHandle && pairedRow.reserveLabelRow && (Boolean(labelSource) || segmentLabelAbove);
   const startHandleHot =
     goldHandleHover?.edge === "start" && goldHandleHover.agendaItemId === startAgendaItemId;
   const endHandleHot =
@@ -1087,19 +1223,18 @@ function CueCell({
 
   return (
     <div
-      className={`px-1 ${pairedRow.segmentGapBefore ? "pt-3" : ""} ${
+      className={`flex min-h-0 flex-1 flex-col px-1 ${pairedRow.segmentGapBefore ? "pt-3" : ""} ${
         interactive && !showStartHandle && !showEndHandle ? "cursor-pointer" : ""
       }`}
       onClick={onCueClick ? () => onCueClick(cueIndex) : undefined}
       onMouseEnter={onGoldRangeHover ? () => onGoldRangeHover(cueIndex) : undefined}
     >
       <article
-        className={`relative overflow-visible px-2.5 py-1 ${sectionBorderClass} ${goldRangeRadiusClass(highlightRole)} ${
+        className={`relative flex-1 overflow-visible px-2.5 py-1 ${sectionBorderClass} ${goldRangeRadiusClass(highlightRole)} ${
           interactive && highlightRole === "none" && !showStartHandle && !showEndHandle
             ? "hover:ring-2 hover:ring-inset hover:ring-amber-500/80"
             : ""
         }`}
-        data-gold-cue-index={goldCueRow ? cueIndex : undefined}
         style={{
           borderColor: highlightRole !== "none" ? undefined : hasSection ? borderColor : undefined,
           backgroundColor: speakerBackgroundColor(cue.speaker),
@@ -1155,8 +1290,8 @@ function CueCell({
             />
           </div>
         ) : null}
-        {pairedRow.reserveLabelRow && labelSource ? (
-          <SegmentLabelRow meta={labelSource} colors={colors} visible={showLabel} />
+        {inlineLabel ? (
+          <SegmentLabelRow meta={labelSource!} colors={colors} visible={showLabel} />
         ) : null}
         <div className="flex items-baseline justify-between gap-3">
           <span className="text-sm font-semibold text-slate-900">
@@ -1193,11 +1328,14 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     edge: "start" | "end";
     agendaItemId: string;
     originCueIndex: number;
+    spanLo: number;
+    spanHi: number;
   } | null>(null);
   const [goldHandleHover, setGoldHandleHover] = useState<GoldHandleHover | null>(null);
   const [pipelineConfirmOpen, setPipelineConfirmOpen] = useState(false);
   const [pipelineBusy, setPipelineBusy] = useState(false);
   const goldDirtyRef = useRef(false);
+  const compareScrollRef = useRef<HTMLDivElement>(null);
 
   async function refresh(): Promise<WorkspacePayload> {
     try {
@@ -1348,20 +1486,25 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     [cues, goldReferenceOverlays],
   );
   const goldLabelCueMeta = useMemo(
-    () => buildCueSegmentMeta(cues, liveGoldOverlays),
-    [cues, liveGoldOverlays],
+    () => buildGoldLabelCueSegmentMeta(cues, agendaConcepts, goldSpans),
+    [cues, agendaConcepts, goldSpans],
   );
   const goldCoverageByItem = useMemo(() => {
     const map = new Map<string, boolean[]>();
-    const ids = new Set(goldSpans.map((span) => span.agendaItemId));
-    for (const id of ids) {
+    for (const span of goldSpans) {
+      const covered = goldCueCoverageForSpan(span, cues, cues.length);
+      const existing = map.get(span.agendaItemId);
+      if (!existing) {
+        map.set(span.agendaItemId, covered);
+        continue;
+      }
       map.set(
-        id,
-        goldLabelCueMeta.map((meta) => meta.sections.some((section) => section.id === id)),
+        span.agendaItemId,
+        existing.map((value, index) => value || covered[index]!),
       );
     }
     return map;
-  }, [goldSpans, goldLabelCueMeta]);
+  }, [goldSpans, cues]);
 
   function handleRunTargetChange(key: string, _row: CombinationRow) {
     setRunTargetKey(key);
@@ -1450,6 +1593,33 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [goldMode]);
 
+  useLayoutEffect(() => {
+    const root = compareScrollRef.current;
+    if (!root) return;
+
+    function syncPaneHeaderOffset() {
+      const header = root?.querySelector<HTMLElement>("[data-compare-sticky-header]");
+      if (!header || !root) return;
+      root.style.setProperty("--compare-pane-header-offset", `${header.offsetHeight}px`);
+    }
+
+    syncPaneHeaderOffset();
+    const header = root.querySelector<HTMLElement>("[data-compare-sticky-header]");
+    if (!header) return;
+    const observer = new ResizeObserver(syncPaneHeaderOffset);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, [
+    goldMode,
+    loading,
+    workspace,
+    goldReferencePaneId,
+    leftId,
+    rightId,
+    selectedConceptId,
+    pendingStartIndex,
+  ]);
+
   function commitGoldSpans(next: SegmentGoldSpan[]) {
     goldDirtyRef.current = true;
     setGoldSpans(mergeGoldSpans(next));
@@ -1467,29 +1637,6 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     setGoldHandleHover(null);
   }
 
-  function applyGoldResizeAtCue(
-    agendaItemId: string,
-    edge: "start" | "end",
-    cueIndex: number,
-  ) {
-    const span = goldSpans.find((entry) => entry.agendaItemId === agendaItemId);
-    const cue = cues[cueIndex];
-    if (!span || !cue) return;
-    const currentLo = Math.min(span.startSeconds, span.endSeconds);
-    const currentHi = Math.max(span.startSeconds, span.endSeconds);
-    const nextLo =
-      edge === "start" ? Math.min(cueSeconds(cue.start), currentHi) : currentLo;
-    const nextHi =
-      edge === "end" ? Math.max(cueEndSeconds(cue), currentLo) : currentHi;
-    commitGoldSpans(
-      goldSpans.map((entry) =>
-        entry.agendaItemId === agendaItemId
-          ? { ...entry, startSeconds: nextLo, endSeconds: nextHi }
-          : entry,
-      ),
-    );
-  }
-
   function handleGoldResizePointerDown(
     edge: "start" | "end",
     agendaItemId: string,
@@ -1497,18 +1644,36 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     event: React.PointerEvent,
   ) {
     if (pendingStartIndex != null) return;
+    const span = findGoldSpanForEdge(goldSpans, agendaItemId, cueIndex, edge, cues);
+    if (!span) return;
+    const { lo, hi } = resolveGoldSpanCueIndices(span, cues);
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     setGoldHandleHover({ edge, agendaItemId });
-    setGoldResize({ edge, agendaItemId, originCueIndex: cueIndex });
+    setGoldResize({ edge, agendaItemId, originCueIndex: cueIndex, spanLo: lo, spanHi: hi });
   }
 
   useEffect(() => {
     if (!goldResize) return;
     const { agendaItemId, edge, originCueIndex } = goldResize;
+    const bounds = { lo: goldResize.spanLo, hi: goldResize.spanHi };
     function onPointerMove(event: PointerEvent) {
       const cueIndex = goldCueIndexAtClientY(event.clientY, edge) ?? originCueIndex;
-      applyGoldResizeAtCue(agendaItemId, edge, cueIndex);
+      const nextLo = edge === "start" ? Math.min(cueIndex, bounds.hi) : bounds.lo;
+      const nextHi = edge === "end" ? Math.max(cueIndex, bounds.lo) : bounds.hi;
+      setGoldSpans((current) =>
+        mergeGoldSpans(
+          current.map((entry) => {
+            if (entry.agendaItemId !== agendaItemId) return entry;
+            const { lo, hi } = resolveGoldSpanCueIndices(entry, cues);
+            if (lo !== bounds.lo || hi !== bounds.hi) return entry;
+            return goldSpanFromCueIndexRange(agendaItemId, nextLo, nextHi, cues);
+          }),
+        ),
+      );
+      goldDirtyRef.current = true;
+      bounds.lo = nextLo;
+      bounds.hi = nextHi;
     }
     function onPointerUp() {
       setGoldResize(null);
@@ -1520,7 +1685,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
-  }, [goldResize, goldSpans, cues]);
+  }, [goldResize, cues]);
 
   function handleGoldCueClick(cueIndex: number) {
     if (goldResize) return;
@@ -1534,17 +1699,15 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
       setPendingHoverIndex(null);
       return;
     }
-    const startCue = cues[Math.min(pendingStartIndex, cueIndex)];
-    const endCue = cues[Math.max(pendingStartIndex, cueIndex)];
-    if (!startCue || !endCue) return;
-    commitGoldSpans([
-      ...goldSpans.filter((span) => span.agendaItemId !== selectedConceptId),
-      {
-        agendaItemId: selectedConceptId,
-        startSeconds: cueSeconds(startCue.start),
-        endSeconds: cueEndSeconds(endCue),
-      },
-    ]);
+    const lo = Math.min(pendingStartIndex, cueIndex);
+    const hi = Math.max(pendingStartIndex, cueIndex);
+    commitGoldSpans(
+      addGoldSpanReplacingOverlaps(
+        goldSpans,
+        goldSpanFromCueIndexRange(selectedConceptId, lo, hi, cues),
+        cues,
+      ),
+    );
     setPendingStartIndex(null);
     setPendingHoverIndex(null);
   }
@@ -1691,7 +1854,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         ) : null}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={compareScrollRef} className="min-h-0 flex-1 overflow-y-auto">
         {loading && !workspace ? (
           <p className="p-6 text-sm text-slate-600">Loading transcript…</p>
         ) : (
@@ -1699,7 +1862,10 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
             {goldMode ? (
               <div className="grid min-h-full grid-cols-[minmax(0,2fr)_36rem] items-start">
                 <div className="min-w-0">
-                  <div className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200">
+                  <div
+                    className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200 bg-white"
+                    data-compare-sticky-header
+                  >
                     <ComparePaneColumnHeader
                       paneId={goldReferencePaneId}
                       runs={runs}
@@ -1714,27 +1880,49 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                       }
                     />
                   </div>
-                  <div className="grid grid-cols-2">
-                    {cues.map((cue, index) => {
-                      const referenceMeta = goldReferenceCueMeta[index] ?? {
-                        sections: [],
-                        position: "solo" as const,
-                        showLabel: false,
-                        segmentStartsAtCue: false,
-                      };
-                      const labelMeta = goldLabelCueMeta[index] ?? {
-                        sections: [],
-                        position: "solo" as const,
-                        showLabel: false,
-                        segmentStartsAtCue: false,
-                      };
+                  <ComparePairedCueGrid
+                    cues={cues}
+                    leftMeta={goldReferenceCueMeta}
+                    rightMeta={goldLabelCueMeta}
+                    colors={colors}
+                    pairedRowForIndex={(_, base) => ({
+                      reserveLabelRow: base.reserveLabelRow,
+                      // Extra padding at a span handoff punches a hole in both
+                      // columns and makes the next cue's hit box swallow the
+                      // previous cue's bottom resize handle.
+                      segmentGapBefore: false,
+                    })}
+                    renderCueCell={({
+                      cueIndex: index,
+                      side,
+                      meta,
+                      partnerMeta,
+                      pairedRow,
+                      segmentLabelAbove,
+                    }) => {
+                      const cue = cues[index];
+                      if (side === "left") {
+                        return (
+                          <CueCell
+                            cue={cue}
+                            meta={meta}
+                            partnerMeta={partnerMeta}
+                            pairedRow={pairedRow}
+                            colors={colors}
+                            cueIndex={index}
+                            segmentLabelAbove={segmentLabelAbove}
+                          />
+                        );
+                      }
+
                       const goldRangeRole = cueGoldRangeBorderRole(
                         index,
                         pendingStartIndex,
                         pendingHoverIndex,
                       );
+                      const goldSpanSettingActive = selectedConceptId != null;
                       const selectedConceptHasSpan =
-                        selectedConceptId != null &&
+                        goldSpanSettingActive &&
                         goldSpans.some((span) => span.agendaItemId === selectedConceptId);
                       const suppressHandles =
                         pendingStartIndex != null ||
@@ -1754,58 +1942,40 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                       const goldActiveSpanRole = highlightCovered
                         ? goldSpanBorderRoleAtIndex(index, highlightCovered)
                         : "none";
-                      const basePairedRow = buildPairedCueRowLayout(
-                        referenceMeta,
-                        labelMeta,
-                        index,
-                      );
-                      const pairedRow: PairedCueRowLayout = {
-                        reserveLabelRow: basePairedRow.reserveLabelRow,
-                        // Extra padding at a span handoff punches a hole in both
-                        // columns and makes the next cue's hit box swallow the
-                        // previous cue's bottom resize handle.
-                        segmentGapBefore: false,
-                      };
+
                       return (
-                        <div key={`${cue.start}-${index}`} className="contents">
-                          <CueCell
-                            cue={cue}
-                            meta={referenceMeta}
-                            partnerMeta={labelMeta}
-                            pairedRow={pairedRow}
-                            colors={colors}
-                            cueIndex={index}
-                          />
-                          <CueCell
-                            cue={cue}
-                            meta={labelMeta}
-                            partnerMeta={referenceMeta}
-                            pairedRow={pairedRow}
-                            colors={colors}
-                            cueIndex={index}
-                            onCueClick={handleGoldCueClick}
-                            goldRangeRole={goldRangeRole}
-                            goldActiveSpanRole={goldActiveSpanRole}
-                            onGoldRangeHover={
-                              pendingStartIndex != null
-                                ? (hoverIndex) => setPendingHoverIndex(hoverIndex)
-                                : undefined
-                            }
-                            goldResizeHandles={goldResizeHandles}
-                            goldHandleHover={goldHandleHover}
-                            onGoldHandleHover={(target) => {
-                              if (target) setGoldHandleHover(target);
-                              else if (!goldResize) setGoldHandleHover(null);
-                            }}
-                            onGoldResizePointerDown={
-                              pendingStartIndex == null ? handleGoldResizePointerDown : undefined
-                            }
-                            goldCueRow
-                          />
-                        </div>
+                        <CueCell
+                          cue={cue}
+                          meta={meta}
+                          partnerMeta={partnerMeta}
+                          pairedRow={pairedRow}
+                          colors={colors}
+                          cueIndex={index}
+                          segmentLabelAbove={segmentLabelAbove}
+                          onCueClick={
+                            goldSpanSettingActive ? handleGoldCueClick : undefined
+                          }
+                          goldRangeRole={goldRangeRole}
+                          goldActiveSpanRole={goldActiveSpanRole}
+                          onGoldRangeHover={
+                            pendingStartIndex != null
+                              ? (hoverIndex) => setPendingHoverIndex(hoverIndex)
+                              : undefined
+                          }
+                          goldResizeHandles={goldResizeHandles}
+                          goldHandleHover={goldHandleHover}
+                          onGoldHandleHover={(target) => {
+                            if (target) setGoldHandleHover(target);
+                            else if (!goldResize) setGoldHandleHover(null);
+                          }}
+                          onGoldResizePointerDown={
+                            pendingStartIndex == null ? handleGoldResizePointerDown : undefined
+                          }
+                          goldCueRow
+                        />
                       );
-                    })}
-                  </div>
+                    }}
+                  />
                 </div>
                 <aside className="sticky top-0 h-[calc(100vh-8rem)] overflow-y-auto border-l border-slate-200 bg-white">
                   <div className="border-b border-slate-200 px-3 py-2.5">
@@ -1881,7 +2051,10 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
               </div>
             ) : (
               <>
-                <div className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200">
+                <div
+                  className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200 bg-white"
+                  data-compare-sticky-header
+                >
                   <ComparePaneColumnHeader
                     paneId={leftId}
                     runs={runs}
@@ -1893,33 +2066,30 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                     onEdit={() => setMatrixOpen(true)}
                   />
                 </div>
-                <div className="grid grid-cols-2">
-                  {cues.map((cue, index) => {
-                    const leftMeta = leftCueMeta[index];
-                    const rightMeta = rightCueMeta[index];
-                    const pairedRow = buildPairedCueRowLayout(leftMeta, rightMeta, index);
-                    return (
-                      <div key={`${cue.start}-${index}`} className="contents">
-                        <CueCell
-                          cue={cue}
-                          meta={leftMeta}
-                          partnerMeta={rightMeta}
-                          pairedRow={pairedRow}
-                          colors={colors}
-                          cueIndex={index}
-                        />
-                        <CueCell
-                          cue={cue}
-                          meta={rightMeta}
-                          partnerMeta={leftMeta}
-                          pairedRow={pairedRow}
-                          colors={colors}
-                          cueIndex={index}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
+                <ComparePairedCueGrid
+                  cues={cues}
+                  leftMeta={leftCueMeta}
+                  rightMeta={rightCueMeta}
+                  colors={colors}
+                  renderCueCell={({
+                    cueIndex: index,
+                    side,
+                    meta,
+                    partnerMeta,
+                    pairedRow,
+                    segmentLabelAbove,
+                  }) => (
+                    <CueCell
+                      cue={cues[index]}
+                      meta={meta}
+                      partnerMeta={partnerMeta}
+                      pairedRow={pairedRow}
+                      colors={colors}
+                      cueIndex={index}
+                      segmentLabelAbove={segmentLabelAbove}
+                    />
+                  )}
+                />
               </>
             )}
           </>

@@ -19,7 +19,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Meetings V2 segmenter compare gold-standard drag and sticky labels** — Resolved sticky label truncation and visual jitter when editing gold spans:
-  - Sticky segment labels now anchor across the entire multi-cue segment subgrid (`grid-row: 1 / -1`) instead of being trapped in the first cue row, keeping the label pinned for the entire duration of the segment.
+  - Sticky segment labels now use an absolutely-positioned overlay spanning the segment group (`absolute inset-0`) rather than occupying a grid row track, keeping cues full-width without auto-placement splitting the pane into separate label and text columns.
   - Sticky pane header elevated to `z-30` above cue cards and resize handles (`z-10`), eliminating the horizontal yellow line artifact visible above the fold during scrolling.
   - Replaced border-stripping box shadows with persistent 2px borders, preventing text layout shifts when hovering or resizing segment edges.
   - Simplified span resizing into a real-time range preview committed on pointer release, removing `setPointerCapture` listener thrashing and state synchronization race conditions that blocked upward span resizing.

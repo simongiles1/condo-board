@@ -972,12 +972,11 @@ function ComparePairedCueGrid({
           style={{ gridRow: `${start + 1} / ${end + 2}` }}
         >
           {hasSections && primaryMeta.showLabel ? (
-            <div
-              className="pointer-events-none sticky z-20 col-start-1 flex justify-center [top:var(--compare-pane-header-offset,3.25rem)] -mx-0.5 px-0.5 pt-0.5 mb-1"
-              style={{ gridRow: "1 / -1", height: 0 }}
-            >
-              <div className="pointer-events-auto bg-gradient-to-b from-white from-70% to-transparent pb-1 px-1 rounded-full">
-                <SegmentLabelRow meta={primaryMeta} colors={colors} visible />
+            <div className="pointer-events-none absolute inset-0 z-20 overflow-visible">
+              <div className="sticky z-20 flex justify-center [top:var(--compare-pane-header-offset,3.25rem)] -mx-0.5 px-0.5 pt-0.5 mb-1">
+                <div className="pointer-events-auto bg-gradient-to-b from-white from-70% to-transparent pb-1 px-1 rounded-full">
+                  <SegmentLabelRow meta={primaryMeta} colors={colors} visible />
+                </div>
               </div>
             </div>
           ) : null}

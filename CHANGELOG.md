@@ -18,6 +18,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 segmenter compare gold-standard drag and sticky labels** — Resolved sticky label truncation and visual jitter when editing gold spans:
+  - Sticky segment labels now anchor across the entire multi-cue segment subgrid (`grid-row: 1 / -1`) instead of being trapped in the first cue row, keeping the label pinned for the entire duration of the segment.
+  - Sticky pane header elevated to `z-30` above cue cards and resize handles (`z-10`), eliminating the horizontal yellow line artifact visible above the fold during scrolling.
+  - Replaced border-stripping box shadows with persistent 2px borders, preventing text layout shifts when hovering or resizing segment edges.
+  - Simplified span resizing into a real-time range preview committed on pointer release, removing `setPointerCapture` listener thrashing and state synchronization race conditions that blocked upward span resizing.
+
 - **Meetings V2 segmenter compare sticky section labels** — Agenda pills at the start of each transcript segment now pin below the walk/edge column headers while you scroll, and the next segment’s label pushes the previous one up (same behavior as the main transcript section overlay). Applies to gold-standard mode and the side-by-side lab panes.
 
 - **Meetings V2 gold-standard span picking** — Transcript cue hover rings and click-to-mark only activate after you select a leaf in the agenda sidebar; with nothing selected, the gold column stays non-interactive (resize handles on existing spans still work). Spans persist inclusive cue row indices: clicking the same row for start and end labels exactly one cue (overlapping speaker timestamps no longer pull in the next row). Resize hit-testing uses full grid-row height and midpoint bands between cues, so a long paragraph can end on that row without swallowing the next speaker line or jumping to the row above. A leaf can have **multiple disjoint spans** (e.g. discussion leaves and returns); marking a new range adds a span instead of replacing earlier ones, and only overlapping ranges on that item are replaced.

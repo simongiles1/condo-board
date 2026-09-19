@@ -844,7 +844,7 @@ function sectionLabel(section: TranscriptSectionOverlay): string {
 }
 
 function segmentBorderClass(position: CueSegmentMeta["position"], hasSection: boolean): string {
-  if (!hasSection) return "";
+  if (!hasSection) return "border-2 border-dashed border-slate-300";
   switch (position) {
     case "solo":
       return "rounded-lg border-2";
@@ -855,7 +855,7 @@ function segmentBorderClass(position: CueSegmentMeta["position"], hasSection: bo
     case "last":
       return "rounded-b-lg border-2 border-t-0";
     default:
-      return "";
+      return "border-2 border-transparent";
   }
 }
 
@@ -877,42 +877,6 @@ function cueGoldRangeBorderRole(
   if (index === lo) return "first";
   if (index === hi) return "last";
   return "middle";
-}
-
-const GOLD_RANGE_STROKE_PX = 2;
-const GOLD_RANGE_STROKE_COLOR = "#d97706";
-
-/** Inset box-shadow strokes avoid layout shift from border-width. */
-function goldRangeInsetBoxShadow(role: GoldRangeBorderRole): string | undefined {
-  const w = GOLD_RANGE_STROKE_PX;
-  const c = GOLD_RANGE_STROKE_COLOR;
-  switch (role) {
-    case "solo":
-      return `inset 0 0 0 ${w}px ${c}`;
-    case "first":
-      return `inset 0 ${w}px 0 0 ${c}, inset ${w}px 0 0 0 ${c}, inset -${w}px 0 0 0 ${c}`;
-    case "middle":
-      return `inset ${w}px 0 0 0 ${c}, inset -${w}px 0 0 0 ${c}`;
-    case "last":
-      return `inset 0 -${w}px 0 0 ${c}, inset ${w}px 0 0 0 ${c}, inset -${w}px 0 0 0 ${c}`;
-    default:
-      return undefined;
-  }
-}
-
-function goldRangeRadiusClass(role: GoldRangeBorderRole): string {
-  switch (role) {
-    case "solo":
-      return "rounded-lg";
-    case "first":
-      return "rounded-t-lg";
-    case "middle":
-      return "";
-    case "last":
-      return "rounded-b-lg";
-    default:
-      return "";
-  }
 }
 
 function colorByCode(overlays: TranscriptSectionOverlay[]): Map<string, string> {
@@ -961,20 +925,6 @@ function buildSegmentGroupsFromMeta(meta: CueSegmentMeta[]): CompareSegmentGroup
   return groups;
 }
 
-function StickySegmentLabelRow({
-  meta,
-  colors,
-}: {
-  meta: CueSegmentMeta;
-  colors: Map<string, string>;
-}) {
-  return (
-    <div className="sticky z-[5] -mx-0.5 mb-1 flex justify-center bg-gradient-to-b from-white from-50% to-transparent px-0.5 pt-0.5 [top:var(--compare-pane-header-offset,3.25rem)]">
-      <SegmentLabelRow meta={meta} colors={colors} visible />
-    </div>
-  );
-}
-
 type ComparePairedCueGridProps = {
   cues: MergedVttCue[];
   leftMeta: CueSegmentMeta[];
@@ -1012,12 +962,25 @@ function ComparePairedCueGrid({
     return groups.map((group) => {
       const start = group.cueIndexes[0];
       const end = group.cueIndexes[group.cueIndexes.length - 1];
+      const primaryMeta = meta[start];
+      const hasSections = group.sections.length > 0;
+
       return (
         <div
           key={`${side}-${start}-${end}`}
-          className={`${column === 1 ? "col-start-1" : "col-start-2"} grid min-w-0 grid-rows-subgrid`}
+          className={`${column === 1 ? "col-start-1" : "col-start-2"} relative grid min-w-0 grid-rows-subgrid`}
           style={{ gridRow: `${start + 1} / ${end + 2}` }}
         >
+          {hasSections && primaryMeta.showLabel ? (
+            <div
+              className="pointer-events-none sticky z-20 col-start-1 flex justify-center [top:var(--compare-pane-header-offset,3.25rem)] -mx-0.5 px-0.5 pt-0.5 mb-1"
+              style={{ gridRow: "1 / -1", height: 0 }}
+            >
+              <div className="pointer-events-auto bg-gradient-to-b from-white from-70% to-transparent pb-1 px-1 rounded-full">
+                <SegmentLabelRow meta={primaryMeta} colors={colors} visible />
+              </div>
+            </div>
+          ) : null}
           {group.cueIndexes.map((cueIndex, offset) => {
             const cueMeta = meta[cueIndex];
             const cuePartnerMeta = partnerMeta[cueIndex];
@@ -1028,20 +991,16 @@ function ComparePairedCueGrid({
               : cuePartnerMeta.showLabel
                 ? cuePartnerMeta
                 : null;
-            const showStickyLabel = offset === 0 && cueMeta.showLabel && group.sections.length > 0;
-            const showInvisibleLabel =
-              pairedRow.reserveLabelRow && Boolean(labelSource) && !showStickyLabel;
-            const segmentLabelAbove = showStickyLabel || showInvisibleLabel;
+            const showInvisibleLabel = pairedRow.reserveLabelRow && Boolean(labelSource);
 
             return (
               <div
                 key={cueIndex}
                 className="flex min-h-0 min-w-0 flex-col self-stretch"
+                style={{ gridRow: offset + 1 }}
                 data-gold-cue-index={side === "right" ? cueIndex : undefined}
               >
-                {showStickyLabel ? (
-                  <StickySegmentLabelRow meta={cueMeta} colors={colors} />
-                ) : showInvisibleLabel && labelSource ? (
+                {showInvisibleLabel && labelSource ? (
                   <SegmentLabelRow meta={labelSource} colors={colors} visible={false} />
                 ) : null}
                 {renderCueCell({
@@ -1050,7 +1009,7 @@ function ComparePairedCueGrid({
                   meta: cueMeta,
                   partnerMeta: cuePartnerMeta,
                   pairedRow,
-                  segmentLabelAbove,
+                  segmentLabelAbove: showInvisibleLabel,
                 })}
               </div>
             );
@@ -1205,17 +1164,18 @@ function CueCell({
   const inlineLabel = !segmentLabelAbove && pairedRow.reserveLabelRow && labelSource;
   const inGoldRange = goldRangeRole !== "none";
   const highlightRole = inGoldRange ? goldRangeRole : goldActiveSpanRole;
-  const sectionBorderClass =
-    highlightRole !== "none" ? "" : segmentBorderClass(position, hasSection);
-  const goldInsetShadow = goldRangeInsetBoxShadow(highlightRole);
+  const isHighlighted = highlightRole !== "none";
+
+  const effectiveRole = isHighlighted ? highlightRole : position;
+  const effectiveHasSection = isHighlighted || hasSection;
+  const sectionBorderClass = segmentBorderClass(effectiveRole, effectiveHasSection);
+  const activeBorderColor = isHighlighted ? "#d97706" : hasSection ? borderColor : undefined;
 
   const interactive = Boolean(onCueClick);
   const startAgendaItemId = goldResizeHandles.startAgendaItemId;
   const endAgendaItemId = goldResizeHandles.endAgendaItemId;
   const showStartHandle = Boolean(onGoldResizePointerDown && startAgendaItemId);
   const showEndHandle = Boolean(onGoldResizePointerDown && endAgendaItemId);
-  const startHandleCoversLabel =
-    showStartHandle && pairedRow.reserveLabelRow && (Boolean(labelSource) || segmentLabelAbove);
   const startHandleHot =
     goldHandleHover?.edge === "start" && goldHandleHover.agendaItemId === startAgendaItemId;
   const endHandleHot =
@@ -1230,15 +1190,14 @@ function CueCell({
       onMouseEnter={onGoldRangeHover ? () => onGoldRangeHover(cueIndex) : undefined}
     >
       <article
-        className={`relative flex-1 overflow-visible px-2.5 py-1 ${sectionBorderClass} ${goldRangeRadiusClass(highlightRole)} ${
-          interactive && highlightRole === "none" && !showStartHandle && !showEndHandle
+        className={`relative flex-1 overflow-visible px-2.5 py-1 ${sectionBorderClass} ${
+          interactive && !isHighlighted && !showStartHandle && !showEndHandle
             ? "hover:ring-2 hover:ring-inset hover:ring-amber-500/80"
             : ""
         }`}
         style={{
-          borderColor: highlightRole !== "none" ? undefined : hasSection ? borderColor : undefined,
+          borderColor: activeBorderColor,
           backgroundColor: speakerBackgroundColor(cue.speaker),
-          boxShadow: goldInsetShadow,
         }}
         title={hasSection ? overlapTitle : undefined}
       >
@@ -1247,9 +1206,7 @@ function CueCell({
             role="separator"
             aria-orientation="horizontal"
             aria-label="Drag to adjust span start"
-            className={`absolute inset-x-0 top-0 z-30 cursor-ns-resize ${
-              startHandleCoversLabel ? "h-14" : "h-5"
-            }`}
+            className="absolute inset-x-0 -top-2 z-10 h-4 cursor-ns-resize"
             onPointerDown={(event) => {
               event.stopPropagation();
               onGoldResizePointerDown!("start", startAgendaItemId!, cueIndex, event);
@@ -1261,7 +1218,7 @@ function CueCell({
             onMouseLeave={() => onGoldHandleHover?.(null)}
           >
             <div
-              className={`pointer-events-none absolute inset-x-0 top-0 ${
+              className={`pointer-events-none absolute inset-x-0 top-1.5 transition-colors ${
                 startHandleHot ? "h-1 bg-amber-600" : "h-0.5 bg-amber-500/70"
               }`}
             />
@@ -1272,7 +1229,7 @@ function CueCell({
             role="separator"
             aria-orientation="horizontal"
             aria-label="Drag to adjust span end"
-            className="absolute inset-x-0 bottom-0 z-30 h-5 cursor-ns-resize"
+            className="absolute inset-x-0 -bottom-2 z-10 h-4 cursor-ns-resize"
             onPointerDown={(event) => {
               event.stopPropagation();
               onGoldResizePointerDown!("end", endAgendaItemId!, cueIndex, event);
@@ -1284,7 +1241,7 @@ function CueCell({
             onMouseLeave={() => onGoldHandleHover?.(null)}
           >
             <div
-              className={`pointer-events-none absolute inset-x-0 bottom-0 ${
+              className={`pointer-events-none absolute inset-x-0 bottom-1.5 transition-colors ${
                 endHandleHot ? "h-1 bg-amber-600" : "h-0.5 bg-amber-500/70"
               }`}
             />
@@ -1328,9 +1285,13 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     edge: "start" | "end";
     agendaItemId: string;
     originCueIndex: number;
-    spanLo: number;
-    spanHi: number;
+    initialLo: number;
+    initialHi: number;
+    currentLo: number;
+    currentHi: number;
   } | null>(null);
+  const goldResizeRef = useRef(goldResize);
+  goldResizeRef.current = goldResize;
   const [goldHandleHover, setGoldHandleHover] = useState<GoldHandleHover | null>(null);
   const [pipelineConfirmOpen, setPipelineConfirmOpen] = useState(false);
   const [pipelineBusy, setPipelineBusy] = useState(false);
@@ -1648,44 +1609,66 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
     if (!span) return;
     const { lo, hi } = resolveGoldSpanCueIndices(span, cues);
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
     setGoldHandleHover({ edge, agendaItemId });
-    setGoldResize({ edge, agendaItemId, originCueIndex: cueIndex, spanLo: lo, spanHi: hi });
+    const resizeState = {
+      edge,
+      agendaItemId,
+      originCueIndex: cueIndex,
+      initialLo: lo,
+      initialHi: hi,
+      currentLo: lo,
+      currentHi: hi,
+    };
+    goldResizeRef.current = resizeState;
+    setGoldResize(resizeState);
   }
 
   useEffect(() => {
     if (!goldResize) return;
-    const { agendaItemId, edge, originCueIndex } = goldResize;
-    const bounds = { lo: goldResize.spanLo, hi: goldResize.spanHi };
     function onPointerMove(event: PointerEvent) {
+      const active = goldResizeRef.current;
+      if (!active) return;
+      const { edge, originCueIndex, initialLo, initialHi, currentLo, currentHi } = active;
       const cueIndex = goldCueIndexAtClientY(event.clientY, edge) ?? originCueIndex;
-      const nextLo = edge === "start" ? Math.min(cueIndex, bounds.hi) : bounds.lo;
-      const nextHi = edge === "end" ? Math.max(cueIndex, bounds.lo) : bounds.hi;
-      setGoldSpans((current) =>
-        mergeGoldSpans(
-          current.map((entry) => {
-            if (entry.agendaItemId !== agendaItemId) return entry;
-            const { lo, hi } = resolveGoldSpanCueIndices(entry, cues);
-            if (lo !== bounds.lo || hi !== bounds.hi) return entry;
-            return goldSpanFromCueIndexRange(agendaItemId, nextLo, nextHi, cues);
-          }),
-        ),
-      );
-      goldDirtyRef.current = true;
-      bounds.lo = nextLo;
-      bounds.hi = nextHi;
+      const nextLo =
+        edge === "start" ? Math.max(0, Math.min(cueIndex, initialHi)) : initialLo;
+      const nextHi =
+        edge === "end" ? Math.min(cues.length - 1, Math.max(cueIndex, initialLo)) : initialHi;
+      if (nextLo === currentLo && nextHi === currentHi) return;
+      const nextState = { ...active, currentLo: nextLo, currentHi: nextHi };
+      goldResizeRef.current = nextState;
+      setGoldResize(nextState);
     }
     function onPointerUp() {
+      const active = goldResizeRef.current;
+      if (active) {
+        const { agendaItemId, initialLo, initialHi, currentLo, currentHi } = active;
+        if (currentLo !== initialLo || currentHi !== initialHi) {
+          setGoldSpans((current) => {
+            const filtered = current.filter((entry) => {
+              if (entry.agendaItemId !== agendaItemId) return true;
+              const { lo, hi } = resolveGoldSpanCueIndices(entry, cues);
+              return !(lo === initialLo && hi === initialHi);
+            });
+            const newSpan = goldSpanFromCueIndexRange(agendaItemId, currentLo, currentHi, cues);
+            return addGoldSpanReplacingOverlaps(filtered, newSpan, cues);
+          });
+          goldDirtyRef.current = true;
+        }
+      }
+      goldResizeRef.current = null;
       setGoldResize(null);
       setGoldHandleHover(null);
     }
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [goldResize, cues]);
+  }, [Boolean(goldResize), cues]);
 
   function handleGoldCueClick(cueIndex: number) {
     if (goldResize) return;
@@ -1863,7 +1846,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
               <div className="grid min-h-full grid-cols-[minmax(0,2fr)_36rem] items-start">
                 <div className="min-w-0">
                   <div
-                    className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200 bg-white"
+                    className="sticky top-0 z-30 grid grid-cols-2 border-b border-slate-200 bg-white"
                     data-compare-sticky-header
                   >
                     <ComparePaneColumnHeader
@@ -1915,16 +1898,23 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                         );
                       }
 
-                      const goldRangeRole = cueGoldRangeBorderRole(
-                        index,
-                        pendingStartIndex,
-                        pendingHoverIndex,
-                      );
+                      const goldRangeRole = goldResize
+                        ? cueGoldRangeBorderRole(
+                            index,
+                            goldResize.currentLo,
+                            goldResize.currentHi,
+                          )
+                        : cueGoldRangeBorderRole(
+                            index,
+                            pendingStartIndex,
+                            pendingHoverIndex,
+                          );
                       const goldSpanSettingActive = selectedConceptId != null;
                       const selectedConceptHasSpan =
                         goldSpanSettingActive &&
                         goldSpans.some((span) => span.agendaItemId === selectedConceptId);
                       const suppressHandles =
+                        goldResize != null ||
                         pendingStartIndex != null ||
                         (selectedConceptId != null && !selectedConceptHasSpan);
                       const goldResizeHandles = goldResizeHandlesAtCue({
@@ -1934,6 +1924,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                         suppressHandles,
                       });
                       const highlightItemId =
+                        goldResize?.agendaItemId ??
                         goldHandleHover?.agendaItemId ??
                         (selectedConceptHasSpan ? selectedConceptId : null);
                       const highlightCovered = highlightItemId
@@ -2052,7 +2043,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
             ) : (
               <>
                 <div
-                  className="sticky top-0 z-10 grid grid-cols-2 border-b border-slate-200 bg-white"
+                  className="sticky top-0 z-30 grid grid-cols-2 border-b border-slate-200 bg-white"
                   data-compare-sticky-header
                 >
                   <ComparePaneColumnHeader

@@ -514,10 +514,13 @@ export function expandGoldCueHitBoxes(
   });
 }
 
-/** Map a pointer Y to a cue when dragging a gold-span start or end handle. */
+/** Map a pointer Y to a cue when dragging a gold-span start or end handle.
+ * Uses continuous midpoint-based bands so dragging up or down transitions smoothly
+ * without dead gaps or asymmetric directional bias.
+ */
 export function goldCueIndexFromBoxes(
   clientY: number,
-  edge: "start" | "end",
+  _edge: "start" | "end",
   boxes: Array<{ index: number; top: number; bottom: number }>,
 ): number | null {
   const indexed = boxes
@@ -525,26 +528,13 @@ export function goldCueIndexFromBoxes(
     .sort((left, right) => left.index - right.index);
   if (indexed.length === 0) return null;
 
-  const rawContaining = indexed.filter(
-    ({ top, bottom }) => clientY >= top && clientY <= bottom,
-  );
-  if (rawContaining.length > 0) {
-    const indexes = rawContaining.map((entry) => entry.index);
-    return edge === "end" ? Math.min(...indexes) : Math.max(...indexes);
-  }
+  const bands = expandGoldCueHitBoxes(indexed);
+  const inBand = bands.find(({ top, bottom }) => clientY >= top && clientY <= bottom);
+  if (inBand) return inBand.index;
 
-  if (edge === "end") {
-    const bands = expandGoldCueHitBoxes(indexed);
-    const inBand = bands.find(({ top, bottom }) => clientY >= top && clientY <= bottom);
-    if (inBand) return inBand.index;
-    const above = [...bands].reverse().find((entry) => clientY > entry.bottom);
-    const below = bands.find((entry) => clientY < entry.top);
-    return above?.index ?? below?.index ?? null;
-  }
-
-  const below = indexed.find((entry) => clientY < entry.top);
-  const above = [...indexed].reverse().find((entry) => clientY > entry.bottom);
-  return below?.index ?? above?.index ?? null;
+  const above = [...bands].reverse().find((entry) => clientY > entry.bottom);
+  const below = bands.find((entry) => clientY < entry.top);
+  return above?.index ?? below?.index ?? null;
 }
 
 export type GoldSpanEdge = "start" | "end" | "both" | "none";

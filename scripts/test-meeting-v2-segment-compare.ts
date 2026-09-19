@@ -418,23 +418,26 @@ describe("segment gold standard", () => {
     assert.deepEqual(unioned.get("parent"), [[10, 20]]);
   });
 
-  it("keeps an end-edge drag on the upper cue when the pointer is in the gap below it", () => {
+  it("keeps an end-edge drag on the upper cue when the pointer is in the gap below it but above midpoint", () => {
     const boxes = [
       { index: 10, top: 100, bottom: 140 },
       { index: 11, top: 152, bottom: 192 },
     ];
+    // Midpoint is 146
     assert.equal(goldCueIndexFromBoxes(140, "end", boxes), 10);
     assert.equal(goldCueIndexFromBoxes(145, "end", boxes), 10);
     assert.equal(goldCueIndexFromBoxes(152, "end", boxes), 11);
   });
 
-  it("keeps a start-edge drag on the lower cue when the pointer is in the gap above it", () => {
+  it("maps start-edge drag symmetrically using continuous midpoint bands without gap dead-zones", () => {
     const boxes = [
       { index: 10, top: 100, bottom: 140 },
       { index: 11, top: 152, bottom: 192 },
     ];
+    // Midpoint is 146: dragging up past 146 cleanly transitions to cue 10
     assert.equal(goldCueIndexFromBoxes(152, "start", boxes), 11);
-    assert.equal(goldCueIndexFromBoxes(145, "start", boxes), 11);
+    assert.equal(goldCueIndexFromBoxes(148, "start", boxes), 11);
+    assert.equal(goldCueIndexFromBoxes(145, "start", boxes), 10);
     assert.equal(goldCueIndexFromBoxes(140, "start", boxes), 10);
   });
 

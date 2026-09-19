@@ -1023,6 +1023,7 @@ function ComparePairedCueGrid({
   return (
     <div
       className="grid grid-cols-2"
+      data-gold-compare-grid
       style={{ gridTemplateRows: `repeat(${cues.length}, auto)` }}
     >
       {renderColumn(1, leftGroups, leftMeta, rightMeta, "left")}

@@ -50,6 +50,8 @@ import {
   groupCuesByTranscriptSections,
   type TranscriptSectionOverlay,
 } from "@/lib/transcript/section-overlay";
+import { GoldStandardPipelineConfirmDialog } from "@/components/GoldStandardPipelineConfirmDialog";
+import { GoldStandardTranscriptMinimap } from "@/components/GoldStandardTranscriptMinimap";
 import { SegmentCompareRunConfirmDialog } from "@/components/SegmentCompareRunConfirmDialog";
 
 type WorkspacePayload = {
@@ -1842,7 +1844,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         ) : (
           <>
             {goldMode ? (
-              <div className="grid min-h-full grid-cols-[minmax(0,2fr)_36rem] items-start">
+              <div className="grid min-h-full grid-cols-[minmax(0,1fr)_2rem_36rem] items-start">
                 <div className="min-w-0">
                   <div
                     className="sticky top-0 z-30 grid grid-cols-2 border-b border-slate-200 bg-white"
@@ -1967,7 +1969,12 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                     }}
                   />
                 </div>
-                <aside className="sticky top-0 h-[calc(100vh-8rem)] overflow-y-auto border-l border-slate-200 bg-white">
+                <GoldStandardTranscriptMinimap
+                  scrollContainerRef={compareScrollRef}
+                  cueMeta={goldLabelCueMeta}
+                  colors={colors}
+                />
+                <aside className="sticky top-0 h-[calc(100vh-8rem)] w-[36rem] shrink-0 overflow-y-auto border-l border-slate-200 bg-white">
                   <div className="border-b border-slate-200 px-3 py-2.5">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       Agenda concepts
@@ -2109,53 +2116,13 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
         savedOverlays={savedOverlays}
       />
 
-      {pipelineConfirmOpen ? (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-          <button
-            type="button"
-            className="absolute inset-0 bg-slate-900/40"
-            onClick={() => setPipelineConfirmOpen(false)}
-            disabled={pipelineBusy}
-            aria-label="Close dialog"
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="gold-pipeline-confirm-title"
-            className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-xl"
-          >
-            <h2 id="gold-pipeline-confirm-title" className="text-lg font-semibold text-slate-900">
-              Run minutes from gold-standard spans?
-            </h2>
-            <p className="mt-2 text-sm text-slate-600">
-              This writes your labeled transcript ranges onto the saved agenda, clears
-              evidence/investigation/validation for this meeting, approves the agenda, and starts
-              the rest of the minutes pipeline as if segmentation were perfect.
-            </p>
-            <p className="mt-2 text-sm text-slate-800">
-              {labeledLeafCount} leaf concept{labeledLeafCount === 1 ? "" : "s"} labeled.
-            </p>
-            <div className="mt-6 flex flex-wrap justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setPipelineConfirmOpen(false)}
-                disabled={pipelineBusy}
-                className="rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-300 disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleRunPipelineFromGold()}
-                disabled={pipelineBusy}
-                className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {pipelineBusy ? "Starting…" : "Run pipeline"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <GoldStandardPipelineConfirmDialog
+        open={pipelineConfirmOpen}
+        labeledLeafCount={labeledLeafCount}
+        busy={pipelineBusy}
+        onCancel={() => setPipelineConfirmOpen(false)}
+        onConfirm={() => void handleRunPipelineFromGold()}
+      />
 
       {runTargetRow ? (
         <SegmentCompareRunConfirmDialog

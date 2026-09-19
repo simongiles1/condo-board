@@ -8,6 +8,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Meetings V2 gold-standard pipeline confirm** — **Run minutes pipeline from gold** now shows the same DeepSeek peak/off-peak timeline and estimated pipeline cost panel as agenda approval and other pipeline start/resume confirmations.
+
+- **Meetings V2 gold-standard minimap** — Segmenter compare gold mode adds a full-height **Map** strip between the gold column and agenda sidebar: colored bands match labeled spans (gaps stay neutral), a rectangle tracks the scroll viewport, and clicking jumps the transcript. Transcript columns are slightly narrower; the agenda panel stays **36rem**.
+
 - **Meetings V2 segmenter compare matrix** — The 6×6 grid lives in a modal (**Combinations** link or pane edit). Click a cell to choose the run target; **Run combination** / **Rerun combination** opens a confirmation with DeepSeek peak/off-peak context and account balance when a DeepSeek slot is selected. In-flight cells show compact **Walk *n*/*total*** / **Edge *n*/*total*** progress (no model names), spend-to-date, and **Est.** projected total (color only, no extra labels). Pane headers label **Walk** and **Edge** per side. **Done** cells include **Remove** to clear before a fresh run.
 
 ### Added

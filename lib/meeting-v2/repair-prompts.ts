@@ -9,6 +9,8 @@ Important rules:
 - Change any field that the validation findings correctly identify as too strong, incomplete, or internally inconsistent.
 - Transcript is authoritative for what was discussed, approved, rejected, deferred, or left unresolved, AND overrides the board package for names, amounts, and details if there is a discrepancy.
 - If the transcript contradicts package Amount / Recommendation / contractor notes, return revised_notes with the full corrected notes list. Otherwise omit revised_notes.
+- Prior approvals & skipped items: If the item was approved at an earlier meeting (scope "prior_approval", e.g. New Water Plumbing for $163,900), the discussion_summary must state that prior approval (contractor, amount, date) and note that the item was skipped today. Do not describe unpresented package recommendations as current discussion, and do not ask in open_questions whether an unvoted package proposal was approved. Drop open_questions that restate facts already selected in the fact-resolution ledger (for example asking for the exact prior contractor and amount when those values are already selected and unresolvedQuestions is empty).
+- Administrative directions: Record agreed directions to management (e.g. submitting CCDC contracts to legal counsel for review) under actions and summarize them in discussion_summary. Do not leave actions empty when direction was agreed.
 - Guest-presentation outline items stay on the passing mention. Do not copy later PM-report discussion of the same project onto a guest_presentation item.
 - Board package provides baseline agenda framing, names, amounts, and supporting details, but transcript takes precedence in conflicts.
 - A package or email approval can prove that a prior approval happened, but it does not automatically prove that an in-meeting ratification vote was explicit in the prepared evidence.
@@ -62,7 +64,7 @@ Constraints:
 - Keep discussion_summary concise but concrete.
 - decisions should contain only supported board-level conclusions.
 - actions should only include explicit or strongly implied follow-ups.
-- open_questions should capture any remaining ambiguity after repair.
+- open_questions should capture any remaining ambiguity after repair. Do not keep restatement questions whose recommended_answer copies a selected ledger fact.
 - If there is no reliable motion, set motion to null.
 - If there are no actions or questions, return empty arrays.
 - revised_notes is optional. Omit it when package notes still match the transcript.

@@ -11,6 +11,13 @@ export type EvidenceSource = {
   sequence?: number;
 };
 
+/**
+ * LLM evidence contract: fact resolution and investigation user prompts pass structured
+ * `sources` only (see resolveAgendaFacts and investigateAgendaItems in service.ts).
+ * `assembledContextText` is a flattened rendering of those same sources for humans and
+ * legacy fallbacks; validation uses sources OR assembledContextText, never both
+ * (buildValidationInput in service.ts).
+ */
 export type CanonicalAgendaEvidence = {
   itemNumber: string | null;
   sourceTranscriptRanges: Array<[number, number]>;
@@ -43,11 +50,12 @@ export function buildEvidenceSources(options: {
   segments: Array<{ sequence: number; text: string; startTimestamp: string; speakerLabel: string | null }>;
   documents: Array<{ chunkId: string; text: string }>;
   relatedSequences?: number[];
+  onlyDirectTranscript?: boolean;
 }): EvidenceSource[] {
   const direct = new Set(options.segments.filter(s => options.ranges.some(([a, b]) => s.sequence >= a && s.sequence <= b)).map(s => s.sequence));
-  const related = new Set(options.relatedSequences ?? []);
+  const related = new Set(options.onlyDirectTranscript ? [] : (options.relatedSequences ?? []));
   const transcript: EvidenceSource[] = options.segments
-    .filter(s => direct.has(s.sequence) || direct.has(s.sequence - 1) || direct.has(s.sequence + 1) || related.has(s.sequence))
+    .filter(s => direct.has(s.sequence) || (!options.onlyDirectTranscript && (direct.has(s.sequence - 1) || direct.has(s.sequence + 1) || related.has(s.sequence))))
     .sort((a, b) => a.sequence - b.sequence)
     .map(s => ({ id: `transcript:${s.sequence}`, kind: "transcript", sequence: s.sequence,
       association: direct.has(s.sequence) ? "direct" : related.has(s.sequence) ? "related" : "neighbor",
@@ -57,21 +65,47 @@ export function buildEvidenceSources(options: {
 
 const clean = (s: string) =>
   s
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&nbsp;/gi, " ")
     .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
     .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
     .replace(/[\u2013\u2014]/g, "-")
+    .replace(/(\d),\s+(\d)/g, "$1,$2")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
 
-function quoteSupportedBySource(sourceText: string, quote: string): boolean {
+/** Alternate slices of a source body when the model quotes content without headers or cue prefixes. */
+function sourceTextVariants(source: EvidenceSource): string[] {
+  const variants = [source.text];
+  if (source.kind === "transcript") {
+    const spoken = source.text.replace(/^\[[^\]]+\]\s+[^:]+:\s*/u, "");
+    if (spoken && spoken !== source.text) variants.push(spoken);
+  }
+  if (source.kind === "document") {
+    const pageIdx = source.text.indexOf("PAGE ");
+    if (pageIdx > 0) variants.push(source.text.slice(pageIdx));
+    const headingIdx = source.text.indexOf("## ");
+    if (headingIdx >= 0) variants.push(source.text.slice(headingIdx));
+  }
+  return variants;
+}
+
+function quoteSupportedBySource(source: EvidenceSource, quote: string): boolean {
   const q = clean(quote);
-  const s = clean(sourceText);
   if (q.length < 8) return false;
-  if (s.includes(q)) return true;
-  const compactQuote = q.replace(/[^a-z0-9]+/g, "");
-  const compactSource = s.replace(/[^a-z0-9]+/g, "");
-  return compactQuote.length >= 12 && compactSource.includes(compactQuote);
+  for (const raw of sourceTextVariants(source)) {
+    const s = clean(raw);
+    if (s.includes(q)) return true;
+    const compactQuote = q.replace(/[^a-z0-9]+/g, "");
+    const compactSource = s.replace(/[^a-z0-9]+/g, "");
+    if (compactQuote.length >= 12 && compactSource.includes(compactQuote)) return true;
+  }
+  return false;
 }
 
 const FACT_SCOPES = ["package_proposal", "prior_approval", "current_decision", "discussion"] as const;
@@ -86,7 +120,7 @@ function candidateIsVerifiable(
       typeof candidate.value === "string" &&
       candidate.value.trim() &&
       typeof candidate.quote === "string" &&
-      quoteSupportedBySource(source.text, candidate.quote),
+      quoteSupportedBySource(source, candidate.quote),
   );
 }
 
@@ -221,9 +255,15 @@ export function parseFactResolution(
   return { facts, unresolvedQuestions };
 }
 
+/** System instruction for resolving material facts from agenda evidence before minutes investigation. */
 export const FACT_RESOLUTION_PROMPT = `Resolve the material facts for ONE agenda item before writing minutes. Return JSON only:
 {"facts":[{"field":"contractor | amount | approval | date | motion | action | other descriptive field","scope":"package_proposal | prior_approval | current_decision | discussion","candidates":[{"value":"precise fact","sourceId":"provided source id","quote":"verbatim supporting passage"}],"selected":0,"explanation":"why this candidate is supported"}],"unresolvedQuestions":[]}
-Read ALL direct transcript evidence, including later continuations. Package notes and recommendations are proposals, not meeting decisions. Preserve competing values as candidates, select transcript over package when they conflict, and distinguish approval at a previous meeting from any decision made today. Keep separate facts for package proposals, prior approvals and current directions. If no candidate can be selected responsibly, selected must be null and record the question. Never invent a mover, seconder, amount, vote, attendance or adjournment time. Preserve the precision of spoken amounts; do not silently expand an ambiguous number. Related and neighboring evidence can concern another agenda item; use it only when the association is supported. Cite source IDs and exact quotes. All material contractors, amounts, decisions, conditions and dates in the evidence must be addressed; an empty facts array is acceptable only for a procedural heading or no substantive evidence.`;
+Read ALL direct transcript evidence, including later continuations. Package notes and recommendations are proposals, not meeting decisions. Preserve competing values as candidates, select transcript over package when they conflict, and distinguish approval at a previous meeting from any decision made today. Keep separate facts for package proposals, prior approvals and current directions. If no candidate can be selected responsibly, selected must be null and record the question. Never invent a mover, seconder, amount, vote, attendance or adjournment time.
+Transcripts are generated by automated speech recognition (ASR) and often contain phonetic errors, homophones, or mishearings (e.g. "second dead" for "seconded", "past" for "passed", "cordial" for "corridor"). Interpret spoken statements using surrounding meeting and package context rather than treating transcription noise as genuine ambiguity or conflict. Verbatim quotes in candidate quote fields must still reproduce the exact transcript text as written.
+When speakers use conversational shorthand for amounts or acronyms (e.g. speaking "eighty-five" when discussing a contractor's $85,000 estimate in a package comparison table, or speaking "100 and sixty-three" for a contractor abbreviation like "NWP" / "new water plumbing"), cross-reference the contractor's specific column and row in package comparison tables and aliases to resolve the exact full figure (e.g. $163,900.00 rather than rounding to $163,000) instead of flagging false ambiguity.
+If an agenda item is skipped, deferred, or was approved at an earlier meeting, the absence of a new decision or contract amount today is expected normal governance; do NOT emit an unresolved question for decisions not made today.
+Informal board agreement or direction to management (e.g. instructing management to proceed with a review, obtain clarification, or send a draft to counsel) represents administrative direction; record it under "discussion" or "action" rather than flagging an unresolved question over the absence of a formal motion or vote.
+Related and neighboring evidence can concern another agenda item; use it only when the association is supported. Cite source IDs and exact quotes: each quote must be a contiguous substring copied from that source's text in the request (same spelling and punctuation; package text may contain &amp; — quote it as stored or use the spoken line without the timestamp prefix for transcript sources). Use scope for package_proposal vs prior_approval; keep field to the topic (contractor, amount, approval), not the scope label. All material contractors, amounts, decisions, conditions and dates in the evidence must be addressed; an empty facts array is acceptable only for a procedural heading or no substantive evidence.`;
 
 export type GateItem = { id: string; title: string };
 export type InvestigationVersion = {

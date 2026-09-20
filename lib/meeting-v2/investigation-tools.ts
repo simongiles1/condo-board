@@ -769,10 +769,12 @@ export async function runToolEnabledInvestigation(options: {
   runtime: InvestigationToolRuntime;
   maxOutputTokens?: number;
   maxToolRounds?: number;
+  thinking?: boolean;
 }): Promise<ToolEnabledInvestigationResult> {
   const modelName = options.modelName?.trim() || "deepseek-v4-flash";
   const maxOutputTokens = options.maxOutputTokens ?? 4096;
   const maxToolRounds = options.maxToolRounds ?? 4;
+  const thinkingEnabled = options.thinking === true;
   const tools = getInvestigationToolDefinitions();
   const messages: DeepSeekMessage[] = [
     { role: "system", content: options.systemInstruction },
@@ -801,8 +803,8 @@ export async function runToolEnabledInvestigation(options: {
       tools,
       maxTokens: maxOutputTokens,
       temperature: 0.1,
-      thinkingType: "disabled",
-      reasoningEffort: "low",
+      thinkingType: thinkingEnabled ? "enabled" : "disabled",
+      reasoningEffort: thinkingEnabled ? "high" : "low",
     });
 
     usage.inputTokens += completion.usage.inputTokens;

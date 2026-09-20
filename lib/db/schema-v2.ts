@@ -345,6 +345,31 @@ export const meetingsV2MinutesDrafts = pgTable(
   }
 );
 
+export const meetingsV2ItemDebugRuns = pgTable(
+  "meetings_v2_item_debug_runs",
+  {
+    id: text("id").primaryKey(),
+    meetingV2Id: text("meeting_v2_id")
+      .notNull()
+      .references(() => meetingsV2.id, { onDelete: "cascade" }),
+    agendaItemId: text("agenda_item_id")
+      .notNull()
+      .references(() => meetingsV2AgendaItems.id, { onDelete: "cascade" }),
+    status: text("status", {
+      enum: ["idle", "running", "completed", "failed"],
+    })
+      .notNull()
+      .default("idle"),
+    error: text("error"),
+    stepsJson: jsonb("steps_json").$type<unknown>().notNull().default([]),
+    totalInputTokens: integer("total_input_tokens").notNull().default(0),
+    totalOutputTokens: integer("total_output_tokens").notNull().default(0),
+    totalCostUsd: text("total_cost_usd").notNull().default("0"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+);
+
 export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   sourceArtifacts: many(meetingsV2SourceArtifacts),
   transcriptSegments: many(meetingsV2TranscriptSegments),
@@ -358,6 +383,7 @@ export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   agendaItemInvestigations: many(meetingsV2AgendaItemInvestigations),
   validationResults: many(meetingsV2ValidationResults),
   minutesDrafts: many(meetingsV2MinutesDrafts),
+  itemDebugRuns: many(meetingsV2ItemDebugRuns),
 }));
 
 export const meetingsV2SourceArtifactsRelations = relations(
@@ -393,5 +419,20 @@ export const meetingsV2AgendaItemsRelations = relations(
     contexts: many(meetingsV2AgendaItemContexts),
     investigations: many(meetingsV2AgendaItemInvestigations),
     validationResults: many(meetingsV2ValidationResults),
+    debugRuns: many(meetingsV2ItemDebugRuns),
   })
+);
+
+export const meetingsV2ItemDebugRunsRelations = relations(
+  meetingsV2ItemDebugRuns,
+  ({ one }) => ({
+    meetingV2: one(meetingsV2, {
+      fields: [meetingsV2ItemDebugRuns.meetingV2Id],
+      references: [meetingsV2.id],
+    }),
+    agendaItem: one(meetingsV2AgendaItems, {
+      fields: [meetingsV2ItemDebugRuns.agendaItemId],
+      references: [meetingsV2AgendaItems.id],
+    }),
+  }),
 );

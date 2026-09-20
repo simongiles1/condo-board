@@ -6,7 +6,17 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Meetings V2 item pipeline debugger** — Each agenda topic has a **Debug** control that opens a sandbox stepper (evidence → fact resolution → investigation → validation → rendered minutes snippet). Pick DeepSeek V4 Flash, V4.1 Flash, or Gemini 3.8 Flash per LLM step, inspect and edit the live prompts, and keep historical runs with token counts and estimated spend. These runs do not overwrite production investigation or validation.
+
 ### Changed
+
+- **Meetings V2 investigation open questions** — Investigation and repair prompts now treat the fact-resolution ledger as closed for selected fields: do not re-ask contractor, amount, or prior-approval details that already have a selected candidate and an empty `unresolvedQuestions` list.
+
+- **Meetings V2 fact resolution prompt guidance** — Updated the fact resolution system instruction to guide models on speech-to-text (ASR) phonetic inaccuracies, homophones, conversational shorthand for figures, skipped or deferred topics, and informal board directions to prevent spurious unresolved questions.
+
+- **Meetings V2 fact citation verification** — Package and transcript fact quotes verify against HTML entities in board-package text, spoken lines without timestamp prefixes, and document body slices so salvage no longer drops contractor/amount facts when the model paraphrases slightly.
 
 - **Meetings V2 gold-standard pipeline confirm** — **Run minutes pipeline from gold** now shows the same DeepSeek peak/off-peak timeline and estimated pipeline cost panel as agenda approval and other pipeline start/resume confirmations.
 
@@ -21,6 +31,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V2 segmenter compare lab** — Temporary full-page tool on the meeting More menu. Pick a model for the transcript walk (overall segmenter) and a model for span-edge / gap judges, with a thinking toggle. Each combination is a stored run with token cost. Side-by-side panes share one scroll; cue rows stay aligned and only the section boxes differ. Runs do not rewrite saved agenda items. Models: DeepSeek V4 Flash, DeepSeek V4.1 Flash (`deepseek-flash`), Gemini 3.8 Flash.
 
 ### Fixed
+
+- **Meetings V2 item investigation prior approvals and administrative actions** — Investigation and fact-resolution prompts now explicitly capture prior approvals (e.g. earlier contract awards and figures like New Water Plumbing at $163,900) in discussion summaries rather than hallucinating unpresented package recommendations, record agreed board directions (such as forwarding CCDC contracts to legal counsel for review) in action items, and cross-reference table columns when resolving shorthand figures.
 
 - **Meetings V2 segmenter compare gold-standard drag and sticky labels** — Resolved sticky label truncation and visual jitter when editing gold spans:
   - Sticky segment labels now use an absolutely-positioned overlay spanning the segment group (`absolute inset-0`) rather than occupying a grid row track, keeping cues full-width without auto-placement splitting the pane into separate label and text columns.

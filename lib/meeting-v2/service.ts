@@ -2706,11 +2706,14 @@ export async function retrieveAgendaItemEvidence(
       chunksById,
       buildNotes,
     };
+    const goldSpans = (evidenceMeeting?.settings as { segmentGoldStandard?: { spans?: Array<{ agendaItemId: string }> } } | null)?.segmentGoldStandard?.spans ?? [];
+    const isGoldStandard = Array.isArray(goldSpans) && goldSpans.some((s) => s.agendaItemId === item.id);
     contextJson.sources = buildEvidenceSources({
       ranges: sourceTranscriptRanges,
       segments: transcriptSegments,
       documents: Object.values(chunksById).filter(c => c.chunkKind === "document"),
-      relatedSequences: matchedTranscriptSegments.map(entry => entry.segment.sequence),
+      relatedSequences: isGoldStandard ? [] : matchedTranscriptSegments.map(entry => entry.segment.sequence),
+      onlyDirectTranscript: isGoldStandard,
     });
     contextJson.pipelineVersion = MINUTES_PIPELINE_VERSION;
     contextJson.fingerprint = evidenceFingerprint({ itemNumber: item.itemNumber, sources: contextJson.sources });
@@ -2820,9 +2823,14 @@ export async function investigateAgendaItems(
     if (!prepared?.sources || prepared.pipelineVersion !== MINUTES_PIPELINE_VERSION) {
       throw new Error(`Current evidence is required before investigating ${item.title}.`);
     }
-    const sources: EvidenceSource[] = [...prepared.sources, ...Object.entries(userAnswers).filter(([,answer]) => answer.trim()).map(([question, answer], index) => ({
+    const goldSpans = (meetingRec?.settings as { segmentGoldStandard?: { spans?: Array<{ agendaItemId: string }> } } | null)?.segmentGoldStandard?.spans ?? [];
+    const isGoldStandard = Array.isArray(goldSpans) && goldSpans.some((s) => s.agendaItemId === item.id);
+    let sources: EvidenceSource[] = [...prepared.sources, ...Object.entries(userAnswers).filter(([,answer]) => answer.trim()).map(([question, answer], index) => ({
       id: `user:${index}`, kind: "user" as const, association: "direct" as const, text: `${question}: ${answer}`,
     }))];
+    if (isGoldStandard) {
+      sources = sources.filter((s) => s.kind !== "transcript" || s.association === "direct");
+    }
     const promptInput = [
       `Agenda item title: ${item.title}`,
       `Item number: ${item.itemNumber ?? "Unknown"}`,

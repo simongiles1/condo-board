@@ -36,10 +36,8 @@ import { GoldStandardValidationSidePanel } from "@/components/GoldStandardValida
 import type { GoldStandardValidationTab } from "@/components/GoldStandardValidationSidePanel";
 import { PdfTemplateDialog } from "@/components/PdfTemplateDialog";
 import { GoldStandardItemFindingBadgesRow } from "@/components/GoldStandardItemFindingBadge";
-import {
-  AgendaItemDetailSidePanel,
-  type AgendaItemDetail,
-} from "@/components/AgendaItemDetailSidePanel";
+import { AgendaItemDetailSidePanel, type AgendaItemDetail } from "@/components/AgendaItemDetailSidePanel";
+import { ItemPipelineDebugModal } from "@/components/ItemPipelineDebugModal";
 import { headlineValidationScore } from "@/lib/minutes/gold-standard-compare";
 import {
   parseStoredGoldStandardValidation,
@@ -2692,6 +2690,7 @@ function AgendaReviewListItem({
   onSelectTimeRange,
   goldStandardFindings,
   onOpenGoldStandardPanel,
+  onOpenPipelineDebug,
 }: {
   item: MeetingV2Status["items"][number];
   displayNumber: string;
@@ -2715,6 +2714,7 @@ function AgendaReviewListItem({
     tab: GoldStandardValidationTab,
     agendaItemId?: string,
   ) => void;
+  onOpenPipelineDebug?: (itemId: string) => void;
 }) {
   const isExcluded = excludedItemIds.has(item.id);
     const currentStatus = itemStatuses[item.id] || item.discussionStatus || "discussed";
@@ -2818,6 +2818,19 @@ function AgendaReviewListItem({
                   agendaItemId={item.id}
                   onOpenGoldStandardPanel={onOpenGoldStandardPanel}
                 />
+                {onOpenPipelineDebug ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenPipelineDebug(item.id);
+                    }}
+                    className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-900"
+                    title="Step through evidence, facts, investigation, and validation for this item"
+                  >
+                    Debug
+                  </button>
+                ) : null}
               </div>
 
               {subItems.length > 0 ? (
@@ -2924,6 +2937,7 @@ function ValidatedAgendaReviewListItem({
   onSelectTimeRange,
   goldStandardFindings,
   onOpenGoldStandardPanel,
+  onOpenPipelineDebug,
 }: {
   item: AgendaReviewItem;
   displayNumber: string;
@@ -2946,6 +2960,7 @@ function ValidatedAgendaReviewListItem({
     tab: GoldStandardValidationTab,
     agendaItemId?: string,
   ) => void;
+  onOpenPipelineDebug?: (itemId: string) => void;
 }) {
   const flagCount = item.validation.filter(
     (validation) => validation.severity === "error" || validation.severity === "warning",
@@ -3052,6 +3067,20 @@ function ValidatedAgendaReviewListItem({
                     {flagCount} {flagCount === 1 ? "Flag" : "Flags"}
                   </span>
                 ) : null}
+
+                {onOpenPipelineDebug ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenPipelineDebug(item.id);
+                    }}
+                    className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-900"
+                    title="Step through evidence, facts, investigation, and validation for this item"
+                  >
+                    Debug
+                  </button>
+                ) : null}
               </div>
 
               {!isHeading && goldStandardFindings && onOpenGoldStandardPanel ? (
@@ -3104,6 +3133,15 @@ function ValidatedAgendaReviewListItem({
                     {flagCount + openQuestionCount + (item.evidence?.length ?? 0)}
                   </span>
                 </button>
+                {onOpenPipelineDebug ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenPipelineDebug(item.id)}
+                    className="inline-flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-900"
+                  >
+                    Debug pipeline
+                  </button>
+                ) : null}
               </div>
 
               <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
@@ -3180,6 +3218,7 @@ function HitlAgendaApprovalWorkspace({
   headerAside,
   goldStandardFindingsByItemId,
   onOpenGoldStandardPanel,
+  onOpenPipelineDebug,
 }: {
   meetingId: string;
   status: MeetingV2Status;
@@ -3191,6 +3230,7 @@ function HitlAgendaApprovalWorkspace({
     tab: GoldStandardValidationTab,
     agendaItemId?: string,
   ) => void;
+  onOpenPipelineDebug?: (itemId: string) => void;
 }) {
   const [itemStatuses, setItemStatuses] = useState<Record<string, "discussed" | "not_discussed" | "ad_hoc">>(() => {
     const initial: Record<string, "discussed" | "not_discussed" | "ad_hoc"> = {};
@@ -3531,6 +3571,7 @@ function HitlAgendaApprovalWorkspace({
             onSelectTimeRange={setSelectedTimeRange}
             goldStandardFindings={goldStandardFindingsByItemId?.get(node.item.id)}
             onOpenGoldStandardPanel={onOpenGoldStandardPanel}
+            onOpenPipelineDebug={onOpenPipelineDebug}
           />
           {hasChildren ? (
             <ol
@@ -3926,6 +3967,7 @@ function AgendaReviewPanel({
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
   const [reevaluationError, setReevaluationError] = useState<string | null>(null);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
+  const [debugItemId, setDebugItemId] = useState<string | null>(null);
   const [detailPanelItem, setDetailPanelItem] = useState<AgendaItemDetail | null>(null);
   const [detailPanelInitialTab, setDetailPanelInitialTab] = useState<
     "flags" | "questions" | "evidence"
@@ -4047,6 +4089,7 @@ function AgendaReviewPanel({
             onSelectTimeRange={setSelectedTimeRange}
             goldStandardFindings={goldStandardFindingsByItemId.get(node.item.id)}
             onOpenGoldStandardPanel={onOpenGoldStandardPanel}
+            onOpenPipelineDebug={setDebugItemId}
           />
           {hasChildren ? (
             <ol
@@ -4093,19 +4136,28 @@ function AgendaReviewPanel({
 
   if (showApprovalWorkspace || (!canReviewItems && status.items.length > 0)) {
     return (
-      <HitlAgendaApprovalWorkspace
-        meetingId={meetingId}
-        status={status}
-        onApproved={() => {
-          onReEvaluateSubmitted?.();
-        }}
-        onSwitchToValidatedReview={
-          canReviewItems && !isPostAgendaPhase ? () => setShowApprovalWorkspace(false) : undefined
-        }
-        headerAside={reviewViewToggle}
-        goldStandardFindingsByItemId={goldStandardFindingsByItemId}
-        onOpenGoldStandardPanel={onOpenGoldStandardPanel}
-      />
+      <>
+        <HitlAgendaApprovalWorkspace
+          meetingId={meetingId}
+          status={status}
+          onApproved={() => {
+            onReEvaluateSubmitted?.();
+          }}
+          onSwitchToValidatedReview={
+            canReviewItems && !isPostAgendaPhase ? () => setShowApprovalWorkspace(false) : undefined
+          }
+          headerAside={reviewViewToggle}
+          goldStandardFindingsByItemId={goldStandardFindingsByItemId}
+          onOpenGoldStandardPanel={onOpenGoldStandardPanel}
+          onOpenPipelineDebug={setDebugItemId}
+        />
+        <ItemPipelineDebugModal
+          open={Boolean(debugItemId)}
+          meetingId={meetingId}
+          agendaItemId={debugItemId ?? ""}
+          onClose={() => setDebugItemId(null)}
+        />
+      </>
     );
   }
 
@@ -4196,6 +4248,13 @@ function AgendaReviewPanel({
         meetingId={meetingId}
         timeRange={selectedTimeRange}
         onClose={() => setSelectedTimeRange(null)}
+      />
+
+      <ItemPipelineDebugModal
+        open={Boolean(debugItemId)}
+        meetingId={meetingId}
+        agendaItemId={debugItemId ?? ""}
+        onClose={() => setDebugItemId(null)}
       />
     </SectionCard>
   );

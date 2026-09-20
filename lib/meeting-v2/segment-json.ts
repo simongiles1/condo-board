@@ -14,7 +14,7 @@ export const DEEPSEEK_THINKING_OUTPUT_CAP = 32_768;
 /** Gemini thinkingLevel medium burns output tokens before JSON; 512-token judges fail immediately. */
 export const GEMINI_THINKING_OUTPUT_HEADROOM = 2_048;
 /** Thinking completions are slower; do not share the 120s non-thinking timeout. */
-const DEEPSEEK_THINKING_REQUEST_TIMEOUT_MS = 300_000;
+export const DEEPSEEK_THINKING_REQUEST_TIMEOUT_MS = 300_000;
 
 /**
  * Stage budgets assume non-thinking JSON. Thinking must keep leftover tokens for content.

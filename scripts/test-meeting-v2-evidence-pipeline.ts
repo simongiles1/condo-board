@@ -140,6 +140,46 @@ describe("source precedence and loss prevention", () => {
       text: "The booster pump was approved at the previous meeting with New Water Plumbing for $163,000",
     }]);
     assert.equal(curlyQuote.facts[0].selected, 0);
+    const htmlEntityQuote = parseFactResolution({
+      facts: [{
+        field: "contractor",
+        scope: "package_proposal",
+        candidates: [{
+          value: "Ambient Mechanical",
+          sourceId: "document:4",
+          quote: "award the contract to Ambient Mechanical",
+        }],
+        selected: 0,
+        explanation: "Package recommendation.",
+      }],
+      unresolvedQuestions: [],
+    }, [{
+      id: "document:4",
+      kind: "document",
+      association: "direct",
+      text: "[SECTION: Report] (Pages 4-4)\n\nPAGE 4\n## Projects\nBell &amp; Gossett pump. TCG recommends award the contract to Ambient Mechanical at $214,194.00 plus HST.",
+    }]);
+    assert.equal(htmlEntityQuote.facts[0].selected, 0);
+    const transcriptBodyQuote = parseFactResolution({
+      facts: [{
+        field: "approval",
+        scope: "prior_approval",
+        candidates: [{
+          value: "prior approval referenced",
+          sourceId: "transcript:165",
+          quote: "approved at the previous meeting with New Water Plumbing",
+        }],
+        selected: 0,
+        explanation: "Transcript body without cue prefix.",
+      }],
+      unresolvedQuestions: [],
+    }, [{
+      id: "transcript:165",
+      kind: "transcript",
+      association: "direct",
+      text: "[00:15:58.534] Haider Mukadam: approved at the previous meeting with New Water Plumbing for $163,000.",
+    }]);
+    assert.equal(transcriptBodyQuote.facts[0].selected, 0);
     const stringSelected = parseFactResolution({
       ...resolution,
       facts: [{ ...resolution.facts[0], selected: "1" as unknown as number }],

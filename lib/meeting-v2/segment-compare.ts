@@ -18,6 +18,7 @@ import {
   isNoChangeResponse,
   normalizeWorkflowState,
   parseWithRepair,
+  rehomeOverflowDiscussionTopics,
   sortTopics,
   type WorkflowState,
   type WorkflowTopic,
@@ -170,34 +171,39 @@ function seedStateFromAgendaItems(
     sourceText: string | null;
   }>,
 ): WorkflowState {
+  const documentTopics = items.map((item) => {
+    const pages = safeParseObject<number[]>(item.sourcePagesJson) ?? [];
+    return {
+      title: item.title,
+      sectionLabel: item.sectionLabel?.trim() || "Unknown",
+      itemType: item.itemType,
+      itemNumber: item.itemNumber?.trim() || undefined,
+      visibility: "PUBLIC" as const,
+      sourcePages: pages,
+      sourceChunkIds: [],
+      sourceTranscriptRanges: [],
+      discussionStatus: "not_discussed" as const,
+      discussionTimestampRange: null,
+      consolidationReason: null,
+      sourceText: stripSeededTiming(item.sourceText),
+      aliases: [],
+      notes: [],
+      confidence: 1,
+      confidenceReason: "Seeded from stored agenda outline",
+      evidenceStrength: "DIRECT" as const,
+      openQuestions: [],
+      needsHumanReview: false,
+      humanReviewReason: null,
+    } satisfies WorkflowTopic;
+  });
   return {
-    documentTopics: items.map((item) => {
-      const pages = safeParseObject<number[]>(item.sourcePagesJson) ?? [];
-      return {
-        title: item.title,
-        sectionLabel: item.sectionLabel?.trim() || "Unknown",
-        itemType: item.itemType,
-        itemNumber: item.itemNumber?.trim() || undefined,
-        visibility: "PUBLIC",
-        sourcePages: pages,
-        sourceChunkIds: [],
-        sourceTranscriptRanges: [],
-        discussionStatus: "not_discussed",
-        discussionTimestampRange: null,
-        consolidationReason: null,
-        sourceText: stripSeededTiming(item.sourceText),
-        aliases: [],
-        notes: [],
-        confidence: 1,
-        confidenceReason: "Seeded from stored agenda outline",
-        evidenceStrength: "DIRECT",
-        openQuestions: [],
-        needsHumanReview: false,
-        humanReviewReason: null,
-      } satisfies WorkflowTopic;
-    }),
+    documentTopics,
     extraTopics: [],
     uncertainties: [],
+    packageItemNumbers: documentTopics
+      .filter((topic) => topic.sourcePages.length > 0 || /items for discussion/i.test(topic.title))
+      .map((topic) => topic.itemNumber)
+      .filter((code): code is string => Boolean(code)),
   };
 }
 
@@ -683,13 +689,9 @@ export async function runSegmentCompareExperiment(options: {
       });
       const parsed = await parseWithRepair(response.text, walkGenerate);
       if (!isNoChangeResponse(parsed)) {
-        const nextState = normalizeWorkflowState(parsed, state);
-        state = {
-          documentTopics: nextState.documentTopics,
-          extraTopics: nextState.extraTopics,
-          uncertainties: nextState.uncertainties,
-          discrepancies: nextState.discrepancies,
-        };
+        state = normalizeWorkflowState(parsed, state);
+      } else {
+        state = rehomeOverflowDiscussionTopics(state);
       }
     }
 

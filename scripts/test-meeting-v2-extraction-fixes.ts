@@ -442,6 +442,131 @@ describe("Dual-Source Agenda Extraction & Synthesis", () => {
     assert.equal(result.documentTopics[1].itemNumber, "4.B.2");
     assert.equal(result.documentTopics[1].discussionStatus, roof.discussionStatus);
   });
+
+  it("demotes new 4.D letters past the locked package list into extraTopics", () => {
+    const heading = normalizeTopic({
+      title: "The items for discussion",
+      sectionLabel: "Property Management Report",
+      itemNumber: "4.D",
+      itemType: "discussion_topic",
+      sourcePages: [12],
+      confidenceReason: "Extracted from board package core report",
+    });
+    const lastOfficial = normalizeTopic({
+      title: "Share Reserve Fund Information - Condominium Consumer Protection (CAO)",
+      sectionLabel: "Property Management Report: The items for discussion",
+      itemNumber: "4.D.l",
+      itemType: "discussion_topic",
+      sourcePages: [12],
+      confidenceReason: "Extracted from board package core report",
+    });
+    assert.ok(heading);
+    assert.ok(lastOfficial);
+
+    const fallback = {
+      documentTopics: [heading, lastOfficial],
+      extraTopics: [],
+      uncertainties: [],
+      packageItemNumbers: ["4.D", "4.D.l"],
+    };
+
+    const patched = normalizeWorkflowState(
+      {
+        documentTopics: [
+          {
+            title: "Toilet Hose Replacement - Contractor Quotes",
+            sectionLabel: "Property Management Report: The items for discussion",
+            itemNumber: "4.D.m",
+            itemType: "discussion_topic",
+            discussionStatus: "discussed",
+            sourceChunkIds: ["transcript_chunk_012"],
+          },
+        ],
+      },
+      fallback,
+    );
+
+    assert.deepEqual(
+      patched.documentTopics.map((topic) => topic.itemNumber),
+      ["4.D", "4.D.l"],
+    );
+    assert.equal(patched.extraTopics.length, 1);
+    assert.equal(patched.extraTopics[0].title, "Toilet Hose Replacement - Contractor Quotes");
+    assert.equal(patched.extraTopics[0].itemNumber, undefined);
+    assert.equal(patched.extraTopics[0].itemType, "extra_topic");
+    assert.equal(patched.extraTopics[0].discussionStatus, "ad_hoc");
+
+    const polluted = normalizeWorkflowState(
+      { status: "no_change" },
+      {
+        documentTopics: [
+          heading,
+          lastOfficial,
+          normalizeTopic({
+            title: "TMG Digitalization Platform - Annual Licensing Renewal",
+            sectionLabel: "Property Management Report: The items for discussion",
+            itemNumber: "4.D.n",
+            itemType: "discussion_topic",
+            sourceChunkIds: ["transcript_chunk_014"],
+          })!,
+        ],
+        extraTopics: [
+          normalizeTopic({
+            title: "Shared Costs with Studio 2 - Unanswered Invoices",
+            sectionLabel: "Ad-hoc Discussion",
+            itemType: "extra_topic",
+            discussionStatus: "ad_hoc",
+          })!,
+        ],
+        uncertainties: [],
+        packageItemNumbers: ["4.D", "4.D.l"],
+      },
+    );
+    assert.equal(
+      polluted.documentTopics.some((topic) => topic.itemNumber === "4.D.n"),
+      false,
+    );
+    assert.equal(
+      polluted.extraTopics.some((topic) => topic.title.includes("TMG")),
+      true,
+    );
+
+    const duplicate = normalizeWorkflowState(
+      {
+        documentTopics: [
+          {
+            title: "Shared Costs with Studio 2 - Unanswered Invoices",
+            sectionLabel: "Property Management Report: The items for discussion",
+            itemNumber: "4.D.s",
+            itemType: "discussion_topic",
+            discussionStatus: "discussed",
+          },
+        ],
+      },
+      {
+        documentTopics: [heading, lastOfficial],
+        extraTopics: [
+          normalizeTopic({
+            title: "Shared Costs with Studio 2 - Unanswered Invoices",
+            sectionLabel: "Ad-hoc Discussion",
+            itemType: "extra_topic",
+            discussionStatus: "ad_hoc",
+          })!,
+        ],
+        uncertainties: [],
+        packageItemNumbers: ["4.D", "4.D.l"],
+      },
+    );
+    assert.equal(duplicate.extraTopics.length, 1);
+    assert.equal(duplicate.documentTopics.some((topic) => topic.itemNumber === "4.D.s"), false);
+
+    const placed = applyAdHocOutlinePlacement(patched);
+    assert.equal(
+      placed.documentTopics.some((topic) => topic.title === "Ad-hoc items" && topic.itemNumber === "4.E"),
+      true,
+    );
+    assert.equal(placed.extraTopics[0].itemNumber, "4.E.a");
+  });
 });
 
 describe("transcript discrepancy deduplication", () => {

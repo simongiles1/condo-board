@@ -86,6 +86,8 @@ export type WorkflowState = {
   extraTopics: WorkflowTopic[];
   uncertainties: string[];
   discrepancies?: WorkflowDiscrepancy[];
+  /** Official package outline codes frozen before the transcript walk. */
+  packageItemNumbers?: string[];
 };
 
 type WorkflowChanges = {
@@ -257,6 +259,7 @@ Use the transcript chunk to:
 - when this chunk continues a topic already marked discussed, extend or append its sourceTranscriptRanges and discussionTimestampRange. Never replace earlier ranges with only this chunk.
 - add aliases or notes when the transcript uses shorthand
 - add extraTopics ONLY for genuinely new board business matters discussed in the transcript but not on the agenda (itemType "ad_hoc_discussion" or "extra_topic", discussionStatus "ad_hoc"). Do not assign itemNumber 4.E to an extra topic. Leave extra topic itemNumbers empty; the server creates a heading titled "Ad-hoc items" at 4.E and letters the extras 4.E.a, 4.E.b.
+- Never invent the next letter under items for discussion (4.D). Those codes are frozen to the package list in CURRENT STATE. A new matter after the last official 4.D leaf is extraTopics, not 4.D.m.
 - detect unaligned discussion discrepancies:
   - if there is substantial discussion in this chunk that does not map to any recognized agenda item, add an entry to "discrepancies":
     {
@@ -284,8 +287,8 @@ Transcript rules:
 - Lines marked as [PREVIOUS TRANSCRIPT CONTEXT] are provided strictly so you can read conversations that connect to the current lines. Do not extract brand new extra topics from the previous transcript context if they do not spill over into the new lines.
 - Preserve early guest-presentation topics when the transcript clearly shows a contractor, engineer, or presenter leading a distinct opening discussion block.
 - GUEST PRESENTERS & CARRIED OVER ITEMS: Distinguish a guest presentation from a later management-report discussion of the same project. A silent guest is not proof that an item was not discussed. Keep any relevant staff or board discussion associated with the item. If the evidence only refers to an earlier meeting or attendance is unclear, request review and describe the uncertainty; never invent attendance or remove a supported discussion.
-- If the transcript clearly reveals a planned or structured meeting matter that belongs in the main agenda but is missing from documentTopics, add it to documentTopics rather than extraTopics.
-- Use extraTopics only for genuinely additional matters that do not behave like an official agenda topic.
+- Do not add a transcript-only matter to documentTopics just because it sounds like structured agenda business. Official outline codes are frozen from the package. New board business goes in extraTopics.
+- Use extraTopics for genuinely additional matters that are not already a package documentTopic.
 - Every transcript-only new matter must use itemType "extra_topic". EXCEPTION: If the transcript introduces the approval of previous minutes or financial matters, add it to documentTopics with itemType "approval_of_previous_minutes" or "financial_matters" respectively. Do not invent custom itemType values for extraTopics.
 - If the transcript uses shorthand, partial names, or abbreviated project references, attach them to the matching existing topic through aliases or notes whenever reasonably possible.
 - Do not merge a transcript matter into an existing topic unless they are clearly the same business issue. Shared words, contractor names, or building-area overlap alone are not enough.
@@ -760,6 +763,7 @@ function attachPageReferenceHintsToState(options: {
   if (hints.length === 0) return options.state;
 
   return {
+    ...options.state,
     documentTopics: attachPageReferenceHintsToTopics({
       topics: options.state.documentTopics,
       chunkId: options.chunkId,
@@ -770,7 +774,6 @@ function attachPageReferenceHintsToState(options: {
       chunkId: options.chunkId,
       hints,
     }),
-    uncertainties: options.state.uncertainties,
   };
 }
 
@@ -932,7 +935,7 @@ export function normalizeWorkflowState(value: unknown, fallback: WorkflowState):
       .map((topic) => normalizeTopic(topic as Partial<WorkflowTopic>))
       .filter((topic): topic is WorkflowTopic => Boolean(topic)),
   );
-  return {
+  return rehomeOverflowDiscussionTopics({
     documentTopics: preserveTranscriptProvenance(
       preserveItemNumbers(
         mergeTopicUpdates(documentTopics, fallback.documentTopics),
@@ -957,8 +960,9 @@ export function normalizeWorkflowState(value: unknown, fallback: WorkflowState):
       ...(fallback.discrepancies || []),
       ...normalizeDiscrepancies(record.discrepancies),
     ]),
+    packageItemNumbers: unique(fallback.packageItemNumbers ?? []),
     changes: normalizeChanges(record.changes),
-  };
+  });
 }
 
 function mergeDiscussionTimestampRange(
@@ -1034,6 +1038,129 @@ export function sortTopics(topics: WorkflowTopic[]): WorkflowTopic[] {
     .map(({ topic }) => topic);
 }
 
+function discussionSectionCodes(topics: WorkflowTopic[]): string[] {
+  const named = unique(
+    topics
+      .filter((topic) => /items for discussion/i.test(topic.title || ""))
+      .map((topic) => (topic.itemNumber || "").trim())
+      .filter((code) => /^\d+\.D$/i.test(code)),
+  );
+  if (named.length > 0) return named;
+  const pm = inferPropertyManagementReportNumber(topics);
+  return pm ? [`${pm}.D`] : [];
+}
+
+function occupiesDiscussionLeaf(
+  itemNumber: string | null | undefined,
+  sectionCodes: string[],
+): boolean {
+  const code = (itemNumber || "").trim().toLowerCase();
+  if (!code) return false;
+  return sectionCodes.some((section) => code.startsWith(`${section.trim().toLowerCase()}.`));
+}
+
+function hasPackageGrounding(topic: WorkflowTopic): boolean {
+  if (topic.sourcePages.length > 0) return true;
+  if (topic.sourceChunkIds.some((id) => /document/i.test(id))) return true;
+  return /board package/i.test(topic.confidenceReason || "");
+}
+
+function lockedDiscussionCodes(state: WorkflowState): Set<string> {
+  const sections = discussionSectionCodes(state.documentTopics);
+  const lock = new Set<string>();
+  for (const raw of state.packageItemNumbers ?? []) {
+    const code = raw.trim().toLowerCase();
+    if (!code) continue;
+    if (
+      sections.some((section) => section.toLowerCase() === code) ||
+      occupiesDiscussionLeaf(code, sections)
+    ) {
+      lock.add(code);
+    }
+  }
+  if (lock.size > 0) return lock;
+  for (const topic of state.documentTopics) {
+    const code = (topic.itemNumber || "").trim().toLowerCase();
+    if (!code) continue;
+    if (sections.some((section) => section.toLowerCase() === code)) {
+      lock.add(code);
+      continue;
+    }
+    if (occupiesDiscussionLeaf(code, sections) && hasPackageGrounding(topic)) {
+      lock.add(code);
+    }
+  }
+  return lock;
+}
+
+function demoteOverflowDiscussionTopic(topic: WorkflowTopic): WorkflowTopic {
+  const itemType =
+    topic.itemType === "discussion_topic" || topic.itemType === "other" || !topic.itemType
+      ? "extra_topic"
+      : topic.itemType;
+  return {
+    ...topic,
+    itemNumber: undefined,
+    itemType,
+    discussionStatus: "ad_hoc",
+  };
+}
+
+/**
+ * Moves transcript-only items numbered past the official items-for-discussion list into extraTopics.
+ */
+export function rehomeOverflowDiscussionTopics(state: WorkflowState): WorkflowState {
+  const lock = lockedDiscussionCodes(state);
+  if (lock.size === 0) return state;
+  const sections = discussionSectionCodes(state.documentTopics);
+  const overflow: WorkflowTopic[] = [];
+  const documentTopics: WorkflowTopic[] = [];
+  for (const topic of state.documentTopics) {
+    const code = (topic.itemNumber || "").trim().toLowerCase();
+    if (occupiesDiscussionLeaf(code, sections) && !lock.has(code)) {
+      overflow.push(topic);
+    } else {
+      documentTopics.push(topic);
+    }
+  }
+  if (overflow.length === 0) return state;
+
+  const extraTopics = [...state.extraTopics];
+  for (const topic of overflow) {
+    const demoted = demoteOverflowDiscussionTopic(topic);
+    const existingIndex = extraTopics.findIndex(
+      (entry) => normalize(entry.title) === normalize(demoted.title),
+    );
+    if (existingIndex === -1) {
+      extraTopics.push(demoted);
+      continue;
+    }
+    const existing = extraTopics[existingIndex];
+    extraTopics[existingIndex] = {
+      ...existing,
+      sourceChunkIds: unique([...existing.sourceChunkIds, ...demoted.sourceChunkIds]),
+      sourceTranscriptRanges: mergeClosedIntervals([
+        ...existing.sourceTranscriptRanges,
+        ...demoted.sourceTranscriptRanges,
+      ]),
+      discussionTimestampRange: mergeDiscussionTimestampRange(
+        existing.discussionTimestampRange,
+        demoted.discussionTimestampRange,
+      ),
+      aliases: unique([...existing.aliases, ...demoted.aliases]),
+      notes: unique([...existing.notes, ...demoted.notes]),
+      discussionStatus: "ad_hoc",
+      itemNumber: undefined,
+    };
+  }
+
+  return {
+    ...state,
+    documentTopics,
+    extraTopics,
+  };
+}
+
 function emptyAdHocSectionTopic(itemNumber: string): WorkflowTopic {
   return {
     title: "Ad-hoc items",
@@ -1061,23 +1188,24 @@ function emptyAdHocSectionTopic(itemNumber: string): WorkflowTopic {
 }
 
 export function applyAdHocOutlinePlacement(state: WorkflowState): WorkflowState {
-  const extraTopics = state.extraTopics.filter((topic) => topic.title.trim());
+  const rehomed = rehomeOverflowDiscussionTopics(state);
+  const extraTopics = rehomed.extraTopics.filter((topic) => topic.title.trim());
   const pmReportNumber =
-    inferPropertyManagementReportNumber(state.documentTopics) || "4";
+    inferPropertyManagementReportNumber(rehomed.documentTopics) || "4";
   const sectionCode = `${pmReportNumber}.E`;
   const { heading, leaves: occupying, rest } = partitionAdHocOccupants(
-    state.documentTopics,
+    rehomed.documentTopics,
     sectionCode,
   );
   const leaves = [...occupying, ...extraTopics];
-  if (leaves.length === 0) return state;
+  if (leaves.length === 0) return rehomed;
 
   const placement = planAdHocPlacement(
     [...rest, ...(heading ? [heading] : [])],
     leaves.length,
     pmReportNumber,
   );
-  if (!placement) return state;
+  if (!placement) return rehomed;
 
   const numberedExtra = leaves.map((topic, index) => ({
     ...topic,
@@ -1096,7 +1224,7 @@ export function applyAdHocOutlinePlacement(state: WorkflowState): WorkflowState 
     : [...rest, emptyAdHocSectionTopic(placement.sectionCode)];
 
   return {
-    ...state,
+    ...rehomed,
     documentTopics,
     extraTopics: numberedExtra,
   };
@@ -1529,9 +1657,25 @@ export async function extractAgendaItemsWithAi(
           humanReviewReason: null,
         };
       });
+      state.packageItemNumbers = unique(
+        flattened.map((item) => item.itemNumber).filter((code): code is string => Boolean(code?.trim())),
+      );
     } catch (err) {
     throw new Error(`Board package agenda extraction failed: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  if (!state.packageItemNumbers?.length) {
+    state.packageItemNumbers = unique(
+      state.documentTopics
+        .filter((topic) => {
+          const code = (topic.itemNumber || "").trim();
+          if (!code) return false;
+          if (/items for discussion/i.test(topic.title) && /^\d+\.D$/i.test(code)) return true;
+          return hasPackageGrounding(topic);
+        })
+        .map((topic) => (topic.itemNumber || "").trim()),
+    );
   }
 
   const remainingPackageChunks =
@@ -1571,11 +1715,7 @@ export async function extractAgendaItemsWithAi(
       if (!noChange) {
         const nextState = normalizeWorkflowState(parsed, state);
         state = attachPageReferenceHintsToState({
-          state: {
-            documentTopics: nextState.documentTopics,
-            extraTopics: nextState.extraTopics,
-            uncertainties: nextState.uncertainties,
-          },
+          state: nextState,
           chunkId: chunk.aiChunkId,
           chunkText: chunk.text,
         });
@@ -1625,13 +1765,9 @@ export async function extractAgendaItemsWithAi(
     const beforeStateJson = JSON.stringify(state);
     const noChange = isNoChangeResponse(parsed);
     if (!noChange) {
-      const nextState = normalizeWorkflowState(parsed, state);
-      state = {
-        documentTopics: nextState.documentTopics,
-        extraTopics: nextState.extraTopics,
-        uncertainties: nextState.uncertainties,
-        discrepancies: nextState.discrepancies,
-      };
+      state = normalizeWorkflowState(parsed, state);
+    } else {
+      state = rehomeOverflowDiscussionTopics(state);
     }
     await db.insert(meetingsV2AgendaChunkSnapshots).values({
       id: randomUUID(),

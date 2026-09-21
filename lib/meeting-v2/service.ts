@@ -12,6 +12,8 @@ import {
   parseInvestigation,
   parseOpenQuestionContextNotes,
   parseStoredOpenQuestions,
+  mergeOpenQuestionContextNotes,
+  openQuestionsMissingContextNotes,
   serializeOpenQuestionsJson,
   storedOpenQuestionTexts,
   type InvestigationDocument,
@@ -36,9 +38,11 @@ import {
   meetingsV2TranscriptSegments,
   meetingsV2ValidationResults,
 } from "@/lib/db/schema";
-import { AGENDA_ITEM_INVESTIGATION_PROMPT } from "@/lib/meeting-v2/investigation-prompts";
+import { AGENDA_ITEM_INVESTIGATION_PROMPT, OPEN_QUESTION_CONTEXT_NOTES_PROMPT } from "@/lib/meeting-v2/investigation-prompts";
 import {
+  applyFallbackQuestionContextNotes,
   applyRevisedNotes,
+  parseSalvagedQuestionContextNotes,
   recommendedAnswerAddsNewFact,
 } from "@/lib/meeting-v2/investigation-reconcile";
 import { AGENDA_ITEM_VALIDATION_PROMPT } from "@/lib/meeting-v2/validation-prompts";
@@ -1857,6 +1861,58 @@ function investigationColumns(doc: InvestigationDocument) {
     openQuestionsJson: serializeOpenQuestionsJson(doc.open_questions) };
 }
 
+async function fillQuestionContextNotes(options: {
+  document: InvestigationDocument;
+  sources: EvidenceSource[];
+  factResolution: FactResolution | null;
+}): Promise<{ document: InvestigationDocument; salvageUsage: Record<string, unknown> | null }> {
+  if (!openQuestionsMissingContextNotes(options.document.open_questions)) {
+    return { document: options.document, salvageUsage: null };
+  }
+  let questions = options.document.open_questions;
+  let salvageUsage: Record<string, unknown> | null = null;
+  try {
+    const missing = questions.filter((question) => question.context_notes.length === 0).map((question) => question.question);
+    const salvage = await generateDeepSeekJson({
+      systemInstruction: OPEN_QUESTION_CONTEXT_NOTES_PROMPT,
+      userText: JSON.stringify({
+        questions: missing,
+        factResolution: options.factResolution,
+        sources: options.sources.slice(0, 36).map((source) => ({
+          kind: source.kind,
+          association: source.association,
+          text: source.text.length > 900 ? `${source.text.slice(0, 900)}…` : source.text,
+        })),
+      }),
+      modelName: "deepseek-v4-flash",
+      temperature: 0,
+      thinking: false,
+      maxOutputTokens: 4096,
+      requestTimeoutMs: 60_000,
+    });
+    salvageUsage = { usage: salvage.usage, modelName: salvage.modelName };
+    const salvaged = parseSalvagedQuestionContextNotes(safeJsonObjectParse(salvage.text));
+    questions = questions.map((question) => {
+      if (question.context_notes.length > 0) return question;
+      const notes = salvaged.get(question.question);
+      return notes?.length ? { ...question, context_notes: notes } : question;
+    });
+  } catch {
+    salvageUsage = salvageUsage ?? { skipped: true };
+  }
+  return {
+    document: {
+      ...options.document,
+      open_questions: applyFallbackQuestionContextNotes({
+        questions,
+        factResolution: options.factResolution,
+        sources: options.sources,
+      }),
+    },
+    salvageUsage,
+  };
+}
+
 function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument {
   const record = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
   const outcome = typeof record.outcome === "string" ? record.outcome.trim().toUpperCase() : "UNCLEAR";
@@ -2155,6 +2211,10 @@ function buildValidationInput(options: {
       motion,
       actions,
       openQuestions,
+      openQuestionDetails: parseStoredOpenQuestions(options.investigation.openQuestionsJson).map((question) => ({
+        question: question.question,
+        context_notes: question.context_notes,
+      })),
       modelName: options.investigation.modelName,
     },
     evidence: {
@@ -2916,6 +2976,12 @@ export async function investigateAgendaItems(
           maxOutputTokens: 8192,
         });
         normalized = parseInvestigation(safeJsonObjectParse(aiResult.text));
+        const filled = await fillQuestionContextNotes({
+          document: normalized,
+          sources,
+          factResolution,
+        });
+        normalized = filled.document;
         modelName = aiResult.modelName;
         usageJson = JSON.stringify({
           evidenceCount: evidenceForItem.length,
@@ -2923,6 +2989,7 @@ export async function investigateAgendaItems(
           toolCalls: aiResult.toolCalls,
           usage: aiResult.usage,
           requestTrace: aiResult.requestTrace,
+          contextNotesSalvage: filled.salvageUsage,
           ...(reEvaluate ? { reEvaluate: true } : {}),
         });
       } catch (error) {
@@ -2938,6 +3005,11 @@ export async function investigateAgendaItems(
           actions: [],
           open_questions: [{ question: message, recommended_answer: "", confidence: "low", context_notes: [] }],
         };
+        normalized.open_questions = applyFallbackQuestionContextNotes({
+          questions: normalized.open_questions,
+          factResolution,
+          sources,
+        });
         modelName = "investigation_item_salvage";
         usageJson = JSON.stringify({
           skippedLlm: true,
@@ -3140,7 +3212,22 @@ export async function validateAgendaItemInvestigations(
             reviewHistory.push({ repair: repaired });
             await recordMeetingV2ValidationUsage(meetingId, repaired.usage, repaired.modelName, { source: options?.usageSource ?? "pipeline" });
             const corrected = parseInvestigation(safeJsonObjectParse(repaired.text));
-            return { ...candidate, ...investigationColumns(corrected), updatedAt: nowIso() };
+            const previousQuestions = parseStoredOpenQuestions(candidate.openQuestionsJson);
+            const merged: InvestigationDocument = {
+              ...corrected,
+              open_questions: mergeOpenQuestionContextNotes(previousQuestions, corrected.open_questions),
+            };
+            const usage = safeJsonParse<Record<string, unknown>>(candidate.usageJson, {});
+            const factResolution =
+              usage.factResolution && typeof usage.factResolution === "object"
+                ? (usage.factResolution as FactResolution)
+                : null;
+            const filled = await fillQuestionContextNotes({
+              document: merged,
+              sources: contextDocument?.sources ?? [],
+              factResolution,
+            });
+            return { ...candidate, ...investigationColumns(filled.document), updatedAt: nowIso() };
           },
         });
         const aiValidation = cycle.review;

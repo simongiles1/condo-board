@@ -4,6 +4,14 @@
  * from absorbing later PM-report resolutions.
  */
 
+import type { EvidenceSource, FactResolution } from "./evidence-contract";
+import {
+  parseOpenQuestionContextNotes,
+  type InvestigationOpenQuestion,
+  type OpenQuestionContextNote,
+  type OpenQuestionFactSource,
+} from "./investigation-contract";
+
 const GENERIC_FACT_TOKENS = new Set([
   "board",
   "corporation",
@@ -95,4 +103,146 @@ export function applyRevisedNotes(options: {
     sourceText: replaceLabeledLine(options.sourceText, "Notes", notesValue),
     assembledContextText: replaceLabeledLine(options.assembledContextText, "Notes", notesValue),
   };
+}
+
+function sourceFromId(sourceId: string): OpenQuestionFactSource {
+  const raw = sourceId.trim().toLowerCase();
+  if (raw.startsWith("transcript")) return "transcript";
+  if (raw.startsWith("document") || raw.startsWith("package")) return "package";
+  return "both";
+}
+
+function meaningfulTokens(text: string): Set<string> {
+  const tokens = new Set<string>();
+  for (const match of text.toLowerCase().matchAll(/[a-z0-9$]{3,}/g)) {
+    const token = match[0] ?? "";
+    if (!token || GENERIC_FACT_TOKENS.has(token)) continue;
+    tokens.add(token);
+  }
+  for (const amount of extractMoneyAmountKeys(text)) tokens.add(amount);
+  return tokens;
+}
+
+function overlapCount(left: Set<string>, right: Set<string>): number {
+  let count = 0;
+  for (const token of left) {
+    if (right.has(token)) count += 1;
+  }
+  return count;
+}
+
+function pushNote(notes: OpenQuestionContextNote[], fact: string, source: OpenQuestionFactSource) {
+  const cleaned = normalizeWhitespace(fact);
+  if (!cleaned) return;
+  if (notes.some((note) => note.fact === cleaned)) return;
+  notes.push({ fact: cleaned, source });
+}
+
+/**
+ * Builds secretary briefing bullets from the fact ledger and labeled sources
+ * when the investigator omitted context_notes.
+ */
+export function fallbackContextNotesForQuestion(options: {
+  question: string;
+  factResolution: FactResolution | null | undefined;
+  sources: EvidenceSource[];
+}): OpenQuestionContextNote[] {
+  const notes: OpenQuestionContextNote[] = [];
+  const questionTokens = meaningfulTokens(options.question);
+  const facts = options.factResolution?.facts ?? [];
+  const rankedFacts = facts
+    .map((fact) => {
+      const selected = fact.selected == null ? null : fact.candidates[fact.selected] ?? null;
+      const haystack = [fact.field, fact.scope, fact.explanation, selected?.value ?? "", selected?.quote ?? ""].join(" ");
+      return { fact, selected, score: overlapCount(questionTokens, meaningfulTokens(haystack)) };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  for (const row of rankedFacts) {
+    if (notes.length >= 6) break;
+    if (row.score === 0 && notes.length >= 2) continue;
+    const selected = row.selected;
+    if (selected) {
+      const scope =
+        row.fact.scope === "prior_approval"
+          ? "Prior approval"
+          : row.fact.scope === "package_proposal"
+            ? "Board package"
+            : row.fact.scope === "current_decision"
+              ? "This meeting"
+              : "Discussion";
+      pushNote(
+        notes,
+        `${scope}: ${row.fact.field.replace(/_/g, " ")} is ${selected.value}. ${row.fact.explanation}`.trim(),
+        sourceFromId(selected.sourceId),
+      );
+    } else if (row.fact.candidates[0]) {
+      pushNote(
+        notes,
+        `Unresolved ${row.fact.field.replace(/_/g, " ")}: candidates include ${row.fact.candidates.map((candidate) => candidate.value).slice(0, 3).join("; ")}.`,
+        sourceFromId(row.fact.candidates[0].sourceId),
+      );
+    }
+  }
+
+  for (const unresolved of options.factResolution?.unresolvedQuestions ?? []) {
+    if (notes.length >= 6) break;
+    if (overlapCount(questionTokens, meaningfulTokens(unresolved)) === 0) continue;
+    pushNote(notes, unresolved, "both");
+  }
+
+  const rankedSources = options.sources
+    .map((source) => ({ source, score: overlapCount(questionTokens, meaningfulTokens(source.text)) }))
+    .sort((a, b) => b.score - a.score);
+  for (const row of rankedSources) {
+    if (notes.length >= 6) break;
+    if (row.score === 0 && notes.length >= 2) continue;
+    const snippet = normalizeWhitespace(row.source.text).slice(0, 280);
+    if (!snippet) continue;
+    pushNote(notes, snippet, row.source.kind === "transcript" ? "transcript" : row.source.kind === "document" ? "package" : "both");
+  }
+
+  return notes.slice(0, 6);
+}
+
+/**
+ * Applies fallback briefing notes to any open question that still has none.
+ */
+export function applyFallbackQuestionContextNotes(options: {
+  questions: InvestigationOpenQuestion[];
+  factResolution: FactResolution | null | undefined;
+  sources: EvidenceSource[];
+}): InvestigationOpenQuestion[] {
+  return options.questions.map((question) => {
+    if (question.context_notes.length > 0) return question;
+    return {
+      ...question,
+      context_notes: fallbackContextNotesForQuestion({
+        question: question.question,
+        factResolution: options.factResolution,
+        sources: options.sources,
+      }),
+    };
+  });
+}
+
+/**
+ * Reads a salvage-model map of question text to briefing notes.
+ */
+export function parseSalvagedQuestionContextNotes(value: unknown): Map<string, OpenQuestionContextNote[]> {
+  const map = new Map<string, OpenQuestionContextNote[]>();
+  const rows = Array.isArray(value)
+    ? value
+    : value && typeof value === "object"
+      ? (value as { questions?: unknown }).questions
+      : null;
+  if (!Array.isArray(rows)) return map;
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const question = normalizeWhitespace(String((row as { question?: unknown }).question ?? ""));
+    const notes = parseOpenQuestionContextNotes((row as { context_notes?: unknown }).context_notes);
+    if (!question || notes.length === 0) continue;
+    map.set(question, notes);
+  }
+  return map;
 }

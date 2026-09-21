@@ -128,3 +128,26 @@ Constraints:
 - Your entire reply must be exactly one JSON object that begins with { and ends with }.
 - Return raw JSON only. Do not add commentary, headings, or markdown fences.
 `;
+
+export const OPEN_QUESTION_CONTEXT_NOTES_PROMPT = `You write secretary briefing notes for one condominium board agenda item's open questions.
+
+Return JSON only:
+{
+  "questions": [
+    {
+      "question": "string, copy the supplied question exactly",
+      "context_notes": [
+        { "fact": "string", "source": "transcript | package | both" }
+      ]
+    }
+  ]
+}
+
+Rules:
+- One object per supplied question, same question text.
+- 3 to 6 context_notes per question.
+- Rewrite in plain English. Attribute speakers when known. Say when nobody confirmed.
+- Do not invent facts. Use only the supplied sources and fact ledger.
+- Short quotes are allowed; do not dump raw excerpts.
+- Return raw JSON only.
+`;

@@ -7,11 +7,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  applyFallbackQuestionContextNotes,
   applyRevisedNotes,
+  fallbackContextNotesForQuestion,
   isGuestPresentationItem,
   recommendedAnswerAddsNewFact,
   replaceLabeledLine,
 } from "../lib/meeting-v2/investigation-reconcile";
+import { mergeOpenQuestionContextNotes } from "../lib/meeting-v2/investigation-contract";
 
 describe("recommendedAnswerAddsNewFact", () => {
   it("skips a 1.B-style wrap-up that restates the summary", () => {
@@ -103,5 +106,57 @@ describe("isGuestPresentationItem", () => {
     assert.equal(isGuestPresentationItem("guest_presentation"), true);
     assert.equal(isGuestPresentationItem("discussion_approval"), false);
     assert.equal(isGuestPresentationItem(null), false);
+  });
+});
+
+describe("open question context notes", () => {
+  it("keeps prior briefing notes when a later pass omits them", () => {
+    const previous = [{
+      question: "What is the five-year price?",
+      recommended_answer: "",
+      confidence: "low" as const,
+      context_notes: [{ fact: "The package lists a five-year option at $41,200.", source: "package" as const }],
+    }];
+    const next = [{
+      question: "What is the five-year price?",
+      recommended_answer: "",
+      confidence: "low" as const,
+      context_notes: [],
+    }];
+    assert.equal(mergeOpenQuestionContextNotes(previous, next)[0]?.context_notes[0]?.source, "package");
+  });
+
+  it("builds briefing notes from selected facts and package sources", () => {
+    const notes = fallbackContextNotesForQuestion({
+      question: "What is the exact five-year contract price for the selected option?",
+      factResolution: {
+        facts: [{
+          field: "contract_price",
+          scope: "package_proposal",
+          candidates: [{ value: "$41,200", sourceId: "document:1", quote: "Five year $41,200" }],
+          selected: 0,
+          explanation: "Package table lists the five-year agreement at $41,200.",
+        }],
+        unresolvedQuestions: ["Confirm whether the Board selected the five-year term."],
+      },
+      sources: [{
+        id: "transcript:12",
+        kind: "transcript",
+        association: "direct",
+        text: "[00:10:00] Property Manager: we talked about the five-year option but nobody confirmed the number",
+      }],
+    });
+    assert.ok(notes.length >= 2);
+    assert.ok(notes.some((note) => note.source === "package"));
+    assert.ok(notes.some((note) => /41,200|five-year|five year/i.test(note.fact)));
+  });
+
+  it("fills empty notes from fallback sources", () => {
+    const filled = applyFallbackQuestionContextNotes({
+      questions: [{ question: "Which quote?", recommended_answer: "", confidence: "low", context_notes: [] }],
+      factResolution: { facts: [], unresolvedQuestions: [] },
+      sources: [{ id: "document:2", kind: "document", association: "direct", text: "Quote A $10,000 versus Quote B $12,000." }],
+    });
+    assert.equal(filled[0]?.context_notes[0]?.source, "package");
   });
 });

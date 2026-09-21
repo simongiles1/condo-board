@@ -134,6 +134,28 @@ export function serializeOpenQuestionsJson(questions: InvestigationOpenQuestion[
   );
 }
 
+/**
+ * Keeps prior briefing notes when a later pass omitted them.
+ */
+export function mergeOpenQuestionContextNotes(
+  previous: InvestigationOpenQuestion[],
+  next: InvestigationOpenQuestion[],
+): InvestigationOpenQuestion[] {
+  const prior = new Map(previous.map((question) => [question.question, question.context_notes]));
+  return next.map((question) =>
+    question.context_notes.length > 0
+      ? question
+      : { ...question, context_notes: prior.get(question.question) ?? [] },
+  );
+}
+
+/**
+ * True when at least one open question still has no briefing bullets.
+ */
+export function openQuestionsMissingContextNotes(questions: InvestigationOpenQuestion[]): boolean {
+  return questions.some((question) => question.context_notes.length === 0);
+}
+
 /** Malformed model output is a failed stage, never a package-derived success. */
 export function parseInvestigation(value: unknown): InvestigationDocument {
   const r = record(value);

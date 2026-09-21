@@ -74,7 +74,6 @@ import {
   inferPropertyManagementReportNumber,
   insertItemsByDiscussionPosition,
   planAdHocPlacement,
-  ensureAdHocSectionOutline,
   type AgendaListMarker,
   type AgendaOutlineNode as OutlineTreeNode,
 } from "@/lib/meeting-v2/agenda-outline";
@@ -2505,24 +2504,7 @@ function mergeAdHocItemsIntoReview(
   items: AgendaReviewItem[],
   newItems: ReviewNewItem[],
 ): AgendaReviewItem[] {
-  const normalized = ensureAdHocSectionOutline(items, (sectionCode) =>
-    syntheticReviewItem({
-      id: "synthetic-adhoc-section",
-      title: "Ad-hoc items",
-      itemNumber: sectionCode,
-      sectionLabel: "Property Management Report",
-      discussionStatus: "ad_hoc",
-    }),
-  );
-  if (newItems.length === 0) return normalized;
-
-  const positioned = newItems.filter((item) => {
-    const position = reviewItemDiscussionPosition(item);
-    return position.startSequence != null || position.startSeconds != null;
-  });
-  const unpositioned = newItems.filter((item) => !positioned.includes(item));
-
-  const extras = positioned.map((item) =>
+  const extras = newItems.map((item) =>
     syntheticReviewItem({
       id: item.id,
       title: item.title,
@@ -2539,45 +2521,19 @@ function mergeAdHocItemsIntoReview(
     }),
   );
 
-  const spliced = insertItemsByDiscussionPosition(
-    normalized,
+  return insertItemsByDiscussionPosition(
+    items,
     extras,
     reviewItemDiscussionPosition,
-  );
-
-  if (unpositioned.length === 0) return spliced;
-
-  const placement = planAdHocPlacement(
-    spliced,
-    unpositioned.length,
-    inferPropertyManagementReportNumber(spliced),
-  );
-  if (!placement) return spliced;
-
-  const tail: AgendaReviewItem[] = [];
-  if (placement.sectionMissing) {
-    tail.push(
+    (sectionCode) =>
       syntheticReviewItem({
         id: "synthetic-adhoc-section",
         title: "Ad-hoc items",
-        itemNumber: placement.sectionCode,
+        itemNumber: sectionCode,
         sectionLabel: "Property Management Report",
         discussionStatus: "ad_hoc",
       }),
-    );
-  }
-  unpositioned.forEach((item, index) => {
-    tail.push(
-      syntheticReviewItem({
-        id: item.id,
-        title: item.title,
-        itemNumber: placement.nextItemCodes[index],
-        sectionLabel: item.sectionLabel || "Property Management Report: Ad-hoc items",
-        discussionStatus: item.discussionStatus,
-      }),
-    );
-  });
-  return [...spliced, ...tail];
+  );
 }
 
 function buildAgendaOutline(items: MeetingV2Status["items"]): AgendaOutlineNode[] {
@@ -3577,19 +3533,14 @@ function HitlAgendaApprovalWorkspace({
     return map;
   }, [status.items]);
 
-  const unpositionedNewItemCount = newItems.filter((item) => {
-    const position = reviewItemDiscussionPosition(item);
-    return position.startSequence == null && position.startSeconds == null;
-  }).length;
-
   const adHocPlacement = useMemo(
     () =>
       planAdHocPlacement(
         status.items,
-        unpositionedNewItemCount,
+        newItems.length,
         inferPropertyManagementReportNumber(status.items),
       ),
-    [status.items, unpositionedNewItemCount],
+    [status.items, newItems.length],
   );
 
   const agendaOutline = useMemo(

@@ -362,106 +362,87 @@ function finiteOrNull(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function outlineHasDescendants<T extends { itemNumber?: string | null }>(
-  items: T[],
-  item: T,
+function hasDiscussionPosition(position: DiscussionPosition): boolean {
+  return finiteOrNull(position.startSequence) != null || finiteOrNull(position.startSeconds) != null;
+}
+
+function isTranscriptOnlyAdHocType(itemType: string | null | undefined): boolean {
+  const type = (itemType || "").trim().toLowerCase();
+  return type === "ad_hoc_discussion" || type === "extra_topic";
+}
+
+function occupiesDiscussionLeafCode(
+  itemNumber: string | null | undefined,
+  discussionSection: string,
 ): boolean {
-  const code = (item.itemNumber || "").trim().toLowerCase();
-  if (!code) return false;
-  return items.some((other) => {
-    const otherCode = (other.itemNumber || "").trim().toLowerCase();
-    return otherCode.startsWith(`${code}.`);
+  const code = (itemNumber || "").trim().toLowerCase();
+  const section = discussionSection.trim().toLowerCase();
+  return Boolean(section) && code.startsWith(`${section}.`);
+}
+
+function sortAdHocLeavesByDiscussion<T>(
+  leaves: T[],
+  getPosition: (item: T) => DiscussionPosition,
+): T[] {
+  return [...leaves].sort((left, right) => {
+    const compared = compareDiscussionPositions(getPosition(left), getPosition(right));
+    if (compared != null) return compared;
+    const leftHas = hasDiscussionPosition(getPosition(left));
+    const rightHas = hasDiscussionPosition(getPosition(right));
+    if (leftHas && !rightHas) return -1;
+    if (!leftHas && rightHas) return 1;
+    return 0;
   });
-}
-
-function nextUnusedChildCode(parentCode: string, takenLower: Set<string>): string {
-  let index = 0;
-  while (index < 200) {
-    const code = canonicalLeafItemCode(parentCode, index);
-    if (!takenLower.has(code.toLowerCase())) return code;
-    index += 1;
-  }
-  return `${parentCode}.${index + 1}`;
-}
-
-function firstLeafBeforeIndex<T extends { itemNumber?: string | null; title?: string | null }>(
-  items: T[],
-  index: number,
-): T | undefined {
-  for (let i = index - 1; i >= 0; i -= 1) {
-    const candidate = items[i];
-    if (isAdHocSectionTitle(candidate.title)) continue;
-    if (outlineHasDescendants(items, candidate)) continue;
-    return candidate;
-  }
-  return undefined;
-}
-
-function parentCodeForInsert<T extends { itemNumber?: string | null; title?: string | null }>(
-  items: T[],
-  insertAt: number,
-): string | null {
-  const predecessor = firstLeafBeforeIndex(items, insertAt);
-  const successor = items[insertAt];
-  return (
-    parentAgendaItemCode(predecessor?.itemNumber) ||
-    parentAgendaItemCode(successor?.itemNumber) ||
-    null
-  );
 }
 
 /**
- * Splice incoming leaves into outline order immediately before the first existing
- * leaf whose discussion starts later. Incoming items receive the next unused child
- * code under that neighbor's parent so they nest with the surrounding discussion.
+ * Keep HITL / transcript-only extras under Ad-hoc items (4.E) and order those
+ * leaves by discussion start. Official 4.D package letters are left untouched.
  */
-export function insertItemsByDiscussionPosition<T extends { itemNumber?: string | null; title?: string | null }>(
+export function insertItemsByDiscussionPosition<
+  T extends { itemNumber?: string | null; title?: string | null; itemType?: string | null },
+>(
   existing: T[],
   incoming: T[],
   getPosition: (item: T) => DiscussionPosition,
+  createHeading: (sectionCode: string) => T,
 ): T[] {
-  const positioned = incoming.filter((item) => {
-    const position = getPosition(item);
-    return finiteOrNull(position.startSequence) != null || finiteOrNull(position.startSeconds) != null;
-  });
-  if (positioned.length === 0) return existing;
+  const extras = incoming.filter((item) => (item.title || "").trim());
+  const pmReportNumber = inferPropertyManagementReportNumber(existing) || "4";
+  const sectionCode = `${pmReportNumber}.E`;
+  const discussionSection = `${pmReportNumber}.D`;
+  const { heading, leaves: occupying, rest } = partitionAdHocOccupants(existing, sectionCode);
 
-  const orderedIncoming = [...positioned].sort((left, right) => {
-    return compareDiscussionPositions(getPosition(left), getPosition(right)) ?? 0;
-  });
-
-  const result = [...existing];
-  for (const extra of orderedIncoming) {
-    const extraPos = getPosition(extra);
-    let insertAt = result.length;
-    for (let i = 0; i < result.length; i += 1) {
-      const item = result[i];
-      if (isAdHocSectionTitle(item.title) || outlineHasDescendants(result, item)) continue;
-      const compared = compareDiscussionPositions(extraPos, getPosition(item));
-      if (compared != null && compared < 0) {
-        insertAt = i;
-        break;
-      }
+  const fromDiscussionOverflow: T[] = [];
+  const keptRest: T[] = [];
+  for (const item of rest) {
+    if (
+      occupiesDiscussionLeafCode(item.itemNumber, discussionSection) &&
+      isTranscriptOnlyAdHocType(item.itemType)
+    ) {
+      fromDiscussionOverflow.push(item);
+      continue;
     }
-    result.splice(insertAt, 0, extra);
+    keptRest.push(item);
   }
 
-  const incomingIds = new Set(orderedIncoming);
-  const takenLower = new Set(
-    result
-      .map((item) => (item.itemNumber || "").trim().toLowerCase())
-      .filter(Boolean),
-  );
+  const mergedLeaves = [...occupying, ...fromDiscussionOverflow, ...extras];
+  if (mergedLeaves.length === 0) return existing;
 
-  return result.map((item, index) => {
-    if (!incomingIds.has(item)) return item;
-    const parentCode = parentCodeForInsert(result, index);
-    if (!parentCode) return item;
-    takenLower.delete((item.itemNumber || "").trim().toLowerCase());
-    const code = nextUnusedChildCode(parentCode, takenLower);
-    takenLower.add(code.toLowerCase());
-    return { ...item, itemNumber: code };
-  });
+  const sortedLeaves = sortAdHocLeavesByDiscussion(mergedLeaves, getPosition);
+  const placement = planAdHocPlacement(
+    [...keptRest, ...(heading ? [heading] : [])],
+    sortedLeaves.length,
+    pmReportNumber,
+  );
+  if (!placement) return existing;
+
+  const numberedLeaves = sortedLeaves.map((leaf, index) => ({
+    ...leaf,
+    itemNumber: placement.nextItemCodes[index],
+  }));
+  const section = heading ?? createHeading(placement.sectionCode);
+  return [...keptRest, { ...section, itemNumber: placement.sectionCode }, ...numberedLeaves];
 }
 
 const RESERVED_TOP_LEVEL_TITLE = /next board meeting|adjournment/i;

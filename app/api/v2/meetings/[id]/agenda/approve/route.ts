@@ -9,8 +9,6 @@ import { resolveMeetingV2SegmentMilestonePercent } from "@/lib/meeting-v2/pipeli
 import { updateMeetingV2Status, resetMeetingV2PostExtractData, markMeetingV2DraftStale } from "@/lib/meeting-v2/service";
 import { canonicalDiscussionTiming, withCanonicalDiscussionTiming } from "@/lib/meeting-v2/canonical-timing";
 import {
-  inferPropertyManagementReportNumber,
-  planAdHocPlacement,
   ensureAdHocSectionOutline,
   insertItemsByDiscussionPosition,
   discussionPositionFromEvidence,
@@ -223,54 +221,29 @@ export async function POST(
       };
     });
 
-    const positionedNew = pendingPrepared.filter((item) => {
-      const position = itemPosition(item);
-      return position.startSequence != null || position.startSeconds != null;
-    });
-    const unpositionedNew = pendingPrepared.filter((item) => !positionedNew.includes(item));
-
-    let orderedItems = insertItemsByDiscussionPosition(
+    const orderedItems = insertItemsByDiscussionPosition(
       placeableExisting,
-      positionedNew,
+      pendingPrepared,
       itemPosition,
+      (sectionCode) => ({
+        id: randomUUID(),
+        meetingV2Id: meetingId,
+        sourceArtifactId: existingItems[0]?.sourceArtifactId ?? null,
+        sourceSectionId: null,
+        sectionLabel: "Property Management Report",
+        title: "Ad-hoc items",
+        normalizedTitle: normalize("Ad-hoc items"),
+        itemNumber: sectionCode,
+        itemType: "ad_hoc_discussion",
+        sourcePagesJson: "[]",
+        sourceText:
+          "Discussion status: ad_hoc\nSynthesized section for transcript-only matters not on the official agenda.",
+        sortOrder: 0,
+        createdAt: new Date().toISOString(),
+        isNew: true,
+        discussionStatus: "ad_hoc",
+      }),
     );
-
-    const unpositionedPlacement = planAdHocPlacement(
-      orderedItems,
-      unpositionedNew.length,
-      inferPropertyManagementReportNumber(orderedItems),
-    );
-    if (unpositionedPlacement?.sectionMissing && unpositionedNew.length > 0) {
-      orderedItems = [
-        ...orderedItems,
-        {
-          id: randomUUID(),
-          meetingV2Id: meetingId,
-          sourceArtifactId: existingItems[0]?.sourceArtifactId ?? null,
-          sourceSectionId: null,
-          sectionLabel: "Property Management Report",
-          title: "Ad-hoc items",
-          normalizedTitle: normalize("Ad-hoc items"),
-          itemNumber: unpositionedPlacement.sectionCode,
-          itemType: "ad_hoc_discussion",
-          sourcePagesJson: "[]",
-          sourceText:
-            "Discussion status: ad_hoc\nSynthesized section for transcript-only matters not on the official agenda.",
-          sortOrder: 0,
-          createdAt: new Date().toISOString(),
-          isNew: true,
-          discussionStatus: "ad_hoc",
-        },
-      ];
-    }
-    let unpositionedCodeIndex = 0;
-    for (const item of unpositionedNew) {
-      const code =
-        unpositionedPlacement && unpositionedCodeIndex < unpositionedPlacement.nextItemCodes.length
-          ? unpositionedPlacement.nextItemCodes[unpositionedCodeIndex++]
-          : String(orderedItems.length + 1);
-      orderedItems.push({ ...item, itemNumber: code });
-    }
 
     const existingByOrderedId = new Map(normalizedExisting.map((item) => [item.id, item]));
     for (const [index, item] of orderedItems.entries()) {

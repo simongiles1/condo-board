@@ -779,51 +779,65 @@ describe("Hierarchical board-package agenda outline", () => {
     assert.equal(labeled?.sectionMissing, false);
   });
 
-  it("inserts an add-to-agenda leaf before later-discussed neighbors, not at the end", () => {
+  it("places add-to-agenda leaves in 4.E ordered by transcript time", () => {
     const existing = [
-      { id: "4", itemNumber: "4", title: "Property Management Report", startSequence: null as number | null },
-      { id: "4d", itemNumber: "4.D", title: "The items for discussion", startSequence: null },
-      { id: "a", itemNumber: "4.D.a", title: "Studio 2 invoices", startSequence: 10 },
-      { id: "b", itemNumber: "4.D.b", title: "PayScan list", startSequence: 40 },
-      { id: "c", itemNumber: "4.D.c", title: "Deferred minor items", startSequence: 90 },
-      { id: "5", itemNumber: "5", title: "Date and time of the next Board Meeting", startSequence: 200 },
+      { id: "4", itemNumber: "4", title: "Property Management Report", itemType: "agenda_section", startSequence: null as number | null },
+      { id: "4d", itemNumber: "4.D", title: "The items for discussion", itemType: "agenda_section", startSequence: null },
+      { id: "a", itemNumber: "4.D.a", title: "Studio 2 invoices", itemType: "discussion_topic", startSequence: 10 },
+      { id: "b", itemNumber: "4.D.b", title: "PayScan list", itemType: "discussion_topic", startSequence: 40 },
+      { id: "hose", itemNumber: "4.D.m", title: "Bulk Toilet Hose Replacement Program", itemType: "ad_hoc_discussion", startSequence: 55 },
+      { id: "e", itemNumber: "4.E", title: "Ad-hoc items", itemType: "ad_hoc_discussion", startSequence: null },
+      { id: "fire", itemNumber: "4.E.a", title: "Fire Alarm Activation", itemType: "ad_hoc_discussion", startSequence: 120 },
+      { id: "5", itemNumber: "5", title: "Date and time of the next Board Meeting", itemType: "agenda_section", startSequence: 200 },
     ];
-    const hose = {
-      id: "hose",
-      itemNumber: "",
-      title: "Bulk Toilet Hose Replacement Program",
-      startSequence: 55,
-    };
-    const spliced = insertItemsByDiscussionPosition(existing, [hose], (item) => ({
-      startSequence: item.startSequence,
-    }));
-    assert.deepEqual(
-      spliced.map((item) => item.title),
-      [
-        "Property Management Report",
-        "The items for discussion",
-        "Studio 2 invoices",
-        "PayScan list",
-        "Bulk Toilet Hose Replacement Program",
-        "Deferred minor items",
-        "Date and time of the next Board Meeting",
-      ],
+    const incoming = [
+      {
+        id: "hose",
+        itemNumber: "",
+        title: "Bulk Toilet Hose Replacement Program",
+        itemType: "ad_hoc_discussion",
+        startSequence: 55,
+      },
+    ];
+    const spliced = insertItemsByDiscussionPosition(
+      existing.filter((item) => item.id !== "hose"),
+      incoming,
+      (item) => ({ startSequence: item.startSequence }),
+      (sectionCode) => ({
+        id: "adhoc",
+        itemNumber: sectionCode,
+        title: "Ad-hoc items",
+        itemType: "ad_hoc_discussion",
+        startSequence: null,
+      }),
     );
-    const inserted = spliced.find((item) => item.id === "hose");
-    assert.equal(inserted?.itemNumber, "4.D.d");
+    assert.equal(spliced.find((item) => item.id === "hose")?.itemNumber, "4.E.a");
+    assert.equal(spliced.find((item) => item.id === "fire")?.itemNumber, "4.E.b");
+    assert.equal(spliced.some((item) => item.itemNumber === "4.D.m"), false);
 
     const tree = buildAgendaOutlineTree(spliced, { order: "input" });
-    const discussion = tree[0]?.children.find((child) => child.item.id === "4d");
-    assert.ok(discussion);
+    const pm = tree.find((node) => node.item.id === "4");
+    const adHoc = pm?.children.find((child) => child.displayNumber === "E");
+    assert.ok(adHoc);
     assert.deepEqual(
-      discussion.children.map((child) => child.item.title),
-      [
-        "Studio 2 invoices",
-        "PayScan list",
-        "Bulk Toilet Hose Replacement Program",
-        "Deferred minor items",
-      ],
+      adHoc.children.map((child) => child.item.title),
+      ["Bulk Toilet Hose Replacement Program", "Fire Alarm Activation"],
     );
+
+    const rehomed = insertItemsByDiscussionPosition(
+      existing,
+      [],
+      (item) => ({ startSequence: item.startSequence }),
+      (sectionCode) => ({
+        id: "adhoc",
+        itemNumber: sectionCode,
+        title: "Ad-hoc items",
+        itemType: "ad_hoc_discussion",
+        startSequence: null,
+      }),
+    );
+    assert.equal(rehomed.find((item) => item.id === "hose")?.itemNumber, "4.E.a");
+    assert.equal(rehomed.find((item) => item.id === "fire")?.itemNumber, "4.E.b");
   });
 
   it("keeps 4.E titled Ad-hoc items and letters meeting-specific extras", () => {

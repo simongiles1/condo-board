@@ -172,6 +172,7 @@ export type MeetingV2Detail = {
     confidence: string | null;
     outcome: string | null;
     openQuestions: string[];
+    openQuestionNotes: OpenQuestionContextNote[][];
     openQuestionContext: Record<string, OpenQuestionContextNote[]>;
     userAnswers: Record<string, string> | null;
     validation: Array<{
@@ -340,6 +341,34 @@ function normalizeKey(value: string | null | undefined): string {
 
 function uniqueValues<T>(values: T[]): T[] {
   return [...new Set(values)];
+}
+
+function evidenceSourcesFromContext(
+  context: AgendaItemContextDocument | null,
+  assembledContextText?: string | null,
+): EvidenceSource[] {
+  if (context?.sources?.length) return context.sources;
+  const fromChunks = Object.values(context?.chunksById ?? {}).map((chunk) => ({
+    id: chunk.chunkId,
+    kind: chunk.chunkKind === "transcript" ? ("transcript" as const) : ("document" as const),
+    association: "direct" as const,
+    text: chunk.text,
+  }));
+  if (fromChunks.length) return fromChunks;
+  const assembled = assembledContextText?.trim();
+  if (assembled) {
+    return [{ id: "assembled", kind: "document", association: "direct", text: assembled }];
+  }
+  return [];
+}
+
+/**
+ * Drops blank clarification fields so an empty Submit is not treated as an answer.
+ */
+export function filledClarificationAnswers(answers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(answers).filter(([, value]) => typeof value === "string" && value.trim()),
+  );
 }
 
 function normalizeExtractedTopic(raw: Record<string, unknown>): ExtractedAgendaTopic | null {
@@ -1894,7 +1923,7 @@ async function fillQuestionContextNotes(options: {
     const salvaged = parseSalvagedQuestionContextNotes(safeJsonObjectParse(salvage.text));
     questions = questions.map((question) => {
       if (question.context_notes.length > 0) return question;
-      const notes = salvaged.get(question.question);
+      const notes = salvaged.get(question.question) ?? salvaged.get(question.question.toLowerCase().replace(/[^a-z0-9$]+/g, " ").trim());
       return notes?.length ? { ...question, context_notes: notes } : question;
     });
   } catch {
@@ -3224,7 +3253,7 @@ export async function validateAgendaItemInvestigations(
                 : null;
             const filled = await fillQuestionContextNotes({
               document: merged,
-              sources: contextDocument?.sources ?? [],
+              sources: evidenceSourcesFromContext(contextDocument, context?.assembledContextText),
               factResolution,
             });
             return { ...candidate, ...investigationColumns(filled.document), updatedAt: nowIso() };
@@ -3677,6 +3706,9 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         confidence: investigation?.confidence ?? null,
         outcome: investigation?.outcome ?? null,
         openQuestions: storedOpenQuestionTexts(investigation?.openQuestionsJson),
+        openQuestionNotes: parseStoredOpenQuestions(investigation?.openQuestionsJson).map(
+          (entry) => entry.context_notes,
+        ),
         openQuestionContext: Object.fromEntries(
           parseStoredOpenQuestions(investigation?.openQuestionsJson).map((entry) => [
             entry.question,
@@ -3877,10 +3909,14 @@ export async function saveUserAnswers(
   if (!userAnswers || typeof userAnswers !== "object" || Array.isArray(userAnswers) || !Object.values(userAnswers).every(value => typeof value === "string")) {
     throw new Error("Clarifications must contain text answers.");
   }
+  const filled = filledClarificationAnswers(userAnswers);
+  if (Object.keys(filled).length === 0) {
+    throw new Error("Type an answer before re-evaluating.");
+  }
   const itemExists = await db.query.meetingsV2AgendaItems.findFirst({ where: and(eq(meetingsV2AgendaItems.meetingV2Id, meetingId), eq(meetingsV2AgendaItems.id, agendaItemId)) });
   if (!itemExists) throw new Error(`Agenda item ${agendaItemId} was not found.`);
   await markMeetingV2DraftStale(meetingId, "User clarification changed. Re-evaluation is required.");
-  await db.update(meetingsV2).set({ settings: sql`jsonb_set(coalesce(${meetingsV2.settings}, '{}'::jsonb), '{userClarifications}', coalesce(${meetingsV2.settings}->'userClarifications', '{}'::jsonb) || ${JSON.stringify({ [agendaItemId]: userAnswers })}::jsonb)` }).where(eq(meetingsV2.id, meetingId));
+  await db.update(meetingsV2).set({ settings: sql`jsonb_set(coalesce(${meetingsV2.settings}, '{}'::jsonb), '{userClarifications}', coalesce(${meetingsV2.settings}->'userClarifications', '{}'::jsonb) || ${JSON.stringify({ [agendaItemId]: filled })}::jsonb)` }).where(eq(meetingsV2.id, meetingId));
   await db.delete(meetingsV2ValidationResults).where(and(eq(meetingsV2ValidationResults.meetingV2Id, meetingId), eq(meetingsV2ValidationResults.agendaItemId, agendaItemId)));
   const [existing] = await db
     .select()
@@ -3895,7 +3931,7 @@ export async function saveUserAnswers(
     await db
       .update(meetingsV2AgendaItemInvestigations)
       .set({
-        userAnswersJson: JSON.stringify(userAnswers),
+        userAnswersJson: JSON.stringify(filled),
         updatedAt: nowIso(),
       })
       .where(eq(meetingsV2AgendaItemInvestigations.id, existing.id));

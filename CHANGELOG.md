@@ -10,6 +10,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V2 question briefing notes** — Each open question in the agenda side-panel Questions tab can include a **What we already know** bullet list: rewritten facts with a Transcript / Board package source, so the secretary can answer without re-reading the whole package and transcript. Notes are generated with the investigation (and repair) pass and persist on the question. If the investigator omits them, a salvage pass plus fact-ledger fallback still fills the list, and repair no longer wipes existing notes.
 
+- **Meetings V2 empty question submit** — **Submit & Re-evaluate** requires at least one typed answer. Blank fields are not stored as clarifications and no longer re-run investigation, so they cannot drop open questions.
+
 - **Meetings V2 item pipeline debugger** — Each agenda topic has a **Debug** control that opens a sandbox stepper (evidence → fact resolution → investigation → validation → rendered minutes snippet). Pick DeepSeek V4 Flash, V4.1 Flash, or Gemini 3.8 Flash per LLM step, inspect and edit the live prompts, and keep historical runs with token counts and estimated spend. These runs do not overwrite production investigation or validation.
 
 ### Changed

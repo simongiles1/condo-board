@@ -30,6 +30,7 @@ export type AgendaItemDetail = {
   }>;
   evidence?: AgendaItemDetailEvidence[];
   openQuestionContext?: Record<string, Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
+  openQuestionNotes?: Array<Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
 };
 
 type DetailTab = "flags" | "questions" | "evidence";
@@ -178,7 +179,10 @@ function QuestionsTabContent({
     <div className="space-y-5">
       {item.openQuestions.map((question, index) => {
         const fieldId = `question-answer-${item.id}-${index}`;
-        const notes = item.openQuestionContext?.[question] ?? [];
+        const notes =
+          item.openQuestionNotes?.[index]?.length
+            ? item.openQuestionNotes[index]
+            : item.openQuestionContext?.[question] ?? [];
         return (
           <div key={`${item.id}-question-${index}`} className="space-y-2">
             <label htmlFor={fieldId} className="block text-sm font-medium leading-6 text-slate-800">
@@ -238,7 +242,7 @@ function QuestionsTabContent({
       <div className="flex items-center gap-3">
         <button
           className="inline-flex items-center rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={busy}
+          disabled={busy || !Object.values(itemAnswers).some((value) => value.trim())}
           onClick={onSubmit}
           type="button"
         >

@@ -243,6 +243,7 @@ export function parseSalvagedQuestionContextNotes(value: unknown): Map<string, O
     const notes = parseOpenQuestionContextNotes((row as { context_notes?: unknown }).context_notes);
     if (!question || notes.length === 0) continue;
     map.set(question, notes);
+    map.set(question.toLowerCase().replace(/[^a-z0-9$]+/g, " ").trim(), notes);
   }
   return map;
 }

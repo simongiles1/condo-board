@@ -45,6 +45,9 @@ const strings = (v: unknown): string[] => {
   if (!Array.isArray(v) || !v.every(s => typeof s === "string")) throw new Error("Expected a string array.");
   return v.map(text).filter(Boolean);
 };
+function questionKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9$]+/g, " ").trim();
+}
 function enumValue<T extends string>(value: unknown, choices: readonly T[]): T {
   const normalized = canonicalEnum(value);
   if (!choices.includes(normalized as T)) throw new Error(`Invalid investigation enum: ${normalized || "missing"}.`);
@@ -141,11 +144,19 @@ export function mergeOpenQuestionContextNotes(
   previous: InvestigationOpenQuestion[],
   next: InvestigationOpenQuestion[],
 ): InvestigationOpenQuestion[] {
-  const prior = new Map(previous.map((question) => [question.question, question.context_notes]));
+  const prior = new Map<string, OpenQuestionContextNote[]>();
+  for (const question of previous) {
+    if (question.context_notes.length === 0) continue;
+    prior.set(question.question, question.context_notes);
+    prior.set(questionKey(question.question), question.context_notes);
+  }
   return next.map((question) =>
     question.context_notes.length > 0
       ? question
-      : { ...question, context_notes: prior.get(question.question) ?? [] },
+      : {
+          ...question,
+          context_notes: prior.get(question.question) ?? prior.get(questionKey(question.question)) ?? [],
+        },
   );
 }
 

@@ -124,6 +124,13 @@ describe("open question context notes", () => {
       context_notes: [],
     }];
     assert.equal(mergeOpenQuestionContextNotes(previous, next)[0]?.context_notes[0]?.source, "package");
+    const reworded = [{
+      question: "What is the five year price?",
+      recommended_answer: "",
+      confidence: "low" as const,
+      context_notes: [],
+    }];
+    assert.equal(mergeOpenQuestionContextNotes(previous, reworded)[0]?.context_notes[0]?.source, "package");
   });
 
   it("builds briefing notes from selected facts and package sources", () => {

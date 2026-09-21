@@ -177,6 +177,7 @@ type MeetingV2Status = {
     confidence: string | null;
     outcome: string | null;
     openQuestions: string[];
+    openQuestionNotes: Array<Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
     openQuestionContext: Record<string, Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
     userAnswers: Record<string, string> | null;
     validation: Array<{
@@ -2457,6 +2458,7 @@ function flattenAgendaDetailItems(nodes: AgendaOutlineNode[], depth = 0): Agenda
       displayNumber: node.displayNumber,
       depth,
       openQuestions: node.item.openQuestions,
+      openQuestionNotes: node.item.openQuestionNotes ?? [],
       openQuestionContext: node.item.openQuestionContext ?? {},
       validation: node.item.validation,
       evidence: node.item.evidence,
@@ -2503,6 +2505,7 @@ function syntheticReviewItem(options: {
     confidence: null,
     outcome: null,
     openQuestions: [],
+    openQuestionNotes: [],
     openQuestionContext: {},
     userAnswers: null,
     validation: [],
@@ -3934,13 +3937,20 @@ function AgendaReviewPanel({
   }, [dirtyItems, reviewItems]);
 
   async function handleSubmit(itemId: string) {
+    const filled = Object.fromEntries(
+      Object.entries(answers[itemId] ?? {}).filter(([, value]) => value.trim()),
+    );
+    if (Object.keys(filled).length === 0) {
+      setReevaluationError("Type an answer before re-evaluating.");
+      return;
+    }
     setBusyItemId(itemId);
     setReevaluationError(null);
     try {
       const response = await fetch(`/api/v2/meetings/${meetingId}/items/${itemId}/re-evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userAnswers: answers[itemId] ?? {} }),
+        body: JSON.stringify({ userAnswers: filled }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));

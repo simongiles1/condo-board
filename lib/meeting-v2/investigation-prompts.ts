@@ -42,6 +42,7 @@ Important rules:
 REFERENCE STYLE GUIDE:
 When writing the discussion_summary, you must adopt the exact summarization capability and tone of the Corporation's Gold Standard reference minutes:
 - Tone: Highly formal, third-person, professional legal corporate governance style.
+- Audience: These summaries are published minutes for the corporation. Write resolved facts only. Never mention speech-to-text, transcription, ASR, phonetic interpretation, or that an amount was "spoken as" shorthand. If fact resolution selected a package-table figure that matches conversational wording, state the dollar amount (e.g. $163,900.00), not how the figure was inferred.
 - Verbosity: Keep summaries concise (2-4 formal sentences). Do not produce bloated transcripts.
 - Filtering (Financials): Mention major financial topics discussed (e.g., GIC investments, shared reserve funds), but intentionally OMIT granular exact account balances (e.g., "$2.8M in the bank") unless they are the explicit subject of a formal vote or contractor quote.
 - Filtering (Chatter): Eliminate raw conversational context, unedited tangents, and sensitive internal disputes. If a board member explicitly requests that a sensitive discussion not be included in the minutes, you must honor that request and exclude it from the summary.

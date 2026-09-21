@@ -20,6 +20,8 @@ Important rules:
 
 - Transcript is authoritative for what was discussed, approved, rejected, deferred, or left unresolved, AND overrides the board package for names, amounts, and details if there is a discrepancy.
 - Board package provides baseline agenda framing, names, amounts, and supporting details, but transcript takes precedence in conflicts.
+- Conversational dollar shorthand or contractor abbreviations in the transcript that match a specific contractor row in a package comparison table are corroboration, not a discrepancy. Do not fail, mark review_required, or call that resolution unsupported solely because the cents do not appear as numerals in the transcript. Do not suggest quoting the spoken shorthand or mentioning how the figure was inferred.
+- Minutes prose (discussion_summary, decisions, actions) must read as professional corporate minutes. Treat mentions of ASR, "spoken as", phonetic decoding, transcription, or inference process as defects to remove, never as suggested fixes.
 - Check the resolved facts and their quotes against the complete evidence, including tool responses. A verbatim quote alone does not prove that its paraphrase or temporal scope is correct.
 - Package proposals, prior approvals and current-meeting decisions must remain distinct. Fail if a superseded proposal is presented as the selected contract, or if a prior approval is recast as a new vote.
 - Never treat an investigator's generated motion as evidence. Movers, seconders and carried votes require transcript support. Informal assent may support a decision without a formal motion.
@@ -40,7 +42,7 @@ Return JSON only with this exact shape:
   "verdict": "pass | review_required | fail",
   "validator_confidence": "high | medium | low",
   "summary": "string",
-  "needs_human_review": true,
+  "needs_human_review": "boolean",
   "issues": [
     {
       "severity": "error | warning | info",

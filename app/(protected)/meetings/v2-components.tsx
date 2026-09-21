@@ -2447,6 +2447,36 @@ function attachSourceSubItems(nodes: Array<OutlineTreeNode<AgendaReviewItem>>): 
   }));
 }
 
+function flattenAgendaDetailItems(nodes: AgendaOutlineNode[], depth = 0): AgendaItemDetail[] {
+  return nodes.flatMap((node) => [
+    {
+      id: node.item.id,
+      title: node.item.title,
+      itemNumber: node.item.itemNumber,
+      displayNumber: node.displayNumber,
+      depth,
+      openQuestions: node.item.openQuestions,
+      validation: node.item.validation,
+      evidence: node.item.evidence,
+    },
+    ...flattenAgendaDetailItems(node.children, depth + 1),
+  ]);
+}
+
+function hydrateItemAnswers(item: AgendaReviewItem): Record<string, string> {
+  const stored = item.userAnswers ?? {};
+  const next: Record<string, string> = {};
+  for (const question of item.openQuestions) {
+    next[question] = stored[question] ?? "";
+  }
+  for (const [key, value] of Object.entries(stored)) {
+    if (!(key in next) && value.trim()) {
+      next[key] = value;
+    }
+  }
+  return next;
+}
+
 function syntheticReviewItem(options: {
   id: string;
   title: string;
@@ -2936,13 +2966,6 @@ function ValidatedAgendaReviewListItem({
   subItems = [],
   discussionTiming = null,
   isHeading = false,
-  isOpen,
-  answers,
-  dirtyItems,
-  busyItemId,
-  onToggleOpen,
-  onAnswerChange,
-  onSubmit,
   onOpenDetailPanel,
   onSelectChunkId,
   onSelectTimeRange,
@@ -2956,13 +2979,6 @@ function ValidatedAgendaReviewListItem({
   subItems?: Array<{ label: string; title: string }>;
   discussionTiming?: string | null;
   isHeading?: boolean;
-  isOpen: boolean;
-  answers: Record<string, string>;
-  dirtyItems: Record<string, boolean>;
-  busyItemId: string | null;
-  onToggleOpen: () => void;
-  onAnswerChange: (itemId: string, value: string) => void;
-  onSubmit: (itemId: string) => void;
   onOpenDetailPanel: (item: AgendaReviewItem, initialTab: "flags" | "questions" | "evidence") => void;
   onSelectChunkId: (chunkId: string) => void;
   onSelectTimeRange: (timeRange: string) => void;
@@ -3007,24 +3023,7 @@ function ValidatedAgendaReviewListItem({
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0 flex-1 space-y-1.5">
-              <div
-                role={isHeading ? undefined : "button"}
-                tabIndex={isHeading ? undefined : 0}
-                onClick={isHeading ? undefined : onToggleOpen}
-                onKeyDown={
-                  isHeading
-                    ? undefined
-                    : (event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          onToggleOpen();
-                        }
-                      }
-                }
-                className={`flex w-full flex-wrap items-center gap-2 text-left ${
-                  isHeading ? "" : "cursor-pointer"
-                }`}
-              >
+              <div className="flex w-full flex-wrap items-center gap-2 text-left">
                 <span className="text-sm font-semibold text-slate-900">{item.title}</span>
 
                 {item.sourcePages && item.sourcePages.length > 0 ? (
@@ -3036,10 +3035,7 @@ function ValidatedAgendaReviewListItem({
                 {discussionTiming ? (
                   <button
                     type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onSelectTimeRange(discussionTiming);
-                    }}
+                    onClick={() => onSelectTimeRange(discussionTiming)}
                     className="inline-flex items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-teal-800 transition hover:bg-teal-100"
                     title="Click to view discussion in transcript"
                   >
@@ -3062,30 +3058,33 @@ function ValidatedAgendaReviewListItem({
                 ) : null}
 
                 {!isHeading && openQuestionCount > 0 ? (
-                  <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-950">
+                  <button
+                    type="button"
+                    onClick={() => onOpenDetailPanel(item, "questions")}
+                    className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-950 hover:border-amber-400 hover:bg-amber-200"
+                  >
                     {openQuestionCount} {openQuestionCount === 1 ? "Question" : "Questions"}
-                  </span>
+                  </button>
                 ) : null}
 
                 {!isHeading && flagCount > 0 ? (
-                  <span
+                  <button
+                    type="button"
+                    onClick={() => onOpenDetailPanel(item, "flags")}
                     className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
                       hasErrorFlags
-                        ? "border-rose-300 bg-rose-100 text-rose-950"
-                        : "border-amber-300 bg-amber-50 text-amber-950"
+                        ? "border-rose-300 bg-rose-100 text-rose-950 hover:bg-rose-200"
+                        : "border-amber-300 bg-amber-50 text-amber-950 hover:bg-amber-100"
                     }`}
                   >
                     {flagCount} {flagCount === 1 ? "Flag" : "Flags"}
-                  </span>
+                  </button>
                 ) : null}
 
                 {onOpenPipelineDebug ? (
                   <button
                     type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onOpenPipelineDebug(item.id);
-                    }}
+                    onClick={() => onOpenPipelineDebug(item.id)}
                     className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-900"
                     title="Step through evidence, facts, investigation, and validation for this item"
                   >
@@ -3125,96 +3124,6 @@ function ValidatedAgendaReviewListItem({
               ) : null}
             </div>
           </div>
-
-          {!isHeading && isOpen ? (
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <div className="mb-4 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() =>
-                    onOpenDetailPanel(
-                      item,
-                      flagCount > 0 ? "flags" : openQuestionCount > 0 ? "questions" : "evidence",
-                    )
-                  }
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-900"
-                >
-                  <span>Flags, questions & evidence</span>
-                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                    {flagCount + openQuestionCount + (item.evidence?.length ?? 0)}
-                  </span>
-                </button>
-                {onOpenPipelineDebug ? (
-                  <button
-                    type="button"
-                    onClick={() => onOpenPipelineDebug(item.id)}
-                    className="inline-flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-900"
-                  >
-                    Debug pipeline
-                  </button>
-                ) : null}
-              </div>
-
-              <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
-                <div className="space-y-3">
-                  <label
-                    htmlFor={`clarification-${item.id}`}
-                    className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500"
-                  >
-                    Clarification
-                  </label>
-                  <textarea
-                    id={`clarification-${item.id}`}
-                    className="min-h-28 w-full rounded-xl border border-slate-300 bg-slate-50 p-3 text-sm shadow-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                    onChange={(event) => onAnswerChange(item.id, event.target.value)}
-                    placeholder="Add a precise clarification for this agenda item if needed..."
-                    value={answers[item.id] ?? ""}
-                  />
-                  <div className="flex items-center gap-3">
-                    <button
-                      className="inline-flex items-center rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={busyItemId === item.id}
-                      onClick={() => onSubmit(item.id)}
-                      type="button"
-                    >
-                      {busyItemId === item.id ? "Submitting..." : "Submit & Re-evaluate"}
-                    </button>
-                    {dirtyItems[item.id] ? (
-                      <span className="text-xs text-slate-500">Unsaved clarification</span>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <h4 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Review Snapshot
-                  </h4>
-                  <dl className="mt-3 space-y-2 text-xs">
-                    <div className="flex items-center justify-between gap-4">
-                      <dt className="text-slate-500">Item type</dt>
-                      <dd className="font-medium text-slate-900">{startCase(item.itemType)}</dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-4">
-                      <dt className="text-slate-500">Outcome</dt>
-                      <dd className="font-medium text-slate-900">{startCase(item.outcome ?? "pending")}</dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-4">
-                      <dt className="text-slate-500">Confidence</dt>
-                      <dd className="font-medium text-slate-900">{startCase(item.confidence ?? "unknown")}</dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-4">
-                      <dt className="text-slate-500">Validation flags</dt>
-                      <dd className="font-medium text-slate-900">{item.validation.length}</dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-4">
-                      <dt className="text-slate-500">Open questions</dt>
-                      <dd className="font-medium text-slate-900">{item.openQuestions.length}</dd>
-                    </div>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          ) : null}
         </div>
       </div>
     </li>
@@ -3972,16 +3881,15 @@ function AgendaReviewPanel({
   ) => void;
   onReEvaluateSubmitted?: () => void;
 }) {
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
   const [dirtyItems, setDirtyItems] = useState<Record<string, boolean>>({});
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
   const [reevaluationError, setReevaluationError] = useState<string | null>(null);
-  const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [debugItemId, setDebugItemId] = useState<string | null>(null);
-  const [detailPanelItem, setDetailPanelItem] = useState<AgendaItemDetail | null>(null);
+  const [detailPanelItemId, setDetailPanelItemId] = useState<string | null>(null);
   const [detailPanelInitialTab, setDetailPanelInitialTab] = useState<
     "flags" | "questions" | "evidence"
-  >("flags");
+  >("questions");
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
   const [selectedTimeRange, setSelectedTimeRange] = useState<string | null>(null);
 
@@ -4005,12 +3913,17 @@ function AgendaReviewPanel({
     [reviewItems],
   );
 
+  const detailPanelItems = useMemo(
+    () => flattenAgendaDetailItems(validatedOutline),
+    [validatedOutline],
+  );
+
   useEffect(() => {
     setAnswers((current) => {
       const nextAnswers = { ...current };
       for (const item of reviewItems) {
         if (!dirtyItems[item.id]) {
-          nextAnswers[item.id] = item.userAnswers?.text ?? "";
+          nextAnswers[item.id] = hydrateItemAnswers(item);
         }
       }
       return nextAnswers;
@@ -4024,7 +3937,7 @@ function AgendaReviewPanel({
       const response = await fetch(`/api/v2/meetings/${meetingId}/items/${itemId}/re-evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userAnswers: { text: answers[itemId] ?? "" } }),
+        body: JSON.stringify({ userAnswers: answers[itemId] ?? {} }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -4042,14 +3955,17 @@ function AgendaReviewPanel({
     }
   }
 
-  function handleAnswerChange(itemId: string, value: string) {
+  function handleAnswerChange(itemId: string, question: string, value: string) {
     setDirtyItems((current) => ({
       ...current,
       [itemId]: true,
     }));
     setAnswers((current) => ({
       ...current,
-      [itemId]: value,
+      [itemId]: {
+        ...(current[itemId] ?? {}),
+        [question]: value,
+      },
     }));
   }
 
@@ -4058,14 +3974,19 @@ function AgendaReviewPanel({
     initialTab: "flags" | "questions" | "evidence",
   ) {
     setDetailPanelInitialTab(initialTab);
-    setDetailPanelItem({
-      id: item.id,
-      title: item.title,
-      itemNumber: item.itemNumber,
-      openQuestions: item.openQuestions,
-      validation: item.validation,
-      evidence: item.evidence,
-    });
+    setDetailPanelItemId(item.id);
+  }
+
+  function handleSelectDetailItem(itemId: string) {
+    setDetailPanelInitialTab("questions");
+    setDetailPanelItemId(itemId);
+  }
+
+  function handleOpenQuestionsFromBadge() {
+    const firstWithQuestions = detailPanelItems.find((item) => item.openQuestions.length > 0);
+    if (!firstWithQuestions) return;
+    setDetailPanelInitialTab("questions");
+    setDetailPanelItemId(firstWithQuestions.id);
   }
 
   function renderValidatedOutlineNodes(
@@ -4085,15 +4006,6 @@ function AgendaReviewPanel({
             subItems={node.subItems}
             discussionTiming={node.discussionTiming ?? null}
             isHeading={isHeading}
-            isOpen={openItemId === node.item.id}
-            answers={answers}
-            dirtyItems={dirtyItems}
-            busyItemId={busyItemId}
-            onToggleOpen={() =>
-              setOpenItemId((current) => (current === node.item.id ? null : node.item.id))
-            }
-            onAnswerChange={handleAnswerChange}
-            onSubmit={(itemId) => void handleSubmit(itemId)}
             onOpenDetailPanel={handleOpenDetailPanel}
             onSelectChunkId={setSelectedChunkId}
             onSelectTimeRange={setSelectedTimeRange}
@@ -4199,7 +4111,7 @@ function AgendaReviewPanel({
     <SectionCard
       eyebrow="Agenda Review"
       title="Review agenda items and resolve open questions"
-      description="Work through items in official agenda order. Expand an item to answer clarifications, inspect flags and evidence, or re-run investigation for that topic only."
+      description="Work through items in official agenda order. Open questions from the badge at the top or on an item, then answer each question in the side panel."
       headerAside={reviewViewToggle}
     >
       {reevaluationError ? <p role="alert" className="mb-3 text-sm text-red-700">{reevaluationError}</p> : null}
@@ -4209,9 +4121,13 @@ function AgendaReviewPanel({
             {reviewItems.length} items in agenda order
           </span>
           {openQuestionTotal > 0 ? (
-            <span className="rounded-full border border-amber-300 bg-amber-100 px-2.5 py-1 font-semibold text-amber-950">
+            <button
+              type="button"
+              onClick={handleOpenQuestionsFromBadge}
+              className="rounded-full border border-amber-300 bg-amber-100 px-2.5 py-1 font-semibold text-amber-950 hover:border-amber-400 hover:bg-amber-200"
+            >
               {openQuestionTotal} open {openQuestionTotal === 1 ? "question" : "questions"}
-            </span>
+            </button>
           ) : null}
           {flagTotal > 0 ? (
             <span className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-950">
@@ -4227,7 +4143,7 @@ function AgendaReviewPanel({
             Meeting Agenda Review
           </h4>
           <p className="mt-1 text-[11px] text-slate-500">
-            Official agenda order is preserved (1, 2, 3, 4.A.1, 4.D.a). Click an item to expand clarifications and evidence.
+            Official agenda order is preserved (1, 2, 3, 4.A.1, 4.D.a). Click a questions badge to open that item in the side panel.
           </p>
         </div>
 
@@ -4241,9 +4157,16 @@ function AgendaReviewPanel({
       </div>
 
       <AgendaItemDetailSidePanel
-        item={detailPanelItem}
+        items={detailPanelItems}
+        selectedItemId={detailPanelItemId}
         initialTab={detailPanelInitialTab}
-        onClose={() => setDetailPanelItem(null)}
+        answers={answers}
+        dirtyItems={dirtyItems}
+        busyItemId={busyItemId}
+        onSelectItem={handleSelectDetailItem}
+        onClose={() => setDetailPanelItemId(null)}
+        onAnswerChange={handleAnswerChange}
+        onSubmit={(itemId) => void handleSubmit(itemId)}
       />
 
       <ChunkPreviewModal

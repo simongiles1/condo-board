@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildEvidenceSources, draftReadiness, evidenceFingerprint, investigationFingerprint, MINUTES_PIPELINE_VERSION, parseFactResolution, type EvidenceSource } from "../lib/meeting-v2/evidence-contract";
+import { buildEvidenceSources, draftReadiness, evidenceFingerprint, FACT_RESOLUTION_PROMPT, investigationFingerprint, MINUTES_PIPELINE_VERSION, parseFactResolution, type EvidenceSource } from "../lib/meeting-v2/evidence-contract";
+import { AGENDA_ITEM_INVESTIGATION_PROMPT } from "../lib/meeting-v2/investigation-prompts";
+import { AGENDA_ITEM_REPAIR_PROMPT } from "../lib/meeting-v2/repair-prompts";
+import { AGENDA_ITEM_VALIDATION_PROMPT } from "../lib/meeting-v2/validation-prompts";
 import { parseInvestigation } from "../lib/meeting-v2/investigation-contract";
 import { resolveAgendaFacts } from "../lib/meeting-v2/fact-resolution";
 import { buildMeetingV2DraftArtifact } from "../lib/meeting-v2/draft-builder";
@@ -342,5 +345,16 @@ describe("complete agenda numbering and restricted filtering", () => {
     const parts = output.contentMarkdown.split(`## ${RESTRICTED_ADDENDUM_TITLE}`);
     assert.doesNotMatch(parts[0], /Private presentation|Private letter/);
     assert.match(parts[1], /Private presentation/); assert.match(parts[1], /Private letter/);
+  });
+});
+
+describe("published minutes must not narrate ASR process", () => {
+  it("keeps fact, investigation, validation, and repair prompts aligned against spoken-as minutes prose", () => {
+    assert.match(FACT_RESOLUTION_PROMPT, /selected\.value must be the professional resolved fact/);
+    assert.doesNotMatch(FACT_RESOLUTION_PROMPT, /speaking "100 and sixty-three"/);
+    assert.match(AGENDA_ITEM_INVESTIGATION_PROMPT, /Never mention speech-to-text/);
+    assert.match(AGENDA_ITEM_VALIDATION_PROMPT, /corroboration, not a discrepancy/);
+    assert.match(AGENDA_ITEM_VALIDATION_PROMPT, /never as suggested fixes/);
+    assert.match(AGENDA_ITEM_REPAIR_PROMPT, /Do not follow a validator suggestion that would insert process language/);
   });
 });

@@ -12,6 +12,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Meetings V2 agenda questions review** — The **X open questions** badge and per-item question badges open the side panel directly. The panel lists every agenda item with numbering indent; only items with questions are selectable and each row shows a question count. Each open question has its own answer field. The Review Snapshot is removed (it duplicated outcome, confidence, and counts already on the agenda row).
+
 - **Meetings V2 investigation open questions** — Investigation and repair prompts now treat the fact-resolution ledger as closed for selected fields: do not re-ask contractor, amount, or prior-approval details that already have a selected candidate and an empty `unresolvedQuestions` list.
 
 - **Meetings V2 fact resolution prompt guidance** — Updated the fact resolution system instruction to guide models on speech-to-text (ASR) phonetic inaccuracies, homophones, conversational shorthand for figures, skipped or deferred topics, and informal board directions to prevent spurious unresolved questions.
@@ -31,6 +33,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V2 segmenter compare lab** — Temporary full-page tool on the meeting More menu. Pick a model for the transcript walk (overall segmenter) and a model for span-edge / gap judges, with a thinking toggle. Each combination is a stored run with token cost. Side-by-side panes share one scroll; cue rows stay aligned and only the section boxes differ. Runs do not rewrite saved agenda items. Models: DeepSeek V4 Flash, DeepSeek V4.1 Flash (`deepseek-flash`), Gemini 3.8 Flash.
 
 ### Fixed
+
+- **Meetings V2 minutes ASR process language** — Published discussion summaries no longer quote speech-to-text wording such as an amount "spoken as" a truncated figure. Fact resolution still maps conversational shorthand to the matching package-table amount; investigation, validation, and the production-only repair pass are instructed to write the resolved dollar figure and never to suggest inserting transcription-process language.
 
 - **Meetings V2 add-to-agenda placement** — Accepting an AI discrepancy keeps the topic under **Ad-hoc items** (4.E) and orders that list by transcript discussion time. Transcript-only ad-hoc rows that had been nested under 4.D are moved into 4.E. Official package 4.D letters stay frozen.
 

@@ -7,13 +7,26 @@ export type OpenQuestionContextNote = {
   source: OpenQuestionFactSource;
 };
 
-/** One unresolved investigation question, including a recommended answer and briefing notes. */
+/** One unresolved investigation question, including clickable replies and briefing notes. */
 export type InvestigationOpenQuestion = {
   question: string;
   recommended_answer: string;
+  /** Short replies the secretary can click. Empty when the model did not offer any. */
+  answer_options?: string[];
   confidence: "high" | "medium" | "low";
   context_notes: OpenQuestionContextNote[];
 };
+
+/**
+ * Replies to show as buttons. Uses answer_options, or the recommended answer
+ * when the model only supplied that.
+ */
+export function clickableAnswers(question: Pick<InvestigationOpenQuestion, "answer_options" | "recommended_answer">): string[] {
+  const options = [...new Set((question.answer_options ?? []).map((option) => option.trim()).filter(Boolean))].slice(0, 4);
+  if (options.length > 0) return options;
+  const recommended = question.recommended_answer.trim();
+  return recommended ? [recommended] : [];
+}
 
 export type InvestigationDocument = {
   discussion_summary: string;
@@ -80,6 +93,18 @@ export function parseOpenQuestionContextNotes(value: unknown): OpenQuestionConte
   return notes;
 }
 
+function parseAnswerOptions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const options: string[] = [];
+  for (const entry of value) {
+    const option = text(entry);
+    if (!option || options.includes(option)) continue;
+    options.push(option);
+    if (options.length >= 4) break;
+  }
+  return options;
+}
+
 function parseOpenQuestion(value: unknown): InvestigationOpenQuestion | null {
   if (typeof value === "string") {
     const question = text(value);
@@ -92,6 +117,7 @@ function parseOpenQuestion(value: unknown): InvestigationOpenQuestion | null {
   return {
     question: textValue,
     recommended_answer: text(question.recommended_answer),
+    answer_options: parseAnswerOptions(question.answer_options),
     confidence: confidence === "HIGH" ? "high" : confidence === "MEDIUM" ? "medium" : "low",
     context_notes: parseOpenQuestionContextNotes(question.context_notes ?? question.briefing),
   };
@@ -132,6 +158,8 @@ export function serializeOpenQuestionsJson(questions: InvestigationOpenQuestion[
   return JSON.stringify(
     questions.map((question) => ({
       question: question.question,
+      recommended_answer: question.recommended_answer,
+      answer_options: question.answer_options ?? [],
       context_notes: question.context_notes,
     })),
   );
@@ -144,20 +172,35 @@ export function mergeOpenQuestionContextNotes(
   previous: InvestigationOpenQuestion[],
   next: InvestigationOpenQuestion[],
 ): InvestigationOpenQuestion[] {
-  const prior = new Map<string, OpenQuestionContextNote[]>();
+  const priorNotes = new Map<string, OpenQuestionContextNote[]>();
+  const priorOptions = new Map<string, string[]>();
+  const priorRecommended = new Map<string, string>();
   for (const question of previous) {
-    if (question.context_notes.length === 0) continue;
-    prior.set(question.question, question.context_notes);
-    prior.set(questionKey(question.question), question.context_notes);
+    const keys = [question.question, questionKey(question.question)];
+    if (question.context_notes.length > 0) {
+      for (const key of keys) priorNotes.set(key, question.context_notes);
+    }
+    const options = question.answer_options ?? [];
+    if (options.length > 0) {
+      for (const key of keys) priorOptions.set(key, options);
+    }
+    if (question.recommended_answer) {
+      for (const key of keys) priorRecommended.set(key, question.recommended_answer);
+    }
   }
-  return next.map((question) =>
-    question.context_notes.length > 0
-      ? question
-      : {
-          ...question,
-          context_notes: prior.get(question.question) ?? prior.get(questionKey(question.question)) ?? [],
-        },
-  );
+  return next.map((question) => {
+    const notes = question.context_notes.length > 0
+      ? question.context_notes
+      : priorNotes.get(question.question) ?? priorNotes.get(questionKey(question.question)) ?? [];
+    const options = (question.answer_options ?? []).length > 0
+      ? question.answer_options
+      : priorOptions.get(question.question) ?? priorOptions.get(questionKey(question.question)) ?? [];
+    const recommended = question.recommended_answer
+      || priorRecommended.get(question.question)
+      || priorRecommended.get(questionKey(question.question))
+      || "";
+    return { ...question, context_notes: notes, answer_options: options, recommended_answer: recommended };
+  });
 }
 
 /**

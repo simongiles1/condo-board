@@ -10,7 +10,9 @@ import {
   applyFallbackQuestionContextNotes,
   applyRevisedNotes,
   fallbackContextNotesForQuestion,
+  isFormalityGapQuestion,
   isGuestPresentationItem,
+  omitBlockedOpenQuestions,
   recommendedAnswerAddsNewFact,
   replaceLabeledLine,
 } from "../lib/meeting-v2/investigation-reconcile";
@@ -53,6 +55,64 @@ describe("recommendedAnswerAddsNewFact", () => {
     const summary = "The Board discussed forwarding the booster pump contract for legal review.";
     const answer = "Management is directed to forward the CCDC contract to Joseph for legal review.";
     assert.equal(recommendedAnswerAddsNewFact(summary, answer), true);
+  });
+});
+
+describe("omitBlockedOpenQuestions", () => {
+  const question = (text: string) => ({
+    question: text,
+    recommended_answer: "",
+    confidence: "low" as const,
+    context_notes: [],
+  });
+
+  it("drops a question that only asks whether missing motion language was an approval", () => {
+    assert.equal(
+      isFormalityGapQuestion(
+        "Was the Board's acceptance of the financial statements a formal approval, given that no motion, mover, seconder, or vote was recorded?",
+      ),
+      true,
+    );
+    const kept = omitBlockedOpenQuestions(
+      [question("Was acceptance a formal approval, given that no motion, mover, seconder, or vote was recorded?")],
+      { facts: [], unresolvedQuestions: [] },
+    );
+    assert.equal(kept.length, 0);
+  });
+
+  it("keeps a question that chooses between an unadopted package figure and a settled decision only while the ledger is unresolved", () => {
+    const choice = question("Was the approval for the base scope, or for separate work, and how does it relate to the package proposal at $90,000?");
+    const facts = {
+      facts: [
+        {
+          field: "amount",
+          scope: "current_decision" as const,
+          candidates: [{ value: "$80,100.00", sourceId: "document:1", quote: "$80,100.00" }],
+          selected: 0,
+          explanation: "Selected.",
+        },
+        {
+          field: "amount",
+          scope: "package_proposal" as const,
+          candidates: [{ value: "$90,000", sourceId: "document:1", quote: "$90,000" }],
+          selected: 0,
+          explanation: "Package proposal.",
+        },
+      ],
+      unresolvedQuestions: [] as string[],
+    };
+    assert.equal(omitBlockedOpenQuestions([choice], facts).length, 0);
+    assert.equal(
+      omitBlockedOpenQuestions([choice], { ...facts, unresolvedQuestions: ["Which scope was approved?"] }).length,
+      1,
+    );
+    assert.equal(
+      omitBlockedOpenQuestions(
+        [question("Did management confirm the start date?")],
+        facts,
+      ).length,
+      1,
+    );
   });
 });
 

@@ -1,3 +1,4 @@
+import { RESOLVED_FACTS_MARKER } from "@/lib/meeting-v2/investigation-prompts";
 import type {
   ItemDebugModelId,
   ItemDebugRun,
@@ -137,7 +138,12 @@ function extractInvestigationSourcesFromPrompt(userPrompt: string): unknown | nu
 }
 
 function extractInvestigationFactsFromPrompt(userPrompt: string): unknown | null {
-  const marker = "Resolved facts (preserve temporal scope and rejected alternatives):";
+  const markers = [
+    RESOLVED_FACTS_MARKER,
+    "Resolved facts (preserve temporal scope and rejected alternatives):",
+  ];
+  const marker = markers.find((candidate) => userPrompt.includes(candidate));
+  if (!marker) return null;
   const idx = userPrompt.indexOf(marker);
   if (idx < 0) return null;
   const rest = userPrompt.slice(idx + marker.length).trim();

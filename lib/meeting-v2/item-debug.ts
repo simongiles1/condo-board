@@ -23,7 +23,7 @@ import {
 } from "@/lib/meeting-v2/evidence-contract";
 import { resolveAgendaFacts } from "@/lib/meeting-v2/fact-resolution";
 import { parseInvestigation, type InvestigationDocument } from "@/lib/meeting-v2/investigation-contract";
-import { AGENDA_ITEM_INVESTIGATION_PROMPT } from "@/lib/meeting-v2/investigation-prompts";
+import { AGENDA_ITEM_INVESTIGATION_PROMPT, RESOLVED_FACTS_MARKER } from "@/lib/meeting-v2/investigation-prompts";
 import {
   loadInvestigationToolRuntime,
   runToolEnabledInvestigation,
@@ -280,7 +280,7 @@ function investigationUserPrompt(options: {
     "Additional user clarification",
     options.answerText ?? "None",
     "",
-    "Resolved facts (preserve temporal scope and rejected alternatives):",
+    `${RESOLVED_FACTS_MARKER}`,
     JSON.stringify(options.facts ?? { facts: [], unresolvedQuestions: [] }, null, 2),
   ].join("\n");
 }

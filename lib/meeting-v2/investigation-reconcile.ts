@@ -4,7 +4,7 @@
  * from absorbing later PM-report resolutions.
  */
 
-import type { EvidenceSource, FactResolution } from "./evidence-contract";
+import { dollarAmounts, isSpokenThousandsTruncation, type EvidenceSource, type FactResolution } from "./evidence-contract";
 import {
   parseOpenQuestionContextNotes,
   type InvestigationOpenQuestion,
@@ -75,6 +75,68 @@ export function recommendedAnswerAddsNewFact(summary: string, answer: string): b
     ...properFactTokens(normalizedAnswer),
   ];
   return answerFacts.some((fact) => !summaryFacts.has(fact));
+}
+
+const FORMALITY_GAP = /\b(formal approval|formally approved|mover|seconder|seconded|recorded vote|no motion|without a (?:motion|vote|seconder|mover))\b/i;
+const SUBSTANTIVE_CHOICE = /\b(which (?:contractor|amount|quote|option|vendor)|or for|versus|how does it relate|instead of)\b/i;
+const CHOICE_LANGUAGE = /\b(?:\bor\b|versus|vs\.?|how does it relate|instead of)\b/i;
+
+/**
+ * True when the question only asks whether missing motion language blocks a decision.
+ * A question that also asks the reader to choose between substantive alternatives stays.
+ */
+export function isFormalityGapQuestion(question: string): boolean {
+  return FORMALITY_GAP.test(question) && !SUBSTANTIVE_CHOICE.test(question);
+}
+
+function selectedDecisionAmounts(facts: FactResolution): number[] {
+  const amounts: number[] = [];
+  for (const fact of facts.facts) {
+    if (fact.selected == null) continue;
+    if (fact.scope !== "prior_approval" && fact.scope !== "current_decision") continue;
+    const selected = fact.candidates[fact.selected];
+    if (!selected) continue;
+    amounts.push(...dollarAmounts(selected.value));
+  }
+  return amounts;
+}
+
+function unadoptedPackageAmounts(facts: FactResolution, decided: number[]): number[] {
+  const amounts: number[] = [];
+  for (const fact of facts.facts) {
+    if (fact.scope !== "package_proposal") continue;
+    for (const candidate of fact.candidates) {
+      for (const amount of dollarAmounts(candidate.value)) {
+        const adopted = decided.some(
+          (decision) => Math.abs(decision - amount) < 0.001
+            || isSpokenThousandsTruncation(amount, decision)
+            || isSpokenThousandsTruncation(decision, amount),
+        );
+        if (!adopted) amounts.push(amount);
+      }
+    }
+  }
+  return amounts;
+}
+
+/**
+ * Drops questions that only exist because a motion was not recited, and questions
+ * that ask the reader to choose an unadopted package figure after a decision amount
+ * is already selected and the fact ledger has nothing unresolved.
+ */
+export function omitBlockedOpenQuestions(
+  questions: InvestigationOpenQuestion[],
+  factResolution: FactResolution | null | undefined,
+): InvestigationOpenQuestion[] {
+  const ledgerClear = !factResolution || factResolution.unresolvedQuestions.length === 0;
+  const decided = factResolution ? selectedDecisionAmounts(factResolution) : [];
+  const unadopted = factResolution && decided.length > 0 ? unadoptedPackageAmounts(factResolution, decided) : [];
+  return questions.filter((question) => {
+    if (isFormalityGapQuestion(question.question)) return false;
+    if (!ledgerClear || unadopted.length === 0 || !CHOICE_LANGUAGE.test(question.question)) return true;
+    const asked = dollarAmounts(question.question);
+    return !asked.some((amount) => unadopted.some((proposal) => Math.abs(proposal - amount) < 0.001));
+  });
 }
 
 export function replaceLabeledLine(text: string, label: string, value: string | null): string {

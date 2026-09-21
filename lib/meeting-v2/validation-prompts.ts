@@ -18,19 +18,19 @@ Primary checks:
 
 Important rules:
 
-- Transcript is authoritative for what was discussed, approved, rejected, deferred, or left unresolved, AND overrides the board package for names, amounts, and details if there is a discrepancy.
-- Board package provides baseline agenda framing, names, amounts, and supporting details, but transcript takes precedence in conflicts.
-- Conversational dollar shorthand or contractor abbreviations in the transcript that match a specific contractor row in a package comparison table are corroboration, not a discrepancy. Do not fail, mark review_required, or call that resolution unsupported solely because the cents do not appear as numerals in the transcript. Do not suggest quoting the spoken shorthand or mentioning how the figure was inferred.
-- Minutes prose (discussion_summary, decisions, actions) must read as professional corporate minutes. Treat mentions of ASR, "spoken as", phonetic decoding, transcription, or inference process as defects to remove, never as suggested fixes.
+- Transcript is authoritative for what was discussed, approved, rejected, deferred, or left unresolved. A spoken amount that only drops the digits below the thousands place, and matches exactly one package figure for the same party, is that package figure, not a discrepancy. A different party or a different thousands place does override the package.
+- Board package provides baseline agenda framing, names, and the precise figures speakers truncate.
+- Do not fail, mark review_required, or call a resolution unsupported because the cents were not spoken. Do not suggest quoting the spoken shorthand or mentioning how the figure was inferred. Do not suggest rewriting a package figure back to the rounded spoken number.
+- Minutes prose (discussion_summary, decisions, actions, revised notes) must read as professional corporate minutes. Treat mentions of speech-to-text, "spoken as", transcription, or inference process as defects to remove. Also treat narration of a recommendation the board did not adopt, or of the board overriding management, as a defect to remove. Suggested fixes state the decision, not the path that was not taken.
 - Check the resolved facts and their quotes against the complete evidence, including tool responses. A verbatim quote alone does not prove that its paraphrase or temporal scope is correct.
 - Package proposals, prior approvals and current-meeting decisions must remain distinct. Fail if a superseded proposal is presented as the selected contract, or if a prior approval is recast as a new vote.
-- Never treat an investigator's generated motion as evidence. Movers, seconders and carried votes require transcript support. Informal assent may support a decision without a formal motion.
+- Never treat an investigator's generated motion as evidence. Do not invent a mover or seconder. When a proposed approval or direction drew proceed replies ("no questions", "fine to approve", agreement, moving on) and nobody stated a condition that blocks the decision, APPROVED or the recorded direction is supported. Do not require a motion, and do not flag the item or suggest an open question, only because that language is missing.
 - Neighboring and related sources may refer to a different item. Direct associations are preferred; require a demonstrated connection before borrowing a fact from elsewhere.
 - Prefer evidence-backed criticism over speculation.
 - If evidence is incomplete, say so clearly instead of guessing.
 - Do not fail an item only because a due date is null.
-- Do not require a formal motion if the meeting clearly reached an action or direction without one.
-- If the outcome is APPROVED or REJECTED, be especially strict. Those outcomes need clear support.
+- Do not require a formal motion if the meeting reached an approval or direction without one.
+- If the outcome is APPROVED or REJECTED, require support in the transcript. Proceed replies on a proposed approval are that support. A blocking condition ("we need X before we can decide") is not.
 - If the outcome is DEFERRED, NO_DECISION, or UNCLEAR, allow ambiguity as long as it is described honestly.
 - If the investigation is mostly sound but has some ambiguity, use review_required instead of fail.
 - Use fail only when the investigation contains a material unsupported claim, contradiction, or trust-breaking problem.

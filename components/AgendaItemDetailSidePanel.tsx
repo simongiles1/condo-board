@@ -31,6 +31,7 @@ export type AgendaItemDetail = {
   evidence?: AgendaItemDetailEvidence[];
   openQuestionContext?: Record<string, Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
   openQuestionNotes?: Array<Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
+  openQuestionOptions?: string[][];
 };
 
 type DetailTab = "flags" | "questions" | "evidence";
@@ -210,10 +211,36 @@ function QuestionsTabContent({
                 </ul>
               </div>
             ) : null}
+            {(item.openQuestionOptions?.[index] ?? []).length > 0 ? (
+              <div className="flex flex-col gap-2" role="group" aria-label="Suggested answers">
+                {(item.openQuestionOptions?.[index] ?? []).map((option, optionIndex) => {
+                  const selected = (itemAnswers[question] ?? "") === option;
+                  return (
+                    <button
+                      key={`${fieldId}-option-${optionIndex}`}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => onAnswerChange(question, option)}
+                      className={`rounded-xl border px-3 py-2 text-left text-sm leading-5 transition ${
+                        selected
+                          ? "border-teal-600 bg-teal-50 text-teal-950"
+                          : "border-slate-200 bg-white text-slate-800 hover:border-teal-300 hover:bg-teal-50/60"
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
             <textarea
               id={fieldId}
               className="min-h-24 w-full rounded-xl border border-slate-300 bg-slate-50 p-3 text-sm shadow-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
-              placeholder="Answer this question for the next investigation pass..."
+              placeholder={
+                (item.openQuestionOptions?.[index] ?? []).length > 0
+                  ? "Or write your own answer..."
+                  : "Answer this question for the next investigation pass..."
+              }
               value={itemAnswers[question] ?? ""}
               onChange={(event) => onAnswerChange(question, event.target.value)}
             />

@@ -301,6 +301,7 @@ Transcript rules:
 - For any topic you touch, include the current transcript chunk id in sourceChunkIds and the current segment range in sourceTranscriptRanges.
 - Keep sourceText very short. Use one short direct phrase from this transcript chunk, not a long recap.
 - Keep notes short and factual. Prefer at most one or two concise notes per topic.
+- Notes state a decision or direction. Do not log each speaker turn, and do not note that the board overrode or declined a recommendation. A spoken amount that only drops the digits below the thousands place, and matches one package figure for that party, is written as that package figure.
 - Keep aliases and notes minimal. Only include them when they will help later retrieval.
 - If the matter concerns a specific suite/unit, owner dispute, chargeback, legal letter, records request, incident, complaint, or personnel issue, mark visibility as RESTRICTED.
 - Use aliases for shorthand names, partial names, speaker phrasing, contractor names, and abbreviations that may help later evidence retrieval.

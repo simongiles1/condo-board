@@ -178,7 +178,9 @@ type MeetingV2Status = {
     outcome: string | null;
     openQuestions: string[];
     openQuestionNotes: Array<Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
+    openQuestionOptions?: string[][];
     openQuestionContext: Record<string, Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
+    revisedNotes?: string[];
     userAnswers: Record<string, string> | null;
     validation: Array<{
       severity: string;
@@ -2409,6 +2411,13 @@ function getDiscrepancyKind(disc: {
 function extractAgendaSubItemsFromSource(
   item: MeetingV2Status["items"][number],
 ): Array<{ label: string; title: string }> {
+  if (item.revisedNotes && item.revisedNotes.length > 0) {
+    return item.revisedNotes.map((title, index) => ({
+      label: String.fromCharCode(97 + index),
+      title,
+    }));
+  }
+
   const sourceText = item.sourceText ?? "";
   const notesMatch = sourceText.match(/Notes:\s*(.+?)(?:\n|$)/i);
   if (notesMatch) {
@@ -2459,6 +2468,7 @@ function flattenAgendaDetailItems(nodes: AgendaOutlineNode[], depth = 0): Agenda
       depth,
       openQuestions: node.item.openQuestions,
       openQuestionNotes: node.item.openQuestionNotes ?? [],
+      openQuestionOptions: node.item.openQuestionOptions ?? [],
       openQuestionContext: node.item.openQuestionContext ?? {},
       validation: node.item.validation,
       evidence: node.item.evidence,

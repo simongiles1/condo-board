@@ -109,6 +109,50 @@ describe("source precedence and loss prevention", () => {
     assert.throws(() => parseFactResolution({ ...resolution, facts: [{ ...resolution.facts[0], selected: 0 }] }, evidence), /package evidence over meeting evidence/);
     assert.throws(() => parseFactResolution({ ...resolution, facts: [{ ...resolution.facts[0], scope: "current_decision", selected: 0 }] }, evidence));
   });
+  it("restores digits below the thousands place from the one matching package figure", () => {
+    const sources: EvidenceSource[] = [
+      { id: "document:9", kind: "document", association: "direct", text: "North Plumbing $48,900.00 plus HST" },
+      { id: "transcript:9", kind: "transcript", association: "direct", text: "The board approved North Plumbing for $48,000." },
+    ];
+    const raw = {
+      facts: [{
+        field: "amount",
+        scope: "prior_approval" as const,
+        candidates: [
+          { value: "$48,000", sourceId: "transcript:9", quote: "North Plumbing for $48,000" },
+          { value: "$48,900.00", sourceId: "document:9", quote: "$48,900.00 plus HST" },
+        ],
+        selected: 0,
+        explanation: "The transcript named the contractor and a round figure.",
+      }],
+      unresolvedQuestions: ["Is the amount $48,000 or $48,900?"],
+    };
+    const aligned = parseFactResolution(raw, sources);
+    assert.equal(aligned.facts[0].candidates[aligned.facts[0].selected!].value, "$48,900.00");
+    assert.deepEqual(aligned.unresolvedQuestions, []);
+    const alreadyPrecise = parseFactResolution({
+      ...raw,
+      facts: [{ ...raw.facts[0], scope: "current_decision", selected: 1 }],
+      unresolvedQuestions: ["Who signs?"],
+    }, sources);
+    assert.equal(alreadyPrecise.facts[0].candidates[alreadyPrecise.facts[0].selected!].value, "$48,900.00");
+    assert.deepEqual(alreadyPrecise.unresolvedQuestions, ["Who signs?"]);
+    const exactRow = parseFactResolution({
+      facts: [{
+        field: "amount",
+        scope: "prior_approval",
+        candidates: [
+          { value: "$48,000", sourceId: "transcript:9", quote: "North Plumbing for $48,000" },
+          { value: "$48,000.00", sourceId: "document:9", quote: "North Plumbing $48,900.00 plus HST" },
+          { value: "$48,900.00", sourceId: "document:9", quote: "$48,900.00 plus HST" },
+        ],
+        selected: 0,
+        explanation: "The package has an exact row for the spoken number.",
+      }],
+      unresolvedQuestions: [],
+    }, [{ ...sources[0], text: "North Plumbing $48,000.00 and North Plumbing $48,900.00 plus HST" }, sources[1]]);
+    assert.equal(exactRow.facts[0].candidates[exactRow.facts[0].selected!].value, "$48,000");
+  });
   it("rejects invented quotations and malformed resolution JSON", () => {
     assert.throws(() => parseFactResolution({ facts: [{ ...resolution.facts[0], candidates: [{ value: "approved", sourceId: "transcript:165", quote: "The board approved Ambient Mechanical" }] }], unresolvedQuestions: [] }, evidence));
     assert.throws(() => parseFactResolution({}, evidence));
@@ -365,11 +409,11 @@ describe("complete agenda numbering and restricted filtering", () => {
 
 describe("published minutes must not narrate ASR process", () => {
   it("keeps fact, investigation, validation, and repair prompts aligned against spoken-as minutes prose", () => {
-    assert.match(FACT_RESOLUTION_PROMPT, /selected\.value must be the professional resolved fact/);
+    assert.match(FACT_RESOLUTION_PROMPT, /never the rounded spoken number/);
     assert.doesNotMatch(FACT_RESOLUTION_PROMPT, /speaking "100 and sixty-three"/);
     assert.match(AGENDA_ITEM_INVESTIGATION_PROMPT, /Never mention speech-to-text/);
-    assert.match(AGENDA_ITEM_VALIDATION_PROMPT, /corroboration, not a discrepancy/);
-    assert.match(AGENDA_ITEM_VALIDATION_PROMPT, /never as suggested fixes/);
+    assert.match(AGENDA_ITEM_VALIDATION_PROMPT, /not a discrepancy/);
+    assert.match(AGENDA_ITEM_VALIDATION_PROMPT, /Suggested fixes state the decision/);
     assert.match(AGENDA_ITEM_REPAIR_PROMPT, /Do not follow a validator suggestion that would insert process language/);
   });
 });

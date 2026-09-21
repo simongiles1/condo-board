@@ -162,6 +162,99 @@ function coerceUnresolvedQuestions(raw: unknown, salvage: boolean): string[] {
   return questions;
 }
 
+/** Dollar amounts at or above $1,000 found in a fact value or question. */
+export function dollarAmounts(text: string): number[] {
+  const amounts: number[] = [];
+  for (const match of text.matchAll(/\$?\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?/g)) {
+    const whole = Number((match[1] ?? "").replace(/,/g, ""));
+    const fraction = match[2] ? Number(`0.${match[2]}`) : 0;
+    const amount = whole + fraction;
+    if (!Number.isFinite(amount) || amount < 1000) continue;
+    amounts.push(Math.round(amount * 100) / 100);
+  }
+  return amounts;
+}
+
+/**
+ * True when `spoken` is the same figure as `precise` with the portion below
+ * the thousands place dropped. Nearest-thousand speech is not a match:
+ * 150,000 does not stand for 149,800.
+ */
+export function isSpokenThousandsTruncation(spoken: number, precise: number): boolean {
+  // CONCERN: nearest-thousand speech ("150" for 149,800) stays unresolved; only truncation below the thousands place is aligned.
+  if (spoken < 1000 || precise < 1000 || spoken === precise) return false;
+  if (spoken % 1000 !== 0 || precise % 1000 === 0) return false;
+  return Math.floor(precise / 1000) * 1000 === spoken;
+}
+
+type AmountCandidate = { index: number; amount: number; kind: EvidenceSource["kind"] };
+
+function amountCandidates(
+  candidates: ResolvedFact["candidates"],
+  byId: Map<string, EvidenceSource>,
+): AmountCandidate[] {
+  const hits: AmountCandidate[] = [];
+  candidates.forEach((candidate, index) => {
+    const source = byId.get(candidate.sourceId);
+    if (!source) return;
+    for (const amount of dollarAmounts(candidate.value)) {
+      hits.push({ index, amount, kind: source.kind });
+    }
+  });
+  return hits;
+}
+
+/**
+ * When the transcript states a round thousands figure and exactly one package
+ * figure is that number plus the dropped remainder, select the package figure.
+ * An exact package row for the spoken number blocks the alignment.
+ */
+export function alignSpokenThousandsAmount(
+  candidates: ResolvedFact["candidates"],
+  selected: number,
+  byId: Map<string, EvidenceSource>,
+): number {
+  const pair = uniqueSpokenThousandsPair(candidates, byId);
+  return pair ? pair.documentIndex : selected;
+}
+
+/** The spoken and package amounts when this selection is their unique truncation pair. */
+export function spokenThousandsPair(
+  candidates: ResolvedFact["candidates"],
+  selected: number,
+  byId: Map<string, EvidenceSource>,
+): { spoken: number; precise: number } | null {
+  const pair = uniqueSpokenThousandsPair(candidates, byId);
+  if (!pair || pair.documentIndex !== selected) return null;
+  return { spoken: pair.spoken, precise: pair.precise };
+}
+
+function uniqueSpokenThousandsPair(
+  candidates: ResolvedFact["candidates"],
+  byId: Map<string, EvidenceSource>,
+): { documentIndex: number; spoken: number; precise: number } | null {
+  const hits = amountCandidates(candidates, byId);
+  const pairs: Array<{ documentIndex: number; spoken: number; precise: number }> = [];
+  for (const spoken of hits) {
+    if (spoken.kind !== "transcript" || spoken.amount % 1000 !== 0) continue;
+    const exactPackageRow = hits.some(
+      (hit) => hit.kind === "document" && Math.abs(hit.amount - spoken.amount) < 0.001,
+    );
+    if (exactPackageRow) continue;
+    const matches = hits.filter(
+      (hit) => hit.kind === "document" && isSpokenThousandsTruncation(spoken.amount, hit.amount),
+    );
+    const documentIndexes = [...new Set(matches.map((hit) => hit.index))];
+    if (documentIndexes.length !== 1) continue;
+    const precise = matches.find((hit) => hit.index === documentIndexes[0]);
+    if (!precise) continue;
+    pairs.push({ documentIndex: documentIndexes[0], spoken: spoken.amount, precise: precise.amount });
+  }
+  const documentIndexes = [...new Set(pairs.map((pair) => pair.documentIndex))];
+  if (documentIndexes.length !== 1) return null;
+  return pairs.find((pair) => pair.documentIndex === documentIndexes[0]) ?? null;
+}
+
 /** Validate shape and verbatim evidence links before a model's fact choices can be used. */
 export function parseFactResolution(
   raw: unknown,
@@ -176,6 +269,7 @@ export function parseFactResolution(
   const byId = new Map(sources.map(s => [s.id, s]));
   const unresolvedQuestions = coerceUnresolvedQuestions(value.unresolvedQuestions, salvage);
   const facts: ResolvedFact[] = [];
+  const resolvedShorthand: Array<{ spoken: number; precise: number }> = [];
   for (const fact of value.facts) {
     const field = typeof fact?.field === "string" ? fact.field : "unknown field";
     const shapeOk = Boolean(
@@ -222,13 +316,17 @@ export function parseFactResolution(
       if (salvage) unresolvedQuestions.push(`Could not verify the selected citation for ${fact.field}.`);
     }
     if (selected !== null) {
+      selected = alignSpokenThousandsAmount(kept, selected, byId);
       const selectedSource = byId.get(kept[selected].sourceId)!;
+      const shorthand = spokenThousandsPair(kept, selected, byId);
+      if (shorthand) resolvedShorthand.push(shorthand);
       const prefersMeetingEvidence =
         selectedSource.kind === "document" &&
         fact.scope !== "package_proposal" &&
         kept.some(c => ["transcript", "user"].includes(byId.get(c.sourceId)!.kind));
       const packageAsDecision = fact.scope === "current_decision" && selectedSource.kind === "document";
-      if (prefersMeetingEvidence || packageAsDecision) {
+      // A package figure that only restores digits below the thousands place is the spoken amount, not a conflicting proposal.
+      if ((prefersMeetingEvidence || packageAsDecision) && !shorthand) {
         if (!salvage) {
           throw new Error(
             prefersMeetingEvidence
@@ -252,15 +350,23 @@ export function parseFactResolution(
       explanation: fact.explanation,
     });
   }
-  return { facts, unresolvedQuestions };
+  return {
+    facts,
+    unresolvedQuestions: unresolvedQuestions.filter(
+      (question) => !resolvedShorthand.some(
+        (pair) => dollarAmounts(question).some((amount) => Math.abs(amount - pair.spoken) < 0.001)
+          && dollarAmounts(question).some((amount) => Math.abs(amount - pair.precise) < 0.001),
+      ),
+    ),
+  };
 }
 
 /** System instruction for resolving material facts from agenda evidence before minutes investigation. */
 export const FACT_RESOLUTION_PROMPT = `Resolve the material facts for ONE agenda item before writing minutes. Return JSON only:
 {"facts":[{"field":"contractor | amount | approval | date | motion | action | other descriptive field","scope":"package_proposal | prior_approval | current_decision | discussion","candidates":[{"value":"precise fact","sourceId":"provided source id","quote":"verbatim supporting passage"}],"selected":0,"explanation":"why this candidate is supported"}],"unresolvedQuestions":[]}
-Read ALL direct transcript evidence, including later continuations. Package notes and recommendations are proposals, not meeting decisions. Preserve competing values as candidates, select transcript over package when they conflict, and distinguish approval at a previous meeting from any decision made today. Keep separate facts for package proposals, prior approvals and current directions. If no candidate can be selected responsibly, selected must be null and record the question. Never invent a mover, seconder, amount, vote, attendance or adjournment time.
+Read ALL direct transcript evidence, including later continuations. Package notes and recommendations are proposals, not meeting decisions. Preserve competing values as candidates, select transcript over package when they name a different party or a different thousands place, and distinguish approval at a previous meeting from any decision made today. Keep separate facts for package proposals, prior approvals and current directions. If no candidate can be selected responsibly, selected must be null and record the question. Never invent a mover, seconder, amount, vote, attendance or adjournment time.
 Transcripts are generated by automated speech recognition (ASR) and often contain phonetic errors, homophones, or mishearings (e.g. "second dead" for "seconded", "past" for "passed", "cordial" for "corridor"). Interpret spoken statements using surrounding meeting and package context rather than treating transcription noise as genuine ambiguity or conflict. Verbatim quotes in candidate quote fields must still reproduce the exact transcript text as written.
-When speakers use conversational shorthand for amounts or acronyms (for example a truncated spoken figure that matches one contractor's row in a package comparison table, or a spoken abbreviation for a contractor name), cross-reference that contractor's specific column and row to resolve the exact full figure (e.g. $163,900.00 rather than rounding to $163,000) instead of flagging false ambiguity. selected.value must be the professional resolved fact (legal name, dollar amount with cents). Do not put spoken shorthand, "spoken as …", ASR, or transcription-process language in selected.value or explanation; those fields feed published minutes.
+When a speaker drops the portion of an amount below the thousands place, and exactly one package figure for the same party is that number with the dropped remainder restored, select that package figure. Include both the spoken wording and the package figure as candidates, and set selected to the package figure. That is corroboration, not a conflict, and it is not an unresolved question. Do this only when one package figure matches; if the package also has an exact row for the spoken number, or two figures share that thousands place, leave the choice unresolved. selected.value must be the package figure with its cents, or the legal name, never the rounded spoken number and never a description of how speech was interpreted.
 If an agenda item is skipped, deferred, or was approved at an earlier meeting, the absence of a new decision or contract amount today is expected normal governance; do NOT emit an unresolved question for decisions not made today.
 Informal board agreement or direction to management (e.g. instructing management to proceed with a review, obtain clarification, or send a draft to counsel) represents administrative direction; record it under "discussion" or "action" rather than flagging an unresolved question over the absence of a formal motion or vote.
 Related and neighboring evidence can concern another agenda item; use it only when the association is supported. Cite source IDs and exact quotes: each quote must be a contiguous substring copied from that source's text in the request (same spelling and punctuation; package text may contain &amp; — quote it as stored or use the spoken line without the timestamp prefix for transcript sources). Use scope for package_proposal vs prior_approval; keep field to the topic (contractor, amount, approval), not the scope label. All material contractors, amounts, decisions, conditions and dates in the evidence must be addressed; an empty facts array is acceptable only for a procedural heading or no substantive evidence.`;

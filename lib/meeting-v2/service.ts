@@ -9,6 +9,7 @@ import { buildEvidenceSources, draftReadiness, evidenceFingerprint, investigatio
 import { AGENDA_ITEM_REPAIR_PROMPT } from "./repair-prompts";
 import { reviewAndRepairOnce } from "./validation-cycle";
 import {
+  clickableAnswers,
   parseInvestigation,
   parseOpenQuestionContextNotes,
   parseStoredOpenQuestions,
@@ -38,10 +39,11 @@ import {
   meetingsV2TranscriptSegments,
   meetingsV2ValidationResults,
 } from "@/lib/db/schema";
-import { AGENDA_ITEM_INVESTIGATION_PROMPT, OPEN_QUESTION_CONTEXT_NOTES_PROMPT } from "@/lib/meeting-v2/investigation-prompts";
+import { AGENDA_ITEM_INVESTIGATION_PROMPT, OPEN_QUESTION_CONTEXT_NOTES_PROMPT, RESOLVED_FACTS_MARKER } from "@/lib/meeting-v2/investigation-prompts";
 import {
   applyFallbackQuestionContextNotes,
   applyRevisedNotes,
+  omitBlockedOpenQuestions,
   parseSalvagedQuestionContextNotes,
   recommendedAnswerAddsNewFact,
 } from "@/lib/meeting-v2/investigation-reconcile";
@@ -173,7 +175,9 @@ export type MeetingV2Detail = {
     outcome: string | null;
     openQuestions: string[];
     openQuestionNotes: OpenQuestionContextNote[][];
+    openQuestionOptions: string[][];
     openQuestionContext: Record<string, OpenQuestionContextNote[]>;
+    revisedNotes: string[];
     userAnswers: Record<string, string> | null;
     validation: Array<{
       severity: string;
@@ -3000,11 +3004,15 @@ export async function investigateAgendaItems(
         factResolutionAttempts = resolved.attempts;
         const aiResult = await runToolEnabledInvestigation({
           systemInstruction: AGENDA_ITEM_INVESTIGATION_PROMPT,
-          userText: `${promptInput}\n\nResolved facts (preserve temporal scope and rejected alternatives):\n${JSON.stringify(factResolution)}`,
+          userText: `${promptInput}\n\n${RESOLVED_FACTS_MARKER}\n${JSON.stringify(factResolution)}`,
           runtime,
           maxOutputTokens: 8192,
         });
         normalized = parseInvestigation(safeJsonObjectParse(aiResult.text));
+        normalized = {
+          ...normalized,
+          open_questions: omitBlockedOpenQuestions(normalized.open_questions, factResolution),
+        };
         const filled = await fillQuestionContextNotes({
           document: normalized,
           sources,
@@ -3234,7 +3242,7 @@ export async function validateAgendaItemInvestigations(
           requiresRepair: review => review.parsed.verdict !== "pass" || review.parsed.needs_human_review || itemRows.some(row => row.severity === "error"),
           repair: async (candidate, review) => {
             const repaired = await generateDeepSeekJson({
-              systemInstruction: `${AGENDA_ITEM_REPAIR_PROMPT}\nOnly selected, cited facts may support assertions. Preserve proposed motions as UNKNOWN and informal assent as informal. Never fill missing mover or seconder names.`,
+              systemInstruction: `${AGENDA_ITEM_REPAIR_PROMPT}\nOnly selected, cited facts may support assertions. Conversational assent on a proposed approval is the decision; leave motion null unless a mover and seconder were named. Never invent mover or seconder names. Do not add an open question whose only gap is missing motion language.`,
               userText: JSON.stringify({ input: buildValidationInput({ ...reviewInput, investigation: candidate }), findings: review.parsed, deterministicFindings: itemRows }),
               modelName: "deepseek-v4-flash", temperature: 0, thinking: false, maxOutputTokens: 8192, requestTimeoutMs: 90_000,
             });
@@ -3242,21 +3250,33 @@ export async function validateAgendaItemInvestigations(
             await recordMeetingV2ValidationUsage(meetingId, repaired.usage, repaired.modelName, { source: options?.usageSource ?? "pipeline" });
             const corrected = parseInvestigation(safeJsonObjectParse(repaired.text));
             const previousQuestions = parseStoredOpenQuestions(candidate.openQuestionsJson);
-            const merged: InvestigationDocument = {
-              ...corrected,
-              open_questions: mergeOpenQuestionContextNotes(previousQuestions, corrected.open_questions),
-            };
             const usage = safeJsonParse<Record<string, unknown>>(candidate.usageJson, {});
             const factResolution =
               usage.factResolution && typeof usage.factResolution === "object"
                 ? (usage.factResolution as FactResolution)
                 : null;
+            const merged: InvestigationDocument = {
+              ...corrected,
+              open_questions: omitBlockedOpenQuestions(
+                mergeOpenQuestionContextNotes(previousQuestions, corrected.open_questions),
+                factResolution,
+              ),
+            };
             const filled = await fillQuestionContextNotes({
               document: merged,
               sources: evidenceSourcesFromContext(contextDocument, context?.assembledContextText),
               factResolution,
             });
-            return { ...candidate, ...investigationColumns(filled.document), updatedAt: nowIso() };
+            return {
+              ...candidate,
+              ...investigationColumns(filled.document),
+              usageJson: JSON.stringify({
+                ...usage,
+                revisedNotes: filled.document.revised_notes ?? usage.revisedNotes,
+                proposedAnswers: filled.document.open_questions,
+              }),
+              updatedAt: nowIso(),
+            };
           },
         });
         const aiValidation = cycle.review;
@@ -3265,7 +3285,13 @@ export async function validateAgendaItemInvestigations(
           itemRows.length = 0;
           addDeterministicValidationRows({ rows: itemRows, meetingId, agendaItem, investigation, contextDocument });
         }
-        investigation.usageJson = JSON.stringify({ ...investigationUsage, validationHistory: reviewHistory });
+        const repairedUsage = safeJsonParse<Record<string, unknown>>(cycle.investigation.usageJson, {});
+        investigation.usageJson = JSON.stringify({
+          ...investigationUsage,
+          ...(Array.isArray(repairedUsage.revisedNotes) ? { revisedNotes: repairedUsage.revisedNotes } : {}),
+          ...(Array.isArray(repairedUsage.proposedAnswers) ? { proposedAnswers: repairedUsage.proposedAnswers } : {}),
+          validationHistory: reviewHistory,
+        });
         addAiValidationRows({
           rows: itemRows,
           meetingId,
@@ -3709,12 +3735,21 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         openQuestionNotes: parseStoredOpenQuestions(investigation?.openQuestionsJson).map(
           (entry) => entry.context_notes,
         ),
+        openQuestionOptions: parseStoredOpenQuestions(investigation?.openQuestionsJson).map((entry) =>
+          clickableAnswers(entry),
+        ),
         openQuestionContext: Object.fromEntries(
           parseStoredOpenQuestions(investigation?.openQuestionsJson).map((entry) => [
             entry.question,
             entry.context_notes,
           ]),
         ),
+        revisedNotes: (() => {
+          const usage = safeJsonParse<Record<string, unknown>>(investigation?.usageJson, {});
+          return Array.isArray(usage.revisedNotes)
+            ? usage.revisedNotes.filter((note): note is string => typeof note === "string" && note.trim().length > 0)
+            : [];
+        })(),
         userAnswers: safeJsonParse<Record<string, string> | null>(
           investigation?.userAnswersJson,
           null,

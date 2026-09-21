@@ -20,7 +20,8 @@ Your job:
 Critical rules:
 - Do not invent facts, motions, attendees, times, votes, dollar figures, owners, due dates, or decisions.
 - If a fact is unknown, leave it empty or omit the optional field instead of guessing.
-- Transcript controls what was actually discussed or approved, and MUST take precedence over the package for names, amounts, contractors, and details if there is a discrepancy.
+- Transcript controls what was actually discussed or approved. A spoken amount that only drops the digits below the thousands place is the one matching package figure; write that figure. A different party or a different thousands place does override the package.
+- State the decision or direction. Do not narrate recommendations the board did not adopt, or that the board departed from management's recommendation.
 - Package-derived framing controls section grouping, baseline project names, and supporting details unless contradicted by the transcript.
 - Keep attendance names in full form.
 - If only a partial person name, company, or role is supported, keep the partial factual wording rather than expanding it.

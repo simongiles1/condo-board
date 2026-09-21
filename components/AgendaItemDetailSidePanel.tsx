@@ -29,6 +29,7 @@ export type AgendaItemDetail = {
     message: string;
   }>;
   evidence?: AgendaItemDetailEvidence[];
+  openQuestionContext?: Record<string, Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
 };
 
 type DetailTab = "flags" | "questions" | "evidence";
@@ -60,6 +61,18 @@ function extraClarificationKeys(item: AgendaItemDetail, itemAnswers: Record<stri
     if (questionSet.has(key)) return false;
     return Boolean(itemAnswers[key]?.trim());
   });
+}
+
+function contextSourceLabel(source: "transcript" | "package" | "both"): string {
+  if (source === "transcript") return "Transcript";
+  if (source === "package") return "Board package";
+  return "Transcript + board package";
+}
+
+function contextSourceTone(source: "transcript" | "package" | "both"): string {
+  if (source === "transcript") return "border-purple-200 bg-purple-50 text-purple-900";
+  if (source === "package") return "border-blue-200 bg-blue-50 text-blue-900";
+  return "border-slate-200 bg-slate-100 text-slate-700";
 }
 
 function DetailTabStrip({
@@ -165,11 +178,34 @@ function QuestionsTabContent({
     <div className="space-y-5">
       {item.openQuestions.map((question, index) => {
         const fieldId = `question-answer-${item.id}-${index}`;
+        const notes = item.openQuestionContext?.[question] ?? [];
         return (
           <div key={`${item.id}-question-${index}`} className="space-y-2">
             <label htmlFor={fieldId} className="block text-sm font-medium leading-6 text-slate-800">
               {question}
             </label>
+            {notes.length > 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  What we already know
+                </p>
+                <ul className="mt-2 space-y-2">
+                  {notes.map((note, noteIndex) => (
+                    <li key={`${fieldId}-note-${noteIndex}`} className="flex items-start gap-2 text-sm text-slate-700">
+                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" aria-hidden />
+                      <span className="min-w-0 leading-5">
+                        {note.fact}
+                        <span
+                          className={`ml-2 inline-flex align-middle rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${contextSourceTone(note.source)}`}
+                        >
+                          {contextSourceLabel(note.source)}
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <textarea
               id={fieldId}
               className="min-h-24 w-full rounded-xl border border-slate-300 bg-slate-50 p-3 text-sm shadow-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"

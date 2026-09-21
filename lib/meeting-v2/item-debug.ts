@@ -443,6 +443,9 @@ function renderMinutesSnippet(
     lines.push("", "**Open questions**");
     for (const question of investigation.open_questions) {
       lines.push(`- ${question.question}`);
+      for (const note of question.context_notes) {
+        lines.push(`  - (${note.source}) ${note.fact}`);
+      }
     }
   }
   return lines.join("\n");

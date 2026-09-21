@@ -23,7 +23,7 @@ import {
 } from "@/lib/db/schema";
 import { CORP_LONG } from "@/lib/pdf/corporation";
 import { draftReadiness, MINUTES_PIPELINE_VERSION } from "./evidence-contract";
-import { canonicalEnum } from "./investigation-contract";
+import { canonicalEnum, storedOpenQuestionTexts } from "./investigation-contract";
 import { parentAgendaItemCode } from "./agenda-outline";
 
 type MeetingRow = typeof meetingsV2.$inferSelect;
@@ -1007,7 +1007,7 @@ function buildDraftInputItems(options: {
             decisions: safeParseArray<string>(investigation.decisionsJson),
             motion: safeParseObject<InvestigationMotion>(investigation.motionJson),
             actions: safeParseArray<InvestigationAction>(investigation.actionsJson),
-            openQuestions: safeParseArray<string>(investigation.openQuestionsJson),
+            openQuestions: storedOpenQuestionTexts(investigation.openQuestionsJson),
           },
           validation: {
             errorCount: validations.filter((row) => row.severity === "error").length,

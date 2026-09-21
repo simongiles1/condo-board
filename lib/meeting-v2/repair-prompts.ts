@@ -54,7 +54,13 @@ Return JSON only with this exact shape:
     {
       "question": "string",
       "recommended_answer": "string",
-      "confidence": "high | medium | low"
+      "confidence": "high | medium | low",
+      "context_notes": [
+        {
+          "fact": "string",
+          "source": "transcript | package | both"
+        }
+      ]
     }
   ],
   "revised_notes": ["string"]
@@ -66,6 +72,7 @@ Constraints:
 - decisions should contain only supported board-level conclusions.
 - actions should only include explicit or strongly implied follow-ups.
 - open_questions should capture any remaining ambiguity after repair. Do not keep restatement questions whose recommended_answer copies a selected ledger fact.
+- Keep or refresh context_notes on remaining questions: 3 to 6 plain-English briefing bullets with source "transcript", "package", or "both", so the secretary can answer without re-reading the full evidence. Do not invent facts.
 - If there is no reliable motion, set motion to null.
 - If there are no actions or questions, return empty arrays.
 - revised_notes is optional. Omit it when package notes still match the transcript.

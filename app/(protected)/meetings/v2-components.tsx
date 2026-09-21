@@ -177,6 +177,7 @@ type MeetingV2Status = {
     confidence: string | null;
     outcome: string | null;
     openQuestions: string[];
+    openQuestionContext: Record<string, Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
     userAnswers: Record<string, string> | null;
     validation: Array<{
       severity: string;
@@ -2456,6 +2457,7 @@ function flattenAgendaDetailItems(nodes: AgendaOutlineNode[], depth = 0): Agenda
       displayNumber: node.displayNumber,
       depth,
       openQuestions: node.item.openQuestions,
+      openQuestionContext: node.item.openQuestionContext ?? {},
       validation: node.item.validation,
       evidence: node.item.evidence,
     },
@@ -2501,6 +2503,7 @@ function syntheticReviewItem(options: {
     confidence: null,
     outcome: null,
     openQuestions: [],
+    openQuestionContext: {},
     userAnswers: null,
     validation: [],
     evidence: [],

@@ -8,7 +8,16 @@ import { generateDeepSeekJson } from "@/lib/deepseek/client";
 import { buildEvidenceSources, draftReadiness, evidenceFingerprint, investigationFingerprint, MINUTES_PIPELINE_VERSION, type EvidenceSource, type FactResolution } from "./evidence-contract";
 import { AGENDA_ITEM_REPAIR_PROMPT } from "./repair-prompts";
 import { reviewAndRepairOnce } from "./validation-cycle";
-import { parseInvestigation, type InvestigationDocument } from "./investigation-contract";
+import {
+  parseInvestigation,
+  parseOpenQuestionContextNotes,
+  parseStoredOpenQuestions,
+  serializeOpenQuestionsJson,
+  storedOpenQuestionTexts,
+  type InvestigationDocument,
+  type InvestigationOpenQuestion,
+  type OpenQuestionContextNote,
+} from "./investigation-contract";
 import { resolveAgendaFacts } from "./fact-resolution";
 import { getDb } from "@/lib/db";
 import {
@@ -159,6 +168,7 @@ export type MeetingV2Detail = {
     confidence: string | null;
     outcome: string | null;
     openQuestions: string[];
+    openQuestionContext: Record<string, OpenQuestionContextNote[]>;
     userAnswers: Record<string, string> | null;
     validation: Array<{
       severity: string;
@@ -930,10 +940,9 @@ export async function loadMeetingsV2DashboardCards(
       } as MeetingV2ExtractionQuality,
       pipelineNotStarted,
     });
-    const needsClarificationCount = investigations.filter((investigation) => {
-      const openQuestions = safeJsonParse<string[]>(investigation.openQuestionsJson, []);
-      return openQuestions.length > 0;
-    }).length;
+    const needsClarificationCount = investigations.filter(
+      (investigation) => storedOpenQuestionTexts(investigation.openQuestionsJson).length > 0,
+    ).length;
     const flaggedAgendaItemIds = new Set(
       validations
         .filter(
@@ -1790,10 +1799,15 @@ function inferVisibility(title: string): string {
   return "open";
 }
 
-function buildOpenQuestions(title: string, transcriptEvidenceCount: number, answerText: string | null): Array<{ question: string; recommended_answer: string; confidence: "high" | "medium" | "low" }> {
+function buildOpenQuestions(title: string, transcriptEvidenceCount: number, answerText: string | null): InvestigationOpenQuestion[] {
   if (answerText) return [];
   if (transcriptEvidenceCount > 0) return [];
-  return [{ question: `Can you confirm the final outcome for "${title}" from the live discussion?`, recommended_answer: "Based on context, the item was discussed but may require confirmation.", confidence: "low" }];
+  return [{
+    question: `Can you confirm the final outcome for "${title}" from the live discussion?`,
+    recommended_answer: "Based on context, the item was discussed but may require confirmation.",
+    confidence: "low",
+    context_notes: [],
+  }];
 }
 
 type AiInvestigationDocument = {
@@ -1814,7 +1828,7 @@ type AiInvestigationDocument = {
     description: string;
     due_date: string | null;
   }>;
-  open_questions: Array<{ question: string; recommended_answer: string; confidence: "high" | "medium" | "low" }>;
+  open_questions: InvestigationOpenQuestion[];
   revised_notes?: string[];
 };
 
@@ -1840,7 +1854,7 @@ function investigationColumns(doc: InvestigationDocument) {
   return { discussionSummary: doc.discussion_summary, outcome: doc.outcome.toLowerCase(),
     confidence: doc.confidence.toLowerCase(), visibility: doc.visibility.toLowerCase(),
     decisionsJson: JSON.stringify(doc.decisions), motionJson: JSON.stringify(doc.motion), actionsJson: JSON.stringify(doc.actions),
-    openQuestionsJson: JSON.stringify(doc.open_questions.map(q => q.question)) };
+    openQuestionsJson: serializeOpenQuestionsJson(doc.open_questions) };
 }
 
 function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument {
@@ -1902,6 +1916,7 @@ function normalizeInvestigationDocument(value: unknown): AiInvestigationDocument
           question: typeof entry.question === "string" ? normalizeWhitespace(entry.question) : "",
           recommended_answer: typeof entry.recommended_answer === "string" ? normalizeWhitespace(entry.recommended_answer) : "",
           confidence: ["high", "medium", "low"].includes(entry.confidence?.toLowerCase()) ? entry.confidence.toLowerCase() : "medium",
+          context_notes: parseOpenQuestionContextNotes(entry.context_notes ?? entry.briefing),
         })).filter((q: any) => Boolean(q.question))
       : [],
     revised_notes: Array.isArray(record.revised_notes)
@@ -2104,7 +2119,7 @@ function buildValidationInput(options: {
   const decisions = safeJsonParse<string[]>(options.investigation.decisionsJson, []);
   const motion = safeJsonParse<Record<string, unknown> | null>(options.investigation.motionJson, null);
   const actions = safeJsonParse<Array<Record<string, unknown>>>(options.investigation.actionsJson, []);
-  const openQuestions = safeJsonParse<string[]>(options.investigation.openQuestionsJson, []);
+  const openQuestions = storedOpenQuestionTexts(options.investigation.openQuestionsJson);
   const anchorChunks = options.contextDocument
     ? options.contextDocument.anchorChunkIds
         .map((chunkId) => options.contextDocument?.chunksById[chunkId] ?? null)
@@ -2270,7 +2285,7 @@ function addDeterministicValidationRows(options: {
     investigation.actionsJson,
     [],
   );
-  const openQuestions = safeJsonParse<string[]>(investigation.openQuestionsJson, []);
+  const openQuestions = storedOpenQuestionTexts(investigation.openQuestionsJson);
   const transcriptEvidenceText = (contextDocument?.sources ?? []).filter(s => s.kind === "transcript" && s.association === "direct").map(s => s.text).join("\n") +
     "\n" + Object.values(safeJsonParse<Record<string, string>>(investigation.userAnswersJson, {})).join("\n");
 
@@ -2921,7 +2936,7 @@ export async function investigateAgendaItems(
           decisions: [],
           motion: null,
           actions: [],
-          open_questions: [{ question: message, recommended_answer: "", confidence: "low" }],
+          open_questions: [{ question: message, recommended_answer: "", confidence: "low", context_notes: [] }],
         };
         modelName = "investigation_item_salvage";
         usageJson = JSON.stringify({
@@ -2949,7 +2964,7 @@ export async function investigateAgendaItems(
       decisionsJson: JSON.stringify(normalized.decisions),
       motionJson: JSON.stringify(normalized.motion),
       actionsJson: JSON.stringify(normalized.actions),
-      openQuestionsJson: JSON.stringify(normalized.open_questions.map(q => typeof q === "string" ? q : q.question)),
+      openQuestionsJson: serializeOpenQuestionsJson(normalized.open_questions),
       userAnswersJson: answerText ? JSON.stringify(userAnswers) : null,
       modelName,
       usageJson,
@@ -3574,7 +3589,13 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         discussionSummary: investigation?.discussionSummary ?? null,
         confidence: investigation?.confidence ?? null,
         outcome: investigation?.outcome ?? null,
-        openQuestions: safeJsonParse<string[]>(investigation?.openQuestionsJson, []),
+        openQuestions: storedOpenQuestionTexts(investigation?.openQuestionsJson),
+        openQuestionContext: Object.fromEntries(
+          parseStoredOpenQuestions(investigation?.openQuestionsJson).map((entry) => [
+            entry.question,
+            entry.context_notes,
+          ]),
+        ),
         userAnswers: safeJsonParse<Record<string, string> | null>(
           investigation?.userAnswersJson,
           null,

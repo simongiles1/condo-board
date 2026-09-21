@@ -97,7 +97,13 @@ Return JSON only with this exact shape:
     {
       "question": "string",
       "recommended_answer": "string",
-      "confidence": "high | medium | low"
+      "confidence": "high | medium | low",
+      "context_notes": [
+        {
+          "fact": "string",
+          "source": "transcript | package | both"
+        }
+      ]
     }
   ],
   "revised_notes": ["string"]
@@ -113,6 +119,7 @@ Constraints:
 - Do not turn general discussion points into actions unless someone was clearly tasked.
 - open_questions should contain unresolved matters, if any. Do not ask the user to confirm facts the fact-resolution ledger already selected. Use the recommended_answer field only for genuinely unresolved matters, so the user can one-click approve a best guess. The recommended_answer MUST be written in the highly formal, third-person tone of the minutes, for the user to review; a proposed answer is never evidence until explicitly confirmed.
 - open_questions should include the exact uncertainty when evidence is incomplete or ambiguous. A field already selected in the ledger, with no matching unresolvedQuestions entry, is not incomplete.
+- Every open_question MUST include context_notes: 3 to 6 short bullets the secretary can read instead of re-hunting the package and transcript. Rewrite in plain English. Attribute speakers when known, and say when nobody confirmed. Short quotes are allowed; do not dump raw excerpts. Each bullet needs source "transcript", "package", or "both". Only include facts that help answer that question. Do not invent facts. Example: {"fact": "The property manager said the CCDC would go to legal before signing, but no board member confirmed a vote.", "source": "transcript"}.
 - If there is no reliable motion, set motion to null.
 - If there are no actions or questions, return empty arrays.
 - revised_notes is optional. Omit it when package notes still match the transcript. When the transcript contradicts package Amount / Recommendation / contractor notes, return the full corrected notes list.

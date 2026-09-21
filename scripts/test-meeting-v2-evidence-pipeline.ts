@@ -4,7 +4,7 @@ import { buildEvidenceSources, draftReadiness, evidenceFingerprint, FACT_RESOLUT
 import { AGENDA_ITEM_INVESTIGATION_PROMPT } from "../lib/meeting-v2/investigation-prompts";
 import { AGENDA_ITEM_REPAIR_PROMPT } from "../lib/meeting-v2/repair-prompts";
 import { AGENDA_ITEM_VALIDATION_PROMPT } from "../lib/meeting-v2/validation-prompts";
-import { parseInvestigation } from "../lib/meeting-v2/investigation-contract";
+import { parseInvestigation, parseStoredOpenQuestions, serializeOpenQuestionsJson, storedOpenQuestionTexts } from "../lib/meeting-v2/investigation-contract";
 import { resolveAgendaFacts } from "../lib/meeting-v2/fact-resolution";
 import { buildMeetingV2DraftArtifact } from "../lib/meeting-v2/draft-builder";
 import { normalizeWorkflowState } from "../lib/meeting-v2/agenda-ai";
@@ -297,10 +297,25 @@ describe("draft quality gate", () => {
   });
   it("requires structurally valid investigations and retains proposed answers as questions", () => {
     assert.throws(() => parseInvestigation({}), /incomplete/);
-    const parsed = parseInvestigation({ discussion_summary: "A quote was discussed.", outcome: "no_decision", confidence: "low", visibility: "restricted", decisions: [], motion: null, actions: [], open_questions: [{ question: "Which quote?", recommended_answer: "Use the cheaper quote.", confidence: "high" }] });
+    const parsed = parseInvestigation({ discussion_summary: "A quote was discussed.", outcome: "no_decision", confidence: "low", visibility: "restricted", decisions: [], motion: null, actions: [], open_questions: [{ question: "Which quote?", recommended_answer: "Use the cheaper quote.", confidence: "high", context_notes: [{ fact: "The property manager named two quotes; no board member confirmed which one.", source: "transcript" }] }] });
     assert.equal(parsed.visibility, "RESTRICTED");
     assert.equal(parsed.open_questions.length, 1);
+    assert.equal(parsed.open_questions[0].context_notes[0]?.source, "transcript");
     assert.doesNotMatch(parsed.discussion_summary, /cheaper/);
+  });
+  it("keeps question briefing notes when storing open questions as objects", () => {
+    const stored = serializeOpenQuestionsJson([{
+      question: "Was the quote approved?",
+      recommended_answer: "",
+      confidence: "low",
+      context_notes: [{ fact: "A director named a figure; nobody seconded a motion.", source: "transcript" }],
+    }]);
+    assert.deepEqual(storedOpenQuestionTexts(stored), ["Was the quote approved?"]);
+    assert.equal(parseStoredOpenQuestions(stored)[0]?.context_notes[0]?.source, "transcript");
+    assert.deepEqual(storedOpenQuestionTexts('["Was the quote approved?"]'), ["Was the quote approved?"]);
+    assert.deepEqual(parseStoredOpenQuestions('["Was the quote approved?"]')[0]?.context_notes, []);
+    const withoutNotes = parseInvestigation({ discussion_summary: "A quote was discussed.", outcome: "no_decision", confidence: "low", visibility: "restricted", decisions: [], motion: null, actions: [], open_questions: [{ question: "Which quote?", recommended_answer: "", confidence: "low" }] });
+    assert.deepEqual(withoutNotes.open_questions[0].context_notes, []);
   });
   it("rejects duplicate agenda codes before they can overwrite a substantive item", () => {
     assert.throws(() => buildMeetingV2DraftArtifact(fixture([{ title: "Pump", code: "4.B.1" }, { title: "Roof", code: "4.B.1" }])), /Duplicate agenda codes/);

@@ -69,8 +69,10 @@ import { TranscriptRangeModal } from "@/components/TranscriptRangeModal";
 import {
   buildAgendaOutlineTree,
   decorateAgendaOutlineTree,
+  discussionPositionFromEvidence,
   filterAgendaItemsPreservingAncestors,
   inferPropertyManagementReportNumber,
+  insertItemsByDiscussionPosition,
   planAdHocPlacement,
   ensureAdHocSectionOutline,
   type AgendaListMarker,
@@ -171,6 +173,7 @@ type MeetingV2Status = {
     discussionStatus?: "discussed" | "not_discussed" | "ad_hoc";
     sourceSectionId: string | null;
     sourcePages?: number[];
+    sourceTranscriptRanges?: Array<[number, number]>;
     discussionSummary: string | null;
     confidence: string | null;
     outcome: string | null;
@@ -2451,6 +2454,8 @@ function syntheticReviewItem(options: {
   itemNumber: string;
   sectionLabel: string;
   discussionStatus: "discussed" | "ad_hoc";
+  sourceText?: string;
+  sourceTranscriptRanges?: Array<[number, number]>;
 }): AgendaReviewItem {
   return {
     id: options.id,
@@ -2458,10 +2463,11 @@ function syntheticReviewItem(options: {
     itemNumber: options.itemNumber,
     itemType: "ad_hoc_discussion",
     sectionLabel: options.sectionLabel,
-    sourceText: `Discussion status: ${options.discussionStatus}`,
+    sourceText: options.sourceText ?? `Discussion status: ${options.discussionStatus}`,
     discussionStatus: options.discussionStatus,
     sourceSectionId: null,
     sourcePages: [],
+    sourceTranscriptRanges: options.sourceTranscriptRanges ?? [],
     discussionSummary: null,
     confidence: null,
     outcome: null,
@@ -2472,14 +2478,32 @@ function syntheticReviewItem(options: {
   };
 }
 
+type ReviewNewItem = {
+  id: string;
+  title: string;
+  sectionLabel: string;
+  discussionStatus: "discussed" | "ad_hoc";
+  transcriptRange?: [number, number];
+  timestamp?: string;
+};
+
+function reviewItemDiscussionPosition(item: {
+  sourceTranscriptRanges?: Array<[number, number]>;
+  transcriptRange?: [number, number];
+  sourceText?: string | null;
+  timestamp?: string;
+}): ReturnType<typeof discussionPositionFromEvidence> {
+  return discussionPositionFromEvidence({
+    sourceTranscriptRanges: item.sourceTranscriptRanges,
+    transcriptRange: item.transcriptRange,
+    sourceText: item.sourceText,
+    timestamp: item.timestamp,
+  });
+}
+
 function mergeAdHocItemsIntoReview(
   items: AgendaReviewItem[],
-  newItems: Array<{
-    id: string;
-    title: string;
-    sectionLabel: string;
-    discussionStatus: "discussed" | "ad_hoc";
-  }>,
+  newItems: ReviewNewItem[],
 ): AgendaReviewItem[] {
   const normalized = ensureAdHocSectionOutline(items, (sectionCode) =>
     syntheticReviewItem({
@@ -2492,16 +2516,47 @@ function mergeAdHocItemsIntoReview(
   );
   if (newItems.length === 0) return normalized;
 
-  const placement = planAdHocPlacement(
-    normalized,
-    newItems.length,
-    inferPropertyManagementReportNumber(normalized),
-  );
-  if (!placement) return normalized;
+  const positioned = newItems.filter((item) => {
+    const position = reviewItemDiscussionPosition(item);
+    return position.startSequence != null || position.startSeconds != null;
+  });
+  const unpositioned = newItems.filter((item) => !positioned.includes(item));
 
-  const extras: AgendaReviewItem[] = [];
+  const extras = positioned.map((item) =>
+    syntheticReviewItem({
+      id: item.id,
+      title: item.title,
+      itemNumber: "",
+      sectionLabel: item.sectionLabel || "Property Management Report: Ad-hoc items",
+      discussionStatus: item.discussionStatus,
+      sourceText: [
+        `Discussion status: ${item.discussionStatus}`,
+        item.timestamp ? `Discussion timing: ${item.timestamp}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      sourceTranscriptRanges: item.transcriptRange ? [item.transcriptRange] : [],
+    }),
+  );
+
+  const spliced = insertItemsByDiscussionPosition(
+    normalized,
+    extras,
+    reviewItemDiscussionPosition,
+  );
+
+  if (unpositioned.length === 0) return spliced;
+
+  const placement = planAdHocPlacement(
+    spliced,
+    unpositioned.length,
+    inferPropertyManagementReportNumber(spliced),
+  );
+  if (!placement) return spliced;
+
+  const tail: AgendaReviewItem[] = [];
   if (placement.sectionMissing) {
-    extras.push(
+    tail.push(
       syntheticReviewItem({
         id: "synthetic-adhoc-section",
         title: "Ad-hoc items",
@@ -2511,8 +2566,8 @@ function mergeAdHocItemsIntoReview(
       }),
     );
   }
-  newItems.forEach((item, index) => {
-    extras.push(
+  unpositioned.forEach((item, index) => {
+    tail.push(
       syntheticReviewItem({
         id: item.id,
         title: item.title,
@@ -2522,11 +2577,11 @@ function mergeAdHocItemsIntoReview(
       }),
     );
   });
-  return [...normalized, ...extras];
+  return [...spliced, ...tail];
 }
 
 function buildAgendaOutline(items: MeetingV2Status["items"]): AgendaOutlineNode[] {
-  const tree = attachSourceSubItems(buildAgendaOutlineTree(items));
+  const tree = attachSourceSubItems(buildAgendaOutlineTree(items, { order: "input" }));
   decorateAgendaOutlineTree(tree, {
     items,
     getTiming: (item) => parseSourceSnippet(item.sourceText || "", item.title || "").timing,
@@ -3270,14 +3325,7 @@ function HitlAgendaApprovalWorkspace({
     return initial;
   });
 
-  const [newItems, setNewItems] = useState<
-    Array<{
-      id: string;
-      title: string;
-      sectionLabel: string;
-      discussionStatus: "discussed" | "ad_hoc";
-    }>
-  >([]);
+  const [newItems, setNewItems] = useState<ReviewNewItem[]>([]);
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -3400,6 +3448,8 @@ function HitlAgendaApprovalWorkspace({
     id: string;
     suggestedTitle: string;
     suggestedSection?: string | null;
+    transcriptRange?: [number, number];
+    timestamp?: string;
   }) {
     setDiscrepancyActions((prev) => ({ ...prev, [disc.id]: "accepted" }));
     const newId = `disc-${disc.id}`;
@@ -3411,6 +3461,8 @@ function HitlAgendaApprovalWorkspace({
         title: disc.suggestedTitle,
         sectionLabel: disc.suggestedSection || "Property Management Report: Ad-hoc items",
         discussionStatus: "ad_hoc",
+        transcriptRange: disc.transcriptRange,
+        timestamp: disc.timestamp,
       },
     ]);
   }
@@ -3475,6 +3527,8 @@ function HitlAgendaApprovalWorkspace({
           title: item.title,
           sectionLabel: item.sectionLabel,
           discussionStatus: item.discussionStatus,
+          transcriptRange: item.transcriptRange,
+          timestamp: item.timestamp,
         })),
         discrepancyActions: Object.entries(discrepancyActions)
           .filter(([, action]) => action !== "pending")
@@ -3523,14 +3577,19 @@ function HitlAgendaApprovalWorkspace({
     return map;
   }, [status.items]);
 
+  const unpositionedNewItemCount = newItems.filter((item) => {
+    const position = reviewItemDiscussionPosition(item);
+    return position.startSequence == null && position.startSeconds == null;
+  }).length;
+
   const adHocPlacement = useMemo(
     () =>
       planAdHocPlacement(
         status.items,
-        newItems.length,
+        unpositionedNewItemCount,
         inferPropertyManagementReportNumber(status.items),
       ),
-    [status.items, newItems.length],
+    [status.items, unpositionedNewItemCount],
   );
 
   const agendaOutline = useMemo(

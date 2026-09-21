@@ -309,6 +309,161 @@ export function planAdHocPlacement(
   };
 }
 
+/** Transcript or clock start used to place a HITL-added agenda leaf. */
+export type DiscussionPosition = {
+  startSequence?: number | null;
+  startSeconds?: number | null;
+};
+
+/** Build a discussion start from transcript sequences, sourceText clocks, or a timestamp string. */
+export function discussionPositionFromEvidence(options: {
+  sourceTranscriptRanges?: Array<[number, number]> | null;
+  transcriptRange?: [number, number] | null;
+  sourceText?: string | null;
+  timestamp?: string | null;
+}): DiscussionPosition {
+  const ranges =
+    options.sourceTranscriptRanges && options.sourceTranscriptRanges.length > 0
+      ? options.sourceTranscriptRanges
+      : options.transcriptRange
+        ? [options.transcriptRange]
+        : [];
+  const usable = ranges.find(
+    (range) =>
+      Number.isFinite(range[0]) &&
+      Number.isFinite(range[1]) &&
+      !(range[0] === 0 && range[1] === 0),
+  );
+  const startSequence = finiteOrNull(usable?.[0]);
+  const startSeconds =
+    parseDiscussionTimestampRanges(options.sourceText)[0]?.startSeconds ??
+    parseClockToSeconds(options.timestamp);
+  return { startSequence, startSeconds };
+}
+
+/**
+ * Compare two discussion starts. Sequence wins when both sides have it; otherwise clocks.
+ * Returns null when the starts cannot be compared.
+ */
+export function compareDiscussionPositions(
+  left: DiscussionPosition | null | undefined,
+  right: DiscussionPosition | null | undefined,
+): number | null {
+  const leftSeq = finiteOrNull(left?.startSequence);
+  const rightSeq = finiteOrNull(right?.startSequence);
+  if (leftSeq != null && rightSeq != null) return leftSeq - rightSeq;
+  const leftSec = finiteOrNull(left?.startSeconds);
+  const rightSec = finiteOrNull(right?.startSeconds);
+  if (leftSec != null && rightSec != null) return leftSec - rightSec;
+  return null;
+}
+
+function finiteOrNull(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function outlineHasDescendants<T extends { itemNumber?: string | null }>(
+  items: T[],
+  item: T,
+): boolean {
+  const code = (item.itemNumber || "").trim().toLowerCase();
+  if (!code) return false;
+  return items.some((other) => {
+    const otherCode = (other.itemNumber || "").trim().toLowerCase();
+    return otherCode.startsWith(`${code}.`);
+  });
+}
+
+function nextUnusedChildCode(parentCode: string, takenLower: Set<string>): string {
+  let index = 0;
+  while (index < 200) {
+    const code = canonicalLeafItemCode(parentCode, index);
+    if (!takenLower.has(code.toLowerCase())) return code;
+    index += 1;
+  }
+  return `${parentCode}.${index + 1}`;
+}
+
+function firstLeafBeforeIndex<T extends { itemNumber?: string | null; title?: string | null }>(
+  items: T[],
+  index: number,
+): T | undefined {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const candidate = items[i];
+    if (isAdHocSectionTitle(candidate.title)) continue;
+    if (outlineHasDescendants(items, candidate)) continue;
+    return candidate;
+  }
+  return undefined;
+}
+
+function parentCodeForInsert<T extends { itemNumber?: string | null; title?: string | null }>(
+  items: T[],
+  insertAt: number,
+): string | null {
+  const predecessor = firstLeafBeforeIndex(items, insertAt);
+  const successor = items[insertAt];
+  return (
+    parentAgendaItemCode(predecessor?.itemNumber) ||
+    parentAgendaItemCode(successor?.itemNumber) ||
+    null
+  );
+}
+
+/**
+ * Splice incoming leaves into outline order immediately before the first existing
+ * leaf whose discussion starts later. Incoming items receive the next unused child
+ * code under that neighbor's parent so they nest with the surrounding discussion.
+ */
+export function insertItemsByDiscussionPosition<T extends { itemNumber?: string | null; title?: string | null }>(
+  existing: T[],
+  incoming: T[],
+  getPosition: (item: T) => DiscussionPosition,
+): T[] {
+  const positioned = incoming.filter((item) => {
+    const position = getPosition(item);
+    return finiteOrNull(position.startSequence) != null || finiteOrNull(position.startSeconds) != null;
+  });
+  if (positioned.length === 0) return existing;
+
+  const orderedIncoming = [...positioned].sort((left, right) => {
+    return compareDiscussionPositions(getPosition(left), getPosition(right)) ?? 0;
+  });
+
+  const result = [...existing];
+  for (const extra of orderedIncoming) {
+    const extraPos = getPosition(extra);
+    let insertAt = result.length;
+    for (let i = 0; i < result.length; i += 1) {
+      const item = result[i];
+      if (isAdHocSectionTitle(item.title) || outlineHasDescendants(result, item)) continue;
+      const compared = compareDiscussionPositions(extraPos, getPosition(item));
+      if (compared != null && compared < 0) {
+        insertAt = i;
+        break;
+      }
+    }
+    result.splice(insertAt, 0, extra);
+  }
+
+  const incomingIds = new Set(orderedIncoming);
+  const takenLower = new Set(
+    result
+      .map((item) => (item.itemNumber || "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+
+  return result.map((item, index) => {
+    if (!incomingIds.has(item)) return item;
+    const parentCode = parentCodeForInsert(result, index);
+    if (!parentCode) return item;
+    takenLower.delete((item.itemNumber || "").trim().toLowerCase());
+    const code = nextUnusedChildCode(parentCode, takenLower);
+    takenLower.add(code.toLowerCase());
+    return { ...item, itemNumber: code };
+  });
+}
+
 const RESERVED_TOP_LEVEL_TITLE = /next board meeting|adjournment/i;
 
 export type TimestampRange = {
@@ -541,30 +696,44 @@ export function filterAgendaItemsPreservingAncestors<T extends AgendaOutlineSour
 
 export function buildAgendaOutlineTree<T extends AgendaOutlineSourceItem>(
   items: T[],
+  options?: { order?: "code" | "input" },
 ): Array<AgendaOutlineNode<T>> {
-  const sorted = items
-    .map((item, itemIndex) => ({ item, itemIndex, parsed: parseAgendaItemCode(item.itemNumber) }))
-    .sort((left, right) => {
-      const compared = compareAgendaItemCodes(left.item.itemNumber, right.item.itemNumber);
-      if (compared !== 0) return compared;
-      return left.itemIndex - right.itemIndex;
-    });
+  const entries = items.map((item, itemIndex) => ({
+    item,
+    itemIndex,
+    parsed: parseAgendaItemCode(item.itemNumber),
+  }));
+  const attachOrder =
+    options?.order === "input"
+      ? entries
+      : [...entries].sort((left, right) => {
+          const compared = compareAgendaItemCodes(left.item.itemNumber, right.item.itemNumber);
+          if (compared !== 0) return compared;
+          return left.itemIndex - right.itemIndex;
+        });
 
-  const nodesByCode = new Map<string, AgendaOutlineNode<T>>();
-  const roots: Array<AgendaOutlineNode<T>> = [];
-
-  for (const entry of sorted) {
+  const nodes: Array<AgendaOutlineNode<T>> = entries.map((entry) => {
     const last = entry.parsed.segments[entry.parsed.segments.length - 1];
-    const node: AgendaOutlineNode<T> = {
+    return {
       item: entry.item,
-      displayNumber: last?.raw || entry.parsed.raw || String(roots.length + 1),
+      displayNumber: last?.raw || entry.parsed.raw || "",
       listMarker: listMarkerForSegment(last),
       children: [],
     };
-
+  });
+  const nodesByCode = new Map<string, AgendaOutlineNode<T>>();
+  for (const entry of entries) {
     const code = entry.parsed.raw;
-    if (code) nodesByCode.set(code.toLowerCase(), node);
+    if (code) nodesByCode.set(code.toLowerCase(), nodes[entry.itemIndex]);
+  }
 
+  const roots: Array<AgendaOutlineNode<T>> = [];
+  for (const entry of attachOrder) {
+    const node = nodes[entry.itemIndex];
+    if (!node.displayNumber) {
+      node.displayNumber = String(roots.length + 1);
+    }
+    const code = entry.parsed.raw;
     let parentCode = parentAgendaItemCode(code);
     let parent: AgendaOutlineNode<T> | undefined;
     while (parentCode && !parent) {

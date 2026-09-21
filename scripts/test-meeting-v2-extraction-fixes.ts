@@ -37,6 +37,7 @@ import {
   compareAgendaItemCodes,
   decorateAgendaOutlineTree,
   filterAgendaItemsPreservingAncestors,
+  insertItemsByDiscussionPosition,
   parseDiscussionTimestampRanges,
   planAdHocPlacement,
   ensureAdHocSectionOutline,
@@ -776,6 +777,53 @@ describe("Hierarchical board-package agenda outline", () => {
       "4",
     );
     assert.equal(labeled?.sectionMissing, false);
+  });
+
+  it("inserts an add-to-agenda leaf before later-discussed neighbors, not at the end", () => {
+    const existing = [
+      { id: "4", itemNumber: "4", title: "Property Management Report", startSequence: null as number | null },
+      { id: "4d", itemNumber: "4.D", title: "The items for discussion", startSequence: null },
+      { id: "a", itemNumber: "4.D.a", title: "Studio 2 invoices", startSequence: 10 },
+      { id: "b", itemNumber: "4.D.b", title: "PayScan list", startSequence: 40 },
+      { id: "c", itemNumber: "4.D.c", title: "Deferred minor items", startSequence: 90 },
+      { id: "5", itemNumber: "5", title: "Date and time of the next Board Meeting", startSequence: 200 },
+    ];
+    const hose = {
+      id: "hose",
+      itemNumber: "",
+      title: "Bulk Toilet Hose Replacement Program",
+      startSequence: 55,
+    };
+    const spliced = insertItemsByDiscussionPosition(existing, [hose], (item) => ({
+      startSequence: item.startSequence,
+    }));
+    assert.deepEqual(
+      spliced.map((item) => item.title),
+      [
+        "Property Management Report",
+        "The items for discussion",
+        "Studio 2 invoices",
+        "PayScan list",
+        "Bulk Toilet Hose Replacement Program",
+        "Deferred minor items",
+        "Date and time of the next Board Meeting",
+      ],
+    );
+    const inserted = spliced.find((item) => item.id === "hose");
+    assert.equal(inserted?.itemNumber, "4.D.d");
+
+    const tree = buildAgendaOutlineTree(spliced, { order: "input" });
+    const discussion = tree[0]?.children.find((child) => child.item.id === "4d");
+    assert.ok(discussion);
+    assert.deepEqual(
+      discussion.children.map((child) => child.item.title),
+      [
+        "Studio 2 invoices",
+        "PayScan list",
+        "Bulk Toilet Hose Replacement Program",
+        "Deferred minor items",
+      ],
+    );
   });
 
   it("keeps 4.E titled Ad-hoc items and letters meeting-specific extras", () => {

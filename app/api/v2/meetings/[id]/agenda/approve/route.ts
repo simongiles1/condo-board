@@ -12,6 +12,8 @@ import {
   inferPropertyManagementReportNumber,
   planAdHocPlacement,
   ensureAdHocSectionOutline,
+  insertItemsByDiscussionPosition,
+  discussionPositionFromEvidence,
 } from "@/lib/meeting-v2/agenda-outline";
 import type {
   AgendaItemDiscussionStatus,
@@ -40,6 +42,8 @@ type ApproveAgendaRequestBody = {
     sectionLabel?: string;
     itemType?: string;
     discussionStatus?: AgendaItemDiscussionStatus;
+    transcriptRange?: [number, number];
+    timestamp?: string;
   }>;
   discrepancyActions?: Array<{
     id: string;
@@ -141,7 +145,6 @@ export async function POST(
       }
     }
 
-    let nextSort = normalizedExisting.length;
     const finalItemStatuses: Record<string, AgendaItemDiscussionStatus> = {
       ...(meeting.settings?.agendaApproval?.itemStatuses || {}),
       ...(body.itemStatuses || {}),
@@ -165,68 +168,155 @@ export async function POST(
     });
 
     const pendingNewItems = (body.newItems || []).filter((item) => item.title?.trim());
-    const placement = planAdHocPlacement(
-      normalizedExisting,
-      pendingNewItems.length,
-      inferPropertyManagementReportNumber(normalizedExisting),
-    );
+    const evidenceByExistingId = currentSettings.agendaEvidence ?? {};
 
-    if (placement?.sectionMissing && pendingNewItems.length > 0) {
-      await db.insert(meetingsV2AgendaItems).values({
+    type PlaceableAgendaItem = (typeof normalizedExisting)[number] & {
+      isNew?: boolean;
+      transcriptRange?: [number, number];
+      timestamp?: string;
+      discussionStatus?: AgendaItemDiscussionStatus;
+    };
+
+    const placeableExisting: PlaceableAgendaItem[] = normalizedExisting.map((item) => ({
+      ...item,
+      isNew: false,
+      transcriptRange: evidenceByExistingId[item.id]?.sourceTranscriptRanges?.[0],
+    }));
+
+    function itemPosition(item: PlaceableAgendaItem) {
+      return discussionPositionFromEvidence({
+        sourceTranscriptRanges: evidenceByExistingId[item.id]?.sourceTranscriptRanges,
+        transcriptRange: item.transcriptRange,
+        sourceText: item.sourceText,
+        timestamp: item.timestamp,
+      });
+    }
+
+    const pendingPrepared: PlaceableAgendaItem[] = pendingNewItems.map((item) => {
+      const range =
+        Array.isArray(item.transcriptRange) && item.transcriptRange.length === 2
+          ? ([Number(item.transcriptRange[0]), Number(item.transcriptRange[1])] as [number, number])
+          : updatedDiscrepancies.find(
+              (disc) =>
+                disc.status === "accepted" &&
+                normalize(discrepancyMap.get(disc.id)?.title || disc.suggestedTitle) ===
+                  normalize(item.title || ""),
+            )?.transcriptRange;
+      return {
         id: randomUUID(),
         meetingV2Id: meetingId,
         sourceArtifactId: existingItems[0]?.sourceArtifactId ?? null,
         sourceSectionId: null,
-        sectionLabel: "Property Management Report",
-        title: "Ad-hoc items",
-        normalizedTitle: normalize("Ad-hoc items"),
-        itemNumber: placement.sectionCode,
-        itemType: "ad_hoc_discussion",
-        sourcePagesJson: "[]",
-        sourceText:
-          "Discussion status: ad_hoc\nSynthesized section for transcript-only matters not on the official agenda.",
-        sortOrder: nextSort++,
-        createdAt: new Date().toISOString(),
-      });
-    }
-
-    let adHocCodeIndex = 0;
-    function nextAdHocItemNumber(): string {
-      if (placement && adHocCodeIndex < placement.nextItemCodes.length) {
-        return placement.nextItemCodes[adHocCodeIndex++];
-      }
-      return String(nextSort + 1);
-    }
-
-    for (const item of pendingNewItems) {
-      const title = item.title?.trim();
-      if (!title) continue;
-      const newItemId = randomUUID();
-      const status = item.discussionStatus || "ad_hoc";
-      finalItemStatuses[newItemId] = status;
-
-      await db.insert(meetingsV2AgendaItems).values({
-        id: newItemId,
-        meetingV2Id: meetingId,
-        sourceArtifactId: existingItems[0]?.sourceArtifactId ?? null,
-        sourceSectionId: null,
         sectionLabel: item.sectionLabel?.trim() || "Property Management Report: Ad-hoc items",
-        title,
-        normalizedTitle: normalize(title),
-        itemNumber: nextAdHocItemNumber(),
+        title: item.title.trim(),
+        normalizedTitle: normalize(item.title),
+        itemNumber: "",
         itemType: item.itemType?.trim() || "ad_hoc_discussion",
         sourcePagesJson: "[]",
-        sourceText: `Discussion status: ${status}\nCreated during agenda review.`,
-        sortOrder: nextSort++,
+        sourceText: `Discussion status: ${item.discussionStatus || "ad_hoc"}\nCreated during agenda review.`,
+        sortOrder: 0,
         createdAt: new Date().toISOString(),
-      });
+        isNew: true,
+        transcriptRange: range,
+        timestamp: item.timestamp,
+        discussionStatus: item.discussionStatus || "ad_hoc",
+      };
+    });
+
+    const positionedNew = pendingPrepared.filter((item) => {
+      const position = itemPosition(item);
+      return position.startSequence != null || position.startSeconds != null;
+    });
+    const unpositionedNew = pendingPrepared.filter((item) => !positionedNew.includes(item));
+
+    let orderedItems = insertItemsByDiscussionPosition(
+      placeableExisting,
+      positionedNew,
+      itemPosition,
+    );
+
+    const unpositionedPlacement = planAdHocPlacement(
+      orderedItems,
+      unpositionedNew.length,
+      inferPropertyManagementReportNumber(orderedItems),
+    );
+    if (unpositionedPlacement?.sectionMissing && unpositionedNew.length > 0) {
+      orderedItems = [
+        ...orderedItems,
+        {
+          id: randomUUID(),
+          meetingV2Id: meetingId,
+          sourceArtifactId: existingItems[0]?.sourceArtifactId ?? null,
+          sourceSectionId: null,
+          sectionLabel: "Property Management Report",
+          title: "Ad-hoc items",
+          normalizedTitle: normalize("Ad-hoc items"),
+          itemNumber: unpositionedPlacement.sectionCode,
+          itemType: "ad_hoc_discussion",
+          sourcePagesJson: "[]",
+          sourceText:
+            "Discussion status: ad_hoc\nSynthesized section for transcript-only matters not on the official agenda.",
+          sortOrder: 0,
+          createdAt: new Date().toISOString(),
+          isNew: true,
+          discussionStatus: "ad_hoc",
+        },
+      ];
+    }
+    let unpositionedCodeIndex = 0;
+    for (const item of unpositionedNew) {
+      const code =
+        unpositionedPlacement && unpositionedCodeIndex < unpositionedPlacement.nextItemCodes.length
+          ? unpositionedPlacement.nextItemCodes[unpositionedCodeIndex++]
+          : String(orderedItems.length + 1);
+      orderedItems.push({ ...item, itemNumber: code });
+    }
+
+    const existingByOrderedId = new Map(normalizedExisting.map((item) => [item.id, item]));
+    for (const [index, item] of orderedItems.entries()) {
+      if (item.isNew) {
+        const status = item.discussionStatus || "ad_hoc";
+        finalItemStatuses[item.id] = status;
+        await db.insert(meetingsV2AgendaItems).values({
+          id: item.id,
+          meetingV2Id: meetingId,
+          sourceArtifactId: item.sourceArtifactId,
+          sourceSectionId: item.sourceSectionId,
+          sectionLabel: item.sectionLabel,
+          title: item.title,
+          normalizedTitle: item.normalizedTitle,
+          itemNumber: item.itemNumber,
+          itemType: item.itemType,
+          sourcePagesJson: item.sourcePagesJson,
+          sourceText: item.sourceText,
+          sortOrder: index,
+          createdAt: item.createdAt,
+        });
+        continue;
+      }
+      const prior = existingByOrderedId.get(item.id);
+      if (!prior) continue;
+      if (prior.sortOrder !== index || prior.itemNumber !== item.itemNumber) {
+        await db
+          .update(meetingsV2AgendaItems)
+          .set({ sortOrder: index, itemNumber: item.itemNumber })
+          .where(
+            and(eq(meetingsV2AgendaItems.meetingV2Id, meetingId), eq(meetingsV2AgendaItems.id, item.id)),
+          );
+      }
     }
 
     const finalItems = await db.select().from(meetingsV2AgendaItems).where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId));
+    const insertedRangeById = new Map(
+      orderedItems
+        .filter((item) => item.transcriptRange)
+        .map((item) => [item.id, item.transcriptRange] as const),
+    );
     const agendaEvidence = Object.fromEntries(finalItems.map(item => {
       const prior = currentSettings.agendaEvidence?.[item.id];
       const accepted = updatedDiscrepancies.find(d => d.status === "accepted" && normalize(discrepancyMap.get(d.id)?.title || d.suggestedTitle) === normalize(item.title));
-      return [item.id, prior ?? { itemNumber: item.itemNumber, sourceTranscriptRanges: accepted ? [accepted.transcriptRange] : [],
+      const insertedRange = insertedRangeById.get(item.id);
+      return [item.id, prior ?? { itemNumber: item.itemNumber, sourceTranscriptRanges: accepted ? [accepted.transcriptRange] : insertedRange ? [insertedRange] : [],
         sourceChunkIds: [], aliases: [], notes: [] }];
     }));
     const segments = await db.select().from(meetingsV2TranscriptSegments).where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId));

@@ -32,6 +32,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 add-to-agenda placement** — Accepting an AI discrepancy now inserts the new topic among the surrounding discussed leaves using the discrepancy transcript range (or clock), instead of appending it at the end of the outline.
+
 - **Meetings V2 item investigation prior approvals and administrative actions** — Investigation and fact-resolution prompts now explicitly capture prior approvals (e.g. earlier contract awards and figures like New Water Plumbing at $163,900) in discussion summaries rather than hallucinating unpresented package recommendations, record agreed board directions (such as forwarding CCDC contracts to legal counsel for review) in action items, and cross-reference table columns when resolving shorthand figures.
 
 - **Meetings V2 segmenter compare gold-standard drag and sticky labels** — Resolved sticky label truncation and visual jitter when editing gold spans:

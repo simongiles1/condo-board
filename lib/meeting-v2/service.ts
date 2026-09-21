@@ -3551,6 +3551,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
           };
         });
       const sourcePages = safeJsonParse<number[]>(item.sourcePagesJson, []);
+      const sourceTranscriptRanges = selectedSettings.agendaEvidence?.[item.id]?.sourceTranscriptRanges ?? [];
       const discussionStatus =
         selectedSettings.agendaApproval?.itemStatuses?.[item.id] ??
         (item.sourceText?.includes("Discussion status: discussed")
@@ -3569,6 +3570,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         discussionStatus,
         sourceSectionId: item.sourceSectionId,
         sourcePages,
+        sourceTranscriptRanges,
         discussionSummary: investigation?.discussionSummary ?? null,
         confidence: investigation?.confidence ?? null,
         outcome: investigation?.outcome ?? null,

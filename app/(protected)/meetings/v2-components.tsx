@@ -4562,10 +4562,10 @@ function DraftWorkspacePanel({
             Draft generation is blocked until the items below are cleared.
           </p>
           <p className="mt-2 text-amber-900">
-            Answering open questions is not enough on its own: the validator must also have no error-level
-            findings, and any item still listed here must have every open question saved. Use{" "}
-            <strong>Agenda Review</strong>, open the item, and check the <strong>Flags</strong> tab for
-            error findings; use <strong>Questions</strong> only when a question still appears there.
+            Open questions belong on the <strong>Questions</strong> tab. The <strong>Flags</strong> tab shows
+            validator notes only — reading them is the review; amber notes do not require a separate approval
+            click. Draft generation is blocked only for error-level validation, unanswered questions, or stale
+            pipeline data.
           </p>
           <ul className="mt-2 list-disc space-y-1 pl-5">
             {readiness?.problems.map((problem) => (

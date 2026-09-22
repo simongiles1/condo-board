@@ -213,7 +213,7 @@ export function preferProjectScope(
 }
 
 export function buildProjectHighlightDomainContext(): string {
-  return `Domain context: These emails concern Studio 1, a condominium corporation. A PROJECT is a named, time-bounded body of work the Board would put on a tracker: capital/improvement jobs (maglock installation, EV charging, envelope repair, boiler replacement tender), remediation (a flood across units 204/304, stack leak restoration), or a discrete campaign (2026 window cleaning, kitchen stack cleaning, reserve fund study). It is NOT a vendor or contractor company, NOT a person, NOT a single meeting, NOT one to-do ("get three quotes"), NOT a complaint thread with no named job, NOT a one-off missed service call, and NOT the physical asset itself (that is equipment). Vague "we should look at X someday" is not a project. Bid options and component SKUs are not new projects. The project NAME is the work (riser replacement, window cleaning), never the contractor doing it. Location is a specific place in the building (unit 201, ninth floor amenity space, P1, roof, garage, front doors). Never use generic words as a location: building, property, site, condo, premises, facility.`;
+  return `Domain context: These emails concern Studio 1, a condominium corporation. A PROJECT is a named, time-bounded body of work the Board would put on a tracker: capital/improvement jobs (maglock installation, EV charging, envelope repair, boiler replacement tender), remediation (a flood across units 204/304, stack leak restoration), or a discrete campaign including a minor project. A minor project can be short on site (even a day or two) when it is a named annual or seasonal campaign, or when cost or technicality is above day-to-day work (2026 window cleaning, garage cleaning, kitchen stack cleaning, replacing sprinklers or trees, a discrete heat-pump service, reserve fund study). It is NOT a vendor or contractor company, NOT a person, NOT a single meeting, NOT one to-do ("get three quotes"), NOT a complaint thread with no named job, NOT a one-off missed service call, and NOT the physical asset itself (that is equipment). Day-to-day tasks stay out (changing light bulbs, clearing a garbage chute, re-lubricating a track, re-keying a lock). Standing monthly or pre-scheduled maintenance with no separate campaign stays out (monthly landscaping, hot tub service, monthly HVAC, elevator contract). A break from that routine can still be a project (replace trees or sprinklers, a one-off heat-pump repair, an annual window-cleaning campaign). Work that exists only to let a named parent job happen is not its own project (unit-access escort, temporary protection, a permit run for that contract) — leave it as a task on the parent job. Vague "we should look at X someday" is not a project. Bid options and component SKUs are not new projects. The project NAME is the work (riser replacement, window cleaning), never the contractor doing it. Location is a specific place in the building (unit 201, ninth floor amenity space, P1, roof, garage, front doors). Never use generic words as a location: building, property, site, condo, premises, facility.`;
 }
 
 export function buildProjectHighlightSystemPrompt(): string {
@@ -713,6 +713,7 @@ Rules:
 - Create one entity card per distinct PROJECT you can identify from this message. name is REQUIRED. It must be the work-name, never a company or person.
 - Do NOT emit a card when the only identity is a contractor/vendor (those are organizations, harvested separately). Leave contractor on a card that already has a work-name.
 - Do NOT emit a card whose name equals or is a shortened form of contractor.
+- Do NOT emit a card for day-to-day work, a standing monthly or pre-scheduled maintenance contract with no separate campaign, or work that only facilitates a named parent job (unit-access escort, temporary protection, a permit run for that contract).
 - If the same named job appears with two non-overlapping years (e.g. maglock 2024 vs maglock 2026), those are TWO cards. Do not collapse them. A spanning range (2024-2026) is ONE card.
 - Other fields may be sparse. Fill only fields supported by evidence; leave others null. name must still be present.
 - year_hint: "2024" or an inclusive range "2024-2026" for THAT job. Resolve "this year" / "next year" / "last year" to calendar years using the email date when present. Never copy a meeting date, a season, or a duration ("3-year").
@@ -787,12 +788,13 @@ You receive a list of entity cards produced per-email (pass 3). The same project
 
 Minting gate — DROP the card (do not emit it) when:
 - name is missing, or name is a company/person, or name equals / is a shortened form of contractor.
+- The work exists only to facilitate a named parent job (unit-access escort, temporary protection, a permit run for that contract). Do not mint it as its own project.
 - The 3-part boundary test fails on this THREAD:
   1. Multi-step or multi-party: more than a single inbox reply, or a contractor is engaged for a body of work.
-  2. Non-routine: not a one-off missed appointment, not a complaint with no named job, not a standing vendor relationship with no current campaign.
-  3. Discrete lifecycle: identifiable start / active work / completion — including a scheduled campaign (window cleaning 2026) or remediation (flood in 204/304).
-Keep: capital/improvement jobs, multi-unit floods/restoration, discrete cleaning campaigns, reserve fund studies, design/tender work.
-Drop: vendor names as projects, noise/vibration complaints with no named job, a contractor who did not show for a service call.
+  2. Non-routine: not a one-off missed appointment, not a complaint with no named job, not day-to-day operational work (bulbs, chute, re-key), and not a standing monthly or pre-scheduled maintenance contract with no separate campaign (monthly landscaping, hot tub, monthly HVAC, elevators).
+  3. Discrete lifecycle: identifiable start / active work / completion — including a minor project (named annual or seasonal campaign, or elevated cost or technicality even if site work is a day or two: window cleaning 2026, garage cleaning, sprinkler or tree replacement) or remediation (flood in 204/304).
+Keep: capital/improvement jobs, multi-unit floods/restoration, discrete cleaning campaigns and other minor projects, reserve fund studies, design/tender work.
+Drop: vendor names as projects, standing monthly maintenance with no campaign, day-to-day tasks, facilitating logistics for a parent job, noise/vibration complaints with no named job, a contractor who did not show for a service call.
 
 Other merge rules:
 - Output ONE card per distinct project identity. name is required.

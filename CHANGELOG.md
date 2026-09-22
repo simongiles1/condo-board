@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Build-out modal ingestion view** — Dev Tools build-out dialog has a **Timeline** / **Ingestion** switch. Ingestion shows a per-entity table (email body vs attachments vs harvest passes vs registry) with clickable rows and Markdown detail (including project minting rules and a harvest pass 1–4 explainer).
+
 - **Meetings V2 suggested question answers** — Each open question in the side panel can include clickable replies. Choosing one fills the answer; a text box remains for a custom reply.
 
 - **Meetings V2 question briefing notes** — Each open question in the agenda side-panel Questions tab can include a **What we already know** bullet list: rewritten facts with a Transcript / Board package source, so the secretary can answer without re-reading the whole package and transcript. Notes are generated with the investigation (and repair) pass and persist on the question. If the investigator omits them, a salvage pass plus fact-ledger fallback still fills the list, and repair no longer wipes existing notes.
@@ -20,11 +22,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V2 saved question answers ignored** — Clarifications merge on save instead of replacing prior answers for the same item. Open questions with a saved answer are hidden in review, dropped after re-investigation, and matched when question wording shifts slightly between runs.
 
-- **Meetings V2 draft gate after answered questions** — Generating a minutes draft no longer stays blocked solely because the AI validator marked an item `review_required` after you saved answers to every open question. Error-level validation findings and items with unanswered questions still block draft generation.
+- **Meetings V2 draft gate after answered questions** — Generating a minutes draft no longer stays blocked solely because the AI validator marked an item `review_required` or listed advisory flag text after you saved answers to every open question. Draft readiness is recomputed on each status load. Only a failed validator verdict, deterministic validation errors, unanswered questions, or stale pipeline data block draft generation.
 
 - **Meetings V2 conversational approval and spoken amounts** — A proposed approval counts when directors let it proceed, including "no questions," and nobody states a condition that blocks the decision. Missing mover, seconder, or vote language is not left as an open question. A spoken amount that only drops the digits below the thousands place is written as the one matching package figure. Minutes state that decision and leave out recommendations the board did not take up.
 
 ### Changed
+
+- **Project and to-do harvest definitions** — Project prompts now keep minor projects (named annual or seasonal campaigns, or short jobs with elevated cost or technicality) and drop day-to-day tasks, standing monthly maintenance with no separate campaign, and work that only facilitates a parent job. To-do prompts treat those dropped cases as tasks when the email still contains an unresolved ask. Parent/child project rows are unchanged.
 
 - **Meetings V2 question answers workflow** — Side panel **Save answer** persists clarifications without re-running investigation. **Submit & Re-evaluate** moves to the Agenda Review header and runs only after every open question has a saved answer (no unsaved edits).
 

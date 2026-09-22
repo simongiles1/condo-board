@@ -3394,7 +3394,6 @@ export async function generateMeetingV2Draft(meetingId: string): Promise<{
 
   if (!meeting.settings?.agendaApproval?.approvedAt) throw new Error("Approve the agenda before generating minutes.");
   const problems = draftReadiness(agendaItems, investigations, validationRows);
-  if (!meeting.settings.draftReadiness?.ready) problems.push("Investigation and validation must finish for the current inputs.");
   if (meeting.settings.pipelineVersion !== MINUTES_PIPELINE_VERSION ||
       meeting.settings.sourceFingerprint !== await currentMeetingSourceFingerprint(meetingId)) {
     problems.push("Source files or pipeline rules changed. Run the pipeline and review the agenda again.");
@@ -3658,6 +3657,17 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
     transcriptSegments.map((s) => [s.id, { speakerLabel: s.speakerLabel, timestamp: s.startTimestamp }] as const),
   );
 
+  const draftReadinessProblems = draftReadiness(
+    agendaItems.map((item) => ({ id: item.id, title: item.title })),
+    investigations,
+    validationRows,
+  );
+  const draftReadinessSnapshot = {
+    ready: draftReadinessProblems.length === 0,
+    problems: draftReadinessProblems,
+    checkedAt: nowIso(),
+  };
+
   return {
     meeting: {
       id: selectedMeeting.id,
@@ -3689,7 +3699,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       goldStandardValidationJson,
       aiUsageJson,
       agendaApproval: selectedSettings.agendaApproval ?? null,
-      draftReadiness: selectedSettings.draftReadiness,
+      draftReadiness: draftReadinessSnapshot,
     },
     items: agendaItems.map((item) => {
       const investigation = investigations.find((entry) => entry.agendaItemId === item.id);

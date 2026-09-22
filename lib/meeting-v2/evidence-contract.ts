@@ -386,6 +386,40 @@ export function investigationFingerprint(row: InvestigationVersion): string {
   return evidenceFingerprint([row.discussionSummary, row.outcome, row.confidence, row.visibility,
     row.decisionsJson, row.motionJson, row.actionsJson, row.openQuestionsJson, row.userAnswersJson]);
 }
+
+const DETERMINISTIC_DRAFT_BLOCKERS = new Set([
+  "ai_validation_failed",
+  "missing_evidence",
+  "missing_investigation",
+  "stale_investigation",
+  "unresolved_facts",
+]);
+
+function parseValidationDetails(detailsJson: string | null | undefined): Record<string, unknown> | null {
+  if (!detailsJson) return null;
+  try {
+    const parsed = JSON.parse(detailsJson) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when validation findings should block draft generation for an agenda item.
+ */
+export function itemValidationBlocksDraft(
+  findings: Array<{ severity: string; code: string; detailsJson?: string | null }>,
+): boolean {
+  const verdictRow = findings.find((entry) => entry.code === "ai_verdict");
+  const verdictDetails = parseValidationDetails(verdictRow?.detailsJson);
+  if (verdictDetails?.verdict === "fail") return true;
+  return findings.some(
+    (entry) => entry.severity === "error" && DETERMINISTIC_DRAFT_BLOCKERS.has(entry.code),
+  );
+}
+
 export function draftReadiness(agenda: GateItem[], investigations: InvestigationVersion[],
   validations: Array<{ agendaItemId: string; severity: string; code: string; detailsJson?: string | null }>): string[] {
   const problems: string[] = [];
@@ -420,15 +454,12 @@ export function draftReadiness(agenda: GateItem[], investigations: Investigation
     if (unansweredQuestions.length > 0) {
       problems.push(`${item.title}: ${unansweredQuestions.length} open question(s) still need answers.`);
     }
-    if (findings.some(v => v.severity === "error")) {
+    if (itemValidationBlocksDraft(findings)) {
       problems.push(`${item.title}: validation requires correction or review.`);
     }
     if (verdict?.detailsJson) {
       try {
         const details = JSON.parse(verdict.detailsJson);
-        if (details.needsHumanReview === true && unansweredQuestions.length > 0) {
-          problems.push(`${item.title}: human review is required.`);
-        }
         if (details.pipelineVersion !== MINUTES_PIPELINE_VERSION || details.investigationId !== results[0].id ||
             details.investigationFingerprint !== investigationFingerprint(results[0])) problems.push(`${item.title}: validation is stale.`);
       }

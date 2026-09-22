@@ -132,6 +132,7 @@ function FlagsTabContent({ item }: { item: AgendaItemDetail }) {
   const flags = item.validation.filter(
     (validation) => validation.severity === "error" || validation.severity === "warning",
   );
+  const mustFix = flags.some((validation) => validation.severity === "error");
 
   if (flags.length === 0) {
     return (
@@ -142,15 +143,39 @@ function FlagsTabContent({ item }: { item: AgendaItemDetail }) {
   }
 
   return (
-    <div className="space-y-2">
-      {flags.map((validation) => (
-        <div
-          key={`${item.id}-${validation.code}`}
-          className={`rounded-2xl border px-4 py-3 text-sm ${severityTone(validation.severity)}`}
-        >
-          <div className="font-medium">{validation.message}</div>
-        </div>
-      ))}
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+        <p className="font-medium text-slate-900">Automated validator notes</p>
+        <p className="mt-1 leading-6">
+          These messages are the AI validator&apos;s review checklist for this item. Reading them is the
+          human review step — there is no separate approve button. Amber notes are suggestions; only red
+          error-level findings block draft generation.
+        </p>
+        {mustFix ? (
+          <p className="mt-2 font-medium text-rose-900">
+            This item has at least one error-level finding. Re-evaluate after fixing evidence or clarifications,
+            or check the Pipeline tab if validation failed to run.
+          </p>
+        ) : (
+          <p className="mt-2 text-slate-600">
+            No error-level findings on this item. You do not need to take further action here before generating
+            the draft.
+          </p>
+        )}
+      </div>
+      <div className="space-y-2">
+        {flags.map((validation) => (
+          <div
+            key={`${item.id}-${validation.code}-${validation.message.slice(0, 40)}`}
+            className={`rounded-2xl border px-4 py-3 text-sm ${severityTone(validation.severity)}`}
+          >
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] opacity-80">
+              {validation.severity === "error" ? "Must fix" : "Review note"}
+            </div>
+            <div className="font-medium">{validation.message}</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

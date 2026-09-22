@@ -104,6 +104,12 @@ Rules:
 CRITICAL — what belongs in action_items[]:
 Internal asks, requests, or follow-ups that someone still needs to do. Use this for anything that is not a calendar-worthy event or hard external deadline.
 
+A Task is routine, single-step, or day-to-day operational work, usually one contractor and a standard invoice: changing light bulbs, clearing a garbage chute, re-lubricating a track, re-keying a lock, and standing monthly or pre-scheduled maintenance (landscaping, hot tub service, monthly HVAC, elevators). When this email still asks someone to do that work, emit it as an action item.
+
+Do not treat a minor or capital project as the task itself. Named campaigns and elevated-cost or technical jobs (annual window cleaning, garage cleaning, sprinkler or tree replacement, a discrete heat-pump service, tenders) are projects and are harvested separately. A single unresolved ask inside that job (for example "get three quotes") is still one action item.
+
+Work that exists only to let a named parent job happen (escort into units, temporary protection, a permit run for that contract) is a task on that job. Emit the unresolved ask as one action item.
+
 - Set deadline ONLY if the email explicitly states a firm hard date by which the action must be completed (e.g. "must be filed by 2026-08-01"). Do NOT set deadline to the date the email was sent or the date of a related meeting if no actual due date is stated. Phrases like "share any thoughts", "please review", "let me know", "respond when you can", or "before the next meeting" are NOT firm deadlines — omit the deadline field for those.
 - Emit ONLY asks still unresolved as of THIS email's content — if quoted thread history in this message shows an ask was already answered, confirmed, scheduled, or otherwise dealt with later in the thread, do NOT emit it.
 - Do NOT emit work this email reports as already done, already approved, already investigated, or already completed. A status report answering "what has been done?" is not a list of new to-dos.

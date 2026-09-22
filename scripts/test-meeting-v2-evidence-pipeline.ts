@@ -323,7 +323,21 @@ describe("draft quality gate", () => {
     assert.doesNotThrow(() => buildMeetingV2DraftArtifact(input));
     assert.throws(() => buildMeetingV2DraftArtifact({ ...input, investigations: input.investigations.slice(0, 1) }), /requires exactly one/);
     assert.throws(() => buildMeetingV2DraftArtifact({ ...input, validations: [] }), /validation is incomplete/);
-    assert.throws(() => buildMeetingV2DraftArtifact({ ...input, validations: input.validations.map(v => ({ ...v, severity: "error" })) }), /correction or review/);
+    assert.throws(
+      () =>
+        buildMeetingV2DraftArtifact({
+          ...input,
+          validations: input.validations.map((v) => ({
+            ...v,
+            severity: "error",
+            detailsJson: JSON.stringify({
+              ...JSON.parse(v.detailsJson ?? "{}"),
+              verdict: "fail",
+            }),
+          })),
+        }),
+      /correction or review/,
+    );
     assert.doesNotThrow(() =>
       buildMeetingV2DraftArtifact({
         ...input,

@@ -10,6 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { BuildoutIngestionView } from "@/components/BuildoutIngestionView";
 import { BuildoutIcon } from "@/components/nav-icons";
 import {
   BUILDOUT_COVERAGE_SNAPSHOT,
@@ -115,6 +116,8 @@ const PHASE_HEADER_SHORT: Record<BuildoutSequenceKind, string> = {
   deferred: "Park",
 };
 
+type BuildoutDialogView = "progress" | "ingestion";
+
 export function BuildoutProgressButton({
   collapsed,
 }: {
@@ -166,6 +169,7 @@ function BuildoutProgressDialog({
 }) {
   const titleId = useId();
   const [mounted, setMounted] = useState(false);
+  const [dialogView, setDialogView] = useState<BuildoutDialogView>("progress");
   const isLgUp = useIsLgUp();
   const stageCounts = countByStatus(BUILDOUT_STAGES);
   const gantt = useMemo(() => buildoutGanttRows(), []);
@@ -225,6 +229,7 @@ function BuildoutProgressDialog({
     if (!open) return;
     setDetailSheetOpen(false);
     setSelectedId(isLgUp ? defaultSelection : null);
+    setDialogView("progress");
   }, [open, defaultSelection, isLgUp]);
 
   useEffect(() => {
@@ -253,15 +258,19 @@ function BuildoutProgressDialog({
                 id={titleId}
                 className="text-sm font-semibold text-slate-900 sm:text-base"
               >
-                Build-out progress
+                {dialogView === "progress"
+                  ? "Build-out progress"
+                  : "Entity ingestion"}
               </h2>
               <p className="mt-0.5 hidden text-xs text-slate-500 sm:block sm:text-sm">
-                Execution timeline and harvest inventory. Reviewed{" "}
-                {BUILDOUT_REVIEWED_ON}. Live coverage stays on the extraction
-                calendar.
+                {dialogView === "progress"
+                  ? `Execution timeline and harvest inventory. Reviewed ${BUILDOUT_REVIEWED_ON}. Live coverage stays on the extraction calendar.`
+                  : "What is harvested from email bodies vs attachments, and how highlight passes map to each registry."}
               </p>
               <p className="mt-0.5 text-[11px] text-slate-500 sm:hidden">
-                Tap a row for details · reviewed {BUILDOUT_REVIEWED_ON}
+                {dialogView === "progress"
+                  ? `Tap a row for details · reviewed ${BUILDOUT_REVIEWED_ON}`
+                  : "Tap a row for rules and gaps"}
               </p>
             </div>
             <button
@@ -273,10 +282,49 @@ function BuildoutProgressDialog({
               Close
             </button>
           </div>
-          <StageMeter counts={stageCounts} />
-          <CoverageSnapshot className="hidden sm:block" />
+          <div
+            className="mt-3 flex gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1"
+            role="tablist"
+            aria-label="Build-out modal view"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={dialogView === "progress"}
+              onClick={() => setDialogView("progress")}
+              className={`flex-1 rounded-md px-2 py-1.5 text-xs font-semibold transition sm:text-sm ${
+                dialogView === "progress"
+                  ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Timeline
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={dialogView === "ingestion"}
+              onClick={() => setDialogView("ingestion")}
+              className={`flex-1 rounded-md px-2 py-1.5 text-xs font-semibold transition sm:text-sm ${
+                dialogView === "ingestion"
+                  ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Ingestion
+            </button>
+          </div>
+          {dialogView === "progress" ? (
+            <>
+              <StageMeter counts={stageCounts} />
+              <CoverageSnapshot className="hidden sm:block" />
+            </>
+          ) : null}
         </div>
 
+        {dialogView === "ingestion" ? (
+          <BuildoutIngestionView />
+        ) : (
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
           <div className="min-h-0 flex-1 overflow-hidden lg:border-r lg:border-slate-200">
             <BuildoutGanttChart
@@ -305,9 +353,13 @@ function BuildoutProgressDialog({
             </div>
           </aside>
         </div>
+        )}
       </div>
 
-      {!isLgUp && selected && detailSheetOpen ? (
+      {!isLgUp &&
+      dialogView === "progress" &&
+      selected &&
+      detailSheetOpen ? (
         <MobileDetailSheet row={selected} onClose={closeDetailSheet} />
       ) : null}
     </div>,

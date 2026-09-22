@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import {
+  omitOpenQuestionsAnsweredByUser,
+  parseStoredOpenQuestions,
+} from "./investigation-contract";
 
 /** Bump when evidence, resolution, investigation, validation, or assembly contracts change. */
 export const MINUTES_PIPELINE_VERSION = "2026-09-evidence-v4";
@@ -396,13 +400,35 @@ export function draftReadiness(agenda: GateItem[], investigations: Investigation
     } catch { problems.push(`${item.title}: invalid investigation provenance.`); }
     const verdict = findings.find(v => v.code === "ai_verdict" || v.code === "item_not_discussed" || v.code === "structural_heading");
     if (!verdict) problems.push(`${item.title}: validation is incomplete.`);
-    if (findings.some(v => v.severity === "error" || (v.code === "ai_verdict" && v.severity !== "info"))) {
+    const userAnswers = (() => {
+      try {
+        const parsed = JSON.parse(results[0].userAnswersJson ?? "{}") as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+        return Object.fromEntries(
+          Object.entries(parsed as Record<string, unknown>).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        );
+      } catch {
+        return {};
+      }
+    })();
+    const unansweredQuestions = omitOpenQuestionsAnsweredByUser(
+      parseStoredOpenQuestions(results[0].openQuestionsJson),
+      userAnswers,
+    );
+    if (unansweredQuestions.length > 0) {
+      problems.push(`${item.title}: ${unansweredQuestions.length} open question(s) still need answers.`);
+    }
+    if (findings.some(v => v.severity === "error")) {
       problems.push(`${item.title}: validation requires correction or review.`);
     }
     if (verdict?.detailsJson) {
       try {
         const details = JSON.parse(verdict.detailsJson);
-        if (details.needsHumanReview === true) problems.push(`${item.title}: human review is required.`);
+        if (details.needsHumanReview === true && unansweredQuestions.length > 0) {
+          problems.push(`${item.title}: human review is required.`);
+        }
         if (details.pipelineVersion !== MINUTES_PIPELINE_VERSION || details.investigationId !== results[0].id ||
             details.investigationFingerprint !== investigationFingerprint(results[0])) problems.push(`${item.title}: validation is stale.`);
       }

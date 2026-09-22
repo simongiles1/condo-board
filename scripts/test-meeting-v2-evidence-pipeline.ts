@@ -324,7 +324,12 @@ describe("draft quality gate", () => {
     assert.throws(() => buildMeetingV2DraftArtifact({ ...input, investigations: input.investigations.slice(0, 1) }), /requires exactly one/);
     assert.throws(() => buildMeetingV2DraftArtifact({ ...input, validations: [] }), /validation is incomplete/);
     assert.throws(() => buildMeetingV2DraftArtifact({ ...input, validations: input.validations.map(v => ({ ...v, severity: "error" })) }), /correction or review/);
-    assert.throws(() => buildMeetingV2DraftArtifact({ ...input, validations: input.validations.map(v => ({ ...v, severity: "warning" })) }), /correction or review/);
+    assert.doesNotThrow(() =>
+      buildMeetingV2DraftArtifact({
+        ...input,
+        validations: input.validations.map(v => ({ ...v, severity: "warning" })),
+      }),
+    );
     input.investigations[0].discussionSummary = "Changed after validation";
     assert.match(draftReadiness(input.agendaItems, input.investigations, input.validations).join(" "), /stale/);
   });

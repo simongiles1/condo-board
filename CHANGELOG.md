@@ -20,6 +20,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V2 saved question answers ignored** — Clarifications merge on save instead of replacing prior answers for the same item. Open questions with a saved answer are hidden in review, dropped after re-investigation, and matched when question wording shifts slightly between runs.
 
+- **Meetings V2 draft gate after answered questions** — Generating a minutes draft no longer stays blocked solely because the AI validator marked an item `review_required` after you saved answers to every open question. Error-level validation findings and items with unanswered questions still block draft generation.
+
 - **Meetings V2 conversational approval and spoken amounts** — A proposed approval counts when directors let it proceed, including "no questions," and nobody states a condition that blocks the decision. Missing mover, seconder, or vote language is not left as an open question. A spoken amount that only drops the digits below the thousands place is written as the one matching package figure. Minutes state that decision and leave out recommendations the board did not take up.
 
 ### Changed

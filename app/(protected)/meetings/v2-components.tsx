@@ -4555,10 +4555,25 @@ function DraftWorkspacePanel({
       description="After validation, generate a formatted minutes document from the pipeline output. Edit here or preview the PDF layout."
       compact
     >
-      {!readiness?.ready ? <p role="status" className="mb-3 text-sm text-amber-800">
-        {draft ? "The saved draft may be outdated. " : ""}Resolve the validation findings before generating minutes.
-        {readiness?.problems.slice(0, 3).map(problem => <span key={problem} className="block">{problem}</span>)}
-      </p> : null}
+      {!readiness?.ready ? (
+        <div role="status" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <p className="font-medium">
+            {draft ? "The saved draft may be outdated. " : ""}
+            Draft generation is blocked until the items below are cleared.
+          </p>
+          <p className="mt-2 text-amber-900">
+            Answering open questions is not enough on its own: the validator must also have no error-level
+            findings, and any item still listed here must have every open question saved. Use{" "}
+            <strong>Agenda Review</strong>, open the item, and check the <strong>Flags</strong> tab for
+            error findings; use <strong>Questions</strong> only when a question still appears there.
+          </p>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {readiness?.problems.map((problem) => (
+              <li key={problem}>{problem}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {!draft ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center">
           <p className="text-sm text-slate-600">

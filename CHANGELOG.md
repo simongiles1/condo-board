@@ -22,6 +22,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Bulk extract Docker build** — Client bulk extract dialog imports DeepSeek peak helpers from a shared module so production `next build` no longer pulls `pg` into the browser bundle.
+
 - **Meetings V2 saved question answers ignored** — Clarifications merge on save instead of replacing prior answers for the same item. Open questions with a saved answer are hidden in review, dropped after re-investigation, and matched when question wording shifts slightly between runs.
 
 - **Meetings V2 draft gate after answered questions** — Generating a minutes draft no longer stays blocked solely because the AI validator marked an item `review_required` or listed advisory flag text after you saved answers to every open question. Draft readiness is recomputed on each status load. Only a failed validator verdict, deterministic validation errors, unanswered questions, or stale pipeline data block draft generation.

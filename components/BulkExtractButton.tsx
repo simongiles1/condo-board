@@ -44,7 +44,7 @@ import { DeepSeekPricingTimeline } from "@/components/DeepSeekPricingTimeline";
 import {
   BULK_EXTRACT_DEEPSEEK_PEAK_PAUSE_PREFIX,
   bulkExtractModelUsesDeepSeek,
-} from "@/lib/email-analysis/bulk-extract-deepseek-peak";
+} from "@/lib/email-analysis/bulk-extract-deepseek-peak-shared";
 import { getDeepSeekPricingStatus } from "@/lib/deepseek/pricing";
 import { formatCostUsd } from "@/lib/gemini/usage";
 

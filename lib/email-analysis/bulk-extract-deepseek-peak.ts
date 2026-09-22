@@ -1,12 +1,7 @@
 /**
- * Pause bulk extract during DeepSeek peak pricing unless the run opts in.
+ * Server-side pause loop for bulk extract during DeepSeek peak pricing.
  */
 
-import {
-  CONTACT_HIGHLIGHT_MODELS,
-  contactHighlightModelProvider,
-  type ContactHighlightModelId,
-} from "@/lib/email-analysis/contact-highlight-models";
 import {
   endBulkExtractActiveStint,
   ensureBulkExtractActiveStint,
@@ -15,32 +10,23 @@ import {
   updateBulkExtractRun,
 } from "@/lib/email-analysis/bulk-extract-runs";
 import {
+  BULK_EXTRACT_DEEPSEEK_PEAK_PAUSE_PREFIX,
+  bulkExtractModelUsesDeepSeek,
+} from "@/lib/email-analysis/bulk-extract-deepseek-peak-shared";
+import {
   formatDeepSeekTierCountdown,
   getDeepSeekPricingStatus,
 } from "@/lib/deepseek/pricing";
 
-const PEAK_PAUSE_POLL_MS = 15_000;
+export {
+  BULK_EXTRACT_DEEPSEEK_PEAK_PAUSE_PREFIX,
+  bulkExtractModelUsesDeepSeek,
+} from "@/lib/email-analysis/bulk-extract-deepseek-peak-shared";
 
-export const BULK_EXTRACT_DEEPSEEK_PEAK_PAUSE_PREFIX =
-  "Paused for DeepSeek peak pricing";
+const PEAK_PAUSE_POLL_MS = 15_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** True when the bulk-extract model id routes to the DeepSeek provider. */
-export function bulkExtractModelUsesDeepSeek(modelId: string): boolean {
-  const trimmed = modelId.trim();
-  if (!trimmed) return false;
-  if (
-    (CONTACT_HIGHLIGHT_MODELS as readonly string[]).includes(trimmed)
-  ) {
-    return (
-      contactHighlightModelProvider(trimmed as ContactHighlightModelId) ===
-      "deepseek"
-    );
-  }
-  return trimmed.toLowerCase().includes("deepseek");
 }
 
 /**

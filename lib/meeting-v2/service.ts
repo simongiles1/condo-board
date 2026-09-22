@@ -14,6 +14,7 @@ import {
   parseOpenQuestionContextNotes,
   parseStoredOpenQuestions,
   mergeOpenQuestionContextNotes,
+  omitOpenQuestionsAnsweredByUser,
   openQuestionsMissingContextNotes,
   serializeOpenQuestionsJson,
   storedOpenQuestionTexts,
@@ -174,6 +175,8 @@ export type MeetingV2Detail = {
     confidence: string | null;
     outcome: string | null;
     openQuestions: string[];
+    /** Open questions last written by investigate/validate before user clarifications are applied. */
+    pipelineOpenQuestions: string[];
     openQuestionNotes: OpenQuestionContextNote[][];
     openQuestionOptions: string[][];
     openQuestionContext: Record<string, OpenQuestionContextNote[]>;
@@ -3056,6 +3059,10 @@ export async function investigateAgendaItems(
       }
     }
     // Proposed answers and revised notes remain model output, never edits to source evidence.
+    normalized = {
+      ...normalized,
+      open_questions: omitOpenQuestionsAnsweredByUser(normalized.open_questions, userAnswers),
+    };
     usageJson = JSON.stringify({ ...safeJsonParse<Record<string, unknown>>(usageJson, {}),
       pipelineVersion: MINUTES_PIPELINE_VERSION, evidenceFingerprint: prepared.fingerprint,
       inputFingerprint: evidenceFingerprint({ sources, itemStatus, title: item.title, itemNumber: item.itemNumber }),
@@ -3257,9 +3264,12 @@ export async function validateAgendaItemInvestigations(
                 : null;
             const merged: InvestigationDocument = {
               ...corrected,
-              open_questions: omitBlockedOpenQuestions(
-                mergeOpenQuestionContextNotes(previousQuestions, corrected.open_questions),
-                factResolution,
+              open_questions: omitOpenQuestionsAnsweredByUser(
+                omitBlockedOpenQuestions(
+                  mergeOpenQuestionContextNotes(previousQuestions, corrected.open_questions),
+                  factResolution,
+                ),
+                safeJsonParse<Record<string, string>>(candidate.userAnswersJson, {}),
               ),
             };
             const filled = await fillQuestionContextNotes({
@@ -3717,6 +3727,21 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
             ? ("ad_hoc" as const)
             : ("not_discussed" as const));
 
+      const pipelineOpenQuestionRows = parseStoredOpenQuestions(investigation?.openQuestionsJson);
+      const pipelineOpenQuestions = pipelineOpenQuestionRows.map((entry) => entry.question);
+      const storedClarifications =
+        selectedSettings.userClarifications?.[item.id] ??
+        safeJsonParse<Record<string, string>>(investigation?.userAnswersJson, {});
+      const investigationAnswers = safeJsonParse<Record<string, string>>(
+        investigation?.userAnswersJson,
+        {},
+      );
+      const userAnswers = { ...investigationAnswers, ...storedClarifications };
+      const visibleOpenQuestionRows = omitOpenQuestionsAnsweredByUser(
+        pipelineOpenQuestionRows,
+        userAnswers,
+      );
+
       return {
         id: item.id,
         title: item.title,
@@ -3731,18 +3756,12 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         discussionSummary: investigation?.discussionSummary ?? null,
         confidence: investigation?.confidence ?? null,
         outcome: investigation?.outcome ?? null,
-        openQuestions: storedOpenQuestionTexts(investigation?.openQuestionsJson),
-        openQuestionNotes: parseStoredOpenQuestions(investigation?.openQuestionsJson).map(
-          (entry) => entry.context_notes,
-        ),
-        openQuestionOptions: parseStoredOpenQuestions(investigation?.openQuestionsJson).map((entry) =>
-          clickableAnswers(entry),
-        ),
+        pipelineOpenQuestions,
+        openQuestions: visibleOpenQuestionRows.map((entry) => entry.question),
+        openQuestionNotes: visibleOpenQuestionRows.map((entry) => entry.context_notes),
+        openQuestionOptions: visibleOpenQuestionRows.map((entry) => clickableAnswers(entry)),
         openQuestionContext: Object.fromEntries(
-          parseStoredOpenQuestions(investigation?.openQuestionsJson).map((entry) => [
-            entry.question,
-            entry.context_notes,
-          ]),
+          visibleOpenQuestionRows.map((entry) => [entry.question, entry.context_notes]),
         ),
         revisedNotes: (() => {
           const usage = safeJsonParse<Record<string, unknown>>(investigation?.usageJson, {});
@@ -3750,10 +3769,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
             ? usage.revisedNotes.filter((note): note is string => typeof note === "string" && note.trim().length > 0)
             : [];
         })(),
-        userAnswers: safeJsonParse<Record<string, string> | null>(
-          investigation?.userAnswersJson,
-          null,
-        ),
+        userAnswers: Object.keys(userAnswers).length > 0 ? userAnswers : null,
         validation: validations,
         evidence: itemEvidence,
       };
@@ -3950,8 +3966,12 @@ export async function saveUserAnswers(
   }
   const itemExists = await db.query.meetingsV2AgendaItems.findFirst({ where: and(eq(meetingsV2AgendaItems.meetingV2Id, meetingId), eq(meetingsV2AgendaItems.id, agendaItemId)) });
   if (!itemExists) throw new Error(`Agenda item ${agendaItemId} was not found.`);
+  const [meetingRow] = await db.select({ settings: meetingsV2.settings }).from(meetingsV2).where(eq(meetingsV2.id, meetingId));
+  const settings = (meetingRow?.settings as MeetingV2Settings) || {};
+  const priorAnswers = settings.userClarifications?.[agendaItemId] ?? {};
+  const mergedAnswers = { ...priorAnswers, ...filled };
   await markMeetingV2DraftStale(meetingId, "User clarification changed. Re-evaluation is required.");
-  await db.update(meetingsV2).set({ settings: sql`jsonb_set(coalesce(${meetingsV2.settings}, '{}'::jsonb), '{userClarifications}', coalesce(${meetingsV2.settings}->'userClarifications', '{}'::jsonb) || ${JSON.stringify({ [agendaItemId]: filled })}::jsonb)` }).where(eq(meetingsV2.id, meetingId));
+  await db.update(meetingsV2).set({ settings: sql`jsonb_set(coalesce(${meetingsV2.settings}, '{}'::jsonb), '{userClarifications}', coalesce(${meetingsV2.settings}->'userClarifications', '{}'::jsonb) || ${JSON.stringify({ [agendaItemId]: mergedAnswers })}::jsonb)` }).where(eq(meetingsV2.id, meetingId));
   await db.delete(meetingsV2ValidationResults).where(and(eq(meetingsV2ValidationResults.meetingV2Id, meetingId), eq(meetingsV2ValidationResults.agendaItemId, agendaItemId)));
   const [existing] = await db
     .select()
@@ -3966,7 +3986,7 @@ export async function saveUserAnswers(
     await db
       .update(meetingsV2AgendaItemInvestigations)
       .set({
-        userAnswersJson: JSON.stringify(filled),
+        userAnswersJson: JSON.stringify(mergedAnswers),
         updatedAt: nowIso(),
       })
       .where(eq(meetingsV2AgendaItemInvestigations.id, existing.id));

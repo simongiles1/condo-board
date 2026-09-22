@@ -269,11 +269,15 @@ function QuestionsTabContent({
       <div className="flex items-center gap-3">
         <button
           className="inline-flex items-center rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={busy || !Object.values(itemAnswers).some((value) => value.trim())}
+          disabled={
+            busy ||
+            !dirty ||
+            !Object.values(itemAnswers).some((value) => value.trim())
+          }
           onClick={onSubmit}
           type="button"
         >
-          {busy ? "Submitting..." : "Submit & Re-evaluate"}
+          {busy ? "Saving..." : "Save answer"}
         </button>
         {dirty ? <span className="text-xs text-slate-500">Unsaved answers</span> : null}
       </div>

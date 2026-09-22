@@ -59,7 +59,44 @@ const strings = (v: unknown): string[] => {
   return v.map(text).filter(Boolean);
 };
 function questionKey(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9$]+/g, " ").trim();
+  return value
+    .toLowerCase()
+    .replace(/\$/g, "")
+    .replace(/,/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Returns the saved clarification for an open question, matching exact or normalized question text.
+ */
+export function userAnswerForOpenQuestion(
+  question: string,
+  userAnswers: Record<string, string>,
+): string | null {
+  const direct = userAnswers[question]?.trim();
+  if (direct) return direct;
+  const key = questionKey(question);
+  for (const [storedQuestion, answer] of Object.entries(userAnswers)) {
+    const trimmed = answer.trim();
+    if (!trimmed) continue;
+    if (storedQuestion === question || questionKey(storedQuestion) === key) {
+      return trimmed;
+    }
+  }
+  return null;
+}
+
+/**
+ * Removes open questions that already have a non-empty user clarification.
+ */
+export function omitOpenQuestionsAnsweredByUser(
+  questions: InvestigationOpenQuestion[],
+  userAnswers: Record<string, string>,
+): InvestigationOpenQuestion[] {
+  if (Object.keys(userAnswers).length === 0) return questions;
+  return questions.filter((entry) => !userAnswerForOpenQuestion(entry.question, userAnswers));
 }
 function enumValue<T extends string>(value: unknown, choices: readonly T[]): T {
   const normalized = canonicalEnum(value);

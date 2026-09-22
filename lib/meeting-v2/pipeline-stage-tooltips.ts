@@ -141,7 +141,8 @@ export const PIPELINE_STAGE_TOOLTIPS: Record<string, PipelineStageTooltip> = {
         items: [
           "Review each agenda item in the Agenda Review tab.",
           "Answer open questions or add clarifications where the pipeline was uncertain.",
-          "Submit & Re-evaluate re-runs investigate and validate for that item only.",
+          "Save answer stores clarifications without re-running the pipeline.",
+          "Submit & Re-evaluate (Agenda Review header) runs investigate and validate for each item once every open question is saved.",
           "Each re-evaluation is billed separately here — not folded into Investigate or Validate.",
         ],
       },

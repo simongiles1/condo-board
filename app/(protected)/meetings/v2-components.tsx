@@ -21,6 +21,8 @@ import { DeleteMeetingButton } from "@/components/DeleteMeetingButton";
 import { DuplicateMeetingV2Dialog, DuplicateMeetingMenuIcon } from "@/components/DuplicateMeetingV2Dialog";
 import { RenameMeetingV2Dialog, RenameMeetingMenuIcon } from "@/components/RenameMeetingV2Dialog";
 import { MEETING_V2_DUPLICATE_NOT_READY_MESSAGE } from "@/lib/meeting-v2/duplicate-meeting-shared";
+import { clarificationReviewReadyForReEvaluate } from "@/lib/meeting-v2/clarification-review";
+import { userAnswerForOpenQuestion } from "@/lib/meeting-v2/investigation-contract";
 import {
   AgendaApprovalConfirmDialog,
   type AgendaApprovalConfirmMode,
@@ -177,6 +179,7 @@ type MeetingV2Status = {
     confidence: string | null;
     outcome: string | null;
     openQuestions: string[];
+    pipelineOpenQuestions?: string[];
     openQuestionNotes: Array<Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
     openQuestionOptions?: string[][];
     openQuestionContext: Record<string, Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
@@ -1309,6 +1312,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                     goldStandardValidation={currentValidation}
                     onOpenGoldStandardPanel={handleOpenGoldStandardPanel}
                     onReEvaluateSubmitted={kickPollWindow}
+                    onStatusRefresh={() => void refreshStatus()}
                   />
                 ) : null}
                 {activeTab === "draft" ? (
@@ -2480,8 +2484,12 @@ function flattenAgendaDetailItems(nodes: AgendaOutlineNode[], depth = 0): Agenda
 function hydrateItemAnswers(item: AgendaReviewItem): Record<string, string> {
   const stored = item.userAnswers ?? {};
   const next: Record<string, string> = {};
-  for (const question of item.openQuestions) {
-    next[question] = stored[question] ?? "";
+  const questionTexts = new Set([
+    ...item.openQuestions,
+    ...(item.pipelineOpenQuestions ?? []),
+  ]);
+  for (const question of questionTexts) {
+    next[question] = userAnswerForOpenQuestion(question, stored) ?? stored[question] ?? "";
   }
   for (const [key, value] of Object.entries(stored)) {
     if (!(key in next) && value.trim()) {
@@ -2515,6 +2523,7 @@ function syntheticReviewItem(options: {
     confidence: null,
     outcome: null,
     openQuestions: [],
+    pipelineOpenQuestions: [],
     openQuestionNotes: [],
     openQuestionContext: {},
     userAnswers: null,
@@ -3887,6 +3896,7 @@ function AgendaReviewPanel({
   goldStandardValidation,
   onOpenGoldStandardPanel,
   onReEvaluateSubmitted,
+  onStatusRefresh,
 }: {
   meetingId: string;
   status: MeetingV2Status;
@@ -3896,10 +3906,12 @@ function AgendaReviewPanel({
     agendaItemId?: string,
   ) => void;
   onReEvaluateSubmitted?: () => void;
+  onStatusRefresh?: () => void;
 }) {
   const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
   const [dirtyItems, setDirtyItems] = useState<Record<string, boolean>>({});
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
+  const [reEvaluateAllBusy, setReEvaluateAllBusy] = useState(false);
   const [reevaluationError, setReevaluationError] = useState<string | null>(null);
   const [debugItemId, setDebugItemId] = useState<string | null>(null);
   const [detailPanelItemId, setDetailPanelItemId] = useState<string | null>(null);
@@ -3934,6 +3946,16 @@ function AgendaReviewPanel({
     [validatedOutline],
   );
 
+  const readyForReEvaluate = useMemo(
+    () =>
+      clarificationReviewReadyForReEvaluate({
+        items: reviewItems,
+        answers,
+        dirtyItems,
+      }),
+    [answers, dirtyItems, reviewItems],
+  );
+
   useEffect(() => {
     setAnswers((current) => {
       const nextAnswers = { ...current };
@@ -3946,35 +3968,81 @@ function AgendaReviewPanel({
     });
   }, [dirtyItems, reviewItems]);
 
-  async function handleSubmit(itemId: string) {
+  async function handleSaveAnswers(itemId: string) {
     const filled = Object.fromEntries(
       Object.entries(answers[itemId] ?? {}).filter(([, value]) => value.trim()),
     );
     if (Object.keys(filled).length === 0) {
-      setReevaluationError("Type an answer before re-evaluating.");
+      setReevaluationError("Type an answer before saving.");
       return;
     }
     setBusyItemId(itemId);
     setReevaluationError(null);
     try {
-      const response = await fetch(`/api/v2/meetings/${meetingId}/items/${itemId}/re-evaluate`, {
+      const response = await fetch(`/api/v2/meetings/${meetingId}/items/${itemId}/answers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userAnswers: filled }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || "Re-evaluation could not be started. Your answer has been retained.");
+        throw new Error(payload.error || "Answers could not be saved.");
       }
-      onReEvaluateSubmitted?.();
       setDirtyItems((current) => ({
         ...current,
         [itemId]: false,
       }));
+      onStatusRefresh?.();
+    } catch (error) {
+      setReevaluationError(error instanceof Error ? error.message : "Save failed.");
+    } finally {
+      setBusyItemId(null);
+    }
+  }
+
+  async function handleReEvaluateAll() {
+    const targets = reviewItems.filter(
+      (item) => (item.pipelineOpenQuestions ?? item.openQuestions).length > 0,
+    );
+    if (
+      !clarificationReviewReadyForReEvaluate({
+        items: reviewItems,
+        answers,
+        dirtyItems,
+      })
+    ) {
+      setReevaluationError("Save an answer for every open question before re-evaluating.");
+      return;
+    }
+
+    setReEvaluateAllBusy(true);
+    setReevaluationError(null);
+    try {
+      for (const item of targets) {
+        const filled = Object.fromEntries(
+          Object.entries(answers[item.id] ?? {}).filter(([, value]) => value.trim()),
+        );
+        const response = await fetch(
+          `/api/v2/meetings/${meetingId}/items/${item.id}/re-evaluate`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userAnswers: filled }),
+          },
+        );
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(
+            payload.error ||
+              `Re-evaluation could not be started for ${item.itemNumber ?? item.title}.`,
+          );
+        }
+      }
+      onReEvaluateSubmitted?.();
     } catch (error) {
       setReevaluationError(error instanceof Error ? error.message : "Re-evaluation failed.");
     } finally {
-      setBusyItemId(null);
+      setReEvaluateAllBusy(false);
     }
   }
 
@@ -4134,7 +4202,7 @@ function AgendaReviewPanel({
     <SectionCard
       eyebrow="Agenda Review"
       title="Review agenda items and resolve open questions"
-      description="Work through items in official agenda order. Open questions from the badge at the top or on an item, then answer each question in the side panel."
+      description="Work through items in official agenda order. Save each answer in the side panel; when every open question is saved, use Submit & Re-evaluate at the top."
       headerAside={reviewViewToggle}
     >
       {reevaluationError ? <p role="alert" className="mb-3 text-sm text-red-700">{reevaluationError}</p> : null}
@@ -4158,6 +4226,17 @@ function AgendaReviewPanel({
             </span>
           ) : null}
         </div>
+        {openQuestionTotal > 0 ||
+        reviewItems.some((item) => (item.pipelineOpenQuestions ?? []).length > 0) ? (
+          <button
+            type="button"
+            disabled={!readyForReEvaluate || reEvaluateAllBusy || busyItemId !== null}
+            onClick={() => void handleReEvaluateAll()}
+            className="inline-flex shrink-0 items-center justify-center rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {reEvaluateAllBusy ? "Starting re-evaluation..." : "Submit & Re-evaluate"}
+          </button>
+        ) : null}
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -4189,7 +4268,7 @@ function AgendaReviewPanel({
         onSelectItem={handleSelectDetailItem}
         onClose={() => setDetailPanelItemId(null)}
         onAnswerChange={handleAnswerChange}
-        onSubmit={(itemId) => void handleSubmit(itemId)}
+        onSubmit={(itemId) => void handleSaveAnswers(itemId)}
       />
 
       <ChunkPreviewModal

@@ -18,9 +18,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 saved question answers ignored** — Clarifications merge on save instead of replacing prior answers for the same item. Open questions with a saved answer are hidden in review, dropped after re-investigation, and matched when question wording shifts slightly between runs.
+
 - **Meetings V2 conversational approval and spoken amounts** — A proposed approval counts when directors let it proceed, including "no questions," and nobody states a condition that blocks the decision. Missing mover, seconder, or vote language is not left as an open question. A spoken amount that only drops the digits below the thousands place is written as the one matching package figure. Minutes state that decision and leave out recommendations the board did not take up.
 
 ### Changed
+
+- **Meetings V2 question answers workflow** — Side panel **Save answer** persists clarifications without re-running investigation. **Submit & Re-evaluate** moves to the Agenda Review header and runs only after every open question has a saved answer (no unsaved edits).
 
 - **Meetings V2 agenda questions review** — The **X open questions** badge and per-item question badges open the side panel directly. The panel lists every agenda item with numbering indent; only items with questions are selectable and each row shows a question count. Each open question has its own answer field. The Review Snapshot is removed (it duplicated outcome, confidence, and counts already on the agenda row).
 

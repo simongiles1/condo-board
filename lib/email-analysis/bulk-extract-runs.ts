@@ -40,6 +40,8 @@ export type BulkExtractRunRecord = {
   stintStartedAt: string | null;
   completedEmailsAtStintStart: number;
   activeElapsedMs: number;
+  /** When true, DeepSeek bulk extract continues during peak pricing. */
+  runDuringDeepSeekPeak: boolean;
   startedAt: string;
   updatedAt: string;
   finishedAt: string | null;
@@ -104,6 +106,7 @@ function rowToRecord(row: BulkExtractRunRow): BulkExtractRunRecord {
     stintStartedAt: row.stintStartedAt,
     completedEmailsAtStintStart: row.completedEmailsAtStintStart,
     activeElapsedMs: row.activeElapsedMs,
+    runDuringDeepSeekPeak: row.runDuringDeepSeekPeak ?? false,
     startedAt: row.startedAt,
     updatedAt: row.updatedAt,
     finishedAt: row.finishedAt,
@@ -122,6 +125,44 @@ function beginStintUpdate(
     stintStartedAt: now,
     completedEmailsAtStintStart: Math.max(0, completedEmailsAtStart),
   };
+}
+
+/** Ends the active stint clock (peak pause) without changing run status. */
+export async function endBulkExtractActiveStint(runId: string): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select()
+    .from(bulkExtractRuns)
+    .where(eq(bulkExtractRuns.id, runId))
+    .limit(1);
+  if (!row?.stintStartedAt) return;
+  const now = new Date().toISOString();
+  await db
+    .update(bulkExtractRuns)
+    .set({
+      ...endStintUpdate(row, now),
+      updatedAt: now,
+    })
+    .where(eq(bulkExtractRuns.id, runId));
+}
+
+/** Resumes the stint clock after a peak pause. */
+export async function ensureBulkExtractActiveStint(runId: string): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select()
+    .from(bulkExtractRuns)
+    .where(eq(bulkExtractRuns.id, runId))
+    .limit(1);
+  if (!row || row.stintStartedAt) return;
+  const now = new Date().toISOString();
+  await db
+    .update(bulkExtractRuns)
+    .set({
+      ...beginStintUpdate(row.completedEmails, now),
+      updatedAt: now,
+    })
+    .where(eq(bulkExtractRuns.id, runId));
 }
 
 function endStintUpdate(
@@ -372,6 +413,7 @@ export async function createBulkExtractRun(input: {
     totalCostUsd: "0",
     ...beginStintUpdate(0, now),
     activeElapsedMs: 0,
+    runDuringDeepSeekPeak: false,
     startedAt: now,
     updatedAt: now,
     finishedAt: null,
@@ -471,6 +513,7 @@ export type BulkExtractRunPatch = {
   /** Absolute cumulative cost for the run. */
   totalCostUsd?: number;
   lastError?: string | null;
+  runDuringDeepSeekPeak?: boolean;
 };
 
 export async function updateBulkExtractRun(
@@ -540,6 +583,10 @@ export async function updateBulkExtractRun(
       finishedAt: terminal ? (existing.finishedAt ?? now) : null,
       lastError:
         patch.lastError !== undefined ? patch.lastError : existing.lastError,
+      runDuringDeepSeekPeak:
+        patch.runDuringDeepSeekPeak !== undefined
+          ? patch.runDuringDeepSeekPeak
+          : existing.runDuringDeepSeekPeak,
       ...(leavingRunning ? endStintUpdate(existingRow, now) : {}),
       ...(terminal
         ? {

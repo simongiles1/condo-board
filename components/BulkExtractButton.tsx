@@ -40,6 +40,12 @@ import {
   formatBulkExtractRate,
   getBulkExtractTimingSnapshot,
 } from "@/lib/email-analysis/bulk-extract-timing";
+import { DeepSeekPricingTimeline } from "@/components/DeepSeekPricingTimeline";
+import {
+  BULK_EXTRACT_DEEPSEEK_PEAK_PAUSE_PREFIX,
+  bulkExtractModelUsesDeepSeek,
+} from "@/lib/email-analysis/bulk-extract-deepseek-peak";
+import { getDeepSeekPricingStatus } from "@/lib/deepseek/pricing";
 import { formatCostUsd } from "@/lib/gemini/usage";
 
 type ExtractKind = "contacts" | "organizations" | "projects" | "events" | "todos";
@@ -70,6 +76,7 @@ type BulkExtractRun = {
   updatedAt: string;
   finishedAt: string | null;
   lastError: string | null;
+  runDuringDeepSeekPeak?: boolean;
 };
 
 function statusLabel(status: BulkExtractRun["status"]): string {
@@ -137,6 +144,7 @@ function normalizeBulkExtractRun(run: BulkExtractRun): BulkExtractRun {
     stintStartedAt: run.stintStartedAt ?? null,
     completedEmailsAtStintStart: run.completedEmailsAtStintStart ?? 0,
     activeElapsedMs: run.activeElapsedMs ?? 0,
+    runDuringDeepSeekPeak: run.runDuringDeepSeekPeak ?? false,
   };
 }
 
@@ -171,6 +179,8 @@ export function BulkExtractButton() {
 
   const activeRunIdRef = useRef<string | null>(null);
   const [timingTick, setTimingTick] = useState(0);
+  const [pricingNowMs, setPricingNowMs] = useState(() => Date.now());
+  const [peakOverrideBusy, setPeakOverrideBusy] = useState(false);
 
   const busy = activeRun?.status === "running" || starting;
 
@@ -466,6 +476,17 @@ export function BulkExtractButton() {
     if (!busy) setError(null);
   }
 
+  const selectedModelId =
+    kind === "organizations"
+      ? orgModel
+      : kind === "projects"
+        ? projectModel
+        : kind === "events"
+          ? eventModel
+          : kind === "todos"
+            ? todoModel
+            : contactModel;
+
   const selectedModelLabel =
     kind === "organizations"
       ? formatOrgHighlightModelOptionLabel(orgModel)
@@ -478,6 +499,41 @@ export function BulkExtractButton() {
             : formatContactHighlightModelOptionLabel(contactModel);
 
   const live = activeRun?.status === "running" ? activeRun : null;
+
+  const deepSeekPanelModelId = live?.modelId ?? selectedModelId;
+  const showDeepSeekPeakPanel = bulkExtractModelUsesDeepSeek(deepSeekPanelModelId);
+  const deepSeekPricingStatus = getDeepSeekPricingStatus(pricingNowMs);
+  const peakPausedForPricing =
+    live?.currentEmailLabel?.startsWith(
+      BULK_EXTRACT_DEEPSEEK_PEAK_PAUSE_PREFIX,
+    ) ?? false;
+
+  useEffect(() => {
+    if (!open || !showDeepSeekPeakPanel) return;
+    setPricingNowMs(Date.now());
+    const timer = window.setInterval(() => {
+      setPricingNowMs(Date.now());
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [open, showDeepSeekPeakPanel]);
+
+  async function allowRunDuringDeepSeekPeak() {
+    const runId = live?.id ?? activeRunIdRef.current;
+    if (!runId || peakOverrideBusy) return;
+    setPeakOverrideBusy(true);
+    setError(null);
+    try {
+      await patchRun(runId, { runDuringDeepSeekPeak: true });
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not enable peak-hour extraction.",
+      );
+    } finally {
+      setPeakOverrideBusy(false);
+    }
+  }
 
   const timingRun =
     activeRun &&
@@ -698,8 +754,27 @@ export function BulkExtractButton() {
                 </p>
               ) : null}
 
+              {showDeepSeekPeakPanel ? (
+                <div className="space-y-2">
+                  <DeepSeekPricingTimeline
+                    pricingStatus={deepSeekPricingStatus}
+                    atMs={pricingNowMs}
+                  />
+                  <p className="text-xs text-slate-600">
+                    DeepSeek bulk extract pauses during peak hours by default.
+                    Off-peak rates are about half of peak.
+                  </p>
+                </div>
+              ) : null}
+
               {live ? (
-                <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-950">
+                <div
+                  className={`rounded-xl border px-4 py-3 text-sm ${
+                    peakPausedForPricing
+                      ? "border-violet-200 bg-violet-50/80 text-violet-950"
+                      : "border-amber-200 bg-amber-50/70 text-amber-950"
+                  }`}
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="font-semibold">
                       Running {kindLabel(live.kind)} extraction
@@ -711,10 +786,29 @@ export function BulkExtractButton() {
                       Cost {formatCostUsd(live.totalCostUsd)}
                     </p>
                   </div>
-                  <p className="mt-1 text-xs text-amber-800/90">
-                    Processing on the dev server — safe to hide this dialog or
-                    switch tabs. Status updates every few seconds.
+                  <p
+                    className={`mt-1 text-xs ${
+                      peakPausedForPricing
+                        ? "text-violet-800/90"
+                        : "text-amber-800/90"
+                    }`}
+                  >
+                    {peakPausedForPricing
+                      ? "Waiting for off-peak DeepSeek pricing. Active-time ETA excludes this pause."
+                      : "Processing on the dev server — safe to hide this dialog or switch tabs. Status updates every few seconds."}
                   </p>
+                  {peakPausedForPricing && !live.runDuringDeepSeekPeak ? (
+                    <button
+                      type="button"
+                      disabled={peakOverrideBusy}
+                      onClick={() => void allowRunDuringDeepSeekPeak()}
+                      className="mt-3 rounded-lg border border-violet-300 bg-white px-3 py-1.5 text-xs font-semibold text-violet-900 hover:bg-violet-50 disabled:opacity-60"
+                    >
+                      {peakOverrideBusy
+                        ? "Enabling…"
+                        : "Continue during peak hours"}
+                    </button>
+                  ) : null}
                   <p className="mt-2 text-amber-900/90">
                     Thread {live.currentThreadIndex || "—"} / {live.totalThreads}
                     {live.currentThreadSubject

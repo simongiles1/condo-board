@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Bulk extract DeepSeek peak pause** — Inbox bulk extract with a DeepSeek model pauses during peak pricing windows (stint clock stops; status shows countdown). **Continue during peak hours** overrides for that run. Peak/off-peak timeline shown in the bulk extract dialog when DeepSeek is selected.
+
 - **Build-out modal ingestion view** — Dev Tools build-out dialog has a **Timeline** / **Ingestion** switch. Ingestion shows a per-entity table (email body vs attachments vs harvest passes vs registry) with clickable rows and Markdown detail (including project minting rules and a harvest pass 1–4 explainer).
 
 - **Meetings V2 suggested question answers** — Each open question in the side panel can include clickable replies. Choosing one fills the answer; a text box remains for a custom reply.

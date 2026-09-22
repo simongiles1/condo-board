@@ -97,6 +97,9 @@ export async function PATCH(request: Request, context: RouteContext) {
       patch.totalCostUsd = Math.max(0, body.totalCostUsd);
     }
     if ("lastError" in body) patch.lastError = body.lastError ?? null;
+    if (typeof body.runDuringDeepSeekPeak === "boolean") {
+      patch.runDuringDeepSeekPeak = body.runDuringDeepSeekPeak;
+    }
 
     const run = await updateBulkExtractRun(id, patch);
     if (!run) {

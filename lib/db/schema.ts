@@ -1251,6 +1251,13 @@ export const bulkExtractRuns = pgTable("bulk_extract_runs", {
     .default(0),
   /** Cumulative active milliseconds from ended stints (excludes pauses). */
   activeElapsedMs: integer("active_elapsed_ms").notNull().default(0),
+  /**
+   * When false (default), DeepSeek models pause during peak pricing windows.
+   * The UI can set true to keep extracting through peak hours.
+   */
+  runDuringDeepSeekPeak: boolean("run_during_deepseek_peak")
+    .notNull()
+    .default(false),
   startedAt: text("started_at").notNull(),
   updatedAt: text("updated_at").notNull(),
   finishedAt: text("finished_at"),

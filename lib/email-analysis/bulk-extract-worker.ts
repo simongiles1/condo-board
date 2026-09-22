@@ -42,6 +42,7 @@ import {
   prepareProjectExtractItemsForEmails,
   prepareProjectExtractItemsForThread,
 } from "@/lib/email-analysis/project-highlight-prepare";
+import { waitForBulkExtractDeepSeekOffPeak } from "@/lib/email-analysis/bulk-extract-deepseek-peak";
 import { runBulkHighlightPass } from "@/lib/email-analysis/bulk-extract-highlight";
 import { listBulkExtractTargets, listMissingExtractTargets } from "@/lib/email-analysis/bulk-extract-targets";
 import {
@@ -217,6 +218,15 @@ async function processOneThread(params: {
         };
       }
 
+      if (!(await waitForBulkExtractDeepSeekOffPeak(runId, modelId))) {
+        return {
+          ok: false,
+          error: "Run cancelled.",
+          subject: target.subject,
+          registryIngestPromise: null,
+        };
+      }
+
       await updateBulkExtractRun(runId, {
         currentThreadIndex: threadIndex + 1,
         currentThreadId: target.threadId ?? target.progressKey,
@@ -259,6 +269,15 @@ async function processOneThread(params: {
     }
 
     if (!(await isRunStillActive(runId))) {
+      return {
+        ok: false,
+        error: "Run cancelled.",
+        subject: target.subject,
+        registryIngestPromise: null,
+      };
+    }
+
+    if (!(await waitForBulkExtractDeepSeekOffPeak(runId, modelId))) {
       return {
         ok: false,
         error: "Run cancelled.",
@@ -446,6 +465,11 @@ async function executeBulkExtractRun(runId: string): Promise<void> {
       nextClaimIndex += 1;
 
       const target = targets[threadIndex]!;
+
+      if (!(await waitForBulkExtractDeepSeekOffPeak(runId, modelId))) {
+        return;
+      }
+
       const outcome = await processOneThread({
         runId,
         kind,

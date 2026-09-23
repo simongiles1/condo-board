@@ -24,7 +24,10 @@ import { MEETING_V2_DUPLICATE_NOT_READY_MESSAGE } from "@/lib/meeting-v2/duplica
 import { clarificationReviewReadyForReEvaluate } from "@/lib/meeting-v2/clarification-review";
 import { userAnswerForOpenQuestion } from "@/lib/meeting-v2/investigation-contract";
 import { itemValidationBlocksDraft } from "@/lib/meeting-v2/evidence-contract";
-import { storedAnswerForReviewQuestion } from "@/lib/meeting-v2/review-questions";
+import {
+  normalizeDrawerClarifications,
+  storedAnswerForReviewQuestion,
+} from "@/lib/meeting-v2/review-questions";
 import {
   AgendaApprovalConfirmDialog,
   type AgendaApprovalConfirmMode,
@@ -1014,16 +1017,20 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     : status?.meeting.computedPipelineState ?? status?.meeting.pipelineState ?? "created";
   const reviewableItems = status?.items ?? [];
   const needsClarificationCount = reviewableItems.filter(
-    (item) => (item.reviewQuestions?.length ?? item.openQuestions.length) > 0,
+    (item) => drawerClarifications(item).reviewQuestions.length > 0,
   ).length;
   const processingFailureCount = reviewableItems.filter(
-    (item) => (item.processingFailures?.length ?? 0) > 0,
+    (item) => drawerClarifications(item).processingFailures.length > 0,
   ).length;
   const blockedItemCount = reviewableItems.filter(
-    (item) =>
-      (item.reviewQuestions?.length ?? item.openQuestions.length) > 0 ||
-      (item.processingFailures?.length ?? 0) > 0 ||
-      itemValidationBlocksDraft(item.validation),
+    (item) => {
+      const clarifications = drawerClarifications(item);
+      return (
+        clarifications.reviewQuestions.length > 0 ||
+        clarifications.processingFailures.length > 0 ||
+        itemValidationBlocksDraft(item.validation)
+      );
+    },
   ).length;
   const flaggedCount = reviewableItems.filter((item) =>
     item.validation.some((validation) => validation.severity === "error" || validation.severity === "warning"),
@@ -2484,41 +2491,47 @@ function attachSourceSubItems(nodes: Array<OutlineTreeNode<AgendaReviewItem>>): 
   }));
 }
 
+function drawerClarifications(item: AgendaReviewItem) {
+  return normalizeDrawerClarifications(item);
+}
+
 function flattenAgendaDetailItems(nodes: AgendaOutlineNode[], depth = 0): AgendaItemDetail[] {
-  return nodes.flatMap((node) => [
-    {
-      id: node.item.id,
-      title: node.item.title,
-      itemNumber: node.item.itemNumber,
-      displayNumber: node.displayNumber,
-      depth,
-      openQuestions: node.item.openQuestions,
-      factClarificationsNeeded: node.item.factClarificationsNeeded ?? [],
-      synopsis: node.item.discussionSummary,
-      reviewQuestions: node.item.reviewQuestions ?? [],
-      processingFailures: node.item.processingFailures ?? [],
-      openQuestionNotes: node.item.openQuestionNotes ?? [],
-      openQuestionOptions: node.item.openQuestionOptions ?? [],
-      openQuestionContext: node.item.openQuestionContext ?? {},
-      validation: node.item.validation,
-      evidence: node.item.evidence,
-    },
-    ...flattenAgendaDetailItems(node.children, depth + 1),
-  ]);
+  return nodes.flatMap((node) => {
+    const clarifications = normalizeDrawerClarifications(node.item);
+    return [
+      {
+        id: node.item.id,
+        title: node.item.title,
+        itemNumber: node.item.itemNumber,
+        displayNumber: node.displayNumber,
+        depth,
+        openQuestions: clarifications.reviewQuestions.map((question) => question.prompt),
+        factClarificationsNeeded: [],
+        synopsis: node.item.discussionSummary,
+        reviewQuestions: clarifications.reviewQuestions,
+        processingFailures: clarifications.processingFailures,
+        openQuestionNotes: clarifications.reviewQuestions.map((question) => question.notes),
+        openQuestionOptions: clarifications.reviewQuestions.map((question) => question.options),
+        openQuestionContext: Object.fromEntries(
+          clarifications.reviewQuestions.map((question) => [question.prompt, question.notes]),
+        ),
+        validation: node.item.validation,
+        evidence: node.item.evidence,
+      },
+      ...flattenAgendaDetailItems(node.children, depth + 1),
+    ];
+  });
 }
 
 function hydrateItemAnswers(item: AgendaReviewItem): Record<string, string> {
   const stored = item.userAnswers ?? {};
   const next: Record<string, string> = {};
-  const reviewQuestions = item.reviewQuestions ?? [];
-  if (reviewQuestions.length > 0) {
-    for (const question of reviewQuestions) {
-      next[question.id] = storedAnswerForReviewQuestion(question, stored);
-    }
+  const { reviewQuestions } = normalizeDrawerClarifications(item);
+  for (const question of reviewQuestions) {
+    next[question.id] = storedAnswerForReviewQuestion(question, stored);
   }
   const questionTexts = new Set([
-    ...item.openQuestions,
-    ...(item.factClarificationsNeeded ?? []),
+    ...reviewQuestions.map((question) => question.prompt),
     ...(item.pipelineOpenQuestions ?? []),
   ]);
   for (const question of questionTexts) {
@@ -3054,9 +3067,9 @@ function ValidatedAgendaReviewListItem({
   const flagCount = item.validation.filter(
     (validation) => validation.severity === "error" || validation.severity === "warning",
   ).length;
+  const itemClarifications = drawerClarifications(item);
   const openQuestionCount =
-    (item.reviewQuestions?.length ?? item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0)) +
-    (item.processingFailures?.length ?? 0);
+    itemClarifications.reviewQuestions.length + itemClarifications.processingFailures.length;
   const hasErrorFlags = item.validation.some((validation) => validation.severity === "error");
   const parsedSnippet = parseSourceSnippet(item.sourceText || "", item.title);
   if (discussionTiming) parsedSnippet.timing = discussionTiming;
@@ -4167,13 +4180,10 @@ function AgendaReviewPanel({
   }
 
   function handleOpenQuestionsFromBadge() {
-    const firstWithQuestions = detailPanelItems.find(
-      (item) =>
-        item.openQuestions.length +
-          (item.factClarificationsNeeded?.length ?? 0) +
-          (item.processingFailures?.length ?? 0) >
-        0,
-    );
+    const firstWithQuestions = detailPanelItems.find((item) => {
+      const clarifications = normalizeDrawerClarifications(item);
+      return clarifications.reviewQuestions.length + clarifications.processingFailures.length > 0;
+    });
     if (!firstWithQuestions) return;
     setDetailPanelInitialTab("questions");
     setDetailPanelItemId(firstWithQuestions.id);
@@ -4288,12 +4298,11 @@ function AgendaReviewPanel({
   }
 
   const openQuestionTotal = reviewItems.reduce(
-    (sum, item) =>
-      sum + (item.reviewQuestions?.length ?? item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0)),
+    (sum, item) => sum + drawerClarifications(item).reviewQuestions.length,
     0,
   );
   const processingTotal = reviewItems.reduce(
-    (sum, item) => sum + (item.processingFailures?.length ?? 0),
+    (sum, item) => sum + drawerClarifications(item).processingFailures.length,
     0,
   );
 

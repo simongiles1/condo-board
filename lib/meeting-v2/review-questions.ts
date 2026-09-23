@@ -53,6 +53,14 @@ export function isProcessingFailureText(value: string): boolean {
 }
 
 /**
+ * True when the secretary should retry processing instead of typing an answer.
+ */
+export function isRetryNotAnswerText(value: string): boolean {
+  const trimmed = value.trim();
+  return isProcessingFailureText(trimmed) || PACKAGE_CONFLICT_TEXT.test(trimmed);
+}
+
+/**
  * Stable id for one fact, shared by prior-approval and current-decision rows.
  */
 export function factStorageId(scope: string, field: string): string {
@@ -131,7 +139,8 @@ function mentionsFact(question: string, fact: FactLike): boolean {
   return mentionsField || aboutApproval;
 }
 
-function failureFromText(text: string, index: number): ProcessingFailure {
+/** Builds a processing failure row from a stored pipeline error string. */
+export function failureFromText(text: string, index: number): ProcessingFailure {
   const named = text.match(/\bfor ([^.]+)\.$/);
   const field = named?.[1]?.trim() || "fact record";
   const slug = field.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "fact";
@@ -212,8 +221,15 @@ export function buildItemReviewQuestions(input: {
     absorb(question, [], []);
   }
   for (const question of input.openQuestions ?? []) {
-    if (isProcessingFailureText(question.question)) continue;
-    absorb(question.question, question.context_notes, clickableAnswers(question));
+    const text = question.question;
+    if (isRetryNotAnswerText(text)) {
+      if (!seenFailure.has(text)) {
+        processingFailures.push(failureFromText(text, processingFailures.length));
+        seenFailure.add(text);
+      }
+      continue;
+    }
+    absorb(text, question.context_notes, clickableAnswers(question));
   }
 
   const questions = [...built.map((entry) => entry.question), ...loose];
@@ -226,4 +242,93 @@ export function buildItemReviewQuestions(input: {
     }),
     processingFailures,
   };
+}
+
+type DrawerClarificationSource = {
+  reviewQuestions?: ReviewQuestion[];
+  processingFailures?: ProcessingFailure[];
+  factClarificationsNeeded?: string[];
+  openQuestions: string[];
+  openQuestionNotes?: OpenQuestionContextNote[][];
+  openQuestionOptions?: string[][];
+  openQuestionContext?: Record<string, OpenQuestionContextNote[]>;
+};
+
+/**
+ * Normalizes API payloads so the drawer never shows pipeline errors as answer boxes.
+ */
+export function normalizeDrawerClarifications(
+  item: DrawerClarificationSource,
+): { reviewQuestions: ReviewQuestion[]; processingFailures: ProcessingFailure[] } {
+  const mergeFailureText = (text: string, failures: ProcessingFailure[], seen: Set<string>) => {
+    if (!isRetryNotAnswerText(text) || seen.has(text)) return;
+    failures.push(failureFromText(text, failures.length));
+    seen.add(text);
+  };
+
+  const serverHasUnifiedModel =
+    item.reviewQuestions !== undefined || item.processingFailures !== undefined;
+
+  if (serverHasUnifiedModel) {
+    const seen = new Set((item.processingFailures ?? []).map((failure) => failure.detail));
+    const processingFailures = [...(item.processingFailures ?? [])];
+    for (const text of item.factClarificationsNeeded ?? []) {
+      mergeFailureText(text, processingFailures, seen);
+    }
+    const reviewQuestions = [...(item.reviewQuestions ?? [])];
+    const humanFactPrompts = (item.factClarificationsNeeded ?? []).filter((text) => !isRetryNotAnswerText(text));
+    for (const text of humanFactPrompts) {
+      if (reviewQuestions.some((question) => question.prompt === text)) continue;
+      reviewQuestions.push({
+        id: openQuestionStorageId(text),
+        prompt: text,
+        options: [],
+        notes: item.openQuestionContext?.[text] ?? [],
+        effect: "This answer is added to the next investigation of this item.",
+      });
+    }
+    return { reviewQuestions, processingFailures };
+  }
+
+  const processingFailures: ProcessingFailure[] = [];
+  const seen = new Set<string>();
+  const humanOpenQuestions: string[] = [];
+  for (let index = 0; index < item.openQuestions.length; index += 1) {
+    const text = item.openQuestions[index];
+    if (isRetryNotAnswerText(text)) {
+      mergeFailureText(text, processingFailures, seen);
+      continue;
+    }
+    humanOpenQuestions.push(text);
+  }
+  for (const text of item.factClarificationsNeeded ?? []) {
+    if (isRetryNotAnswerText(text)) mergeFailureText(text, processingFailures, seen);
+  }
+
+  const reviewQuestions: ReviewQuestion[] = [];
+  for (const text of humanOpenQuestions) {
+    const index = item.openQuestions.indexOf(text);
+    reviewQuestions.push({
+      id: openQuestionStorageId(text),
+      prompt: text,
+      options: item.openQuestionOptions?.[index] ?? [],
+      notes:
+        item.openQuestionNotes?.[index]?.length
+          ? item.openQuestionNotes[index]
+          : item.openQuestionContext?.[text] ?? [],
+      effect: "This answer is added to the next investigation of this item.",
+    });
+  }
+  for (const text of (item.factClarificationsNeeded ?? []).filter((entry) => !isRetryNotAnswerText(entry))) {
+    if (reviewQuestions.some((question) => question.prompt === text)) continue;
+    reviewQuestions.push({
+      id: openQuestionStorageId(text),
+      prompt: text,
+      options: [],
+      notes: item.openQuestionContext?.[text] ?? [],
+      effect: "This answer is added to the next investigation of this item.",
+    });
+  }
+
+  return { reviewQuestions, processingFailures };
 }

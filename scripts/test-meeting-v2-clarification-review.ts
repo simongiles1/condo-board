@@ -11,7 +11,11 @@ import {
   UNKNOWN_CLARIFICATION,
   userAnswerForOpenQuestion,
 } from "@/lib/meeting-v2/investigation-contract";
-import { buildItemReviewQuestions, storedAnswerForReviewQuestion } from "@/lib/meeting-v2/review-questions";
+import {
+  buildItemReviewQuestions,
+  normalizeDrawerClarifications,
+  storedAnswerForReviewQuestion,
+} from "@/lib/meeting-v2/review-questions";
 
 test("openQuestionsFullyAnswered requires every question", () => {
   assert.equal(openQuestionsFullyAnswered(["Q1", "Q2"], { Q1: "yes" }), false);
@@ -175,6 +179,18 @@ test("a stored package-conflict message does not hide the name question", () => 
   assert.equal(review.questions.length, 1);
   assert.deepEqual(review.questions[0].options, ["Absolute Interior", "Absolute"]);
   assert.equal(review.questions[0].notes.some((note) => /package evidence/.test(note.fact)), false);
+});
+
+test("legacy factClarificationsNeeded maps malformed rows to retry", () => {
+  const normalized = normalizeDrawerClarifications({
+    openQuestions: [],
+    factClarificationsNeeded: [
+      "Could not use a malformed fact record for auditor availability confirmation.",
+      "Could not use a malformed fact record for notify Michael and Condo Nexus.",
+    ],
+  });
+  assert.equal(normalized.reviewQuestions.length, 0);
+  assert.equal(normalized.processingFailures.length, 2);
 });
 
 test("factResolutionClarificationPrompts lists unresolved ledger fields", () => {

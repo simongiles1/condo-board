@@ -2,6 +2,8 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 
+import { normalizeDrawerClarifications } from "@/lib/meeting-v2/review-questions";
+
 /** One evidence citation attached to an agenda item. */
 export type AgendaItemDetailEvidence = {
   id: string;
@@ -161,13 +163,17 @@ function QuestionsTabContent({
   reEvaluateBusy?: boolean;
 }) {
   const extras = extraClarificationKeys(item, itemAnswers);
-  const factPrompts = item.reviewQuestions ? [] : (item.factClarificationsNeeded ?? []);
-  const reviewQuestions = item.reviewQuestions ?? [];
-  const processingFailures = item.processingFailures ?? [];
+  const { reviewQuestions, processingFailures } = normalizeDrawerClarifications({
+    reviewQuestions: item.reviewQuestions,
+    processingFailures: item.processingFailures,
+    factClarificationsNeeded: item.factClarificationsNeeded,
+    openQuestions: item.openQuestions,
+    openQuestionNotes: item.openQuestionNotes,
+    openQuestionOptions: item.openQuestionOptions,
+    openQuestionContext: item.openQuestionContext,
+  });
 
   if (
-    item.openQuestions.length === 0 &&
-    factPrompts.length === 0 &&
     reviewQuestions.length === 0 &&
     processingFailures.length === 0 &&
     extras.length === 0
@@ -291,103 +297,6 @@ function QuestionsTabContent({
               placeholder="Or write your own answer..."
               value={current === UNKNOWN_ANSWER ? "" : current}
               onChange={(event) => onAnswerChange(question.id, event.target.value)}
-            />
-          </div>
-        );
-      })}
-      {factPrompts.length > 0 ? (
-        <div className="space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800">
-            <p className="font-medium">Answer these, then re-evaluate this item.</p>
-            <p className="mt-1 leading-6 text-slate-600">
-              Each box is something the minutes pipeline could not lock. Save, then re-evaluate this item.
-              Draft generation stays blocked until those answers are applied.
-            </p>
-          </div>
-          {factPrompts.map((question, index) => {
-            const fieldId = `fact-clarification-${item.id}-${index}`;
-            return (
-              <div key={`${item.id}-fact-${index}`} className="space-y-2">
-                <label htmlFor={fieldId} className="block text-sm font-medium leading-6 text-slate-800">
-                  {question}
-                </label>
-                <textarea
-                  id={fieldId}
-                  className="min-h-24 w-full rounded-xl border border-slate-300 bg-slate-50 p-3 text-sm shadow-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                  placeholder="Clarify what the board decided or which figure/name is correct..."
-                  value={itemAnswers[question] ?? ""}
-                  onChange={(event) => onAnswerChange(question, event.target.value)}
-                />
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-      {item.reviewQuestions ? null : item.openQuestions.map((question, index) => {
-        const fieldId = `question-answer-${item.id}-${index}`;
-        const notes =
-          item.openQuestionNotes?.[index]?.length
-            ? item.openQuestionNotes[index]
-            : item.openQuestionContext?.[question] ?? [];
-        return (
-          <div key={`${item.id}-question-${index}`} className="space-y-2">
-            <label htmlFor={fieldId} className="block text-sm font-medium leading-6 text-slate-800">
-              {question}
-            </label>
-            {notes.length > 0 ? (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                  What we already know
-                </p>
-                <ul className="mt-2 space-y-2">
-                  {notes.map((note, noteIndex) => (
-                    <li key={`${fieldId}-note-${noteIndex}`} className="flex items-start gap-2 text-sm text-slate-700">
-                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" aria-hidden />
-                      <span className="min-w-0 leading-5">
-                        {note.fact}
-                        <span
-                          className={`ml-2 inline-flex align-middle rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${contextSourceTone(note.source)}`}
-                        >
-                          {contextSourceLabel(note.source)}
-                        </span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {(item.openQuestionOptions?.[index] ?? []).length > 0 ? (
-              <div className="flex flex-col gap-2" role="group" aria-label="Suggested answers">
-                {(item.openQuestionOptions?.[index] ?? []).map((option, optionIndex) => {
-                  const selected = (itemAnswers[question] ?? "") === option;
-                  return (
-                    <button
-                      key={`${fieldId}-option-${optionIndex}`}
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={() => onAnswerChange(question, option)}
-                      className={`rounded-xl border px-3 py-2 text-left text-sm leading-5 transition ${
-                        selected
-                          ? "border-teal-600 bg-teal-50 text-teal-950"
-                          : "border-slate-200 bg-white text-slate-800 hover:border-teal-300 hover:bg-teal-50/60"
-                      }`}
-                    >
-                      {option}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-            <textarea
-              id={fieldId}
-              className="min-h-24 w-full rounded-xl border border-slate-300 bg-slate-50 p-3 text-sm shadow-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
-              placeholder={
-                (item.openQuestionOptions?.[index] ?? []).length > 0
-                  ? "Or write your own answer..."
-                  : "Answer this question for the next investigation pass..."
-              }
-              value={itemAnswers[question] ?? ""}
-              onChange={(event) => onAnswerChange(question, event.target.value)}
             />
           </div>
         );
@@ -730,9 +639,9 @@ export function AgendaItemDetailSidePanel({
 
   if (!item) return null;
 
+  const drawerClarifications = normalizeDrawerClarifications(item);
   const questionCount =
-    (item.reviewQuestions?.length ?? item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0)) +
-    (item.processingFailures?.length ?? 0);
+    drawerClarifications.reviewQuestions.length + drawerClarifications.processingFailures.length;
   const evidenceCount = item.evidence?.length ?? 0;
 
   return (

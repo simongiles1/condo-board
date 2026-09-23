@@ -3479,12 +3479,19 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       .orderBy(asc(meetingsV2AgendaItems.sortOrder)),
     db
       .select({
+        id: meetingsV2AgendaItemInvestigations.id,
         agendaItemId: meetingsV2AgendaItemInvestigations.agendaItemId,
         discussionSummary: meetingsV2AgendaItemInvestigations.discussionSummary,
         confidence: meetingsV2AgendaItemInvestigations.confidence,
         outcome: meetingsV2AgendaItemInvestigations.outcome,
+        visibility: meetingsV2AgendaItemInvestigations.visibility,
+        decisionsJson: meetingsV2AgendaItemInvestigations.decisionsJson,
+        motionJson: meetingsV2AgendaItemInvestigations.motionJson,
+        actionsJson: meetingsV2AgendaItemInvestigations.actionsJson,
         openQuestionsJson: meetingsV2AgendaItemInvestigations.openQuestionsJson,
         userAnswersJson: meetingsV2AgendaItemInvestigations.userAnswersJson,
+        modelName: meetingsV2AgendaItemInvestigations.modelName,
+        usageJson: meetingsV2AgendaItemInvestigations.usageJson,
       })
       .from(meetingsV2AgendaItemInvestigations)
       .where(eq(meetingsV2AgendaItemInvestigations.meetingV2Id, meetingId)),
@@ -3497,6 +3504,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         severity: meetingsV2ValidationResults.severity,
         code: meetingsV2ValidationResults.code,
         message: meetingsV2ValidationResults.message,
+        detailsJson: meetingsV2ValidationResults.detailsJson,
       })
       .from(meetingsV2ValidationResults)
       .where(eq(meetingsV2ValidationResults.meetingV2Id, meetingId)),

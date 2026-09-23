@@ -22,6 +22,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 draft readiness on status load** — Loading the meeting workspace for draft preview now includes investigation `usageJson` and validation `detailsJson` when recomputing readiness, so every agenda item is not falsely listed as needing pipeline re-evaluation or missing validation provenance.
+
 - **Bulk extract Docker build** — Client bulk extract dialog imports DeepSeek peak helpers from a shared module so production `next build` no longer pulls `pg` into the browser bundle.
 
 - **Meetings V2 saved question answers ignored** — Clarifications merge on save instead of replacing prior answers for the same item. Open questions with a saved answer are hidden in review, dropped after re-investigation, and matched when question wording shifts slightly between runs.

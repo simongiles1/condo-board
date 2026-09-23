@@ -5,7 +5,7 @@ import path from "node:path";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
-import { buildEvidenceSources, draftReadiness, evidenceFingerprint, investigationFingerprint, MINUTES_PIPELINE_VERSION, type EvidenceSource, type FactResolution } from "./evidence-contract";
+import { buildEvidenceSources, draftReadiness, evidenceFingerprint, investigationFingerprint, MINUTES_PIPELINE_VERSION, type EvidenceSource, type FactResolution, factResolutionClarificationPrompts } from "./evidence-contract";
 import { AGENDA_ITEM_REPAIR_PROMPT } from "./repair-prompts";
 import { reviewAndRepairOnce } from "./validation-cycle";
 import {
@@ -18,6 +18,7 @@ import {
   openQuestionsMissingContextNotes,
   serializeOpenQuestionsJson,
   storedOpenQuestionTexts,
+  userAnswerForOpenQuestion,
   type InvestigationDocument,
   type InvestigationOpenQuestion,
   type OpenQuestionContextNote,
@@ -175,6 +176,8 @@ export type MeetingV2Detail = {
     confidence: string | null;
     outcome: string | null;
     openQuestions: string[];
+    /** Fact-resolution ledger prompts still needing a saved clarification. */
+    factClarificationsNeeded: string[];
     /** Open questions last written by investigate/validate before user clarifications are applied. */
     pipelineOpenQuestions: string[];
     openQuestionNotes: OpenQuestionContextNote[][];
@@ -3755,9 +3758,15 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         {},
       );
       const userAnswers = { ...investigationAnswers, ...storedClarifications };
+      const investigationUsage = safeJsonParse<Record<string, unknown>>(investigation?.usageJson, {});
+      const factResolution = investigationUsage.factResolution as FactResolution | undefined;
+      const factClarificationPrompts = factResolutionClarificationPrompts(factResolution);
       const visibleOpenQuestionRows = omitOpenQuestionsAnsweredByUser(
         pipelineOpenQuestionRows,
         userAnswers,
+      );
+      const factClarificationsNeeded = factClarificationPrompts.filter(
+        (prompt) => !userAnswerForOpenQuestion(prompt, userAnswers),
       );
 
       return {
@@ -3774,7 +3783,8 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         discussionSummary: investigation?.discussionSummary ?? null,
         confidence: investigation?.confidence ?? null,
         outcome: investigation?.outcome ?? null,
-        pipelineOpenQuestions,
+        pipelineOpenQuestions: [...pipelineOpenQuestions, ...factClarificationPrompts],
+        factClarificationsNeeded,
         openQuestions: visibleOpenQuestionRows.map((entry) => entry.question),
         openQuestionNotes: visibleOpenQuestionRows.map((entry) => entry.context_notes),
         openQuestionOptions: visibleOpenQuestionRows.map((entry) => clickableAnswers(entry)),

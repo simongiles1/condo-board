@@ -4,6 +4,7 @@ import {
   clarificationReviewReadyForReEvaluate,
   openQuestionsFullyAnswered,
 } from "@/lib/meeting-v2/clarification-review";
+import { factResolutionClarificationPrompts } from "@/lib/meeting-v2/evidence-contract";
 import {
   omitOpenQuestionsAnsweredByUser,
   userAnswerForOpenQuestion,
@@ -57,4 +58,20 @@ test("userAnswerForOpenQuestion matches normalized question text", () => {
     answers,
   );
   assert.equal(visible.length, 0);
+});
+
+test("factResolutionClarificationPrompts lists unresolved ledger fields", () => {
+  const prompts = factResolutionClarificationPrompts({
+    facts: [
+      {
+        field: "date",
+        scope: "current_decision",
+        candidates: [{ value: "Oct 19", sourceId: "t:1", quote: "October 19" }],
+        selected: null,
+        explanation: "",
+      },
+    ],
+    unresolvedQuestions: ["Which auditor was confirmed?"],
+  });
+  assert.equal(prompts.length, 2);
 });

@@ -180,6 +180,7 @@ type MeetingV2Status = {
     outcome: string | null;
     openQuestions: string[];
     pipelineOpenQuestions?: string[];
+    factClarificationsNeeded?: string[];
     openQuestionNotes: Array<Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
     openQuestionOptions?: string[][];
     openQuestionContext: Record<string, Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
@@ -2471,6 +2472,7 @@ function flattenAgendaDetailItems(nodes: AgendaOutlineNode[], depth = 0): Agenda
       displayNumber: node.displayNumber,
       depth,
       openQuestions: node.item.openQuestions,
+      factClarificationsNeeded: node.item.factClarificationsNeeded ?? [],
       openQuestionNotes: node.item.openQuestionNotes ?? [],
       openQuestionOptions: node.item.openQuestionOptions ?? [],
       openQuestionContext: node.item.openQuestionContext ?? {},
@@ -2486,6 +2488,7 @@ function hydrateItemAnswers(item: AgendaReviewItem): Record<string, string> {
   const next: Record<string, string> = {};
   const questionTexts = new Set([
     ...item.openQuestions,
+    ...(item.factClarificationsNeeded ?? []),
     ...(item.pipelineOpenQuestions ?? []),
   ]);
   for (const question of questionTexts) {
@@ -2524,6 +2527,7 @@ function syntheticReviewItem(options: {
     outcome: null,
     openQuestions: [],
     pipelineOpenQuestions: [],
+    factClarificationsNeeded: [],
     openQuestionNotes: [],
     openQuestionContext: {},
     userAnswers: null,
@@ -3017,7 +3021,8 @@ function ValidatedAgendaReviewListItem({
   const flagCount = item.validation.filter(
     (validation) => validation.severity === "error" || validation.severity === "warning",
   ).length;
-  const openQuestionCount = item.openQuestions.length;
+  const openQuestionCount =
+    item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0);
   const hasErrorFlags = item.validation.some((validation) => validation.severity === "error");
   const parsedSnippet = parseSourceSnippet(item.sourceText || "", item.title);
   if (discussionTiming) parsedSnippet.timing = discussionTiming;
@@ -3911,6 +3916,7 @@ function AgendaReviewPanel({
   const [answers, setAnswers] = useState<Record<string, Record<string, string>>>({});
   const [dirtyItems, setDirtyItems] = useState<Record<string, boolean>>({});
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
+  const [reEvaluateItemBusyId, setReEvaluateItemBusyId] = useState<string | null>(null);
   const [reEvaluateAllBusy, setReEvaluateAllBusy] = useState(false);
   const [reevaluationError, setReevaluationError] = useState<string | null>(null);
   const [debugItemId, setDebugItemId] = useState<string | null>(null);
@@ -3997,6 +4003,46 @@ function AgendaReviewPanel({
       setReevaluationError(error instanceof Error ? error.message : "Save failed.");
     } finally {
       setBusyItemId(null);
+    }
+  }
+
+  async function handleReEvaluateItem(itemId: string) {
+    const filled = Object.fromEntries(
+      Object.entries(answers[itemId] ?? {}).filter(([, value]) => value.trim()),
+    );
+    setReEvaluateItemBusyId(itemId);
+    setReevaluationError(null);
+    try {
+      if (dirtyItems[itemId] && Object.keys(filled).length > 0) {
+        const saveResponse = await fetch(`/api/v2/meetings/${meetingId}/items/${itemId}/answers`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userAnswers: filled }),
+        });
+        if (!saveResponse.ok) {
+          const payload = await saveResponse.json().catch(() => ({}));
+          throw new Error(payload.error || "Answers could not be saved.");
+        }
+        setDirtyItems((current) => ({ ...current, [itemId]: false }));
+      }
+      const response = await fetch(
+        `/api/v2/meetings/${meetingId}/items/${itemId}/re-evaluate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userAnswers: filled }),
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "Re-evaluation could not be started.");
+      }
+      onReEvaluateSubmitted?.();
+      onStatusRefresh?.();
+    } catch (error) {
+      setReevaluationError(error instanceof Error ? error.message : "Re-evaluation failed.");
+    } finally {
+      setReEvaluateItemBusyId(null);
     }
   }
 
@@ -4188,7 +4234,11 @@ function AgendaReviewPanel({
     );
   }
 
-  const openQuestionTotal = reviewItems.reduce((sum, item) => sum + item.openQuestions.length, 0);
+  const openQuestionTotal = reviewItems.reduce(
+    (sum, item) =>
+      sum + item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0),
+    0,
+  );
   const flagTotal = reviewItems.reduce(
     (sum, item) =>
       sum +
@@ -4269,6 +4319,8 @@ function AgendaReviewPanel({
         onClose={() => setDetailPanelItemId(null)}
         onAnswerChange={handleAnswerChange}
         onSubmit={(itemId) => void handleSaveAnswers(itemId)}
+        onReEvaluateItem={(itemId) => void handleReEvaluateItem(itemId)}
+        reEvaluateItemBusy={reEvaluateItemBusyId === detailPanelItemId}
       />
 
       <ChunkPreviewModal

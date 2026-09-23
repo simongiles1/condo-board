@@ -41,6 +41,33 @@ export type ResolvedFact = {
 };
 export type FactResolution = { facts: ResolvedFact[]; unresolvedQuestions: string[] };
 
+/**
+ * Human-facing prompts when the fact-resolution ledger still needs secretary input.
+ */
+export function factResolutionClarificationPrompts(
+  factResolution: FactResolution | null | undefined,
+): string[] {
+  if (!factResolution) {
+    return [
+      "The fact ledger for this item was not recorded. Re-evaluate the item after adding any clarifications below.",
+    ];
+  }
+  const prompts: string[] = [...factResolution.unresolvedQuestions];
+  for (const fact of factResolution.facts) {
+    if (fact.selected !== null) continue;
+    const options = fact.candidates
+      .map((candidate) => candidate.value.trim())
+      .filter(Boolean)
+      .slice(0, 4);
+    if (options.length > 0) {
+      prompts.push(`Which is correct for ${fact.field}? (${options.join(" · ")})`);
+    } else {
+      prompts.push(`What is the correct value for ${fact.field}?`);
+    }
+  }
+  return prompts.filter((entry, index, all) => all.indexOf(entry) === index);
+}
+
 export function evidenceFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }

@@ -24,7 +24,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V2 draft readiness on status load** — Loading the meeting workspace for draft preview now includes investigation `usageJson` and validation `detailsJson` when recomputing readiness, so every agenda item is not falsely listed as needing pipeline re-evaluation or missing validation provenance.
 
-- **Meetings V2 fact ledger clarifications in review** — Items with a red **Must fix** / `unresolved_facts` flag now show **Fact ledger clarifications** on the Questions tab, plus **Add clarifications** and **Re-evaluate this item** on the Flags tab so secretaries can answer and re-run one item without guessing.
+- **Meetings V2 review is one answer list** — The agenda header count opens the first item that still needs an answer (including fact-ledger prompts). The side-panel item list shows that same count. Flags are no longer a separate task: answer on **To answer**, then **Re-evaluate this item**. Validator wording sits under **Why this item is waiting**.
 
 - **Bulk extract Docker build** — Client bulk extract dialog imports DeepSeek peak helpers from a shared module so production `next build` no longer pulls `pg` into the browser bundle.
 

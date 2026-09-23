@@ -54,12 +54,6 @@ type Props = {
   reEvaluateItemBusy?: boolean;
 };
 
-function severityTone(severity: string): string {
-  if (severity === "error") return "border-rose-200 bg-rose-50 text-rose-900";
-  if (severity === "warning") return "border-amber-200 bg-amber-50 text-amber-900";
-  return "border-slate-200 bg-slate-100 text-slate-700";
-}
-
 function extraClarificationKeys(item: AgendaItemDetail, itemAnswers: Record<string, string>): string[] {
   const questionSet = new Set(item.openQuestions);
   return Object.keys(itemAnswers).filter((key) => {
@@ -83,20 +77,17 @@ function contextSourceTone(source: "transcript" | "package" | "both"): string {
 function DetailTabStrip({
   active,
   onChange,
-  flagCount,
   questionCount,
   evidenceCount,
 }: {
   active: DetailTab;
   onChange: (tab: DetailTab) => void;
-  flagCount: number;
   questionCount: number;
   evidenceCount: number;
 }) {
   const tabs: { id: DetailTab; label: string; count: number }[] = [
-    { id: "flags", label: "Flags", count: flagCount },
-    { id: "questions", label: "Questions", count: questionCount },
-    { id: "evidence", label: "Evidence & Provenance", count: evidenceCount },
+    { id: "questions", label: "To answer", count: questionCount },
+    { id: "evidence", label: "Evidence", count: evidenceCount },
   ];
 
   return (
@@ -131,111 +122,6 @@ function DetailTabStrip({
   );
 }
 
-function FlagsTabContent({
-  item,
-  onGoToQuestions,
-  onReEvaluateItem,
-  reEvaluateBusy,
-}: {
-  item: AgendaItemDetail;
-  onGoToQuestions: () => void;
-  onReEvaluateItem?: () => void;
-  reEvaluateBusy?: boolean;
-}) {
-  const flags = item.validation.filter(
-    (validation) => validation.severity === "error" || validation.severity === "warning",
-  );
-  const hasUnresolvedFacts = item.validation.some((validation) => validation.code === "unresolved_facts");
-  const hasBlockingError = item.validation.some(
-    (validation) =>
-      validation.severity === "error" &&
-      [
-        "unresolved_facts",
-        "unsupported_approval_outcome",
-        "unknown_visibility",
-        "stale_investigation",
-        "ai_validation_failed",
-      ].includes(validation.code),
-  );
-  const needsClarification =
-    hasUnresolvedFacts ||
-    (item.factClarificationsNeeded?.length ?? 0) > 0 ||
-    item.openQuestions.length > 0;
-
-  if (flags.length === 0) {
-    return (
-      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-        This item currently has no validation flags.
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-        <p className="font-medium text-slate-900">Automated validator notes</p>
-        <p className="mt-1 leading-6">
-          These messages are the AI validator&apos;s review checklist for this item. Amber notes are
-          suggestions. Red <strong>Must fix</strong> rows block draft generation until you add clarifications
-          and re-run this item.
-        </p>
-        {needsClarification ? (
-          <p className="mt-2 font-medium text-slate-900">
-            Open the <strong>Questions</strong> tab to type clarifications for the fact ledger (even when
-            the item shows no investigation questions). Then use <strong>Re-evaluate this item</strong> so
-            the pipeline can rebuild facts and validation.
-          </p>
-        ) : null}
-        {hasBlockingError ? (
-          <p className="mt-2 font-medium text-rose-900">
-            This item has an error-level finding. Add clarifications if prompted on Questions, then
-            re-evaluate this item.
-          </p>
-        ) : (
-          <p className="mt-2 text-slate-600">
-            No error-level findings on this item. You do not need further action here before generating the
-            draft.
-          </p>
-        )}
-        {needsClarification || hasBlockingError ? (
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={onGoToQuestions}
-              className="inline-flex items-center rounded-lg border border-teal-600 bg-teal-50 px-3 py-1.5 text-sm font-semibold text-teal-900 hover:bg-teal-100"
-            >
-              Add clarifications
-            </button>
-            {onReEvaluateItem ? (
-              <button
-                type="button"
-                disabled={reEvaluateBusy}
-                onClick={onReEvaluateItem}
-                className="inline-flex items-center rounded-lg bg-teal-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
-              >
-                {reEvaluateBusy ? "Re-evaluating..." : "Re-evaluate this item"}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-      <div className="space-y-2">
-        {flags.map((validation) => (
-          <div
-            key={`${item.id}-${validation.code}-${validation.message.slice(0, 40)}`}
-            className={`rounded-2xl border px-4 py-3 text-sm ${severityTone(validation.severity)}`}
-          >
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] opacity-80">
-              {validation.severity === "error" ? "Must fix" : "Review note"}
-            </div>
-            <div className="font-medium">{validation.message}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function QuestionsTabContent({
   item,
   itemAnswers,
@@ -243,6 +129,8 @@ function QuestionsTabContent({
   busy,
   onAnswerChange,
   onSubmit,
+  onReEvaluate,
+  reEvaluateBusy,
 }: {
   item: AgendaItemDetail;
   itemAnswers: Record<string, string>;
@@ -250,23 +138,39 @@ function QuestionsTabContent({
   busy: boolean;
   onAnswerChange: (question: string, value: string) => void;
   onSubmit: () => void;
+  onReEvaluate?: () => void;
+  reEvaluateBusy?: boolean;
 }) {
   const extras = extraClarificationKeys(item, itemAnswers);
   const factPrompts = item.factClarificationsNeeded ?? [];
 
   if (item.openQuestions.length === 0 && factPrompts.length === 0 && extras.length === 0) {
-    return <p className="text-sm text-slate-600">No open questions on this item.</p>;
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-slate-600">Nothing left to answer on this item.</p>
+        {onReEvaluate ? (
+          <button
+            type="button"
+            disabled={reEvaluateBusy}
+            onClick={onReEvaluate}
+            className="inline-flex items-center rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
+          >
+            {reEvaluateBusy ? "Re-evaluating..." : "Re-evaluate this item"}
+          </button>
+        ) : null}
+      </div>
+    );
   }
 
   return (
     <div className="space-y-5">
       {factPrompts.length > 0 ? (
         <div className="space-y-4">
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
-            <p className="font-medium">Fact ledger clarifications</p>
-            <p className="mt-1 leading-6">
-              The automated fact pass could not lock every detail. Answer below, save, then re-evaluate this
-              item from the Flags tab.
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800">
+            <p className="font-medium">Answer these, then re-evaluate this item.</p>
+            <p className="mt-1 leading-6 text-slate-600">
+              Each box is something the minutes pipeline could not lock. Save, then re-evaluate this item.
+              Draft generation stays blocked until those answers are applied.
             </p>
           </div>
           {factPrompts.map((question, index) => {
@@ -376,7 +280,7 @@ function QuestionsTabContent({
         );
       })}
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button
           className="inline-flex items-center rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={
@@ -389,8 +293,32 @@ function QuestionsTabContent({
         >
           {busy ? "Saving..." : "Save answer"}
         </button>
+        {onReEvaluate ? (
+          <button
+            type="button"
+            disabled={reEvaluateBusy || busy}
+            onClick={onReEvaluate}
+            className="inline-flex items-center rounded-xl border border-teal-700 bg-white px-4 py-2 text-sm font-semibold text-teal-900 shadow-sm transition hover:bg-teal-50 disabled:opacity-50"
+          >
+            {reEvaluateBusy ? "Re-evaluating..." : "Re-evaluate this item"}
+          </button>
+        ) : null}
         {dirty ? <span className="text-xs text-slate-500">Unsaved answers</span> : null}
       </div>
+      {item.validation.some((entry) => entry.severity === "error" || entry.severity === "warning") ? (
+        <details className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          <summary className="cursor-pointer font-medium text-slate-800">
+            Why this item is waiting
+          </summary>
+          <ul className="mt-2 list-disc space-y-2 pl-5">
+            {item.validation
+              .filter((entry) => entry.severity === "error" || entry.severity === "warning")
+              .map((entry) => (
+                <li key={`${entry.code}-${entry.message.slice(0, 48)}`}>{entry.message}</li>
+              ))}
+          </ul>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -580,7 +508,7 @@ function AgendaItemPicker({
           {items.map((item) => {
             const clarificationCount =
               item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0);
-            const selectable = clarificationCount > 0 || item.validation.some((v) => v.severity === "error");
+            const selectable = true;
             const isSelected = item.id === selectedItemId;
             return (
               <li key={item.id} role="none">
@@ -606,13 +534,11 @@ function AgendaItemPicker({
                     <span className="font-medium tabular-nums">{item.displayNumber}.</span>{" "}
                     {item.title}
                   </span>
-                  {item.openQuestions.length > 0 ? (
-                    <span className="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-900">
-                      {item.openQuestions.length}
+                  {clarificationCount > 0 ? (
+                    <span className="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
+                      {clarificationCount}
                     </span>
-                  ) : (
-                    <span className="shrink-0 text-[10px] font-medium text-slate-400">0</span>
-                  )}
+                  ) : null}
                 </button>
               </li>
             );
@@ -645,7 +571,7 @@ export function AgendaItemDetailSidePanel({
 
   useEffect(() => {
     if (!selectedItemId) return;
-    setActiveTab(initialTab ?? "questions");
+    setActiveTab(initialTab === "flags" ? "questions" : (initialTab ?? "questions"));
   }, [selectedItemId, initialTab]);
 
   useEffect(() => {
@@ -663,9 +589,6 @@ export function AgendaItemDetailSidePanel({
 
   if (!item) return null;
 
-  const flagCount = item.validation.filter(
-    (validation) => validation.severity === "error" || validation.severity === "warning",
-  ).length;
   const questionCount =
     item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0);
   const evidenceCount = item.evidence?.length ?? 0;
@@ -702,23 +625,14 @@ export function AgendaItemDetailSidePanel({
         </header>
 
         <DetailTabStrip
-          active={activeTab}
+          active={activeTab === "flags" ? "questions" : activeTab}
           onChange={setActiveTab}
-          flagCount={flagCount}
           questionCount={questionCount}
           evidenceCount={evidenceCount}
         />
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-          {activeTab === "flags" ? (
-            <FlagsTabContent
-              item={item}
-              onGoToQuestions={() => setActiveTab("questions")}
-              onReEvaluateItem={onReEvaluateItem ? () => onReEvaluateItem(item.id) : undefined}
-              reEvaluateBusy={reEvaluateItemBusy}
-            />
-          ) : null}
-          {activeTab === "questions" ? (
+          {activeTab === "questions" || activeTab === "flags" ? (
             <QuestionsTabContent
               item={item}
               itemAnswers={answers[item.id] ?? {}}
@@ -726,6 +640,8 @@ export function AgendaItemDetailSidePanel({
               busy={busyItemId === item.id}
               onAnswerChange={(question, value) => onAnswerChange(item.id, question, value)}
               onSubmit={() => onSubmit(item.id)}
+              onReEvaluate={onReEvaluateItem ? () => onReEvaluateItem(item.id) : undefined}
+              reEvaluateBusy={reEvaluateItemBusy}
             />
           ) : null}
           {activeTab === "evidence" ? <EvidenceTabContent item={item} /> : null}

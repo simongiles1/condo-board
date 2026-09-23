@@ -3093,21 +3093,7 @@ function ValidatedAgendaReviewListItem({
                     onClick={() => onOpenDetailPanel(item, "questions")}
                     className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-950 hover:border-amber-400 hover:bg-amber-200"
                   >
-                    {openQuestionCount} {openQuestionCount === 1 ? "Question" : "Questions"}
-                  </button>
-                ) : null}
-
-                {!isHeading && flagCount > 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => onOpenDetailPanel(item, "flags")}
-                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                      hasErrorFlags
-                        ? "border-rose-300 bg-rose-100 text-rose-950 hover:bg-rose-200"
-                        : "border-amber-300 bg-amber-50 text-amber-950 hover:bg-amber-100"
-                    }`}
-                  >
-                    {flagCount} {flagCount === 1 ? "Flag" : "Flags"}
+                    {openQuestionCount} to answer
                   </button>
                 ) : null}
 
@@ -4120,7 +4106,9 @@ function AgendaReviewPanel({
   }
 
   function handleOpenQuestionsFromBadge() {
-    const firstWithQuestions = detailPanelItems.find((item) => item.openQuestions.length > 0);
+    const firstWithQuestions = detailPanelItems.find(
+      (item) => item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0) > 0,
+    );
     if (!firstWithQuestions) return;
     setDetailPanelInitialTab("questions");
     setDetailPanelItemId(firstWithQuestions.id);
@@ -4239,20 +4227,12 @@ function AgendaReviewPanel({
       sum + item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0),
     0,
   );
-  const flagTotal = reviewItems.reduce(
-    (sum, item) =>
-      sum +
-      item.validation.filter(
-        (validation) => validation.severity === "error" || validation.severity === "warning",
-      ).length,
-    0,
-  );
 
   return (
     <SectionCard
       eyebrow="Agenda Review"
-      title="Review agenda items and resolve open questions"
-      description="Work through items in official agenda order. Save each answer in the side panel; when every open question is saved, use Submit & Re-evaluate at the top."
+      title="Answer what the draft still needs"
+      description="Answer each item that still needs input. Save, then re-evaluate that item. When nothing is left to answer, generate the minutes draft."
       headerAside={reviewViewToggle}
     >
       {reevaluationError ? <p role="alert" className="mb-3 text-sm text-red-700">{reevaluationError}</p> : null}
@@ -4267,13 +4247,8 @@ function AgendaReviewPanel({
               onClick={handleOpenQuestionsFromBadge}
               className="rounded-full border border-amber-300 bg-amber-100 px-2.5 py-1 font-semibold text-amber-950 hover:border-amber-400 hover:bg-amber-200"
             >
-              {openQuestionTotal} open {openQuestionTotal === 1 ? "question" : "questions"}
+              {openQuestionTotal} to answer
             </button>
-          ) : null}
-          {flagTotal > 0 ? (
-            <span className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-950">
-              {flagTotal} {flagTotal === 1 ? "flag" : "flags"}
-            </span>
           ) : null}
         </div>
         {openQuestionTotal > 0 ||

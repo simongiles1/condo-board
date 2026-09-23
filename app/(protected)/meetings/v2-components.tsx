@@ -23,7 +23,7 @@ import { RenameMeetingV2Dialog, RenameMeetingMenuIcon } from "@/components/Renam
 import { MEETING_V2_DUPLICATE_NOT_READY_MESSAGE } from "@/lib/meeting-v2/duplicate-meeting-shared";
 import { clarificationReviewReadyForReEvaluate } from "@/lib/meeting-v2/clarification-review";
 import { userAnswerForOpenQuestion } from "@/lib/meeting-v2/investigation-contract";
-import { itemValidationBlocksDraft } from "@/lib/meeting-v2/evidence-contract";
+import { itemValidationBlocksDraft } from "@/lib/meeting-v2/draft-validation-gate";
 import {
   normalizeDrawerClarifications,
   storedAnswerForReviewQuestion,

@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Email volume chart people filter** — The inbox “Email volume over time” dialog includes a multiselect for Bonnie Kafi (`bkafi@iccpropertymanagement.com`) and Haider Mukadam (`studiopm@iccpropertymanagement.com`). Bonnie is selected by default; choose one or both to chart From/Cc volume (other inbox filters still apply).
+
 - **Bulk extract DeepSeek peak pause** — Inbox bulk extract with a DeepSeek model pauses during peak pricing windows (stint clock stops; status shows countdown). **Continue during peak hours** overrides for that run. Peak/off-peak timeline shown in the bulk extract dialog when DeepSeek is selected.
 
 - **Build-out modal ingestion view** — Dev Tools build-out dialog has a **Timeline** / **Ingestion** switch. Ingestion shows a per-entity table (email body vs attachments vs harvest passes vs registry) with clickable rows and Markdown detail (including project minting rules and a harvest pass 1–4 explainer).

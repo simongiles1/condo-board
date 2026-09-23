@@ -203,4 +203,27 @@ describe("shouldPollMeetingV2Status", () => {
     assert.equal(display.progressPercent, 95);
     assert.equal(display.currentLabel, "Agenda review");
   });
+
+  it("counts each blocked agenda item once", () => {
+    const workflowProgress = buildMeetingV2WorkflowProgress({
+      pipelineStages: [
+        { key: "ingest", label: "Ingest", status: "complete", note: "" },
+        { key: "extract", label: "Extract", status: "complete", note: "" },
+        { key: "evidence", label: "Evidence", status: "complete", note: "" },
+        { key: "investigate", label: "Investigate", status: "complete", note: "" },
+        { key: "validate", label: "Validate", status: "complete", note: "" },
+      ],
+      agendaItemCount: 36,
+      needsClarificationCount: 15,
+      flaggedCount: 17,
+      blockedItemCount: 17,
+      processingFailureCount: 4,
+      draftCount: 0,
+      hasLatestDraft: false,
+    });
+
+    assert.equal(workflowProgress.progressPercent, 93);
+    assert.match(workflowProgress.currentStep, /15 item\(s\) still need an answer/);
+    assert.match(workflowProgress.currentStep, /4 item\(s\) need a processing retry/);
+  });
 });

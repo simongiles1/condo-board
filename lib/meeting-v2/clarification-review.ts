@@ -1,4 +1,4 @@
-import { userAnswerForOpenQuestion } from "./investigation-contract";
+import { isConfirmingClarification, userAnswerForOpenQuestion } from "./investigation-contract";
 
 /**
  * Whether every open question on an item has a non-empty answer in the working map.
@@ -10,7 +10,7 @@ export function openQuestionsFullyAnswered(
   if (openQuestions.length === 0) return false;
   const answers = itemAnswers ?? {};
   for (const question of openQuestions) {
-    if (!userAnswerForOpenQuestion(question, answers)) return false;
+    if (!isConfirmingClarification(userAnswerForOpenQuestion(question, answers))) return false;
   }
   return true;
 }

@@ -265,6 +265,8 @@ export function computeMeetingV2WorkflowProgressPercent(
     agendaItemCount: number;
     needsClarificationCount: number;
     flaggedCount: number;
+    /** Items that block draft readiness, counted once. */
+    blockedItemCount?: number;
   },
 ): number {
   if (steps.length === 0) return 0;
@@ -285,10 +287,9 @@ export function computeMeetingV2WorkflowProgressPercent(
   }
 
   if (activeStep.key === "agenda_review" && options.agendaItemCount > 0) {
-    const readyCount = Math.max(
-      0,
-      options.agendaItemCount - options.needsClarificationCount - options.flaggedCount,
-    );
+    const blocked =
+      options.blockedItemCount ?? options.needsClarificationCount + options.flaggedCount;
+    const readyCount = Math.max(0, options.agendaItemCount - blocked);
     const ratio = Math.max(0, Math.min(1, readyCount / options.agendaItemCount));
     return Math.round(floor + (ceiling - floor) * ratio);
   }
@@ -303,11 +304,35 @@ type PipelineStage = {
   note: string;
 };
 
+function agendaReviewNote(input: {
+  agendaReviewComplete: boolean;
+  pipelineValidated: boolean;
+  needsClarificationCount: number;
+  processingFailureCount: number;
+  flaggedCount: number;
+}): string {
+  if (input.agendaReviewComplete) return "All agenda items are clear of open questions and validation flags.";
+  if (!input.pipelineValidated) return "Available after the automated pipeline finishes validation.";
+  const parts: string[] = [];
+  if (input.needsClarificationCount > 0) {
+    parts.push(`${input.needsClarificationCount} item(s) still need an answer.`);
+  }
+  if (input.processingFailureCount > 0) {
+    parts.push(`${input.processingFailureCount} item(s) need a processing retry.`);
+  }
+  if (parts.length > 0) return parts.join(" ");
+  if (input.flaggedCount > 0) return `${input.flaggedCount} item(s) still have validation flags.`;
+  return "Review agenda items in the Agenda Review tab.";
+}
+
 export function buildMeetingV2WorkflowProgress(options: {
   pipelineStages: PipelineStage[];
   agendaItemCount: number;
   needsClarificationCount: number;
   flaggedCount: number;
+  /** Items that block draft readiness, counted once. */
+  blockedItemCount?: number;
+  processingFailureCount?: number;
   draftCount: number;
   hasLatestDraft: boolean;
 }): MeetingV2WorkflowProgress {
@@ -324,11 +349,8 @@ export function buildMeetingV2WorkflowProgress(options: {
     pipelineStages.length > 0 &&
     pipelineStages.every((stage) => stage.status === "complete");
 
-  const agendaReviewComplete =
-    pipelineValidated &&
-    agendaItemCount > 0 &&
-    needsClarificationCount === 0 &&
-    flaggedCount === 0;
+  const blockedCount = options.blockedItemCount ?? needsClarificationCount + flaggedCount;
+  const agendaReviewComplete = pipelineValidated && agendaItemCount > 0 && blockedCount === 0;
 
   const draftGenerated = draftCount > 0 || hasLatestDraft;
 
@@ -356,15 +378,13 @@ export function buildMeetingV2WorkflowProgress(options: {
       key: "agenda_review",
       label: "Agenda review",
       status: agendaReviewStatus,
-      note: agendaReviewComplete
-        ? "All agenda items are clear of open questions and validation flags."
-        : !pipelineValidated
-          ? "Available after the automated pipeline finishes validation."
-          : needsClarificationCount > 0
-            ? `${needsClarificationCount} item(s) still have open questions.`
-            : flaggedCount > 0
-              ? `${flaggedCount} item(s) still have validation flags.`
-              : "Review agenda items in the Agenda Review tab.",
+      note: agendaReviewNote({
+        agendaReviewComplete,
+        pipelineValidated,
+        needsClarificationCount,
+        processingFailureCount: options.processingFailureCount ?? 0,
+        flaggedCount,
+      }),
       kind: "user",
     },
     {
@@ -386,6 +406,7 @@ export function buildMeetingV2WorkflowProgress(options: {
     agendaItemCount,
     needsClarificationCount,
     flaggedCount,
+    blockedItemCount: options.blockedItemCount,
   });
   const firstIncomplete = steps.find((step) => step.status !== "complete");
   const inProgress = steps.find((step) => step.status === "in_progress");

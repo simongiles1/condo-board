@@ -170,7 +170,7 @@ describe("source precedence and loss prevention", () => {
       { salvageUnverifiable: true },
     );
     assert.equal(salvaged.facts.length, 0);
-    assert.match(salvaged.unresolvedQuestions.join(" "), /minutes accepted as amended/);
+    assert.match((salvaged.processingFailures ?? []).map((failure) => failure.detail).join(" "), /minutes accepted as amended/);
     const curlyQuote = parseFactResolution({
       facts: [{
         ...resolution.facts[0],
@@ -238,7 +238,7 @@ describe("source precedence and loss prevention", () => {
     }, evidence, { salvageUnverifiable: true });
     assert.equal(salvagedSelection.facts.length, 1);
     assert.equal(salvagedSelection.facts[0].selected, null);
-    assert.match(salvagedSelection.unresolvedQuestions.join(" "), /selected index/);
+    assert.match((salvagedSelection.processingFailures ?? []).map((failure) => failure.detail).join(" "), /selected index/);
   });
   it("keeps late transcript corrections intact and labels unrelated keyword hits", () => {
     const segments = Array.from({ length: 730 }, (_, sequence) => ({ sequence, startTimestamp: "00:00:00", speakerLabel: "Speaker", text: sequence === 720 ? evidence[2].text : "Context ".repeat(220) }));
@@ -283,7 +283,7 @@ describe("source precedence and loss prevention", () => {
       sources: evidence,
     }, complete as Parameters<typeof resolveAgendaFacts>[1]);
     assert.equal(result.facts.facts.length, 0);
-    assert.match(result.facts.unresolvedQuestions.join(" "), /minutes accepted as amended/);
+    assert.match((result.facts.processingFailures ?? []).map((failure) => failure.detail).join(" "), /minutes accepted as amended/);
   });
   it("salvages an out-of-range selected index instead of aborting fact resolution", async () => {
     const invalid = { ...resolution, facts: [{ ...resolution.facts[0], selected: 9 }] };
@@ -299,7 +299,7 @@ describe("source precedence and loss prevention", () => {
     }, complete as Parameters<typeof resolveAgendaFacts>[1]);
     assert.equal(result.facts.facts.length, 1);
     assert.equal(result.facts.facts[0].selected, null);
-    assert.match(result.facts.unresolvedQuestions.join(" "), /selected index/);
+    assert.match((result.facts.processingFailures ?? []).map((failure) => failure.detail).join(" "), /selected index/);
   });
   it("retains topics, printed codes and earlier notes after a partial incremental response", () => {
     const a: Parameters<typeof normalizeWorkflowState>[1]["documentTopics"][number] = { title: "Pump", itemNumber: "4.B.1", sectionLabel: "Management", itemType: "discussion_approval", sourcePages: [4], sourceChunkIds: [], sourceTranscriptRanges: [[1, 2]], aliases: [], notes: ["Earlier discussion"], visibility: "PUBLIC", confidence: 1, sourceText: "", confidenceReason: null, evidenceStrength: "DIRECT", openQuestions: [], needsHumanReview: false, humanReviewReason: null };

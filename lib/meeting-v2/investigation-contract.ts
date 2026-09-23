@@ -68,6 +68,25 @@ function questionKey(value: string): string {
     .replace(/\s+/g, " ");
 }
 
+/** Saved reply that records uncertainty and must not be treated as a decision. */
+export const UNKNOWN_CLARIFICATION = "I don't know";
+
+/**
+ * True when a saved reply confirms a fact.
+ * Blank text and "I don't know" do not confirm.
+ */
+export function isConfirmingClarification(value: string | null | undefined): boolean {
+  const trimmed = value?.trim() ?? "";
+  return Boolean(trimmed) && trimmed.toLowerCase() !== UNKNOWN_CLARIFICATION.toLowerCase();
+}
+
+/**
+ * Stable id for an investigation question so punctuation changes keep the same answer.
+ */
+export function openQuestionStorageId(question: string): string {
+  return `q:${questionKey(question)}`;
+}
+
 /**
  * Returns the saved clarification for an open question, matching exact or normalized question text.
  */
@@ -89,14 +108,19 @@ export function userAnswerForOpenQuestion(
 }
 
 /**
- * Removes open questions that already have a non-empty user clarification.
+ * Removes open questions that already have a confirming clarification.
+ * "I don't know" stays open so it cannot clear the draft gate.
  */
 export function omitOpenQuestionsAnsweredByUser(
   questions: InvestigationOpenQuestion[],
   userAnswers: Record<string, string>,
 ): InvestigationOpenQuestion[] {
   if (Object.keys(userAnswers).length === 0) return questions;
-  return questions.filter((entry) => !userAnswerForOpenQuestion(entry.question, userAnswers));
+  return questions.filter((entry) => {
+    const byId = userAnswers[openQuestionStorageId(entry.question)];
+    if (isConfirmingClarification(byId)) return false;
+    return !isConfirmingClarification(userAnswerForOpenQuestion(entry.question, userAnswers));
+  });
 }
 function enumValue<T extends string>(value: unknown, choices: readonly T[]): T {
   const normalized = canonicalEnum(value);

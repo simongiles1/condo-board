@@ -23,6 +23,8 @@ import { RenameMeetingV2Dialog, RenameMeetingMenuIcon } from "@/components/Renam
 import { MEETING_V2_DUPLICATE_NOT_READY_MESSAGE } from "@/lib/meeting-v2/duplicate-meeting-shared";
 import { clarificationReviewReadyForReEvaluate } from "@/lib/meeting-v2/clarification-review";
 import { userAnswerForOpenQuestion } from "@/lib/meeting-v2/investigation-contract";
+import { itemValidationBlocksDraft } from "@/lib/meeting-v2/evidence-contract";
+import { storedAnswerForReviewQuestion } from "@/lib/meeting-v2/review-questions";
 import {
   AgendaApprovalConfirmDialog,
   type AgendaApprovalConfirmMode,
@@ -181,6 +183,14 @@ type MeetingV2Status = {
     openQuestions: string[];
     pipelineOpenQuestions?: string[];
     factClarificationsNeeded?: string[];
+    reviewQuestions?: Array<{
+      id: string;
+      prompt: string;
+      options: string[];
+      notes: Array<{ fact: string; source: "transcript" | "package" | "both" }>;
+      effect: string;
+    }>;
+    processingFailures?: Array<{ id: string; field: string; label: string; detail: string }>;
     openQuestionNotes: Array<Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
     openQuestionOptions?: string[][];
     openQuestionContext: Record<string, Array<{ fact: string; source: "transcript" | "package" | "both" }>>;
@@ -1003,13 +1013,22 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
     ? "created"
     : status?.meeting.computedPipelineState ?? status?.meeting.pipelineState ?? "created";
   const reviewableItems = status?.items ?? [];
-  const needsClarificationCount = reviewableItems.filter((item) => item.openQuestions.length > 0).length;
+  const needsClarificationCount = reviewableItems.filter(
+    (item) => (item.reviewQuestions?.length ?? item.openQuestions.length) > 0,
+  ).length;
+  const processingFailureCount = reviewableItems.filter(
+    (item) => (item.processingFailures?.length ?? 0) > 0,
+  ).length;
+  const blockedItemCount = reviewableItems.filter(
+    (item) =>
+      (item.reviewQuestions?.length ?? item.openQuestions.length) > 0 ||
+      (item.processingFailures?.length ?? 0) > 0 ||
+      itemValidationBlocksDraft(item.validation),
+  ).length;
   const flaggedCount = reviewableItems.filter((item) =>
     item.validation.some((validation) => validation.severity === "error" || validation.severity === "warning"),
   ).length;
-  const readyCount = reviewableItems.filter(
-    (item) => item.openQuestions.length === 0 && !item.validation.some(v => v.severity === "error" || v.severity === "warning"),
-  ).length;
+  const readyCount = reviewableItems.length - blockedItemCount;
   const workflowProgress = status
     ? buildMeetingV2WorkflowProgress({
         pipelineStages: status.meeting.stages.map((stage) => ({
@@ -1021,6 +1040,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         agendaItemCount: status.meeting.counts.agendaItems,
         needsClarificationCount,
         flaggedCount,
+        blockedItemCount,
+        processingFailureCount,
         draftCount: status.meeting.counts.drafts,
         hasLatestDraft: Boolean(status.latestDraft),
       })
@@ -2473,6 +2494,9 @@ function flattenAgendaDetailItems(nodes: AgendaOutlineNode[], depth = 0): Agenda
       depth,
       openQuestions: node.item.openQuestions,
       factClarificationsNeeded: node.item.factClarificationsNeeded ?? [],
+      synopsis: node.item.discussionSummary,
+      reviewQuestions: node.item.reviewQuestions ?? [],
+      processingFailures: node.item.processingFailures ?? [],
       openQuestionNotes: node.item.openQuestionNotes ?? [],
       openQuestionOptions: node.item.openQuestionOptions ?? [],
       openQuestionContext: node.item.openQuestionContext ?? {},
@@ -2486,12 +2510,19 @@ function flattenAgendaDetailItems(nodes: AgendaOutlineNode[], depth = 0): Agenda
 function hydrateItemAnswers(item: AgendaReviewItem): Record<string, string> {
   const stored = item.userAnswers ?? {};
   const next: Record<string, string> = {};
+  const reviewQuestions = item.reviewQuestions ?? [];
+  if (reviewQuestions.length > 0) {
+    for (const question of reviewQuestions) {
+      next[question.id] = storedAnswerForReviewQuestion(question, stored);
+    }
+  }
   const questionTexts = new Set([
     ...item.openQuestions,
     ...(item.factClarificationsNeeded ?? []),
     ...(item.pipelineOpenQuestions ?? []),
   ]);
   for (const question of questionTexts) {
+    if (question in next) continue;
     next[question] = userAnswerForOpenQuestion(question, stored) ?? stored[question] ?? "";
   }
   for (const [key, value] of Object.entries(stored)) {
@@ -2528,6 +2559,8 @@ function syntheticReviewItem(options: {
     openQuestions: [],
     pipelineOpenQuestions: [],
     factClarificationsNeeded: [],
+    reviewQuestions: [],
+    processingFailures: [],
     openQuestionNotes: [],
     openQuestionContext: {},
     userAnswers: null,
@@ -3022,7 +3055,8 @@ function ValidatedAgendaReviewListItem({
     (validation) => validation.severity === "error" || validation.severity === "warning",
   ).length;
   const openQuestionCount =
-    item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0);
+    (item.reviewQuestions?.length ?? item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0)) +
+    (item.processingFailures?.length ?? 0);
   const hasErrorFlags = item.validation.some((validation) => validation.severity === "error");
   const parsedSnippet = parseSourceSnippet(item.sourceText || "", item.title);
   if (discussionTiming) parsedSnippet.timing = discussionTiming;
@@ -3938,15 +3972,16 @@ function AgendaReviewPanel({
     [validatedOutline],
   );
 
-  const readyForReEvaluate = useMemo(
-    () =>
-      clarificationReviewReadyForReEvaluate({
-        items: reviewItems,
-        answers,
-        dirtyItems,
-      }),
-    [answers, dirtyItems, reviewItems],
-  );
+  const readyForReEvaluate = useMemo(() => {
+    const questionsReady = clarificationReviewReadyForReEvaluate({
+      items: reviewItems,
+      answers,
+      dirtyItems,
+    });
+    const hasAnswerTargets = reviewItems.some((item) => (item.pipelineOpenQuestions ?? []).length > 0);
+    const hasRetryTargets = reviewItems.some((item) => (item.processingFailures?.length ?? 0) > 0);
+    return questionsReady || (hasRetryTargets && !hasAnswerTargets);
+  }, [answers, dirtyItems, reviewItems]);
 
   useEffect(() => {
     setAnswers((current) => {
@@ -3992,7 +4027,7 @@ function AgendaReviewPanel({
     }
   }
 
-  async function handleReEvaluateItem(itemId: string) {
+  async function handleReEvaluateItem(itemId: string, options?: { retryProcessing?: boolean }) {
     const filled = Object.fromEntries(
       Object.entries(answers[itemId] ?? {}).filter(([, value]) => value.trim()),
     );
@@ -4016,7 +4051,10 @@ function AgendaReviewPanel({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userAnswers: filled }),
+          body: JSON.stringify({
+            userAnswers: filled,
+            retryProcessing: options?.retryProcessing === true,
+          }),
         },
       );
       if (!response.ok) {
@@ -4036,7 +4074,13 @@ function AgendaReviewPanel({
     const targets = reviewItems.filter(
       (item) => (item.pipelineOpenQuestions ?? item.openQuestions).length > 0,
     );
+    const retryTargets = reviewItems.filter(
+      (item) =>
+        (item.processingFailures?.length ?? 0) > 0 &&
+        (item.pipelineOpenQuestions ?? []).length === 0,
+    );
     if (
+      targets.length > 0 &&
       !clarificationReviewReadyForReEvaluate({
         items: reviewItems,
         answers,
@@ -4067,6 +4111,23 @@ function AgendaReviewPanel({
           throw new Error(
             payload.error ||
               `Re-evaluation could not be started for ${item.itemNumber ?? item.title}.`,
+          );
+        }
+      }
+      for (const item of retryTargets) {
+        const response = await fetch(
+          `/api/v2/meetings/${meetingId}/items/${item.id}/re-evaluate`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ retryProcessing: true, userAnswers: {} }),
+          },
+        );
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(
+            payload.error ||
+              `Processing retry could not be started for ${item.itemNumber ?? item.title}.`,
           );
         }
       }
@@ -4107,7 +4168,11 @@ function AgendaReviewPanel({
 
   function handleOpenQuestionsFromBadge() {
     const firstWithQuestions = detailPanelItems.find(
-      (item) => item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0) > 0,
+      (item) =>
+        item.openQuestions.length +
+          (item.factClarificationsNeeded?.length ?? 0) +
+          (item.processingFailures?.length ?? 0) >
+        0,
     );
     if (!firstWithQuestions) return;
     setDetailPanelInitialTab("questions");
@@ -4224,7 +4289,11 @@ function AgendaReviewPanel({
 
   const openQuestionTotal = reviewItems.reduce(
     (sum, item) =>
-      sum + item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0),
+      sum + (item.reviewQuestions?.length ?? item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0)),
+    0,
+  );
+  const processingTotal = reviewItems.reduce(
+    (sum, item) => sum + (item.processingFailures?.length ?? 0),
     0,
   );
 
@@ -4250,9 +4319,17 @@ function AgendaReviewPanel({
               {openQuestionTotal} to answer
             </button>
           ) : null}
+          {processingTotal > 0 ? (
+            <button
+              type="button"
+              onClick={handleOpenQuestionsFromBadge}
+              className="rounded-full border border-slate-300 bg-slate-100 px-2.5 py-1 font-semibold text-slate-800 hover:border-slate-400"
+            >
+              {processingTotal} to retry
+            </button>
+          ) : null}
         </div>
-        {openQuestionTotal > 0 ||
-        reviewItems.some((item) => (item.pipelineOpenQuestions ?? []).length > 0) ? (
+        {openQuestionTotal > 0 || processingTotal > 0 ? (
           <button
             type="button"
             disabled={!readyForReEvaluate || reEvaluateAllBusy || busyItemId !== null}
@@ -4295,6 +4372,7 @@ function AgendaReviewPanel({
         onAnswerChange={handleAnswerChange}
         onSubmit={(itemId) => void handleSaveAnswers(itemId)}
         onReEvaluateItem={(itemId) => void handleReEvaluateItem(itemId)}
+        onRetryProcessing={(itemId) => void handleReEvaluateItem(itemId, { retryProcessing: true })}
         reEvaluateItemBusy={reEvaluateItemBusyId === detailPanelItemId}
       />
 

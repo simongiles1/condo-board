@@ -5,6 +5,7 @@ function acceptFactResolution(facts: ReturnType<typeof parseFactResolution>, sou
   if (
     !facts.facts.length &&
     !facts.unresolvedQuestions.length &&
+    !(facts.processingFailures?.length) &&
     sources.some((s) => s.kind === "transcript" && s.association === "direct")
   ) {
     throw new Error("Direct discussion was supplied but no facts were addressed.");

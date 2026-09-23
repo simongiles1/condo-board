@@ -22,6 +22,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V2 clarification questions** — Software failures in the fact ledger are a retry, not a question the secretary has to answer. Real uncertainties share one question per fact, with suggested replies, a custom answer, and **I don't know** (which does not confirm a decision). Saved answers stay attached when the wording changes. A shorter spoken name is asked about instead of being rejected as an internal conflict. Agenda-review progress counts each blocked item once.
+
 - **Meetings V2 draft readiness on status load** — Loading the meeting workspace for draft preview now includes investigation `usageJson` and validation `detailsJson` when recomputing readiness, so every agenda item is not falsely listed as needing pipeline re-evaluation or missing validation provenance.
 
 - **Meetings V2 review is one answer list** — The agenda header count opens the first item that still needs an answer (including fact-ledger prompts). The side-panel item list shows that same count. Flags are no longer a separate task: answer on **To answer**, then **Re-evaluate this item**. Validator wording sits under **Why this item is waiting**.

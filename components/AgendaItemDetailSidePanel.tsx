@@ -24,6 +24,15 @@ export type AgendaItemDetail = {
   depth: number;
   openQuestions: string[];
   factClarificationsNeeded?: string[];
+  synopsis?: string | null;
+  reviewQuestions?: Array<{
+    id: string;
+    prompt: string;
+    options: string[];
+    notes: Array<{ fact: string; source: "transcript" | "package" | "both" }>;
+    effect: string;
+  }>;
+  processingFailures?: Array<{ id: string; field: string; label: string; detail: string }>;
   validation: Array<{
     severity: string;
     code: string;
@@ -51,13 +60,21 @@ type Props = {
   onAnswerChange: (itemId: string, question: string, value: string) => void;
   onSubmit: (itemId: string) => void;
   onReEvaluateItem?: (itemId: string) => void;
+  onRetryProcessing?: (itemId: string) => void;
   reEvaluateItemBusy?: boolean;
 };
 
+const UNKNOWN_ANSWER = "I don't know";
+
 function extraClarificationKeys(item: AgendaItemDetail, itemAnswers: Record<string, string>): string[] {
-  const questionSet = new Set(item.openQuestions);
+  const questionSet = new Set([
+    ...item.openQuestions,
+    ...(item.factClarificationsNeeded ?? []),
+    ...(item.reviewQuestions ?? []).flatMap((question) => [question.id, question.prompt]),
+  ]);
   return Object.keys(itemAnswers).filter((key) => {
     if (questionSet.has(key)) return false;
+    if (key.startsWith("fact:") || key.startsWith("q:") || key.startsWith("processing:")) return false;
     return Boolean(itemAnswers[key]?.trim());
   });
 }
@@ -130,6 +147,7 @@ function QuestionsTabContent({
   onAnswerChange,
   onSubmit,
   onReEvaluate,
+  onRetryProcessing,
   reEvaluateBusy,
 }: {
   item: AgendaItemDetail;
@@ -139,12 +157,21 @@ function QuestionsTabContent({
   onAnswerChange: (question: string, value: string) => void;
   onSubmit: () => void;
   onReEvaluate?: () => void;
+  onRetryProcessing?: () => void;
   reEvaluateBusy?: boolean;
 }) {
   const extras = extraClarificationKeys(item, itemAnswers);
-  const factPrompts = item.factClarificationsNeeded ?? [];
+  const factPrompts = item.reviewQuestions ? [] : (item.factClarificationsNeeded ?? []);
+  const reviewQuestions = item.reviewQuestions ?? [];
+  const processingFailures = item.processingFailures ?? [];
 
-  if (item.openQuestions.length === 0 && factPrompts.length === 0 && extras.length === 0) {
+  if (
+    item.openQuestions.length === 0 &&
+    factPrompts.length === 0 &&
+    reviewQuestions.length === 0 &&
+    processingFailures.length === 0 &&
+    extras.length === 0
+  ) {
     return (
       <div className="space-y-4">
         <p className="text-sm text-slate-600">Nothing left to answer on this item.</p>
@@ -164,6 +191,110 @@ function QuestionsTabContent({
 
   return (
     <div className="space-y-5">
+      {item.synopsis ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Synopsis</p>
+          <p className="mt-1 leading-6">{item.synopsis}</p>
+        </div>
+      ) : null}
+      {processingFailures.length > 0 ? (
+        <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
+          <p className="font-medium">This item needs another processing pass.</p>
+          <p className="leading-6 text-amber-900">
+            The minutes pipeline could not use part of its own fact record. Retry processing. You do not need to invent an answer.
+          </p>
+          <ul className="list-disc space-y-1 pl-5">
+            {processingFailures.map((failure) => (
+              <li key={failure.id}>{failure.label}</li>
+            ))}
+          </ul>
+          <details className="text-xs text-amber-900">
+            <summary className="cursor-pointer font-medium">Technical detail</summary>
+            <ul className="mt-2 space-y-2">
+              {processingFailures.map((failure) => (
+                <li key={`${failure.id}-detail`}>{failure.detail}</li>
+              ))}
+            </ul>
+          </details>
+          {onRetryProcessing ? (
+            <button
+              type="button"
+              disabled={reEvaluateBusy}
+              onClick={onRetryProcessing}
+              className="inline-flex items-center rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
+            >
+              {reEvaluateBusy ? "Retrying..." : "Retry processing"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {reviewQuestions.map((question) => {
+        const fieldId = `review-${item.id}-${question.id}`;
+        const current = itemAnswers[question.id] ?? "";
+        const choices = [...question.options, UNKNOWN_ANSWER];
+        return (
+          <div key={question.id} className="space-y-2">
+            <label htmlFor={fieldId} className="block text-sm font-medium leading-6 text-slate-800">
+              {question.prompt}
+            </label>
+            <p className="text-sm leading-6 text-slate-600">{question.effect}</p>
+            {question.notes.length > 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  What we already know
+                </p>
+                <ul className="mt-2 space-y-2">
+                  {question.notes.map((note, noteIndex) => (
+                    <li key={`${fieldId}-note-${noteIndex}`} className="flex items-start gap-2 text-sm text-slate-700">
+                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" aria-hidden />
+                      <span className="min-w-0 leading-5">
+                        {note.fact}
+                        <span
+                          className={`ml-2 inline-flex align-middle rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${contextSourceTone(note.source)}`}
+                        >
+                          {contextSourceLabel(note.source)}
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <div className="flex flex-col gap-2" role="group" aria-label="Suggested answers">
+              {choices.map((option) => {
+                const selected = current === option;
+                return (
+                  <button
+                    key={`${fieldId}-${option}`}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => onAnswerChange(question.id, option)}
+                    className={`rounded-xl border px-3 py-2 text-left text-sm leading-5 transition ${
+                      selected
+                        ? "border-teal-600 bg-teal-50 text-teal-950"
+                        : "border-slate-200 bg-white text-slate-800 hover:border-teal-300 hover:bg-teal-50/60"
+                    }`}
+                  >
+                    {option}
+                  </button>
+                );
+              })}
+            </div>
+            {current === UNKNOWN_ANSWER ? (
+              <p className="text-xs leading-5 text-slate-500">
+                I don&apos;t know does not confirm a decision, so the draft stays blocked until there is a real answer.
+              </p>
+            ) : null}
+            <textarea
+              id={fieldId}
+              className="min-h-24 w-full rounded-xl border border-slate-300 bg-slate-50 p-3 text-sm shadow-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+              placeholder="Or write your own answer..."
+              value={current === UNKNOWN_ANSWER ? "" : current}
+              onChange={(event) => onAnswerChange(question.id, event.target.value)}
+            />
+          </div>
+        );
+      })}
       {factPrompts.length > 0 ? (
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800">
@@ -192,7 +323,7 @@ function QuestionsTabContent({
           })}
         </div>
       ) : null}
-      {item.openQuestions.map((question, index) => {
+      {item.reviewQuestions ? null : item.openQuestions.map((question, index) => {
         const fieldId = `question-answer-${item.id}-${index}`;
         const notes =
           item.openQuestionNotes?.[index]?.length
@@ -482,10 +613,17 @@ function AgendaItemPicker({
           <span className="block font-medium text-slate-900">
             {selected.displayNumber}. {selected.title}
           </span>
-          {selected.openQuestions.length > 0 || (selected.factClarificationsNeeded?.length ?? 0) > 0 ? (
+          {selected.openQuestions.length > 0 ||
+          (selected.factClarificationsNeeded?.length ?? 0) > 0 ||
+          (selected.processingFailures?.length ?? 0) > 0 ? (
             <span className="mt-0.5 block text-xs text-amber-800">
-              {selected.openQuestions.length + (selected.factClarificationsNeeded?.length ?? 0)}{" "}
-              {selected.openQuestions.length + (selected.factClarificationsNeeded?.length ?? 0) === 1
+              {selected.openQuestions.length +
+                (selected.factClarificationsNeeded?.length ?? 0) +
+                (selected.processingFailures?.length ?? 0)}{" "}
+              {selected.openQuestions.length +
+                (selected.factClarificationsNeeded?.length ?? 0) +
+                (selected.processingFailures?.length ?? 0) ===
+              1
                 ? "clarification"
                 : "clarifications"}
             </span>
@@ -507,7 +645,9 @@ function AgendaItemPicker({
         >
           {items.map((item) => {
             const clarificationCount =
-              item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0);
+              item.openQuestions.length +
+              (item.factClarificationsNeeded?.length ?? 0) +
+              (item.processingFailures?.length ?? 0);
             const selectable = true;
             const isSelected = item.id === selectedItemId;
             return (
@@ -564,6 +704,7 @@ export function AgendaItemDetailSidePanel({
   onAnswerChange,
   onSubmit,
   onReEvaluateItem,
+  onRetryProcessing,
   reEvaluateItemBusy,
 }: Props) {
   const [activeTab, setActiveTab] = useState<DetailTab>("questions");
@@ -590,7 +731,8 @@ export function AgendaItemDetailSidePanel({
   if (!item) return null;
 
   const questionCount =
-    item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0);
+    (item.reviewQuestions?.length ?? item.openQuestions.length + (item.factClarificationsNeeded?.length ?? 0)) +
+    (item.processingFailures?.length ?? 0);
   const evidenceCount = item.evidence?.length ?? 0;
 
   return (
@@ -641,6 +783,7 @@ export function AgendaItemDetailSidePanel({
               onAnswerChange={(question, value) => onAnswerChange(item.id, question, value)}
               onSubmit={() => onSubmit(item.id)}
               onReEvaluate={onReEvaluateItem ? () => onReEvaluateItem(item.id) : undefined}
+              onRetryProcessing={onRetryProcessing ? () => onRetryProcessing(item.id) : undefined}
               reEvaluateBusy={reEvaluateItemBusy}
             />
           ) : null}

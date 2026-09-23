@@ -8,18 +8,25 @@ export async function POST(
 ) {
   try {
     const { id, itemId } = await params;
-    const { userAnswers } = await req.json();
+    const body = await req.json();
+    const { userAnswers, retryProcessing } = body as { userAnswers?: unknown; retryProcessing?: unknown };
 
-    if (!userAnswers || typeof userAnswers !== "object" || Array.isArray(userAnswers)) {
+    if (userAnswers != null && (typeof userAnswers !== "object" || Array.isArray(userAnswers))) {
       return NextResponse.json({ error: "userAnswers are required" }, { status: 400 });
     }
 
-    const filled = filledClarificationAnswers(userAnswers);
-    if (Object.keys(filled).length === 0) {
+    const filled = filledClarificationAnswers(
+      userAnswers && typeof userAnswers === "object" && !Array.isArray(userAnswers)
+        ? (userAnswers as Record<string, string>)
+        : {},
+    );
+    if (retryProcessing !== true && Object.keys(filled).length === 0) {
       return NextResponse.json({ error: "Type an answer before re-evaluating." }, { status: 400 });
     }
 
-    await saveUserAnswers(id, itemId, filled);
+    if (Object.keys(filled).length > 0) {
+      await saveUserAnswers(id, itemId, filled);
+    }
 
     await inngest.send({
       name: "meeting-v2/item.reevaluate",

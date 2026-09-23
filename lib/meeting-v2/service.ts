@@ -5,11 +5,10 @@ import path from "node:path";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
-import { buildEvidenceSources, draftReadiness, evidenceFingerprint, investigationFingerprint, MINUTES_PIPELINE_VERSION, type EvidenceSource, type FactResolution, factResolutionClarificationPrompts } from "./evidence-contract";
+import { buildEvidenceSources, draftReadiness, evidenceFingerprint, investigationFingerprint, MINUTES_PIPELINE_VERSION, type EvidenceSource, type FactResolution } from "./evidence-contract";
 import { AGENDA_ITEM_REPAIR_PROMPT } from "./repair-prompts";
 import { reviewAndRepairOnce } from "./validation-cycle";
 import {
-  clickableAnswers,
   parseInvestigation,
   parseOpenQuestionContextNotes,
   parseStoredOpenQuestions,
@@ -18,12 +17,18 @@ import {
   openQuestionsMissingContextNotes,
   serializeOpenQuestionsJson,
   storedOpenQuestionTexts,
-  userAnswerForOpenQuestion,
+  isConfirmingClarification,
   type InvestigationDocument,
   type InvestigationOpenQuestion,
   type OpenQuestionContextNote,
 } from "./investigation-contract";
 import { resolveAgendaFacts } from "./fact-resolution";
+import {
+  buildItemReviewQuestions,
+  isProcessingFailureText,
+  ledgerNeedsBoundedReresolve,
+  storedAnswerForReviewQuestion,
+} from "./review-questions";
 import { getDb } from "@/lib/db";
 import {
   meetings,
@@ -178,6 +183,14 @@ export type MeetingV2Detail = {
     openQuestions: string[];
     /** Fact-resolution ledger prompts still needing a saved clarification. */
     factClarificationsNeeded: string[];
+    reviewQuestions: Array<{
+      id: string;
+      prompt: string;
+      options: string[];
+      notes: OpenQuestionContextNote[];
+      effect: string;
+    }>;
+    processingFailures: Array<{ id: string; field: string; label: string; detail: string }>;
     /** Open questions last written by investigate/validate before user clarifications are applied. */
     pipelineOpenQuestions: string[];
     openQuestionNotes: OpenQuestionContextNote[][];
@@ -2373,9 +2386,15 @@ function addDeterministicValidationRows(options: {
       code: "stale_investigation", message: "Investigation does not match the current evidence and pipeline version." });
   }
 
-  if (!resolution || resolution.facts.some(f => f.selected === null) || resolution.unresolvedQuestions.length > 0) {
+  const reviewState = buildItemReviewQuestions({ factResolution: resolution, openQuestions: [] });
+  if (reviewState.processingFailures.length > 0) {
     pushValidationRow(rows, { meetingId, agendaItemId: agendaItem.id, validationType: "evidence_support", severity: "error",
-      code: "unresolved_facts", message: "Material facts remain unresolved; clarify the evidence and re-evaluate this item." });
+      code: "fact_processing_failed", message: "Part of the fact record could not be read. Retry processing for this item." });
+  }
+  const genuineUnresolved = (resolution?.unresolvedQuestions ?? []).filter((question) => !isProcessingFailureText(question));
+  if (!resolution || resolution.facts.some((fact) => fact.selected === null && !reviewState.processingFailures.some((failure) => failure.field === fact.field)) || genuineUnresolved.length > 0) {
+    pushValidationRow(rows, { meetingId, agendaItemId: agendaItem.id, validationType: "evidence_support", severity: "error",
+      code: "unresolved_facts", message: "Some facts from the meeting still need an answer." });
   }
 
   const decisions = safeJsonParse<string[]>(investigation.decisionsJson, []);
@@ -2939,7 +2958,7 @@ export async function investigateAgendaItems(
     }
     const goldSpans = (meetingRec?.settings as { segmentGoldStandard?: { spans?: Array<{ agendaItemId: string }> } } | null)?.segmentGoldStandard?.spans ?? [];
     const isGoldStandard = Array.isArray(goldSpans) && goldSpans.some((s) => s.agendaItemId === item.id);
-    let sources: EvidenceSource[] = [...prepared.sources, ...Object.entries(userAnswers).filter(([,answer]) => answer.trim()).map(([question, answer], index) => ({
+    let sources: EvidenceSource[] = [...prepared.sources, ...Object.entries(userAnswers).filter(([, answer]) => isConfirmingClarification(answer)).map(([question, answer], index) => ({
       id: `user:${index}`, kind: "user" as const, association: "direct" as const, text: `${question}: ${answer}`,
     }))];
     if (isGoldStandard) {
@@ -2962,7 +2981,7 @@ export async function investigateAgendaItems(
     ].join("\n");
 
     let normalized: InvestigationDocument;
-    let factResolution: FactResolution = { facts: [], unresolvedQuestions: [] };
+    let factResolution: FactResolution = { facts: [], unresolvedQuestions: [], processingFailures: [] };
     let factResolutionAttempts: unknown[] = [];
     let modelName = "deepseek-v4-flash";
     const reEvaluate = options?.usageSource === "re_evaluate";
@@ -3017,7 +3036,8 @@ export async function investigateAgendaItems(
         normalized = parseInvestigation(safeJsonObjectParse(aiResult.text));
         normalized = {
           ...normalized,
-          open_questions: omitBlockedOpenQuestions(normalized.open_questions, factResolution),
+          open_questions: omitBlockedOpenQuestions(normalized.open_questions, factResolution)
+            .filter((question) => !isProcessingFailureText(question.question)),
         };
         const filled = await fillQuestionContextNotes({
           document: normalized,
@@ -3037,16 +3057,25 @@ export async function investigateAgendaItems(
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        factResolution = { facts: [], unresolvedQuestions: [message] };
+        factResolution = {
+          facts: [],
+          unresolvedQuestions: [],
+          processingFailures: [{
+            id: "processing:investigation:exception",
+            field: "investigation",
+            label: "Investigation did not finish. Retry processing.",
+            detail: message,
+          }],
+        };
         normalized = {
-          discussion_summary: `Automatic investigation could not finish for this item. ${message}`,
+          discussion_summary: "This item could not be investigated automatically.",
           outcome: "UNCLEAR",
           confidence: "INSUFFICIENT",
           visibility: inferVisibility(item.title) === "in_camera" ? "RESTRICTED" : "PUBLIC",
           decisions: [],
           motion: null,
           actions: [],
-          open_questions: [{ question: message, recommended_answer: "", confidence: "low", context_notes: [] }],
+          open_questions: [],
         };
         normalized.open_questions = applyFallbackQuestionContextNotes({
           questions: normalized.open_questions,
@@ -3251,6 +3280,34 @@ export async function validateAgendaItemInvestigations(
           },
           requiresRepair: review => review.parsed.verdict !== "pass" || review.parsed.needs_human_review || itemRows.some(row => row.severity === "error"),
           repair: async (candidate, review) => {
+            let usage = safeJsonParse<Record<string, unknown>>(candidate.usageJson, {});
+            let factResolution =
+              usage.factResolution && typeof usage.factResolution === "object"
+                ? (usage.factResolution as FactResolution)
+                : null;
+            if (ledgerNeedsBoundedReresolve(factResolution, usage.factLedgerRetried === true)) {
+              const sources = evidenceSourcesFromContext(contextDocument, context?.assembledContextText);
+              if (sources.length > 0) {
+                const resolved = await resolveAgendaFacts({
+                  agenda: {
+                    title: agendaItem.title,
+                    itemNumber: agendaItem.itemNumber,
+                    itemType: agendaItem.itemType,
+                  },
+                  sources,
+                });
+                factResolution = resolved.facts;
+                usage = {
+                  ...usage,
+                  factResolution,
+                  factResolutionAttempts: resolved.attempts,
+                  factLedgerRetried: true,
+                };
+              } else {
+                usage = { ...usage, factLedgerRetried: true };
+              }
+              candidate = { ...candidate, usageJson: JSON.stringify(usage) };
+            }
             const repaired = await generateDeepSeekJson({
               systemInstruction: `${AGENDA_ITEM_REPAIR_PROMPT}\nOnly selected, cited facts may support assertions. Conversational assent on a proposed approval is the decision; leave motion null unless a mover and seconder were named. Never invent mover or seconder names. Do not add an open question whose only gap is missing motion language.`,
               userText: JSON.stringify({ input: buildValidationInput({ ...reviewInput, investigation: candidate }), findings: review.parsed, deterministicFindings: itemRows }),
@@ -3260,11 +3317,6 @@ export async function validateAgendaItemInvestigations(
             await recordMeetingV2ValidationUsage(meetingId, repaired.usage, repaired.modelName, { source: options?.usageSource ?? "pipeline" });
             const corrected = parseInvestigation(safeJsonObjectParse(repaired.text));
             const previousQuestions = parseStoredOpenQuestions(candidate.openQuestionsJson);
-            const usage = safeJsonParse<Record<string, unknown>>(candidate.usageJson, {});
-            const factResolution =
-              usage.factResolution && typeof usage.factResolution === "object"
-                ? (usage.factResolution as FactResolution)
-                : null;
             const merged: InvestigationDocument = {
               ...corrected,
               open_questions: omitOpenQuestionsAnsweredByUser(
@@ -3273,7 +3325,7 @@ export async function validateAgendaItemInvestigations(
                   factResolution,
                 ),
                 safeJsonParse<Record<string, string>>(candidate.userAnswersJson, {}),
-              ),
+              ).filter((question) => !isProcessingFailureText(question.question)),
             };
             const filled = await fillQuestionContextNotes({
               document: merged,
@@ -3301,6 +3353,13 @@ export async function validateAgendaItemInvestigations(
         const repairedUsage = safeJsonParse<Record<string, unknown>>(cycle.investigation.usageJson, {});
         investigation.usageJson = JSON.stringify({
           ...investigationUsage,
+          ...(repairedUsage.factResolution && typeof repairedUsage.factResolution === "object"
+            ? { factResolution: repairedUsage.factResolution }
+            : {}),
+          ...(Array.isArray(repairedUsage.factResolutionAttempts)
+            ? { factResolutionAttempts: repairedUsage.factResolutionAttempts }
+            : {}),
+          ...(repairedUsage.factLedgerRetried === true ? { factLedgerRetried: true } : {}),
           ...(Array.isArray(repairedUsage.revisedNotes) ? { revisedNotes: repairedUsage.revisedNotes } : {}),
           ...(Array.isArray(repairedUsage.proposedAnswers) ? { proposedAnswers: repairedUsage.proposedAnswers } : {}),
           validationHistory: reviewHistory,
@@ -3749,7 +3808,6 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
             : ("not_discussed" as const));
 
       const pipelineOpenQuestionRows = parseStoredOpenQuestions(investigation?.openQuestionsJson);
-      const pipelineOpenQuestions = pipelineOpenQuestionRows.map((entry) => entry.question);
       const storedClarifications =
         selectedSettings.userClarifications?.[item.id] ??
         safeJsonParse<Record<string, string>>(investigation?.userAnswersJson, {});
@@ -3760,15 +3818,13 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       const userAnswers = { ...investigationAnswers, ...storedClarifications };
       const investigationUsage = safeJsonParse<Record<string, unknown>>(investigation?.usageJson, {});
       const factResolution = investigationUsage.factResolution as FactResolution | undefined;
-      const factClarificationPrompts = factResolutionClarificationPrompts(factResolution);
-      const visibleOpenQuestionRows = omitOpenQuestionsAnsweredByUser(
-        pipelineOpenQuestionRows,
-        userAnswers,
+      const builtReview = buildItemReviewQuestions({
+        factResolution,
+        openQuestions: pipelineOpenQuestionRows,
+      });
+      const reviewQuestions = builtReview.questions.filter(
+        (question) => !isConfirmingClarification(storedAnswerForReviewQuestion(question, userAnswers)),
       );
-      const factClarificationsNeeded = factClarificationPrompts.filter(
-        (prompt) => !userAnswerForOpenQuestion(prompt, userAnswers),
-      );
-
       return {
         id: item.id,
         title: item.title,
@@ -3783,13 +3839,15 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         discussionSummary: investigation?.discussionSummary ?? null,
         confidence: investigation?.confidence ?? null,
         outcome: investigation?.outcome ?? null,
-        pipelineOpenQuestions: [...pipelineOpenQuestions, ...factClarificationPrompts],
-        factClarificationsNeeded,
-        openQuestions: visibleOpenQuestionRows.map((entry) => entry.question),
-        openQuestionNotes: visibleOpenQuestionRows.map((entry) => entry.context_notes),
-        openQuestionOptions: visibleOpenQuestionRows.map((entry) => clickableAnswers(entry)),
+        pipelineOpenQuestions: reviewQuestions.map((question) => question.id),
+        factClarificationsNeeded: [],
+        reviewQuestions,
+        processingFailures: builtReview.processingFailures,
+        openQuestions: reviewQuestions.map((question) => question.prompt),
+        openQuestionNotes: reviewQuestions.map((question) => question.notes),
+        openQuestionOptions: reviewQuestions.map((question) => question.options),
         openQuestionContext: Object.fromEntries(
-          visibleOpenQuestionRows.map((entry) => [entry.question, entry.context_notes]),
+          reviewQuestions.map((question) => [question.prompt, question.notes]),
         ),
         revisedNotes: (() => {
           const usage = safeJsonParse<Record<string, unknown>>(investigation?.usageJson, {});

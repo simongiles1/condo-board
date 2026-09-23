@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
 import {
-  omitOpenQuestionsAnsweredByUser,
+  isConfirmingClarification,
   parseStoredOpenQuestions,
 } from "./investigation-contract";
+import {
+  buildItemReviewQuestions,
+  storedAnswerForReviewQuestion,
+  type FactResolutionLike,
+} from "./review-questions";
 
 /** Bump when evidence, resolution, investigation, validation, or assembly contracts change. */
 export const MINUTES_PIPELINE_VERSION = "2026-09-evidence-v4";
@@ -39,7 +44,19 @@ export type ResolvedFact = {
   selected: number | null;
   explanation: string;
 };
-export type FactResolution = { facts: ResolvedFact[]; unresolvedQuestions: string[] };
+/** A model fact the parser rejected. Shown as a retry, not as a question about the meeting. */
+export type FactProcessingFailure = {
+  id: string;
+  field: string;
+  label: string;
+  detail: string;
+};
+
+export type FactResolution = {
+  facts: ResolvedFact[];
+  unresolvedQuestions: string[];
+  processingFailures?: FactProcessingFailure[];
+};
 
 /**
  * Human-facing prompts when the fact-resolution ledger still needs secretary input.
@@ -52,7 +69,12 @@ export function factResolutionClarificationPrompts(
       "The fact ledger for this item was not recorded. Re-evaluate the item after adding any clarifications below.",
     ];
   }
-  const prompts: string[] = [...factResolution.unresolvedQuestions];
+  const prompts: string[] = factResolution.unresolvedQuestions.filter(
+    (question) =>
+      !/^(Could not use |Could not verify |Could not accept package evidence|Could not treat a package proposal|Fact resolution failed|Fact resolution contains|Fact resolution returned|Fact .+ has a missing|Automatic investigation)/i.test(
+        question.trim(),
+      ),
+  );
   for (const fact of factResolution.facts) {
     if (fact.selected !== null) continue;
     const options = fact.candidates
@@ -286,6 +308,46 @@ function uniqueSpokenThousandsPair(
   return pairs.find((pair) => pair.documentIndex === documentIndexes[0]) ?? null;
 }
 
+function compactFactName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+/** True when one name is the other, or a shorter form of it. Not proof of identity by itself. */
+function namesMayMatch(leftValue: string, rightValue: string): boolean {
+  const left = compactFactName(leftValue);
+  const right = compactFactName(rightValue);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left];
+  if (shorter.length < 4) return false;
+  return longer.startsWith(`${shorter} `);
+}
+
+function describeFactShapeError(fact: unknown): { field: string; detail: string } | null {
+  if (!fact || typeof fact !== "object") {
+    return {
+      field: "fact record",
+      detail: "A fact record is not an object. Each fact needs field, scope, explanation, and at least one candidate.",
+    };
+  }
+  const record = fact as Record<string, unknown>;
+  const field = typeof record.field === "string" ? record.field.trim() : "";
+  if (!field) return { field: "fact record", detail: "A fact record is missing a field name." };
+  if (typeof record.explanation !== "string" || !record.explanation.trim()) {
+    return { field, detail: `Fact "${field}" is missing an explanation string.` };
+  }
+  if (!FACT_SCOPES.includes(record.scope as (typeof FACT_SCOPES)[number])) {
+    return {
+      field,
+      detail: `Fact "${field}" has scope ${JSON.stringify(record.scope)}. Allowed scopes: ${FACT_SCOPES.join(", ")}.`,
+    };
+  }
+  if (!Array.isArray(record.candidates) || record.candidates.length === 0) {
+    return { field, detail: `Fact "${field}" needs at least one candidate with value, sourceId, and quote.` };
+  }
+  return null;
+}
+
 /** Validate shape and verbatim evidence links before a model's fact choices can be used. */
 export function parseFactResolution(
   raw: unknown,
@@ -299,28 +361,34 @@ export function parseFactResolution(
   }
   const byId = new Map(sources.map(s => [s.id, s]));
   const unresolvedQuestions = coerceUnresolvedQuestions(value.unresolvedQuestions, salvage);
+  const processingFailures: FactProcessingFailure[] = [];
+  const recordFailure = (fieldName: string, detail: string) => {
+    const slug = fieldName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "fact";
+    processingFailures.push({
+      id: `processing:${slug}:${processingFailures.length}`,
+      field: fieldName,
+      label: `${fieldName} needs another processing pass.`,
+      detail,
+    });
+  };
   const facts: ResolvedFact[] = [];
   const resolvedShorthand: Array<{ spoken: number; precise: number }> = [];
   for (const fact of value.facts) {
-    const field = typeof fact?.field === "string" ? fact.field : "unknown field";
-    const shapeOk = Boolean(
-      fact &&
-        typeof fact.field === "string" &&
-        typeof fact.explanation === "string" &&
-        FACT_SCOPES.includes(fact.scope as (typeof FACT_SCOPES)[number]) &&
-        Array.isArray(fact.candidates) &&
-        fact.candidates.length,
-    );
-    if (!shapeOk) {
-      if (!salvage) throw new Error("Fact resolution contains an invalid fact or selection.");
-      unresolvedQuestions.push(`Could not use a malformed fact record for ${field}.`);
+    const shapeError = describeFactShapeError(fact);
+    if (shapeError) {
+      if (!salvage) throw new Error(shapeError.detail);
+      recordFailure(shapeError.field, shapeError.detail);
       continue;
     }
     let originalSelected = coerceSelectedIndex(fact.selected ?? null, fact.candidates.length);
     if (originalSelected === undefined) {
-      if (!salvage) throw new Error("Fact resolution contains an invalid fact or selection.");
+      if (!salvage) {
+        throw new Error(
+          `Fact "${fact.field}" selected index ${JSON.stringify(fact.selected)} is outside 0..${fact.candidates.length - 1}.`,
+        );
+      }
       originalSelected = null;
-      unresolvedQuestions.push(`Could not use the selected index for ${fact.field}.`);
+      recordFailure(fact.field, `Could not use the selected index for ${fact.field}.`);
     }
     const kept: ResolvedFact["candidates"] = [];
     const keptFromOriginal: number[] = [];
@@ -338,39 +406,48 @@ export function parseFactResolution(
       if (!salvage) {
         throw new Error(`Fact ${fact.field} has a missing or unverifiable citation.`);
       }
-      unresolvedQuestions.push(`Could not verify a citation for ${fact.field}.`);
+      recordFailure(fact.field, `Could not verify a citation for ${fact.field}.`);
       continue;
     }
     let selected = originalSelected === null ? null : keptFromOriginal.indexOf(originalSelected);
     if (selected !== null && selected < 0) {
       selected = null;
-      if (salvage) unresolvedQuestions.push(`Could not verify the selected citation for ${fact.field}.`);
+      if (salvage) recordFailure(fact.field, `Could not verify the selected citation for ${fact.field}.`);
     }
     if (selected !== null) {
       selected = alignSpokenThousandsAmount(kept, selected, byId);
       const selectedSource = byId.get(kept[selected].sourceId)!;
       const shorthand = spokenThousandsPair(kept, selected, byId);
       if (shorthand) resolvedShorthand.push(shorthand);
+      const meetingIndexes = kept.flatMap((candidate, index) => {
+        const kind = byId.get(candidate.sourceId)?.kind;
+        return kind === "transcript" || kind === "user" ? [index] : [];
+      });
       const prefersMeetingEvidence =
         selectedSource.kind === "document" &&
         fact.scope !== "package_proposal" &&
-        kept.some(c => ["transcript", "user"].includes(byId.get(c.sourceId)!.kind));
+        meetingIndexes.length > 0;
       const packageAsDecision = fact.scope === "current_decision" && selectedSource.kind === "document";
       // A package figure that only restores digits below the thousands place is the spoken amount, not a conflicting proposal.
       if ((prefersMeetingEvidence || packageAsDecision) && !shorthand) {
-        if (!salvage) {
+        const meetingValues = meetingIndexes.map((index) => kept[index].value);
+        const sameParty = meetingValues.length > 0 && meetingValues.every((entry) => namesMayMatch(kept[selected].value, entry));
+        const exactMeeting = meetingIndexes.find((index) => compactFactName(kept[index].value) === compactFactName(kept[selected].value));
+        if (packageAsDecision && sameParty) {
+          selected = null;
+        } else if (prefersMeetingEvidence && exactMeeting !== undefined && !packageAsDecision) {
+          selected = exactMeeting;
+        } else if (prefersMeetingEvidence && sameParty && !packageAsDecision) {
+          selected = null;
+        } else if (!salvage) {
           throw new Error(
             prefersMeetingEvidence
               ? `Fact ${fact.field} selects package evidence over meeting evidence.`
               : `Fact ${fact.field} treats a package proposal as a current decision.`,
           );
+        } else {
+          selected = null;
         }
-        selected = null;
-        unresolvedQuestions.push(
-          prefersMeetingEvidence
-            ? `Could not accept package evidence over meeting evidence for ${fact.field}.`
-            : `Could not treat a package proposal as a current decision for ${fact.field}.`,
-        );
       }
     }
     facts.push({
@@ -389,6 +466,7 @@ export function parseFactResolution(
           && dollarAmounts(question).some((amount) => Math.abs(amount - pair.precise) < 0.001),
       ),
     ),
+    processingFailures,
   };
 }
 
@@ -399,7 +477,8 @@ Read ALL direct transcript evidence, including later continuations. Package note
 Transcripts are generated by automated speech recognition (ASR) and often contain phonetic errors, homophones, or mishearings (e.g. "second dead" for "seconded", "past" for "passed", "cordial" for "corridor"). Interpret spoken statements using surrounding meeting and package context rather than treating transcription noise as genuine ambiguity or conflict. Verbatim quotes in candidate quote fields must still reproduce the exact transcript text as written.
 When a speaker drops the portion of an amount below the thousands place, and exactly one package figure for the same party is that number with the dropped remainder restored, select that package figure. Include both the spoken wording and the package figure as candidates, and set selected to the package figure. That is corroboration, not a conflict, and it is not an unresolved question. Do this only when one package figure matches; if the package also has an exact row for the spoken number, or two figures share that thousands place, leave the choice unresolved. selected.value must be the package figure with its cents, or the legal name, never the rounded spoken number and never a description of how speech was interpreted.
 If an agenda item is skipped, deferred, or was approved at an earlier meeting, the absence of a new decision or contract amount today is expected normal governance; do NOT emit an unresolved question for decisions not made today.
-Informal board agreement or direction to management (e.g. instructing management to proceed with a review, obtain clarification, or send a draft to counsel) represents administrative direction; record it under "discussion" or "action" rather than flagging an unresolved question over the absence of a formal motion or vote.
+Informal board agreement or direction to management (e.g. instructing management to proceed with a review, obtain clarification, or send a draft to counsel) represents administrative direction; record it with scope "discussion". Scope "action" is invalid. Do not flag an unresolved question only because a formal motion or vote was not spoken.
+A shorter spoken name and a longer package name are not proof they are the same party. Keep both as candidates and set selected to null unless the normalized names match exactly. Do not select the package candidate only because meeting evidence is also present.
 Related and neighboring evidence can concern another agenda item; use it only when the association is supported. Cite source IDs and exact quotes: each quote must be a contiguous substring copied from that source's text in the request (same spelling and punctuation; package text may contain &amp; — quote it as stored or use the spoken line without the timestamp prefix for transcript sources). Use scope for package_proposal vs prior_approval; keep field to the topic (contractor, amount, approval), not the scope label. All material contractors, amounts, decisions, conditions and dates in the evidence must be addressed; an empty facts array is acceptable only for a procedural heading or no substantive evidence.`;
 
 export type GateItem = { id: string; title: string };
@@ -420,6 +499,7 @@ const DETERMINISTIC_DRAFT_BLOCKERS = new Set([
   "missing_investigation",
   "stale_investigation",
   "unresolved_facts",
+  "fact_processing_failed",
 ]);
 
 function parseValidationDetails(detailsJson: string | null | undefined): Record<string, unknown> | null {
@@ -443,7 +523,9 @@ export function itemValidationBlocksDraft(
   const verdictDetails = parseValidationDetails(verdictRow?.detailsJson);
   if (verdictDetails?.verdict === "fail") return true;
   return findings.some(
-    (entry) => entry.severity === "error" && DETERMINISTIC_DRAFT_BLOCKERS.has(entry.code),
+    (entry) =>
+      entry.severity === "error" &&
+      (entry.code === "ai_verdict" || DETERMINISTIC_DRAFT_BLOCKERS.has(entry.code)),
   );
 }
 
@@ -474,12 +556,25 @@ export function draftReadiness(agenda: GateItem[], investigations: Investigation
         return {};
       }
     })();
-    const unansweredQuestions = omitOpenQuestionsAnsweredByUser(
-      parseStoredOpenQuestions(results[0].openQuestionsJson),
-      userAnswers,
+    const usage = (() => {
+      try {
+        return JSON.parse(results[0].usageJson ?? "{}") as { factResolution?: FactResolutionLike };
+      } catch {
+        return {};
+      }
+    })();
+    const review = buildItemReviewQuestions({
+      factResolution: usage.factResolution,
+      openQuestions: parseStoredOpenQuestions(results[0].openQuestionsJson),
+    });
+    const pendingQuestions = review.questions.filter(
+      (question) => !isConfirmingClarification(storedAnswerForReviewQuestion(question, userAnswers)),
     );
-    if (unansweredQuestions.length > 0) {
-      problems.push(`${item.title}: ${unansweredQuestions.length} open question(s) still need answers.`);
+    if (pendingQuestions.length > 0) {
+      problems.push(`${item.title}: ${pendingQuestions.length} open question(s) still need answers.`);
+    }
+    if (review.processingFailures.length > 0) {
+      problems.push(`${item.title}: the fact ledger needs another processing pass.`);
     }
     if (itemValidationBlocksDraft(findings)) {
       problems.push(`${item.title}: validation requires correction or review.`);

@@ -8,7 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Email volume chart people filter** — The inbox “Email volume over time” dialog includes a multiselect for Bonnie Kafi (`bkafi@iccpropertymanagement.com`) and Haider Mukadam (`studiopm@iccpropertymanagement.com`). Bonnie is selected by default; choose one or both to chart From/Cc volume (other inbox filters still apply).
+- **Email volume chart people filter** — The inbox “Email volume over time” dialog includes a multiselect for Bonnie Kafi (`bkafi@iccpropertymanagement.com`), Assistant PM (`studiopm@iccpropertymanagement.com`, shared role mailbox), and John Wilson (`jwilson@iccpropertymanagement.com`). Bonnie is selected by default; choose any combination to chart From/Cc volume (other inbox filters still apply). With multiple people selected, switch between stacked bars and side-by-side bars. **2-mo avg** and **3-mo avg** show a trailing rolling mean of monthly counts (partial window at the start of the series).
 
 - **Bulk extract DeepSeek peak pause** — Inbox bulk extract with a DeepSeek model pauses during peak pricing windows (stint clock stops; status shows countdown). **Continue during peak hours** overrides for that run. Peak/off-peak timeline shown in the bulk extract dialog when DeepSeek is selected.
 
@@ -23,6 +23,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V2 item pipeline debugger** — Each agenda topic has a **Debug** control that opens a sandbox stepper (evidence → fact resolution → investigation → validation → rendered minutes snippet). Pick DeepSeek V4 Flash, V4.1 Flash, or Gemini 3.8 Flash per LLM step, inspect and edit the live prompts, and keep historical runs with token counts and estimated spend. These runs do not overwrite production investigation or validation.
 
 ### Fixed
+
+- **Transcript search scroll and highlight** — Search jumps in the readable transcript leave room below sticky section badges (including wrapped badge rows). Partial-word highlights no longer add horizontal padding that splits the word.
 
 - **Production Docker build** — The meetings workspace no longer imports server-only fact-resolution code into the client bundle, fixing `next build` failures on `node:crypto` during Coolify deploys.
 

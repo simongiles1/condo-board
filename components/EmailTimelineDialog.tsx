@@ -5,16 +5,23 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import {
+  chartSeriesForTimelineSenderIds,
   DEFAULT_EMAIL_TIMELINE_SENDER_IDS,
   EMAIL_TIMELINE_SENDER_OPTIONS,
   emailsForTimelineSenderIds,
+  type EmailTimelineChartLayout,
+  type EmailTimelineChartSeries,
 } from "@/lib/email/timeline-senders";
 import {
   hasActiveFilters,
   parseEmailThreadFilters,
   searchParamsToFilterRecord,
 } from "@/lib/email/thread-filter-params";
-import type { TimelineBin, TimelineBinSize } from "@/lib/email/timeline-bins";
+import {
+  timelineRollingAverageMonths,
+  type TimelineBin,
+  type TimelineBinSize,
+} from "@/lib/email/timeline-bins";
 
 const EmailTimelineChart = dynamic(
   () =>
@@ -24,7 +31,7 @@ const EmailTimelineChart = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex h-80 items-center justify-center text-sm text-slate-500">
+      <div className="flex h-[18.5rem] items-center justify-center text-sm text-slate-500">
         Loading chart…
       </div>
     ),
@@ -36,6 +43,7 @@ type TimelineResponse = {
   totalCount: number;
   binSize: TimelineBinSize;
   filtersActive: boolean;
+  series?: EmailTimelineChartSeries[];
 };
 
 type Props = {
@@ -46,6 +54,16 @@ type Props = {
 const BIN_OPTIONS: Array<{ id: TimelineBinSize; label: string }> = [
   { id: "week", label: "Week" },
   { id: "month", label: "Month" },
+  { id: "month_avg_2", label: "2-mo avg" },
+  { id: "month_avg_3", label: "3-mo avg" },
+];
+
+const CHART_LAYOUT_OPTIONS: Array<{
+  id: EmailTimelineChartLayout;
+  label: string;
+}> = [
+  { id: "stacked", label: "Stacked" },
+  { id: "grouped", label: "Side by side" },
 ];
 
 export function EmailTimelineDialog({ open, onClose }: Props) {
@@ -59,6 +77,8 @@ export function EmailTimelineDialog({ open, onClose }: Props) {
   const [selectedSenderIds, setSelectedSenderIds] = useState<string[]>(
     () => [...DEFAULT_EMAIL_TIMELINE_SENDER_IDS],
   );
+  const [chartLayout, setChartLayout] =
+    useState<EmailTimelineChartLayout>("stacked");
   const [data, setData] = useState<TimelineResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +146,10 @@ export function EmailTimelineDialog({ open, onClose }: Props) {
   const bins = data?.bins ?? [];
   const senderEmails = emailsForTimelineSenderIds(selectedSenderIds);
   const noSendersSelected = senderEmails.length === 0;
+  const multiPersonChart = selectedSenderIds.length > 1;
+  const chartSeries =
+    data?.series ?? chartSeriesForTimelineSenderIds(selectedSenderIds);
+  const rollingMonths = timelineRollingAverageMonths(binSize);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -141,7 +165,15 @@ export function EmailTimelineDialog({ open, onClose }: Props) {
         aria-labelledby="email-timeline-title"
         className="relative flex max-h-[90vh] w-full max-w-4xl flex-col rounded-3xl border border-slate-200 bg-white shadow-xl"
       >
-        <div className="border-b border-slate-100 px-6 py-5">
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-4 z-10 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+          aria-label="Close"
+        >
+          <CloseIcon />
+        </button>
+        <div className="border-b border-slate-100 px-6 py-5 pr-14">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <h2
@@ -153,10 +185,14 @@ export function EmailTimelineDialog({ open, onClose }: Props) {
               <p className="mt-1 text-sm text-slate-600">
                 {noSendersSelected
                   ? "Select at least one person to chart email volume."
-                  : filtersActive
-                    ? "Counts for the selected people plus other active inbox filters."
-                    : "Counts for the selected people (From or Cc)."}
-                {data ? ` ${data.totalCount.toLocaleString()} total.` : null}
+                  : rollingMonths
+                    ? `${rollingMonths}-month rolling average of monthly email counts (From or Cc).`
+                    : filtersActive
+                      ? "Counts for the selected people plus other active inbox filters."
+                      : "Counts for the selected people (From or Cc)."}
+                {data && !rollingMonths
+                  ? ` ${data.totalCount.toLocaleString()} total.`
+                  : null}
               </p>
             </div>
 
@@ -189,17 +225,43 @@ export function EmailTimelineDialog({ open, onClose }: Props) {
                 );
               })}
               </div>
+              {multiPersonChart ? (
+                <div
+                  className="inline-flex shrink-0 rounded-lg border border-slate-200 bg-slate-100 p-0.5"
+                  role="group"
+                  aria-label="Chart layout"
+                >
+                  {CHART_LAYOUT_OPTIONS.map((option) => {
+                    const selected = chartLayout === option.id;
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => setChartLayout(option.id)}
+                        className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                          selected
+                            ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-6 pt-4">
           {noSendersSelected ? (
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-              Choose Bonnie and/or Haider above to load the chart.
+              Choose at least one person above to load the chart.
             </div>
           ) : loading ? (
-            <div className="flex h-80 items-center justify-center text-sm text-slate-500">
+            <div className="flex h-[18.5rem] items-center justify-center text-sm text-slate-500">
               Loading timeline…
             </div>
           ) : error ? (
@@ -211,18 +273,13 @@ export function EmailTimelineDialog({ open, onClose }: Props) {
               No emails match the current filters.
             </div>
           ) : (
-            <EmailTimelineChart bins={bins} />
+            <EmailTimelineChart
+              bins={bins}
+              series={multiPersonChart ? chartSeries : undefined}
+              layout={chartLayout}
+              valuesAreAverages={rollingMonths != null}
+            />
           )}
-        </div>
-
-        <div className="flex justify-end border-t border-slate-100 px-6 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-300"
-          >
-            Close
-          </button>
         </div>
       </div>
     </div>
@@ -266,7 +323,7 @@ function EmailTimelineSenderMultiSelect({
     value.length === 0
       ? "Select people"
       : value.length === EMAIL_TIMELINE_SENDER_OPTIONS.length
-        ? "Bonnie & Haider"
+        ? "All people"
         : EMAIL_TIMELINE_SENDER_OPTIONS
             .filter((option) => selected.has(option.id))
             .map((option) => option.label.split(" ")[0])
@@ -300,7 +357,7 @@ function EmailTimelineSenderMultiSelect({
           role="listbox"
           aria-label="People to include in chart"
           aria-multiselectable="true"
-          className="absolute right-0 top-full z-30 mt-1 w-72 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+          className="absolute left-0 top-full z-30 mt-1 w-72 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
           {EMAIL_TIMELINE_SENDER_OPTIONS.map((option) => {
             const checked = selected.has(option.id);
@@ -339,6 +396,21 @@ function EmailTimelineSenderMultiSelect({
         </ul>
       ) : null}
     </div>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg
+      aria-hidden
+      className="h-5 w-5"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+    </svg>
   );
 }
 

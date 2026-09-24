@@ -2,10 +2,9 @@ import type { ReactNode } from "react";
 
 import type { TextMatch } from "@/lib/transcript/search";
 
-const MATCH_CLASS =
-  "rounded-sm bg-yellow-200/90 text-yellow-950 box-decoration-clone px-0.5";
+const MATCH_CLASS = "rounded-[2px] bg-yellow-200/90 text-yellow-950";
 const CURRENT_MATCH_CLASS =
-  "rounded-sm bg-orange-300 text-orange-950 ring-2 ring-orange-500 box-decoration-clone px-0.5";
+  "rounded-[2px] bg-orange-300 text-orange-950 ring-2 ring-orange-500 ring-inset";
 
 type MatchWithIndex = TextMatch & {
   globalIndex: number;

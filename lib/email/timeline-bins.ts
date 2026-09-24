@@ -1,11 +1,33 @@
 import { DISPLAY_TIME_ZONE } from "@/lib/format/datetime";
 
-export type TimelineBinSize = "week" | "month";
+export type TimelineBinSize =
+  | "week"
+  | "month"
+  | "month_avg_2"
+  | "month_avg_3";
+
+/** Month-based modes (calendar month or rolling average on monthly bins). */
+export function timelineUsesMonthlyBins(binSize: TimelineBinSize): boolean {
+  return binSize !== "week";
+}
+
+export function timelineRollingAverageMonths(
+  binSize: TimelineBinSize,
+): number | null {
+  if (binSize === "month_avg_2") return 2;
+  if (binSize === "month_avg_3") return 3;
+  return null;
+}
 
 export type TimelineBin = {
   key: string;
   label: string;
   count: number;
+};
+
+/** One time bin with per-person counts (distinct emails in `count`). */
+export type TimelineMultiBin = TimelineBin & {
+  bySenderId: Record<string, number>;
 };
 
 type TorontoYmd = {
@@ -151,17 +173,168 @@ function fillBins(
   return filled;
 }
 
+/**
+ * Replaces each bin with the mean of itself and prior months back to the window
+ * size (partial window at the start of the series).
+ */
+export function applyMonthlyRollingAverage(
+  bins: TimelineBin[],
+  windowMonths: number,
+): TimelineBin[] {
+  if (windowMonths <= 1 || bins.length === 0) return bins;
+
+  return bins.map((bin, index) => {
+    const start = Math.max(0, index - windowMonths + 1);
+    const slice = bins.slice(start, index + 1);
+    const count =
+      slice.reduce((sum, entry) => sum + entry.count, 0) / slice.length;
+    return { ...bin, count };
+  });
+}
+
+/**
+ * Rolling monthly average for multi-series bins (per sender and total distinct).
+ */
+export function applyMonthlyRollingAverageMulti(
+  bins: TimelineMultiBin[],
+  windowMonths: number,
+): TimelineMultiBin[] {
+  if (windowMonths <= 1 || bins.length === 0) return bins;
+
+  return bins.map((bin, index) => {
+    const start = Math.max(0, index - windowMonths + 1);
+    const slice = bins.slice(start, index + 1);
+
+    const count =
+      slice.reduce((sum, entry) => sum + entry.count, 0) / slice.length;
+
+    const senderIds = new Set<string>();
+    for (const entry of slice) {
+      for (const senderId of Object.keys(entry.bySenderId)) {
+        senderIds.add(senderId);
+      }
+    }
+
+    const bySenderId: Record<string, number> = {};
+    for (const senderId of senderIds) {
+      bySenderId[senderId] =
+        slice.reduce(
+          (sum, entry) => sum + (entry.bySenderId[senderId] ?? 0),
+          0,
+        ) / slice.length;
+    }
+
+    return { ...bin, count, bySenderId };
+  });
+}
+
+function finalizeTimelineBins(
+  bins: TimelineBin[],
+  binSize: TimelineBinSize,
+): TimelineBin[] {
+  const windowMonths = timelineRollingAverageMonths(binSize);
+  if (!windowMonths) return bins;
+  return applyMonthlyRollingAverage(bins, windowMonths);
+}
+
+function finalizeTimelineMultiBins(
+  bins: TimelineMultiBin[],
+  binSize: TimelineBinSize,
+): TimelineMultiBin[] {
+  const windowMonths = timelineRollingAverageMonths(binSize);
+  if (!windowMonths) return bins;
+  return applyMonthlyRollingAverageMulti(bins, windowMonths);
+}
+
 export function binEmailsByTime(
   receivedAtValues: string[],
   binSize: TimelineBinSize,
 ): TimelineBin[] {
   const counts = new Map<string, number>();
+  const monthly = timelineUsesMonthlyBins(binSize);
 
   for (const receivedAt of receivedAtValues) {
-    const key =
-      binSize === "month" ? monthStartKey(receivedAt) : weekStartKey(receivedAt);
+    const key = monthly ? monthStartKey(receivedAt) : weekStartKey(receivedAt);
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
 
-  return fillBins(counts, binSize);
+  const fillSize: TimelineBinSize = monthly ? "month" : "week";
+  return finalizeTimelineBins(fillBins(counts, fillSize), binSize);
+}
+
+/**
+ * Returns true when a message From or Cc header contains the sender email
+ * (case-insensitive substring match, same rule as inbox address filters).
+ */
+export function messageMatchesTimelineSender(
+  fromAddress: string,
+  ccAddresses: string,
+  senderEmail: string,
+): boolean {
+  const needle = senderEmail.toLowerCase();
+  return (
+    fromAddress.toLowerCase().includes(needle) ||
+    ccAddresses.toLowerCase().includes(needle)
+  );
+}
+
+/**
+ * Bins messages by time with separate counts per sender id; `count` is distinct
+ * messages in the bin (not the sum of per-sender slices).
+ */
+export function binEmailsByTimeMulti(
+  messages: Array<{ receivedAt: string; senderIds: string[] }>,
+  binSize: TimelineBinSize,
+): TimelineMultiBin[] {
+  const distinctByKey = new Map<string, number>();
+  const senderByKey = new Map<string, Map<string, number>>();
+  const monthly = timelineUsesMonthlyBins(binSize);
+
+  for (const message of messages) {
+    const key = monthly
+      ? monthStartKey(message.receivedAt)
+      : weekStartKey(message.receivedAt);
+
+    distinctByKey.set(key, (distinctByKey.get(key) ?? 0) + 1);
+
+    let senderCounts = senderByKey.get(key);
+    if (!senderCounts) {
+      senderCounts = new Map();
+      senderByKey.set(key, senderCounts);
+    }
+
+    for (const senderId of message.senderIds) {
+      senderCounts.set(senderId, (senderCounts.get(senderId) ?? 0) + 1);
+    }
+  }
+
+  if (distinctByKey.size === 0) return [];
+
+  const keys = [...distinctByKey.keys()].sort();
+  const filled: TimelineMultiBin[] = [];
+
+  let cursor = keys[0];
+  const last = keys[keys.length - 1];
+
+  while (true) {
+    const senderCounts = senderByKey.get(cursor);
+    const bySenderId: Record<string, number> = {};
+    if (senderCounts) {
+      for (const [senderId, value] of senderCounts) {
+        bySenderId[senderId] = value;
+      }
+    }
+
+    filled.push({
+      key: cursor,
+      label: monthly ? formatMonthLabel(cursor) : formatWeekLabel(cursor),
+      count: distinctByKey.get(cursor) ?? 0,
+      bySenderId,
+    });
+
+    if (cursor === last) break;
+    cursor = monthly ? nextMonthKey(cursor) : nextWeekKey(cursor);
+  }
+
+  return finalizeTimelineMultiBins(filled, binSize);
 }

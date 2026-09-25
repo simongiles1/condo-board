@@ -14,17 +14,27 @@ import { listMissingExtractTargets } from "@/lib/email-analysis/bulk-extract-tar
 import { runBulkExtractWorker } from "@/lib/email-analysis/bulk-extract-worker";
 import { startIngestPipeline } from "@/lib/email/ingest-pipeline";
 import type { IngestRunRecord } from "@/lib/email/ingest-pipeline";
-import { getEmailSyncSettings } from "@/lib/email/settings";
+import {
+  getEmailSyncSettings,
+  type EmailSyncSettings,
+} from "@/lib/email/settings";
 import { type SyncResult, type SyncTrigger } from "@/lib/gmail/sync";
 
 export { formatHarvestAfterSyncMessage } from "@/lib/email/ingest-stages";
 
+/** @deprecated Use {@link harvestAfterSyncKindsForSettings} — kinds are configured in Email Settings. */
 export const HARVEST_AFTER_SYNC_KINDS: BulkExtractKind[] = [
   "contacts",
   "organizations",
   "events",
   "todos",
 ];
+
+function harvestAfterSyncKindsForSettings(
+  settings: EmailSyncSettings,
+): BulkExtractKind[] {
+  return settings.harvestAfterSyncKinds;
+}
 
 export type HarvestAfterSyncKindResult = {
   kind: BulkExtractKind;
@@ -117,8 +127,13 @@ export async function runHarvestMissingAfterSync(): Promise<HarvestAfterSyncResu
   }
 
   const kinds: HarvestAfterSyncKindResult[] = [];
+  const enabledKinds = harvestAfterSyncKindsForSettings(settings);
 
-  for (const kind of HARVEST_AFTER_SYNC_KINDS) {
+  if (enabledKinds.length === 0) {
+    return { status: "disabled", kinds: [] };
+  }
+
+  for (const kind of enabledKinds) {
     const stillRunning = await listRunningBulkExtractRuns();
     if (stillRunning.length > 0) {
       kinds.push({

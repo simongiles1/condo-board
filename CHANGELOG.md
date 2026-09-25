@@ -8,6 +8,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Harvest-after-sync entity toggles** — Email & Sync Settings → Sync controls lists which entity harvests run after ingest (contacts, organizations, events, to-dos, projects). Each runs missing-only harvest on new mail; enable **Projects** after historical bulk without editing code.
+
+- **Virtual meeting room, first slice** — A Meetings V2 workspace can open a Live room. Two people join the same LiveKit Cloud room, each microphone is set to record when the room is created, and the screen shows whether that recording is healthy. Refresh rejoins the same room. The room shows one agenda leaf from the package text and pages already stored for that item, and Previous, Next, and Mark on clock store the move on the meeting media clock. Live speech is not written into the transcript yet: the cue shape already matches, but inserting it would make the minutes pipeline treat a second transcript file as the historical one, and no recognizer is connected.
+
 - **Email volume chart people filter** — The inbox “Email volume over time” dialog includes a multiselect for Bonnie Kafi (`bkafi@iccpropertymanagement.com`), Assistant PM (`studiopm@iccpropertymanagement.com`, shared role mailbox), and John Wilson (`jwilson@iccpropertymanagement.com`). Bonnie is selected by default; choose any combination to chart From/Cc volume (other inbox filters still apply). With multiple people selected, switch between stacked bars and side-by-side bars. **2-mo avg** and **3-mo avg** show a trailing rolling mean of monthly counts (partial window at the start of the series).
 
 - **Bulk extract DeepSeek peak pause** — Inbox bulk extract with a DeepSeek model pauses during peak pricing windows (stint clock stops; status shows countdown). **Continue during peak hours** overrides for that run. Peak/off-peak timeline shown in the bulk extract dialog when DeepSeek is selected.
@@ -23,6 +27,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V2 item pipeline debugger** — Each agenda topic has a **Debug** control that opens a sandbox stepper (evidence → fact resolution → investigation → validation → rendered minutes snippet). Pick DeepSeek V4 Flash, V4.1 Flash, or Gemini 3.8 Flash per LLM step, inspect and edit the live prompts, and keep historical runs with token counts and estimated spend. These runs do not overwrite production investigation or validation.
 
 ### Fixed
+
+- **Live room join** — Joining a LiveKit room no longer fails when a storage bucket is not configured. Track recording is requested only after `LIVEKIT_EGRESS_S3_BUCKET`, access key, and secret are set. Until then the room still opens and the recording badge says it is not recording.
 
 - **Transcript search scroll and highlight** — Search jumps in the readable transcript leave room below sticky section badges (including wrapped badge rows). Partial-word highlights no longer add horizontal padding that splits the word.
 
@@ -43,6 +49,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V2 conversational approval and spoken amounts** — A proposed approval counts when directors let it proceed, including "no questions," and nobody states a condition that blocks the decision. Missing mover, seconder, or vote language is not left as an open question. A spoken amount that only drops the digits below the thousands place is written as the one matching package figure. Minutes state that decision and leave out recommendations the board did not take up.
 
 ### Changed
+
+- **Build-out progress (Stage 5 projects)** — Curated playbook reviewed 2026-09-25 after historical project bulk extract completed (~7,374 email bodies). Coverage snapshot and ingestion catalog note the bulk is done; **Add projects to harvest-after-sync** is **Do now**; ongoing work shifts to identity merge and AI Duplicates on Entities → Projects.
 
 - **Project and to-do harvest definitions** — Project prompts now keep minor projects (named annual or seasonal campaigns, or short jobs with elevated cost or technicality) and drop day-to-day tasks, standing monthly maintenance with no separate campaign, and work that only facilitates a parent job. To-do prompts treat those dropped cases as tasks when the email still contains an unresolved ask. Parent/child project rows are unchanged.
 

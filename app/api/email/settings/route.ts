@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 
 import { getBackfillCutoff } from "@/lib/email/backfill-cutoff";
 import { refreshEmailScheduler } from "@/lib/email/scheduler";
+import { normalizeHarvestAfterSyncKindsInput } from "@/lib/email/harvest-after-sync-kinds";
 import {
   getEmailSyncSettings,
   updateEmailSyncSettings,
@@ -35,6 +36,7 @@ export async function PATCH(req: Request) {
     syncCron?: string;
     schedulerEnabled?: boolean;
     harvestAfterSyncEnabled?: boolean;
+    harvestAfterSyncKinds?: string[];
     oauthRelinkRemindAfterDays?: number;
     allowlistReviewTimeoutHours?: number;
     pauseBetweenPipelineStages?: boolean;
@@ -56,6 +58,20 @@ export async function PATCH(req: Request) {
     );
   }
 
+  const harvestAfterSyncKinds =
+    body.harvestAfterSyncKinds !== undefined
+      ? normalizeHarvestAfterSyncKindsInput(body.harvestAfterSyncKinds)
+      : undefined;
+  if (
+    body.harvestAfterSyncKinds !== undefined &&
+    harvestAfterSyncKinds === null
+  ) {
+    return NextResponse.json(
+      { error: "Invalid harvest-after-sync entity list." },
+      { status: 400 },
+    );
+  }
+
   try {
     const updated = await updateEmailSyncSettings({
       syncCron,
@@ -67,6 +83,7 @@ export async function PATCH(req: Request) {
         typeof body.harvestAfterSyncEnabled === "boolean"
           ? body.harvestAfterSyncEnabled
           : undefined,
+      harvestAfterSyncKinds,
       oauthRelinkRemindAfterDays:
         typeof body.oauthRelinkRemindAfterDays === "number"
           ? Math.max(1, Math.min(30, Math.round(body.oauthRelinkRemindAfterDays)))

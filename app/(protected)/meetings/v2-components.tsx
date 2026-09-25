@@ -1134,6 +1134,12 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   ? formatMeetingDate(status.meeting.meetingDate)
                   : "Loading date"}
               </p>
+              <Link
+                href={`/operations/meetings/v2/${meetingId}/room`}
+                className="mt-2 inline-flex text-sm font-medium text-teal-200 underline decoration-teal-200/40 underline-offset-2 hover:text-white"
+              >
+                Live room
+              </Link>
               <div className="mt-2 hidden flex-col gap-0.5 xl:flex">
                 <label
                   htmlFor="meeting-autonomy-slider-desktop"

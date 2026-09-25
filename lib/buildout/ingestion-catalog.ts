@@ -85,12 +85,13 @@ Code also enforces \`cardPassesNameMintingGate\`: work-name must not collide wit
 
 | Source | Projects |
 | --- | --- |
-| **Email body** | Four-pass harvest → registry (bulk extract / Re-harvest C+P). Not on post-sync auto-harvest yet. |
+| **Email body** | Four-pass harvest → registry (bulk extract / Re-harvest C+P). Historical bulk completed 2026-09-24 (~7,374 emails). Enable **Projects** under **Email & Sync Settings → Sync controls → Harvest entity types** for post-sync drip on new mail. |
 | **Attachments** | Not mined into \`project_entities\`. Board packages are handled in **Meetings V2**; attachment markdown is indexed for **Ask the archive**, not entity minting. |
 
 ## Still open
 
-- Bulk historical project harvest and pass-4 re-extract for older “routine” mis-mints.
+- Turn on **Projects** in Email & Sync Settings harvest checkboxes; then curate the roster (merge + AI Duplicates on Entities → Projects).
+- Pass-4 re-extract only when you intentionally want to revisit older “routine” mis-mints — not required after bulk.
 - **Harvest from attachment markdown** (shared backlog with contacts/orgs/events/todos).
 `;
 }

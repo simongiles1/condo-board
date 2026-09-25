@@ -28,6 +28,8 @@ type Props = {
   onClose: () => void;
   /** When true, renders only the viewer body (no modal shell). */
   embedded?: boolean;
+  /** 1-based package page to show when the PDF opens. */
+  initialPage?: number;
 };
 
 export function BoardPackageViewerDialog({
@@ -35,6 +37,7 @@ export function BoardPackageViewerDialog({
   meetingId,
   onClose,
   embedded = false,
+  initialPage,
 }: Props) {
   const [meta, setMeta] = useState<BoardPackageMeta | null>(null);
   const [formatTab, setFormatTab] = useState<FormatTab>("pdf");
@@ -188,6 +191,7 @@ export function BoardPackageViewerDialog({
       ) : formatTab === "pdf" && meta?.available ? (
         <ZoomablePdfViewer
           url={downloadUrl}
+          initialPage={initialPage}
           className={embedded ? "h-[min(60vh,560px)]" : "h-[min(70vh,720px)] rounded-xl border border-slate-200"}
         />
       ) : formatTab === "markdown" ? (

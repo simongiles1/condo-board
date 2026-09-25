@@ -31,6 +31,11 @@ import {
   type IngestRunPublic,
 } from "@/lib/email/ingest-stages";
 import { formatSyncImportResultLabel } from "@/lib/email/sync-run-label";
+import {
+  HARVEST_AFTER_SYNC_KIND_LABEL,
+  HARVEST_AFTER_SYNC_KIND_ORDER,
+  type HarvestAfterSyncKind,
+} from "@/lib/email/harvest-after-sync-kinds";
 
 type AllowlistEntry = {
   id: string;
@@ -74,6 +79,7 @@ type SyncSettings = {
   syncCron: string;
   schedulerEnabled: boolean;
   harvestAfterSyncEnabled: boolean;
+  harvestAfterSyncKinds: HarvestAfterSyncKind[];
   oauthRelinkRemindAfterDays: number;
   allowlistReviewTimeoutHours: number;
   pauseBetweenPipelineStages: boolean;
@@ -221,6 +227,9 @@ export function EmailSettingsClient(props: {
   const [customCron, setCustomCron] = useState<string | null>(null);
   const [schedulerEnabled, setSchedulerEnabled] = useState(true);
   const [harvestAfterSyncEnabled, setHarvestAfterSyncEnabled] = useState(false);
+  const [harvestAfterSyncKinds, setHarvestAfterSyncKinds] = useState<
+    HarvestAfterSyncKind[]
+  >([...HARVEST_AFTER_SYNC_KIND_ORDER.filter((k) => k !== "projects")]);
   const [pauseBetweenPipelineStages, setPauseBetweenPipelineStages] =
     useState(true);
   const [allowlistReviewTimeoutHours, setAllowlistReviewTimeoutHours] =
@@ -397,6 +406,11 @@ export function EmailSettingsClient(props: {
       }
       setSchedulerEnabled(settingsData.schedulerEnabled);
       setHarvestAfterSyncEnabled(settingsData.harvestAfterSyncEnabled);
+      setHarvestAfterSyncKinds(
+        settingsData.harvestAfterSyncKinds?.length
+          ? settingsData.harvestAfterSyncKinds
+          : [...HARVEST_AFTER_SYNC_KIND_ORDER.filter((k) => k !== "projects")],
+      );
       setPauseBetweenPipelineStages(
         settingsData.pauseBetweenPipelineStages ?? true,
       );
@@ -819,6 +833,7 @@ export function EmailSettingsClient(props: {
           syncCron,
           schedulerEnabled,
           harvestAfterSyncEnabled,
+          harvestAfterSyncKinds,
           pauseBetweenPipelineStages,
           allowlistReviewTimeoutHours,
         }),
@@ -1226,12 +1241,59 @@ export function EmailSettingsClient(props: {
                   <span>
                     Harvest after sync
                     <span className="mt-1 block font-normal text-slate-600">
-                    Harvest as the last ingest stage (contacts, organizations,
-                      events, and to-dos) after Docling, file cards, and embeddings.
-                      Leave off to skip harvest.
+                      After Docling, file cards, and embeddings, run missing-only
+                      harvest on new mail for the entity types you select below.
+                      Leave off to skip harvest entirely.
                     </span>
                   </span>
                 </label>
+
+                <fieldset
+                  className="mt-3 space-y-2 rounded-md border border-slate-200 bg-white px-3 py-3"
+                  disabled={!harvestAfterSyncEnabled}
+                >
+                  <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Harvest entity types
+                  </legend>
+                  {HARVEST_AFTER_SYNC_KIND_ORDER.map((kind) => {
+                    const checked = harvestAfterSyncKinds.includes(kind);
+                    return (
+                      <label
+                        key={kind}
+                        className="flex items-center gap-2 text-sm text-slate-800"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            if (event.target.checked) {
+                              setHarvestAfterSyncKinds((prev) =>
+                                HARVEST_AFTER_SYNC_KIND_ORDER.filter(
+                                  (k) => prev.includes(k) || k === kind,
+                                ),
+                              );
+                            } else {
+                              setHarvestAfterSyncKinds((prev) =>
+                                prev.filter((k) => k !== kind),
+                              );
+                            }
+                          }}
+                          className="rounded border-slate-300"
+                        />
+                        {HARVEST_AFTER_SYNC_KIND_LABEL[kind]}
+                        {kind === "projects" ? (
+                          <span className="text-xs font-normal text-slate-500">
+                            (new mail only — missing harvest)
+                          </span>
+                        ) : null}
+                      </label>
+                    );
+                  })}
+                  <p className="text-xs text-slate-500">
+                    Each type runs only on emails still missing that harvest (not
+                    a full re-bulk of the inbox).
+                  </p>
+                </fieldset>
 
                 <label className="mt-4 flex items-start gap-2 text-sm font-medium text-slate-800">
                   <input

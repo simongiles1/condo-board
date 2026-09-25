@@ -11,17 +11,20 @@ import {
 type Props = {
   url: string;
   className?: string;
+  initialPage?: number;
 };
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 3;
 const SCALE_STEP = 0.25;
 
-export function ZoomablePdfViewer({ url, className }: Props) {
+export function ZoomablePdfViewer({ url, className, initialPage }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRootRef = useRef<HTMLDivElement>(null);
+  const initialPageRef = useRef(initialPage && initialPage > 0 ? initialPage : 1);
+  initialPageRef.current = initialPage && initialPage > 0 ? initialPage : 1;
 
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
   const [page, setPage] = useState(1);
@@ -67,6 +70,7 @@ export function ZoomablePdfViewer({ url, className }: Props) {
         if (cancelled) return;
         setPdfData(buffer);
         setPageCount(count);
+        setPage(Math.min(count, Math.max(1, initialPageRef.current)));
         setLoadingPdf(false);
       })
       .catch((error: unknown) => {
@@ -79,6 +83,11 @@ export function ZoomablePdfViewer({ url, className }: Props) {
       cancelled = true;
     };
   }, [url]);
+
+  useEffect(() => {
+    if (!pageCount || !initialPage || initialPage < 1) return;
+    setPage(Math.min(pageCount, initialPage));
+  }, [initialPage, pageCount]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

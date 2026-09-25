@@ -2,6 +2,11 @@ import { eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { emailSyncSettings } from "@/lib/db/schema";
+import {
+  type HarvestAfterSyncKind,
+  parseHarvestAfterSyncKindsJson,
+  serializeHarvestAfterSyncKinds,
+} from "@/lib/email/harvest-after-sync-kinds";
 
 export const DEFAULT_SYNC_CRON = "0 7 * * *";
 export const DEFAULT_SETTINGS_ID = "default";
@@ -10,6 +15,7 @@ export type EmailSyncSettings = {
   syncCron: string;
   schedulerEnabled: boolean;
   harvestAfterSyncEnabled: boolean;
+  harvestAfterSyncKinds: HarvestAfterSyncKind[];
   oauthRelinkRemindAfterDays: number;
   allowlistReviewTimeoutHours: number;
   pauseBetweenPipelineStages: boolean;
@@ -43,6 +49,7 @@ export async function getEmailSyncSettings(): Promise<EmailSyncSettings> {
       syncCron: defaults.syncCron,
       schedulerEnabled: defaults.schedulerEnabled,
       harvestAfterSyncEnabled: defaults.harvestAfterSyncEnabled,
+      harvestAfterSyncKinds: parseHarvestAfterSyncKindsJson(null),
       oauthRelinkRemindAfterDays: defaults.oauthRelinkRemindAfterDays,
       allowlistReviewTimeoutHours: defaults.allowlistReviewTimeoutHours,
       pauseBetweenPipelineStages: defaults.pauseBetweenPipelineStages,
@@ -55,6 +62,9 @@ export async function getEmailSyncSettings(): Promise<EmailSyncSettings> {
     syncCron: row.syncCron,
     schedulerEnabled: row.schedulerEnabled,
     harvestAfterSyncEnabled: row.harvestAfterSyncEnabled,
+    harvestAfterSyncKinds: parseHarvestAfterSyncKindsJson(
+      row.harvestAfterSyncKindsJson,
+    ),
     oauthRelinkRemindAfterDays: row.oauthRelinkRemindAfterDays ?? 6,
     allowlistReviewTimeoutHours: row.allowlistReviewTimeoutHours ?? 24,
     pauseBetweenPipelineStages: row.pauseBetweenPipelineStages ?? true,
@@ -70,6 +80,7 @@ export async function updateEmailSyncSettings(
       | "syncCron"
       | "schedulerEnabled"
       | "harvestAfterSyncEnabled"
+      | "harvestAfterSyncKinds"
       | "oauthRelinkRemindAfterDays"
       | "allowlistReviewTimeoutHours"
       | "pauseBetweenPipelineStages"
@@ -84,6 +95,9 @@ export async function updateEmailSyncSettings(
     schedulerEnabled: input.schedulerEnabled ?? current.schedulerEnabled,
     harvestAfterSyncEnabled:
       input.harvestAfterSyncEnabled ?? current.harvestAfterSyncEnabled,
+    harvestAfterSyncKindsJson: serializeHarvestAfterSyncKinds(
+      input.harvestAfterSyncKinds ?? current.harvestAfterSyncKinds,
+    ),
     oauthRelinkRemindAfterDays:
       input.oauthRelinkRemindAfterDays ?? current.oauthRelinkRemindAfterDays,
     allowlistReviewTimeoutHours:
@@ -102,5 +116,5 @@ export async function updateEmailSyncSettings(
     .set(updated)
     .where(eq(emailSyncSettings.id, DEFAULT_SETTINGS_ID));
 
-  return updated;
+  return getEmailSyncSettings();
 }

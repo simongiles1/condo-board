@@ -125,6 +125,8 @@ export const emailSyncSettings = pgTable("email_sync_settings", {
   harvestAfterSyncEnabled: boolean("harvest_after_sync_enabled")
     .notNull()
     .default(false),
+  /** JSON array of BulkExtractKind strings; null = contacts/orgs/events/todos only. */
+  harvestAfterSyncKindsJson: text("harvest_after_sync_kinds_json"),
   /** Days after OAuth connect to Telegram-remind a Testing-token relink. */
   oauthRelinkRemindAfterDays: integer("oauth_relink_remind_after_days")
     .notNull()

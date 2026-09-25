@@ -40,20 +40,20 @@ export type BuildoutSequenceStep = {
   relatedIds: string[];
 };
 
-export const BUILDOUT_REVIEWED_ON = "2026-09-14";
+export const BUILDOUT_REVIEWED_ON = "2026-09-25";
 
 /**
  * Corpus snapshot for the playbook header. Not queried live — refresh when
  * reviewing this file. Exact coverage belongs on the extraction calendar.
  */
 export const BUILDOUT_COVERAGE_SNAPSHOT = {
-  asOf: "2026-08-17",
-  emails: 7311,
-  contactsExtracted: 7311,
-  orgsExtracted: 7311,
-  eventsExtracted: 7311,
-  todosExtracted: 7311,
-  projectsExtracted: 0,
+  asOf: "2026-09-25",
+  emails: 7374,
+  contactsExtracted: 7374,
+  orgsExtracted: 7374,
+  eventsExtracted: 7374,
+  todosExtracted: 7374,
+  projectsExtracted: 7374,
   visionPagesDone: 2345,
   visionPagesTotal: 6614,
   visionPagesRemaining: 4269,
@@ -138,13 +138,13 @@ export const BUILDOUT_STAGES: BuildoutItem[] = [
     title: "Projects",
     status: "in_progress",
     summary:
-      "Named building jobs are first-class with four-pass body harvest, fingerprint registry, human merge, and mention staging (`project_mentions`). Entities → Projects has a Mentions tab, AI identity review (Duplicates), board-report salience, filters, pagination, and phase/year badges. Identity is name plus year when present — 2024 and 2026 jobs stay separate until you merge them. Bulk extract and roster curation continue in parallel; not on harvest-after-sync until a bulk you trust finishes.",
+      "Named building jobs are first-class with four-pass body harvest, fingerprint registry, human merge, and mention staging (`project_mentions`). Historical body bulk finished 2026-09-24 (~7,374 emails; ~773 registry rows and ~2.8k mentions — many threads mint zero cards by design). Entities → Projects has a Mentions tab, AI identity review (Duplicates), board-report salience, filters, pagination, and phase/year badges. Identity is name plus year when present — 2024 and 2026 jobs stay separate until you merge them. Next: add projects to harvest-after-sync, then roster curation (merge + AI Duplicates).",
     remaining: [
-      "Bulk-extract projects on email bodies (inbox Extract Projects or bulk extract). Run `backfill:project-mentions` if pass-3 JSON exists but Mentions is empty.",
-      "Merge duplicate mentions and AI-proposed groups on Entities → Projects as they land. Do not auto-merge by name alone.",
-      "Turn on drip for projects only after the historical bulk, or the nightly job becomes a 7,000-email run.",
+      "Email & Sync Settings → Sync controls: under Harvest after sync, check Projects (and save). Historical bulk is done; drip only harvests missing emails.",
+      "Merge duplicate mentions and AI-proposed groups on Entities → Projects. Do not auto-merge by name alone.",
+      "Run `backfill:project-mentions --apply` only if pass-3 JSON exists but Mentions is empty for minted cards — not for emails the minting gate dropped.",
       "Attachment harvest not started. related_project_id on to-dos is not wired yet.",
-      "After the roster exists: nest tasks under projects (see Project operations). Board meetings review projects, not a 50-item task dump.",
+      "After identity is trusted: nest tasks under projects (see Project operations). Board meetings review projects, not a 50-item task dump.",
     ],
   },
   {
@@ -222,10 +222,10 @@ export const BUILDOUT_BACKLOG: BuildoutItem[] = [
     title: "Ongoing ingest + harvest",
     status: "done",
     summary:
-      "Gated Gmail pipeline: Sync and the daily cron share one worker — catch-up since last successful import (not a 2-day window), per-address allowlist review in Telegram and Email Settings, full history for approved senders, then Docling/vision, file cards, embeddings, and harvest-after-sync (contacts / orgs / events / to-dos). Stage Continue pauses exist for testing; allowlist review always waits. Projects stay off the drip until the historical project bulk finishes.",
+      "Gated Gmail pipeline: Sync and the daily cron share one worker — catch-up since last successful import (not a 2-day window), per-address allowlist review in Telegram and Email Settings, full history for approved senders, then Docling/vision, file cards, embeddings, and harvest-after-sync (contacts / orgs / events / to-dos). Stage Continue pauses exist for testing; allowlist review always waits. Historical project bulk is done — wire projects into harvest-after-sync next.",
     remaining: [
       "Turn off stage Continue pauses on production when comfortable; leave harvest-after-sync on.",
-      "Add projects to the drip only after the historical project bulk.",
+      "Enable Projects under Harvest entity types in Email & Sync Settings (Sync controls tab).",
       "Retest ingest → extraction → file cards for recent weekly reports after Sept fixes.",
       "New PDFs still need Docling/vision; do not wait for the historical vision cap to start body harvest on new mail.",
       "DISABLE_BACKGROUND_WORKERS=true stops the ingest scheduler and Telegram long-poll on local npm run dev — production must leave workers on.",
@@ -410,9 +410,9 @@ export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
   {
     id: "seq-projects",
     kind: "parallel",
-    title: "Project extract + mentions + identity merge (ongoing lab)",
+    title: "Project identity merge + Duplicates review",
     detail:
-      "Stage 5 is the active harvest lane. Mentions tab, AI Duplicates review, and board-report salience are live. Keep bulk extract and merge over the next month. Maglock 2024 and Maglock 2026 stay separate until you merge them. Leave harvest-after-sync alone until a bulk you trust finishes.",
+      "Historical project bulk on email bodies finished 2026-09-24. Shift to Entities → Projects: merge duplicate mentions, run AI Duplicates review, and spot-check board-report salience. Maglock 2024 and Maglock 2026 stay separate until you merge them. Empty mints on routine mail are expected.",
     relatedIds: ["projects"],
   },
   {
@@ -441,10 +441,10 @@ export const BUILDOUT_SEQUENCE: BuildoutSequenceStep[] = [
   },
   {
     id: "seq-project-drip",
-    kind: "after",
-    title: "Add projects to harvest-after-sync",
+    kind: "now",
+    title: "Enable project harvest after sync (UI)",
     detail:
-      "Only after the historical project bulk. Then new mail picks up project mentions automatically with contacts / orgs / events / to-dos.",
+      "Historical project bulk completed 2026-09-24. Email & Sync Settings → Sync controls → Harvest after sync → check Projects → save. New mail then picks up project mentions with the other enabled entity types.",
     relatedIds: ["projects", "ongoing-extract"],
   },
   {

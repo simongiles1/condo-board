@@ -370,6 +370,46 @@ export const meetingsV2ItemDebugRuns = pgTable(
   },
 );
 
+export const meetingsV2LiveSessions = pgTable(
+  "meetings_v2_live_sessions",
+  {
+    id: text("id").primaryKey(),
+    meetingV2Id: text("meeting_v2_id")
+      .notNull()
+      .references(() => meetingsV2.id, { onDelete: "cascade" }),
+    roomName: text("room_name").notNull(),
+    mediaStartedAt: text("media_started_at").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    meetingUnique: uniqueIndex("meetings_v2_live_sessions_meeting_unique").on(
+      table.meetingV2Id,
+    ),
+    roomUnique: uniqueIndex("meetings_v2_live_sessions_room_unique").on(table.roomName),
+  }),
+);
+
+export const meetingsV2LiveNavigationEvents = pgTable(
+  "meetings_v2_live_navigation_events",
+  {
+    id: text("id").primaryKey(),
+    meetingV2Id: text("meeting_v2_id")
+      .notNull()
+      .references(() => meetingsV2.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => meetingsV2LiveSessions.id, { onDelete: "cascade" }),
+    agendaItemId: text("agenda_item_id")
+      .notNull()
+      .references(() => meetingsV2AgendaItems.id, { onDelete: "cascade" }),
+    mediaOffsetMs: integer("media_offset_ms").notNull(),
+    actorIdentity: text("actor_identity").notNull(),
+    actorUserId: text("actor_user_id"),
+    createdAt: text("created_at").notNull(),
+  },
+);
+
 export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   sourceArtifacts: many(meetingsV2SourceArtifacts),
   transcriptSegments: many(meetingsV2TranscriptSegments),
@@ -384,6 +424,8 @@ export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   validationResults: many(meetingsV2ValidationResults),
   minutesDrafts: many(meetingsV2MinutesDrafts),
   itemDebugRuns: many(meetingsV2ItemDebugRuns),
+  liveSessions: many(meetingsV2LiveSessions),
+  liveNavigationEvents: many(meetingsV2LiveNavigationEvents),
 }));
 
 export const meetingsV2SourceArtifactsRelations = relations(

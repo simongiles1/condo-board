@@ -610,6 +610,20 @@
       "when": 1790850000000,
       "tag": "0086_harvest_after_sync_kinds",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1790900000000,
+      "tag": "0087_meetings_v2_live_capture",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1790950000000,
+      "tag": "0088_meetings_v2_live_presenter",
+      "breakpoints": true
     }
   ]
 }

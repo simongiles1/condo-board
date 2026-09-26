@@ -22,10 +22,43 @@ export type RecordingHealthState =
   | "finished"
   | "unknown";
 
+export type CaptureSeverity = "healthy" | "critical";
+
+export type CaptureDetection =
+  | "status_read_failed"
+  | "storage_unconfigured"
+  | "microphone_unmatched"
+  | "egress_failed"
+  | "file_missing"
+  | "duration_short"
+  | "clock_unmeasured"
+  | "backup_accepted";
+
 export type RecordingHealth = {
+  severity: CaptureSeverity;
   state: RecordingHealthState;
   label: string;
   detail: string;
+};
+
+export type CaptureGapView = {
+  id: string;
+  detection: CaptureDetection;
+  participantIdentity: string | null;
+  trackId: string | null;
+  egressId: string | null;
+  startOffsetMs: number;
+  endOffsetMs: number | null;
+  detail: string;
+  acceptedAt: string | null;
+};
+
+export type CaptureFileView = {
+  trackId: string;
+  participantIdentity: string;
+  playable: boolean;
+  durationMs: number | null;
+  clockDeltaMs: number | null;
 };
 
 export type LiveRecognitionCue = {
@@ -78,6 +111,7 @@ export function summarizeRecordingHealth(
 ): RecordingHealth {
   if (rows.length === 0) {
     return {
+      severity: "healthy",
       state: "waiting",
       label: "Waiting",
       detail: "No track recording has started. It begins when someone publishes audio.",
@@ -92,6 +126,7 @@ export function summarizeRecordingHealth(
     const countLabel =
       inProgress.length === 1 ? "1 track recording" : `${inProgress.length} track recordings`;
     return {
+      severity: "healthy",
       state: "recording",
       label: "Recording",
       detail: `${countLabel} in progress.`,
@@ -103,8 +138,9 @@ export function summarizeRecordingHealth(
   );
   if (failed.length > 0) {
     return {
+      severity: "critical",
       state: "failed",
-      label: "Recording failed",
+      label: "Critical",
       detail: failed.find((row) => row.error.trim())?.error.trim()
         || `${failed.length} track recording${failed.length === 1 ? "" : "s"} failed.`,
     };
@@ -112,6 +148,7 @@ export function summarizeRecordingHealth(
 
   if (rows.every((row) => row.status === "complete")) {
     return {
+      severity: "healthy",
       state: "finished",
       label: "Recording finished",
       detail:
@@ -122,8 +159,9 @@ export function summarizeRecordingHealth(
   }
 
   return {
-    state: "unknown",
-    label: "Unknown",
+    severity: "critical",
+    state: "failed",
+    label: "Critical",
     detail: "Recording status could not be read.",
   };
 }
@@ -133,6 +171,7 @@ export function summarizeRecordingHealth(
  */
 export function unconfiguredRecordingHealth(): RecordingHealth {
   return {
+    severity: "critical",
     state: "unconfigured",
     label: "Not configured",
     detail: "Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET to join a room.",
@@ -144,10 +183,11 @@ export function unconfiguredRecordingHealth(): RecordingHealth {
  */
 export function missingStorageRecordingHealth(): RecordingHealth {
   return {
-    state: "unconfigured",
-    label: "Not recording",
+    severity: "critical",
+    state: "failed",
+    label: "Critical",
     detail:
-      "The room can open, but LiveKit Cloud will not record until LIVEKIT_EGRESS_S3_BUCKET, LIVEKIT_EGRESS_S3_ACCESS_KEY, and LIVEKIT_EGRESS_S3_SECRET are set. A room created before that stays without recording until everyone leaves and it is opened again.",
+      "Capture is not healthy. The room can open, but LiveKit Cloud will not record until LIVEKIT_EGRESS_S3_BUCKET, LIVEKIT_EGRESS_S3_ACCESS_KEY, and LIVEKIT_EGRESS_S3_SECRET are set. A room created before that stays without recording until everyone leaves and it is opened again. Stop substantive business until capture is restored or the interruption is recorded.",
   };
 }
 

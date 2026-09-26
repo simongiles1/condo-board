@@ -5,6 +5,7 @@ import {
   boolean,
   jsonb,
   uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import type { MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
@@ -34,6 +35,10 @@ export const meetingsV2 = pgTable("meetings_v2", {
   progressPercent: integer("progress_percent").default(0),
   lastError: text("last_error"),
   settings: jsonb("settings").$type<MeetingV2Settings>().default({}),
+  // Stored on the meeting so a check does not create the live session. mediaStartedAt is that insert time.
+  livePageMapCheckedAt: text("live_page_map_checked_at"),
+  livePageMapCheckedByIdentity: text("live_page_map_checked_by_identity"),
+  livePageMapCheckedByName: text("live_page_map_checked_by_name"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -379,6 +384,11 @@ export const meetingsV2LiveSessions = pgTable(
       .references(() => meetingsV2.id, { onDelete: "cascade" }),
     roomName: text("room_name").notNull(),
     mediaStartedAt: text("media_started_at").notNull(),
+    // First claim wins until that person releases. Navigation rejects every other identity.
+    presenterIdentity: text("presenter_identity"),
+    presenterDisplayName: text("presenter_display_name"),
+    // Present-to-everyone. A personal open is not stored here and does not change the active leaf.
+    presentedPage: integer("presented_page"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
@@ -400,14 +410,86 @@ export const meetingsV2LiveNavigationEvents = pgTable(
     sessionId: text("session_id")
       .notNull()
       .references(() => meetingsV2LiveSessions.id, { onDelete: "cascade" }),
-    agendaItemId: text("agenda_item_id")
-      .notNull()
-      .references(() => meetingsV2AgendaItems.id, { onDelete: "cascade" }),
+    agendaItemId: text("agenda_item_id").references(() => meetingsV2AgendaItems.id, {
+      onDelete: "cascade",
+    }),
+    // A row is either one leaf or an unscheduled discussion. The SQL check enforces that split.
+    unscheduled: boolean("unscheduled").notNull().default(false),
     mediaOffsetMs: integer("media_offset_ms").notNull(),
     actorIdentity: text("actor_identity").notNull(),
     actorUserId: text("actor_user_id"),
     createdAt: text("created_at").notNull(),
   },
+);
+
+export const meetingsV2LiveCaptureTracks = pgTable(
+  "meetings_v2_live_capture_tracks",
+  {
+    id: text("id").primaryKey(),
+    meetingV2Id: text("meeting_v2_id")
+      .notNull()
+      .references(() => meetingsV2.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => meetingsV2LiveSessions.id, { onDelete: "cascade" }),
+    participantIdentity: text("participant_identity").notNull(),
+    trackSid: text("track_sid").notNull(),
+    firstSeenAt: text("first_seen_at").notNull(),
+    lastSeenAt: text("last_seen_at").notNull(),
+    unpublishedAt: text("unpublished_at"),
+    egressId: text("egress_id"),
+    fileLocation: text("file_location"),
+    fileStartedAt: text("file_started_at"),
+    fileDurationMs: integer("file_duration_ms"),
+    fileOpenedAt: text("file_opened_at"),
+    clockDeltaMs: integer("clock_delta_ms"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    trackUnique: uniqueIndex("meetings_v2_live_capture_tracks_sid_unique").on(
+      table.sessionId,
+      table.trackSid,
+    ),
+  }),
+);
+
+export const meetingsV2LiveCaptureGaps = pgTable(
+  "meetings_v2_live_capture_gaps",
+  {
+    id: text("id").primaryKey(),
+    meetingV2Id: text("meeting_v2_id")
+      .notNull()
+      .references(() => meetingsV2.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => meetingsV2LiveSessions.id, { onDelete: "cascade" }),
+    detection: text("detection", {
+      enum: [
+        "status_read_failed",
+        "storage_unconfigured",
+        "microphone_unmatched",
+        "egress_failed",
+        "file_missing",
+        "duration_short",
+        "clock_unmeasured",
+        "backup_accepted",
+      ],
+    }).notNull(),
+    participantIdentity: text("participant_identity"),
+    trackSid: text("track_sid"),
+    egressId: text("egress_id"),
+    startOffsetMs: integer("start_offset_ms").notNull(),
+    endOffsetMs: integer("end_offset_ms"),
+    detail: text("detail").notNull(),
+    acceptedAt: text("accepted_at"),
+    acceptedByIdentity: text("accepted_by_identity"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    sessionIdx: index("meetings_v2_live_capture_gaps_session_idx").on(table.sessionId),
+  }),
 );
 
 export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
@@ -426,6 +508,8 @@ export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   itemDebugRuns: many(meetingsV2ItemDebugRuns),
   liveSessions: many(meetingsV2LiveSessions),
   liveNavigationEvents: many(meetingsV2LiveNavigationEvents),
+  liveCaptureTracks: many(meetingsV2LiveCaptureTracks),
+  liveCaptureGaps: many(meetingsV2LiveCaptureGaps),
 }));
 
 export const meetingsV2SourceArtifactsRelations = relations(

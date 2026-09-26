@@ -8,8 +8,14 @@ import { describe, it } from "node:test";
 
 import {
   activeLeafId,
+  activeLiveFocus,
   adjacentLeafId,
+  effectivePresentedPage,
+  leafStepTarget,
   liveAgendaLeaves,
+  navigationAllowed,
+  packagePageToOpen,
+  pageMapCheckView,
   type LiveAgendaSourceItem,
 } from "../lib/meeting-v2/live-agenda";
 import { liveKitTrackEgress } from "../lib/livekit/config";
@@ -20,7 +26,16 @@ import {
   mediaOffsetMs,
   missingStorageRecordingHealth,
   summarizeRecordingHealth,
+  type CaptureGapView,
+  type RecordingEgressStatus,
 } from "../lib/meeting-v2/live-clock";
+import {
+  assessCaptureHealth,
+  liveKitTimestampMs,
+  parseCaptureObjectLocation,
+  trackIdFromEgressFile,
+  type CaptureHealthInput,
+} from "../lib/meeting-v2/capture-health";
 import {
   mergedCuesToSegmentRows,
   parseVttToMergedCues,
@@ -92,6 +107,101 @@ describe("live room agenda", () => {
     assert.equal(activeLeafId(leaves, []), "steam");
     assert.equal(activeLeafId(leaves, ["roof", "missing"]), "roof");
   });
+
+  it("lets only the presenter move, and a later jump restores an earlier leaf", () => {
+    assert.equal(navigationAllowed(null, "ada"), false);
+    assert.equal(navigationAllowed("ada", "bea"), false);
+    assert.equal(navigationAllowed("ada", "ada"), true);
+
+    const leaves = liveAgendaLeaves(items);
+    const history = [
+      { agendaItemId: "steam", unscheduled: false },
+      { agendaItemId: null, unscheduled: true },
+      { agendaItemId: "steam", unscheduled: false },
+    ];
+    assert.deepEqual(activeLiveFocus(leaves, history), {
+      kind: "leaf",
+      agendaItemId: "steam",
+    });
+    assert.equal(history.length, 3);
+    assert.deepEqual(activeLiveFocus(leaves, history.slice(0, 2)), { kind: "unscheduled" });
+    assert.equal(leafStepTarget(leaves, history.slice(0, 2), 1), "roof");
+    assert.equal(leafStepTarget(leaves, history.slice(0, 2), -1), "steam");
+  });
+
+  it("keeps a personal page open and does not treat a presented page as a leaf change", () => {
+    const leaves = liveAgendaLeaves(items);
+    const focus = activeLiveFocus(leaves, [{ agendaItemId: "steam", unscheduled: false }]);
+    assert.equal(effectivePresentedPage(focus, leaves, 4), 4);
+    assert.equal(effectivePresentedPage(focus, leaves, 9), null);
+    assert.equal(effectivePresentedPage({ kind: "unscheduled" }, leaves, 4), null);
+    assert.deepEqual(activeLiveFocus(leaves, [{ agendaItemId: "steam", unscheduled: false }]), focus);
+
+    assert.deepEqual(
+      packagePageToOpen({
+        personalPage: 5,
+        presentedPage: 4,
+        viewerIsPresenter: false,
+        dismissedPresentedPage: null,
+      }),
+      { page: 5, source: "personal" },
+    );
+    assert.deepEqual(
+      packagePageToOpen({
+        personalPage: null,
+        presentedPage: 4,
+        viewerIsPresenter: false,
+        dismissedPresentedPage: null,
+      }),
+      { page: 4, source: "presented" },
+    );
+    assert.deepEqual(
+      packagePageToOpen({
+        personalPage: null,
+        presentedPage: 4,
+        viewerIsPresenter: true,
+        dismissedPresentedPage: null,
+      }),
+      { page: null, source: null },
+    );
+    assert.deepEqual(
+      packagePageToOpen({
+        personalPage: null,
+        presentedPage: 4,
+        viewerIsPresenter: false,
+        dismissedPresentedPage: 4,
+      }),
+      { page: null, source: null },
+    );
+  });
+
+  it("shows an unchecked page map without dropping leaves", () => {
+    const leaves = liveAgendaLeaves(items);
+    const unchecked = pageMapCheckView({
+      checkedAt: null,
+      checkedByIdentity: null,
+      checkedByName: null,
+      leaves,
+    });
+    assert.equal(unchecked.checkedAt, null);
+    assert.deepEqual(
+      unchecked.leavesWithoutPages.map((leaf) => leaf.id),
+      ["roof"],
+    );
+    assert.deepEqual(
+      leaves.map((leaf) => leaf.id),
+      ["steam", "roof"],
+    );
+
+    const checked = pageMapCheckView({
+      checkedAt: "2026-09-26T12:00:00.000Z",
+      checkedByIdentity: "ada",
+      checkedByName: "Ada",
+      leaves,
+    });
+    assert.equal(checked.checkedAt, "2026-09-26T12:00:00.000Z");
+    assert.equal(checked.checkedByName, "Ada");
+  });
 });
 
 describe("live room recording health", () => {
@@ -125,10 +235,246 @@ describe("live room recording health", () => {
     assert.match(health.detail, /2 track files/);
   });
 
-  it("names the missing bucket instead of pretending recording is waiting", () => {
+  it("names a missing bucket as critical, including the recreate step", () => {
     const health = missingStorageRecordingHealth();
-    assert.equal(health.state, "unconfigured");
+    assert.equal(health.severity, "critical");
+    assert.equal(health.label, "Critical");
+    assert.doesNotMatch(health.label, /Unknown/);
     assert.match(health.detail, /LIVEKIT_EGRESS_S3_BUCKET/);
+    assert.match(health.detail, /everyone must leave|everyone leaves/i);
+  });
+
+  it("does not call an unreadable status Unknown", () => {
+    const health = summarizeRecordingHealth([
+      { status: "not-a-status" as RecordingEgressStatus, error: "" },
+    ]);
+    assert.equal(health.severity, "critical");
+    assert.equal(health.label, "Critical");
+    assert.doesNotMatch(health.label, /Unknown/);
+  });
+});
+
+const mediaStartedAtMs = Date.parse("2026-09-26T00:00:00.000Z");
+
+function captureInput(overrides: Partial<CaptureHealthInput> = {}): CaptureHealthInput {
+  return {
+    nowMs: mediaStartedAtMs + 60_000,
+    mediaStartedAtMs,
+    storageConfigured: true,
+    statusReadOk: true,
+    statusError: null,
+    roomClosed: false,
+    publishing: [],
+    egress: [],
+    gaps: [],
+    tracks: [],
+    graceMs: 20_000,
+    ...overrides,
+  };
+}
+
+function gap(partial: Partial<CaptureGapView> & Pick<CaptureGapView, "detection">): CaptureGapView {
+  return {
+    id: partial.id ?? "gap",
+    detection: partial.detection,
+    participantIdentity: partial.participantIdentity ?? null,
+    trackId: partial.trackId ?? null,
+    egressId: partial.egressId ?? null,
+    startOffsetMs: partial.startOffsetMs ?? 0,
+    endOffsetMs: partial.endOffsetMs ?? null,
+    detail: partial.detail ?? "",
+    acceptedAt: partial.acceptedAt ?? null,
+  };
+}
+
+describe("capture health", () => {
+  it("stays healthy while a new microphone is inside the grace period", () => {
+    const health = assessCaptureHealth(
+      captureInput({
+        publishing: [
+          {
+            participantIdentity: "ada",
+            trackId: "TR_ada",
+            firstSeenAtMs: mediaStartedAtMs + 50_000,
+          },
+        ],
+      }),
+    );
+    assert.equal(health.health.severity, "healthy");
+    assert.equal(health.health.state, "waiting");
+    assert.equal(health.drafts.length, 0);
+  });
+
+  it("is critical when a publishing microphone has no egress after the grace period", () => {
+    const health = assessCaptureHealth(
+      captureInput({
+        publishing: [
+          {
+            participantIdentity: "ada",
+            trackId: "TR_ada",
+            firstSeenAtMs: mediaStartedAtMs,
+          },
+        ],
+      }),
+    );
+    assert.equal(health.health.severity, "critical");
+    assert.equal(health.health.label, "Critical");
+    assert.equal(health.drafts[0]?.detection, "microphone_unmatched");
+    assert.equal(health.drafts[0]?.trackId, "TR_ada");
+    assert.match(health.health.detail, /ada/);
+  });
+
+  it("matches each publishing microphone and ignores a bare active egress", () => {
+    const health = assessCaptureHealth(
+      captureInput({
+        publishing: [
+          { participantIdentity: "ada", trackId: "TR_ada", firstSeenAtMs: mediaStartedAtMs },
+          { participantIdentity: "grace", trackId: "TR_grace", firstSeenAtMs: mediaStartedAtMs },
+        ],
+        egress: [{ egressId: "eg-ada", status: "active", error: "", trackId: "TR_ada" }],
+      }),
+    );
+    assert.equal(health.health.severity, "critical");
+    assert.equal(health.drafts.filter((draft) => draft.trackId === "TR_grace").length, 1);
+  });
+
+  it("is healthy when every publishing microphone has a live egress", () => {
+    const health = assessCaptureHealth(
+      captureInput({
+        publishing: [
+          { participantIdentity: "ada", trackId: "TR_ada", firstSeenAtMs: mediaStartedAtMs },
+        ],
+        egress: [{ egressId: "eg-ada", status: "active", error: "", trackId: "TR_ada" }],
+      }),
+    );
+    assert.equal(health.health.severity, "healthy");
+    assert.equal(health.health.state, "recording");
+  });
+
+  it("treats a failed status read as critical and not Unknown", () => {
+    const health = assessCaptureHealth(
+      captureInput({ statusReadOk: false, statusError: "timeout" }),
+    );
+    assert.equal(health.health.severity, "critical");
+    assert.equal(health.health.label, "Critical");
+    assert.doesNotMatch(health.health.detail, /Unknown/);
+    assert.equal(health.drafts[0]?.detection, "status_read_failed");
+  });
+
+  it("keeps a failed egress critical until a gap covers it", () => {
+    const uncovered = assessCaptureHealth(
+      captureInput({
+        egress: [{ egressId: "eg-1", status: "failed", error: "bucket rejected", trackId: "TR_ada" }],
+      }),
+    );
+    assert.equal(uncovered.health.severity, "critical");
+    assert.match(uncovered.health.detail, /bucket rejected/);
+
+    const covered = assessCaptureHealth(
+      captureInput({
+        egress: [{ egressId: "eg-1", status: "failed", error: "bucket rejected", trackId: "TR_ada" }],
+        gaps: [gap({ detection: "egress_failed", egressId: "eg-1", trackId: "TR_ada", endOffsetMs: 1000 })],
+      }),
+    );
+    assert.equal(covered.health.severity, "healthy");
+    assert.equal(covered.drafts.length, 0);
+  });
+
+  it("stays critical when a covered failure still has a publishing microphone", () => {
+    const health = assessCaptureHealth(
+      captureInput({
+        publishing: [
+          { participantIdentity: "ada", trackId: "TR_ada", firstSeenAtMs: mediaStartedAtMs },
+        ],
+        egress: [{ egressId: "eg-1", status: "failed", error: "", trackId: "TR_ada" }],
+        gaps: [gap({ detection: "egress_failed", egressId: "eg-1", trackId: "TR_ada" })],
+      }),
+    );
+    assert.equal(health.health.severity, "critical");
+    assert.equal(health.drafts.some((draft) => draft.detection === "microphone_unmatched"), true);
+  });
+
+  it("requires the stored file to cover publishing time minus gaps", () => {
+    const track = {
+      trackId: "TR_ada",
+      participantIdentity: "ada",
+      firstSeenAtMs: mediaStartedAtMs,
+      lastSeenAtMs: mediaStartedAtMs + 61_000,
+      unpublishedAtMs: mediaStartedAtMs + 61_000,
+      fileOpened: true,
+      fileDurationMs: 50_000,
+      fileStartedAtMs: mediaStartedAtMs + 400,
+    };
+    const short = assessCaptureHealth(
+      captureInput({
+        roomClosed: true,
+        nowMs: mediaStartedAtMs + 70_000,
+        egress: [{ egressId: "eg-1", status: "complete", error: "", trackId: "TR_ada" }],
+        tracks: [track],
+      }),
+    );
+    assert.equal(short.health.severity, "critical");
+    assert.equal(short.drafts[0]?.detection, "duration_short");
+
+    const explained = assessCaptureHealth(
+      captureInput({
+        roomClosed: true,
+        nowMs: mediaStartedAtMs + 70_000,
+        egress: [{ egressId: "eg-1", status: "complete", error: "", trackId: "TR_ada" }],
+        tracks: [track],
+        gaps: [
+          gap({
+            detection: "microphone_unmatched",
+            trackId: "TR_ada",
+            startOffsetMs: 0,
+            endOffsetMs: 12_000,
+          }),
+        ],
+      }),
+    );
+    assert.equal(explained.health.severity, "healthy");
+    assert.equal(explained.health.state, "finished");
+    assert.equal(explained.clockDeltaMs, 400);
+  });
+
+  it("is critical when a completed file cannot be opened", () => {
+    const health = assessCaptureHealth(
+      captureInput({
+        roomClosed: true,
+        egress: [{ egressId: "eg-1", status: "complete", error: "", trackId: "TR_ada" }],
+        tracks: [
+          {
+            trackId: "TR_ada",
+            participantIdentity: "ada",
+            firstSeenAtMs: mediaStartedAtMs,
+            lastSeenAtMs: mediaStartedAtMs + 10_000,
+            unpublishedAtMs: mediaStartedAtMs + 10_000,
+            fileOpened: false,
+            fileDurationMs: 10_000,
+            fileStartedAtMs: mediaStartedAtMs,
+          },
+        ],
+      }),
+    );
+    assert.equal(health.health.severity, "critical");
+    assert.equal(health.drafts[0]?.detection, "file_missing");
+  });
+
+  it("parses egress locations and track ids", () => {
+    assert.equal(liveKitTimestampMs(BigInt("1700000000000000000")), 1_700_000_000_000);
+    assert.equal(liveKitTimestampMs(1_700_000_000_000), 1_700_000_000_000);
+    assert.equal(
+      trackIdFromEgressFile("meetings/v2-1/ada-MICROPHONE-TR_abc123"),
+      "TR_abc123",
+    );
+    assert.deepEqual(parseCaptureObjectLocation("s3://board-recordings/meetings/a.ogg", "other"), {
+      bucket: "board-recordings",
+      key: "meetings/a.ogg",
+    });
+    assert.deepEqual(
+      parseCaptureObjectLocation("meetings/v2-1/ada.ogg", "board-recordings"),
+      { bucket: "board-recordings", key: "meetings/v2-1/ada.ogg" },
+    );
   });
 });
 

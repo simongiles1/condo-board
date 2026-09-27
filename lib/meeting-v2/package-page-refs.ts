@@ -46,6 +46,24 @@ export function linkPackagePageCitations(text: string): string {
 }
 
 /**
+ * Explains a citation that runs past the pages kept for this meeting.
+ * Returns null when the stored package includes the whole citation.
+ */
+export function storedPackageCitationGap(input: {
+  citedStart: number;
+  citedEnd: number;
+  storedPageCount: number;
+}): string | null {
+  const { citedStart, citedEnd, storedPageCount } = input;
+  if (storedPageCount < 1 || citedEnd <= storedPageCount) return null;
+  if (citedStart > storedPageCount) {
+    const pageLabel = citedStart === citedEnd ? `Page ${citedStart}` : `Pages ${citedStart}–${citedEnd}`;
+    return `${pageLabel} is not in this meeting's package. Only ${storedPageCount} pages were kept when the meeting was created.`;
+  }
+  return `This citation runs through page ${citedEnd}. This meeting's package has ${storedPageCount} pages, so pages ${storedPageCount + 1}–${citedEnd} are missing.`;
+}
+
+/**
  * Reads a `#pkg/13` or `#pkg/13-26` href. Returns null for any other link.
  */
 export function packagePageFromHref(href: string): { start: number; end: number } | null {

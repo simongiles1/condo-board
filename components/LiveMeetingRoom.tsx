@@ -40,7 +40,7 @@ type Person = {
 type Connection = "idle" | "connecting" | "connected" | "disconnected";
 
 type DocumentDrawer =
-  | { kind: "package"; page: number; label: string }
+  | { kind: "package"; page: number; end: number; label: string }
   | { kind: "file"; fileId: string; label: string };
 
 const HEALTH_CLASS: Record<RecordingHealthState, string> = {
@@ -282,7 +282,7 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
 
   function openPackagePage(page: number, end = page) {
     const label = end === page ? `Page ${page}` : `Pages ${page}–${end}`;
-    setDrawer({ kind: "package", page, label });
+    setDrawer({ kind: "package", page, end, label });
   }
 
   const viewerIsPresenter = navigationAllowed(
@@ -573,6 +573,7 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
                 : `/api/email/attachments/${drawer.fileId}`
             }
             initialPage={drawer.kind === "package" ? drawer.page : 1}
+            citedEnd={drawer.kind === "package" ? drawer.end : undefined}
           />
         </aside>
       ) : null}

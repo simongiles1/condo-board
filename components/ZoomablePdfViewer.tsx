@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { storedPackageCitationGap } from "@/lib/meeting-v2/package-page-refs";
 import { getPdfPageCount } from "@/lib/pdf/pdf-page-count";
 import {
   cancelPdfCanvasRender,
@@ -12,13 +13,16 @@ type Props = {
   url: string;
   className?: string;
   initialPage?: number;
+  /** Last page of the citation, when it is a range. */
+  citedEnd?: number;
 };
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 3;
 const SCALE_STEP = 0.25;
 
-export function ZoomablePdfViewer({ url, className, initialPage }: Props) {
+/** Scrollable PDF page viewer with zoom and an optional missing-page notice. */
+export function ZoomablePdfViewer({ url, className, initialPage, citedEnd }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -165,6 +169,14 @@ export function ZoomablePdfViewer({ url, className, initialPage }: Props) {
   }
 
   const displayScale = Math.round(effectiveScale * 100);
+  const citationGap =
+    pageCount > 0 && initialPage
+      ? storedPackageCitationGap({
+          citedStart: initialPage,
+          citedEnd: citedEnd && citedEnd > initialPage ? citedEnd : initialPage,
+          storedPageCount: pageCount,
+        })
+      : null;
 
   if (loadingPdf) {
     return (
@@ -254,6 +266,11 @@ export function ZoomablePdfViewer({ url, className, initialPage }: Props) {
           </button>
         </div>
       </div>
+      {citationGap ? (
+        <p className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+          {citationGap}
+        </p>
+      ) : null}
 
       <div
         ref={scrollRef}

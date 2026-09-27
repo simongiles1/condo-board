@@ -30,6 +30,7 @@ import {
 import { clipStageTextToItem } from "../lib/meeting-v2/stage-item-text";
 import {
   linkPackagePageCitations,
+  storedPackageCitationGap,
   packagePageFromHref,
 } from "../lib/meeting-v2/package-page-refs";
 import { liveKitTrackEgress } from "../lib/livekit/config";
@@ -256,6 +257,18 @@ describe("live room package citations", () => {
     assert.match(linked, /Bell & Gossett/);
     assert.deepEqual(packagePageFromHref("#pkg/13-26"), { start: 13, end: 26 });
     assert.equal(packagePageFromHref("https://example.com"), null);
+    assert.match(
+      storedPackageCitationGap({ citedStart: 13, citedEnd: 26, storedPageCount: 13 }) ?? "",
+      /pages 14–26 are missing/,
+    );
+    assert.match(
+      storedPackageCitationGap({ citedStart: 27, citedEnd: 27, storedPageCount: 13 }) ?? "",
+      /Page 27 is not in this meeting's package/,
+    );
+    assert.equal(
+      storedPackageCitationGap({ citedStart: 13, citedEnd: 26, storedPageCount: 80 }),
+      null,
+    );
   });
 });
 

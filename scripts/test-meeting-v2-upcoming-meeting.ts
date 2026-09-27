@@ -10,6 +10,10 @@ import {
   applyAttachmentPageAssignments,
   parseAgendaContentEndsAtPage,
 } from "../lib/meeting-v2/upcoming-meeting";
+import {
+  defaultAgendaBoundaryPage,
+  omittedPageRanges,
+} from "../lib/pdf/page-selection";
 
 describe("upcoming meeting package split", () => {
   it("rejects a split that leaves no attachment pages", () => {
@@ -35,5 +39,13 @@ describe("upcoming meeting package split", () => {
     assert.deepEqual(applied.pagesByLeafId.get("steam"), [2, 5, 6]);
     assert.deepEqual(applied.pagesByLeafId.get("budget"), [3]);
     assert.deepEqual(applied.unassignedPages, [7]);
+  });
+
+  it("keeps later package pages when the agenda boundary defaults to page 12", () => {
+    const selected = Array.from({ length: 80 }, (_, index) => index + 1);
+    assert.equal(defaultAgendaBoundaryPage(selected), 12);
+    assert.deepEqual(omittedPageRanges(80, selected), []);
+    assert.deepEqual(omittedPageRanges(80, selected.slice(0, 13)), [{ start: 14, end: 80 }]);
+    assert.equal(defaultAgendaBoundaryPage([1, 2, 3, 4]), 3);
   });
 });

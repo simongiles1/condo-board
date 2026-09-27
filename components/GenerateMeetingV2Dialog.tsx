@@ -15,6 +15,7 @@ import {
   buildTrimmedBoardPackage,
   type BoardPackageSelection,
 } from "@/lib/pdf/board-package";
+import { defaultAgendaBoundaryPage } from "@/lib/pdf/page-selection";
 
 const BoardPackagePageSelector = dynamic(
   () =>
@@ -267,7 +268,7 @@ export function GenerateMeetingV2Dialog({
       ) {
         return current;
       }
-      return pages[pages.length - 2];
+      return defaultAgendaBoundaryPage(pages);
     });
   }, [existingSelection, packageTab, upcoming, uploadSelection]);
 
@@ -645,7 +646,8 @@ export function GenerateMeetingV2Dialog({
               {upcoming ? (
                 <p className="text-sm text-slate-600">
                   Select every page for the live meeting—agenda and attachments.
-                  Mark where the agenda ends on the same screen (teal vs amber).
+                  The last-agenda dropdown only marks where the written agenda stops.
+                  Pages after it stay in the meeting. Unselected pages are removed.
                 </p>
               ) : null}
               <div className="flex flex-wrap items-start gap-3">

@@ -15,7 +15,12 @@ import {
 } from "@/lib/pdf/extract-pages";
 import { getPdfPageCount } from "@/lib/pdf/pdf-page-count";
 import { renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
-import { formatPageList, parsePageRangeInput } from "@/lib/pdf/page-selection";
+import {
+  formatOmittedPageRanges,
+  formatPageList,
+  omittedPageRanges,
+  parsePageRangeInput,
+} from "@/lib/pdf/page-selection";
 
 export type { BoardPackageSelection };
 
@@ -94,6 +99,8 @@ export function BoardPackagePageSelector({
 
   const selectedSorted = [...selected].sort((a, b) => a - b);
   const selectedKey = selectedSorted.join(",");
+  const leftOutRanges =
+    variant === "upcoming" ? omittedPageRanges(pageCount, selectedSorted) : [];
   const loadedExternalRef = useRef<File | null>(null);
 
   useEffect(() => {
@@ -118,13 +125,18 @@ export function BoardPackagePageSelector({
       const buffer = await file.arrayBuffer();
       const count = await getPdfPageCount(buffer);
 
-      const initial = defaultInitialPageSelection(count);
+      const initial =
+        variant === "upcoming"
+          ? Array.from({ length: count }, (_, index) => index + 1)
+          : defaultInitialPageSelection(count);
       setSourceFile(file);
       setPdfBytes(buffer);
       setPageCount(count);
       setSelected(new Set(initial));
       setPreviewPage(1);
-      setRangeInput(`1-${Math.min(20, count)}`);
+      setRangeInput(
+        variant === "upcoming" ? `1-${count}` : `1-${Math.min(20, count)}`,
+      );
       setRangeError(null);
     } catch (e) {
       setSourceFile(null);
@@ -136,7 +148,7 @@ export function BoardPackagePageSelector({
     } finally {
       setLoading(false);
     }
-  }, [onSelectionChange]);
+  }, [onSelectionChange, variant]);
 
   const onPick = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
@@ -282,6 +294,12 @@ export function BoardPackagePageSelector({
                 {variant === "upcoming" ? " for this meeting" : " for Gemini"} (
                 {formatPageList(selectedSorted)})
               </p>
+              {leftOutRanges.length > 0 ? (
+                <p className="mt-2 text-xs text-amber-800">
+                  Pages {formatOmittedPageRanges(leftOutRanges)} are left out. The live room cannot
+                  open them. Select them if the agenda cites them.
+                </p>
+              ) : null}
             </div>
             {showFilePicker ? (
               <button
@@ -305,7 +323,7 @@ export function BoardPackagePageSelector({
                 }
                 className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50"
               >
-                First 20 pages
+                {variant === "upcoming" ? "First 20 only" : "First 20 pages"}
               </button>
               <button
                 type="button"
@@ -415,7 +433,7 @@ export function BoardPackagePageSelector({
               </div>
               <p className="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
                 {variant === "upcoming"
-                  ? "Teal = agenda. Amber = attachments. Shift+click a selected page to set where the agenda ends."
+                  ? "Teal = agenda. Amber = attachments. Unselected pages are removed from the meeting."
                   : "Checked = sent to Gemini. Unchecked pages are stripped out."}
               </p>
             </div>
@@ -460,6 +478,10 @@ export function BoardPackagePageSelector({
           {variant === "upcoming" && selectedSorted.length >= 2 ? (
             <label className="flex flex-col gap-1 text-sm font-medium text-slate-800">
               Last agenda page
+              <span className="text-xs font-normal text-slate-600">
+                Marks where the written agenda stops. Later selected pages stay in the meeting as
+                attachments.
+              </span>
               <select
                 value={
                   agendaEndsAtPage ??

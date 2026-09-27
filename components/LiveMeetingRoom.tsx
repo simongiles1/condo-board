@@ -6,6 +6,7 @@ import { Room, RoomEvent, Track } from "livekit-client";
 
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { ZoomablePdfViewer } from "@/components/ZoomablePdfViewer";
+import { agendaItemIndentDepth } from "@/lib/meeting-v2/agenda-outline";
 import {
   groupPageRanges,
   navigationAllowed,
@@ -19,6 +20,7 @@ import {
   linkPackagePageCitations,
   packagePageFromHref,
 } from "@/lib/meeting-v2/package-page-refs";
+import { clipStageTextToItem } from "@/lib/meeting-v2/stage-item-text";
 import { formatMediaClock, type RecordingHealthState } from "@/lib/meeting-v2/live-clock";
 
 type JoinPayload = {
@@ -302,6 +304,9 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
     .filter((page): page is NonNullable<typeof page> => page != null);
   const attachedRanges = groupPageRanges(pagesOnItem.attached);
   const itemArchiveLinks = archiveLinks.filter((link) => link.agendaItemId === active?.id);
+  const otherItemTitles = (snapshot?.leaves ?? [])
+    .filter((leaf) => leaf.id !== active?.id)
+    .map((leaf) => leaf.title);
   const canStepBack = snapshot
     ? stageMove({
         leaves: snapshot.leaves,
@@ -461,7 +466,7 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
         <p className="mx-4 mb-3 text-sm text-rose-200">{loadError || joinError || micError}</p>
       )}
 
-      <div className="mx-4 mb-3 flex min-h-0 flex-1 gap-3">
+      <div className="relative mx-4 mb-3 flex min-h-0 flex-1 gap-3">
       <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-slate-900 shadow-sm">
         <div className="border-b border-slate-200 px-6 py-4">
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -526,7 +531,11 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
                         if (target) openPackagePage(target.start, target.end);
                       }}
                     >
-                      {linkPackagePageCitations(page.extractedText)}
+                      {linkPackagePageCitations(
+                        active
+                          ? clipStageTextToItem(page.extractedText, active.title, otherItemTitles)
+                          : page.extractedText,
+                      )}
                     </MarkdownPreview>
                   ) : null,
                 )
@@ -544,7 +553,7 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
         </div>
       </main>
       {drawer ? (
-        <aside className="flex w-[28rem] max-w-[40%] shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-slate-900 shadow-sm">
+        <aside className="absolute inset-y-0 right-72 z-20 flex w-[min(42rem,calc(100%-19rem))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl">
           <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
             <p className="truncate text-sm font-semibold">{drawer.label}</p>
             <button
@@ -567,7 +576,7 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
           />
         </aside>
       ) : null}
-      <aside className="flex w-64 shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-slate-900 shadow-sm">
+      <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-slate-900 shadow-sm">
         <p className="border-b border-slate-200 px-3 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
           Agenda
         </p>
@@ -579,7 +588,8 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
                 <button
                   type="button"
                   disabled={!viewerIsPresenter || navBusy || !snapshot.roomName}
-                  className={`w-full rounded-lg px-2 py-1.5 text-left text-sm disabled:opacity-60 ${
+                  style={{ paddingLeft: `${12 + agendaItemIndentDepth(leaf.itemNumber) * 20}px` }}
+                  className={`w-full rounded-lg py-1.5 pr-2 text-left text-sm disabled:opacity-60 ${
                     selected ? "bg-slate-900 text-white" : "hover:bg-slate-50"
                   }`}
                   onClick={() => {

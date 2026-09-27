@@ -64,6 +64,14 @@ export function parseAgendaItemCode(value: string | null | undefined): ParsedAge
   return { segments, raw };
 }
 
+/**
+ * Indent level for an outline code. `2` is 0, `1.A` is 1, `4.A.1` is 2.
+ */
+export function agendaItemIndentDepth(itemNumber: string | null | undefined): number {
+  const count = parseAgendaItemCode(itemNumber).segments.length;
+  return Math.max(0, count - 1);
+}
+
 export function compareAgendaItemCodes(
   left: string | null | undefined,
   right: string | null | undefined,

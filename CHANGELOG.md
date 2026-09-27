@@ -38,6 +38,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Live room agenda and documents** — The agenda stays open on the right. Previous and Next move to the next agenda item instead of the next attached page. Package text is formatted, and a page citation opens that package page in a side drawer. A minutes or financial-statement item with no package page opens the matching file already categorized in the archive.
 
+- **Live room layout** — The live room fills the window beside the navigation. Agenda rows indent by outline depth. A document opens over the stage and leaves the agenda in place. A package page that holds two agenda items shows only the item on screen.
+
 ### Fixed
 
 - **Live room opens into the call** — Opening the live room joins LiveKit on the first visit. The room fills the window so Join, Previous, Next, and the presenter controls stay on screen. The Waiting badge is recording status, not a connection spinner.

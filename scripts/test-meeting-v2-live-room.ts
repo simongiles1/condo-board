@@ -22,10 +22,12 @@ import {
   stagePages,
   type LiveAgendaSourceItem,
 } from "../lib/meeting-v2/live-agenda";
+import { agendaItemIndentDepth } from "../lib/meeting-v2/agenda-outline";
 import {
   archiveLinksForLeaves,
   matchAgendaArchiveFile,
 } from "../lib/meeting-v2/live-archive-links";
+import { clipStageTextToItem } from "../lib/meeting-v2/stage-item-text";
 import {
   linkPackagePageCitations,
   packagePageFromHref,
@@ -254,6 +256,43 @@ describe("live room package citations", () => {
     assert.match(linked, /Bell & Gossett/);
     assert.deepEqual(packagePageFromHref("#pkg/13-26"), { start: 13, end: 26 });
     assert.equal(packagePageFromHref("https://example.com"), null);
+  });
+});
+
+describe("live room stage item text", () => {
+  const page = [
+    "## Property Management Report:",
+    "## A. Ratification of email decisions",
+    "## 1. Steam Room Heat Pump Design, Tender and Construction Review",
+    "The Board approved the steam room proposal.",
+    "## 2. Main Lobby / Elevator Lobby Restoration Work - Certificate of Completion",
+    "The lobby work was awarded to Absolute Ltd.",
+  ].join("\n");
+
+  it("drops the next agenda item that shares the package page", () => {
+    const steam = clipStageTextToItem(
+      page,
+      "Steam Room Heat Pump Design, Tender and Construction Review",
+      ["Main Lobby / Elevator Lobby Restoration Work - Certificate of Completion"],
+    );
+    assert.match(steam, /steam room proposal/);
+    assert.doesNotMatch(steam, /Absolute Ltd/);
+    assert.doesNotMatch(steam, /Property Management Report/);
+
+    const lobby = clipStageTextToItem(
+      page,
+      "Main Lobby / Elevator Lobby Restoration Work - Certificate of Completion",
+      ["Steam Room Heat Pump Design, Tender and Construction Review"],
+    );
+    assert.match(lobby, /Absolute Ltd/);
+    assert.doesNotMatch(lobby, /steam room proposal/);
+  });
+
+  it("indents outline codes the way the agenda review nests them", () => {
+    assert.equal(agendaItemIndentDepth("2"), 0);
+    assert.equal(agendaItemIndentDepth("1.A"), 1);
+    assert.equal(agendaItemIndentDepth("4.A.1"), 2);
+    assert.equal(agendaItemIndentDepth("4.B.1"), 2);
   });
 });
 

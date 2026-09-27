@@ -152,7 +152,13 @@ export function AppShell({
             <AuthNavActions {...userProps} />
           </header>
 
-          <main className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-hidden px-4 py-4 md:py-6">
+          <main
+            className={
+              /\/operations\/meetings\/v2\/[^/]+\/room\/?$/.test(pathname)
+                ? "flex min-h-0 w-full flex-1 flex-col overflow-hidden"
+                : "mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-hidden px-4 py-4 md:py-6"
+            }
+          >
             {children}
           </main>
         </div>

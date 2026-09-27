@@ -31,25 +31,36 @@ const BoardPackagePageSelector = dynamic(
   },
 );
 
-function defaultTitleForDate(date: string) {
-  return `Minutes - ${date}`;
+function defaultTitleForDate(date: string, upcoming: boolean) {
+  return upcoming ? `Meeting - ${date}` : `Minutes - ${date}`;
 }
 
 type Stage = 1 | 2 | 3;
 type PackageTab = "existing" | "upload";
+type CreateMode = "historical" | "upcoming";
 
-const STAGES: { id: Stage; label: string }[] = [
+const HISTORICAL_STAGES: { id: Stage; label: string }[] = [
   { id: 1, label: "Details" },
   { id: 2, label: "Transcript" },
   { id: 3, label: "Board package" },
 ];
 
+const UPCOMING_STAGES: { id: Stage; label: string }[] = [
+  { id: 1, label: "Details" },
+  { id: 2, label: "Board package" },
+];
+
 type Props = {
   open: boolean;
   onClose: () => void;
+  mode?: CreateMode;
 };
 
-export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
+export function GenerateMeetingV2Dialog({
+  open,
+  onClose,
+  mode = "historical",
+}: Props) {
   const router = useRouter();
   const [stage, setStage] = useState<Stage>(1);
   const [loading, setLoading] = useState(false);
@@ -81,7 +92,14 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
   const [existingPdfFile, setExistingPdfFile] = useState<File | null>(null);
   const [existingPdfLoading, setExistingPdfLoading] = useState(false);
   const [packagePdfEnabled, setPackagePdfEnabled] = useState(false);
+  const [agendaEndsAtSourcePage, setAgendaEndsAtSourcePage] = useState<
+    number | null
+  >(null);
   const loadedPdfIdRef = useRef<string | null>(null);
+  const upcoming = mode === "upcoming";
+  const stages = upcoming ? UPCOMING_STAGES : HISTORICAL_STAGES;
+  const packageStage: Stage = upcoming ? 2 : 3;
+  const finalStage: Stage = upcoming ? 2 : 3;
 
   const handleUploadSelection = useCallback(
     (value: BoardPackageSelection | null) => {
@@ -233,6 +251,26 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
     return () => controller.abort();
   }, [packagePdfEnabled, selectedPackageId, selectedPackageName]);
 
+  useEffect(() => {
+    if (!upcoming) return;
+    const selection = packageTab === "existing" ? existingSelection : uploadSelection;
+    const pages = selection?.selectedPages ?? [];
+    if (pages.length < 2) {
+      setAgendaEndsAtSourcePage(null);
+      return;
+    }
+    setAgendaEndsAtSourcePage((current) => {
+      if (
+        current != null &&
+        pages.includes(current) &&
+        pages.indexOf(current) < pages.length - 1
+      ) {
+        return current;
+      }
+      return pages[pages.length - 2];
+    });
+  }, [existingSelection, packageTab, upcoming, uploadSelection]);
+
   function resetForm() {
     setStage(1);
     setLoading(false);
@@ -254,6 +292,7 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
     setExistingPdfFile(null);
     setExistingPdfLoading(false);
     setPackagePdfEnabled(false);
+    setAgendaEndsAtSourcePage(null);
     loadedPdfIdRef.current = null;
   }
 
@@ -267,7 +306,7 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
     setMeetingDate(date);
     if (!date) return;
 
-    const nextTitle = defaultTitleForDate(date);
+    const nextTitle = defaultTitleForDate(date, upcoming);
     setTitle((current) =>
       current === "" || current === autoTitle ? nextTitle : current,
     );
@@ -279,7 +318,21 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
   }
 
   function stageTwoValid() {
+    if (upcoming) {
+      const selection = activePackageSelection();
+      if (!selection || selection.selectedPages.length < 2) return false;
+      return upcomingAgendaSplitValid(selection, agendaEndsAtSourcePage);
+    }
     return Boolean(transcriptFile?.name.toLowerCase().endsWith(".vtt"));
+  }
+
+  function upcomingAgendaSplitValid(
+    selection: BoardPackageSelection,
+    boundaryPage: number | null,
+  ) {
+    if (boundaryPage == null) return false;
+    const index = selection.selectedPages.indexOf(boundaryPage);
+    return index >= 0 && index < selection.selectedPages.length - 1;
   }
 
   function activePackageSelection() {
@@ -289,6 +342,7 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
   function canOpenStage(next: Stage) {
     if (next === 1) return true;
     if (next === 2) return stageOneValid();
+    if (upcoming) return false;
     return stageOneValid() && stageTwoValid();
   }
 
@@ -297,7 +351,9 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
       return "Enter a meeting title and date.";
     }
     if (current === 2 && !stageTwoValid()) {
-      return "Upload a Teams transcript (.vtt).";
+      return upcoming
+        ? "Select at least two pages, then set the last agenda page (shift+click or the dropdown)."
+        : "Upload a Teams transcript (.vtt).";
     }
     return null;
   }
@@ -316,7 +372,7 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
     if (!canOpenStage(next)) return;
     setError(null);
     setStage(next);
-    if (next === 3) setPackagePdfEnabled(true);
+    if (next === packageStage) setPackagePdfEnabled(true);
   }
 
   async function submit() {
@@ -327,8 +383,14 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
       setError("Select at least one page from the board package PDF.");
       return;
     }
-    if (!transcriptFile) {
+    if (!upcoming && !transcriptFile) {
       setError("Upload a Teams transcript (.vtt).");
+      return;
+    }
+    if (upcoming && !upcomingAgendaSplitValid(packageSelection, agendaEndsAtSourcePage)) {
+      setError(
+        "Set the last agenda page. At least one selected page must be an attachment.",
+      );
       return;
     }
 
@@ -337,7 +399,13 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
     const formData = new FormData();
     formData.append("title", title.trim());
     formData.append("meetingDate", meetingDate);
-    formData.append("transcript", transcriptFile);
+    if (transcriptFile) formData.append("transcript", transcriptFile);
+    if (upcoming && agendaEndsAtSourcePage != null) {
+      const splitIndex =
+        packageSelection.selectedPages.indexOf(agendaEndsAtSourcePage) + 1;
+      formData.append("purpose", "upcoming");
+      formData.append("agendaContentEndsAtPage", String(splitIndex));
+    }
 
     try {
       const trimmed = await buildTrimmedBoardPackage(packageSelection);
@@ -380,7 +448,7 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
 
   function handleFormSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (stage < 3) {
+    if (stage < finalStage) {
       goToStage((stage + 1) as Stage);
       return;
     }
@@ -418,19 +486,19 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
       >
         <div className="shrink-0 border-b border-slate-100 px-6 py-5">
           <p className="text-xs uppercase tracking-wide text-slate-500">
-            Meetings V2
+            {upcoming ? "New meeting" : "Meetings V2"}
           </p>
           <h2
             id="generate-meeting-v2-dialog-title"
             className="mt-1 text-xl font-semibold text-slate-900"
           >
-            Create V2 workspace
+            {upcoming ? "Create a meeting" : "Create V2 workspace"}
           </h2>
           <ol
             className="mt-4 flex w-full list-none items-center p-0"
             aria-label="Create steps"
           >
-            {STAGES.map((item, index) => {
+            {stages.map((item, index) => {
               const current = item.id === stage;
               const reachable = canOpenStage(item.id);
               const stepControl = (
@@ -533,7 +601,7 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
 
             <div
               className={
-                stage === 2 ? "flex min-h-full flex-col gap-3" : "hidden"
+                !upcoming && stage === 2 ? "flex min-h-full flex-col gap-3" : "hidden"
               }
             >
               <p className="text-sm text-slate-600">
@@ -573,7 +641,13 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
               </div>
             </div>
 
-            <div className={stage === 3 ? "space-y-3" : "hidden"}>
+            <div className={stage === packageStage ? "space-y-3" : "hidden"}>
+              {upcoming ? (
+                <p className="text-sm text-slate-600">
+                  Select every page for the live meeting—agenda and attachments.
+                  Mark where the agenda ends on the same screen (teal vs amber).
+                </p>
+              ) : null}
               <div className="flex flex-wrap items-start gap-3">
                 <div className="min-w-0 flex-1">
                   {packageTab === "existing" ? (
@@ -648,7 +722,12 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
                   </p>
                 ) : null}
                 <BoardPackagePageSelector
-                  label="Management report pages *"
+                  label={
+                    upcoming ? "Board package pages *" : "Management report pages *"
+                  }
+                  variant={upcoming ? "upcoming" : "minutes"}
+                  agendaEndsAtPage={agendaEndsAtSourcePage}
+                  onAgendaEndsAtPage={setAgendaEndsAtSourcePage}
                   showFilePicker={false}
                   previewFitWidth
                   externalFile={existingPdfFile}
@@ -660,6 +739,9 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
               <div className={packageTab === "upload" ? "space-y-3" : "hidden"}>
                 <BoardPackagePageSelector
                   label="Board package *"
+                  variant={upcoming ? "upcoming" : "minutes"}
+                  agendaEndsAtPage={agendaEndsAtSourcePage}
+                  onAgendaEndsAtPage={setAgendaEndsAtSourcePage}
                   previewFitWidth
                   onSelectionChange={handleUploadSelection}
                   disabled={loading}
@@ -694,7 +776,7 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
                   Back
                 </button>
               ) : null}
-              {stage < 3 ? (
+              {stage < finalStage ? (
                 <button
                   type="submit"
                   disabled={loading}
@@ -708,7 +790,11 @@ export function GenerateMeetingV2Dialog({ open, onClose }: Props) {
                   disabled={loading}
                   className="rounded-xl bg-teal-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {loading ? "Starting..." : "Create V2 Workspace"}
+                  {loading
+                    ? "Starting..."
+                    : upcoming
+                      ? "Create meeting"
+                      : "Create V2 Workspace"}
                 </button>
               )}
             </div>

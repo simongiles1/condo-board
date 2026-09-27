@@ -8,6 +8,9 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { meetings, meetingsV2 } from "@/lib/db/schema";
+import { inngest } from "@/lib/inngest/client";
+import { getPdfPageCount } from "@/lib/pdf/pdf-page-count";
+import { parseAgendaContentEndsAtPage } from "@/lib/meeting-v2/upcoming-meeting";
 
 function assertFile(value: unknown): value is File {
   return typeof value === "object" && value !== null && "arrayBuffer" in value;
@@ -19,6 +22,8 @@ export async function POST(req: Request) {
   const meetingDateRaw = formData.get("meetingDate");
   const transcriptFile = formData.get("transcript");
   const boardPackageFile = formData.get("boardPackage");
+  const purpose = formData.get("purpose");
+  const upcoming = purpose === "upcoming";
 
   if (
     typeof titleRaw !== "string" ||
@@ -31,7 +36,7 @@ export async function POST(req: Request) {
     );
   }
 
-  if (!assertFile(transcriptFile)) {
+  if (!upcoming && !assertFile(transcriptFile)) {
     return NextResponse.json(
       { error: "Microsoft Teams transcript (.vtt) is required." },
       { status: 400 },
@@ -45,7 +50,7 @@ export async function POST(req: Request) {
     );
   }
 
-  if (!transcriptFile.name.toLowerCase().endsWith(".vtt")) {
+  if (!upcoming && assertFile(transcriptFile) && !transcriptFile.name.toLowerCase().endsWith(".vtt")) {
     return NextResponse.json(
       { error: "Transcript must be a .vtt file." },
       { status: 400 },
@@ -67,19 +72,38 @@ export async function POST(req: Request) {
       meetingId,
       title: titleRaw.trim(),
       meetingDate: meetingDateRaw,
-      transcriptName: transcriptFile.name,
+      transcriptName: assertFile(transcriptFile) ? transcriptFile.name : null,
+      upcoming,
       boardPackageName: boardPackageFile.name,
     });
 
-    const vttBuffer = Buffer.from(await transcriptFile.arrayBuffer());
+    const vttBuffer =
+      !upcoming && assertFile(transcriptFile)
+        ? Buffer.from(await transcriptFile.arrayBuffer())
+        : null;
     const boardPackageBuffer = Buffer.from(await boardPackageFile.arrayBuffer());
+    const packagePageCount = await getPdfPageCount(
+      boardPackageBuffer.buffer.slice(
+        boardPackageBuffer.byteOffset,
+        boardPackageBuffer.byteOffset + boardPackageBuffer.byteLength,
+      ),
+    );
+    const agendaContentEndsAtPage = upcoming
+      ? parseAgendaContentEndsAtPage(formData.get("agendaContentEndsAtPage"), packagePageCount)
+      : null;
+    if (upcoming && agendaContentEndsAtPage == null) {
+      return NextResponse.json(
+        { error: "Choose the last agenda page. At least one later page must be an attachment." },
+        { status: 400 },
+      );
+    }
 
     await mkdir(uploadRoot, { recursive: true });
 
     const vttAbsolute = path.join(uploadRoot, "transcript.vtt");
     const boardPackageAbsolute = path.join(uploadRoot, "board-package.pdf");
 
-    await writeFile(vttAbsolute, vttBuffer);
+    if (vttBuffer) await writeFile(vttAbsolute, vttBuffer);
     await writeFile(boardPackageAbsolute, boardPackageBuffer);
 
     const db = getDb();
@@ -94,7 +118,9 @@ export async function POST(req: Request) {
       minutesJson: null,
       aiUsageJson: null,
       todosContent: "",
-      vttFilePath: path.relative(process.cwd(), vttAbsolute).replace(/\\/g, "/"),
+      vttFilePath: vttBuffer
+        ? path.relative(process.cwd(), vttAbsolute).replace(/\\/g, "/")
+        : "",
       pdfFilePath: "",
       boardPackageFilePath: path
         .relative(process.cwd(), boardPackageAbsolute)
@@ -108,12 +134,26 @@ export async function POST(req: Request) {
       title: titleRaw.trim(),
       meetingDate: meetingDateRaw,
       pipelineState: "created",
-      currentStep: "Ready to start",
+      currentStep: upcoming ? "Preparing the board package" : "Ready to start",
       progressPercent: 0,
       lastError: null,
+      settings: upcoming
+        ? { upcomingMeeting: { agendaContentEndsAtPage: agendaContentEndsAtPage! } }
+        : {},
       createdAt,
       updatedAt: createdAt,
     });
+
+    if (upcoming) {
+      try {
+        await inngest.send({
+          name: "meeting-v2/pipeline.start",
+          data: { meetingId },
+        });
+      } catch (error) {
+        console.error("[meetings:v2:upload] pipeline start failed", error);
+      }
+    }
 
     console.info("[meetings:v2:upload] rows created", { meetingId });
 

@@ -13,9 +13,9 @@ export async function POST(
 ) {
   const { id } = await context.params;
 
-  let body: { agendaItemId?: unknown; unscheduled?: unknown };
+  let body: { agendaItemId?: unknown; unscheduled?: unknown; page?: unknown };
   try {
-    body = (await req.json()) as { agendaItemId?: unknown; unscheduled?: unknown };
+    body = (await req.json()) as { agendaItemId?: unknown; unscheduled?: unknown; page?: unknown };
   } catch {
     return liveRoomJson({ error: "Malformed JSON body." }, null, 400);
   }
@@ -36,9 +36,10 @@ export async function POST(
 
   try {
     const { participant, cookieToSet } = await resolveLiveParticipant();
+    const page = typeof body.page === "number" && Number.isInteger(body.page) ? body.page : undefined;
     const snapshot = await recordLiveNavigation(
       id,
-      unscheduled ? { unscheduled: true } : { agendaItemId },
+      unscheduled ? { unscheduled: true } : { agendaItemId, page },
       participant,
     );
     return liveRoomJson(snapshot, cookieToSet);

@@ -16,7 +16,7 @@ Committed on `main` as the virtual meeting room slice. Extend it. Do not replace
 | `joinLiveRoom` | Creates `v2-{meetingId}` once. A later join returns that room, so a refresh does not start a second recording. Egress is omitted when no bucket is set, because Cloud would otherwise reject the join. |
 | `meetings_v2_live_sessions` | One row per meeting. `mediaStartedAt` is the time that row was inserted. |
 | `recordLiveNavigation` | Stores the leaf id and `mediaOffsetMs`, computed on the server as elapsed time since `mediaStartedAt`. The click is not stored as the facilitator's wall clock. |
-| `LiveMeetingRoom` | Join, hear remote audio, microphone on or off, recording badge, one leaf of `source_text`, and a jump list. Previous, Next, jump, and unscheduled discussion are enabled only for the presenter. Page buttons open `BoardPackageViewerDialog` for that person. Present sends the page to everyone else and does not change the leaf. An unchecked leaf-to-page map is a room notice; the room still opens. |
+| `LiveMeetingRoom` | Join, hear remote audio, mute, leave, and a recording badge. The shared stage shows extracted package text for the active leaf's current page. Previous and Next move that page, then the next leaf. Agenda jump is presenter-only. Open PDF is a personal view of the same page. Pipeline notes are not shown. An unchecked leaf-to-page map is a room notice; the room still opens. |
 | Recording badge | Capture health from `assessCaptureHealth`: every publishing microphone must match a live track egress, a failed read or a missing bucket is critical, and failed egress is critical unless a gap row covers it. |
 | Cue shape | `liveCuesToMergedCues` matches the VTT cues V2 already parses. Rows are not inserted. `LIVE_TRANSCRIPT_INSERT_GAP` records why: a second transcript artifact would be read as the historical transcript, and no recognizer is connected. |
 | Tests | `scripts/test-meeting-v2-live-room.ts` covers the clock, leaf order, egress configuration, badge collapse, and the decision not to insert live cues. |
@@ -37,7 +37,7 @@ These are the reasons the current badge is not the capture requirement below.
 
 - One room. Cameras optional. One person per device.
 - One scrollable view per leaf. The presenter uses Next, Previous, or jump, including an unscheduled discussion. Everyone else follows the active leaf.
-- Opening a document is a drawer or modal. It does not change the active leaf. A personal open stays personal. Present-to-everyone is a separate presenter action.
+- The shared stage is the extracted text of the current package page. Next and Previous change that page for everyone, then move to the next leaf. Open PDF is personal and does not change the leaf.
 - A person checks the leaf-to-page map before the meeting. The room can still open if the check is incomplete, and the facilitator sees that it is incomplete.
 - Vocabulary is meeting-wide plus the active leaf, with a short hangover on the previous leaf after Next. OKF is not a source.
 - Navigation markers are a prior. A content pass still assigns returns, tangents, and speech that crosses a click. Edge detection stays.
@@ -132,7 +132,7 @@ Sizes are relative to the room slice already shipped, for this repo with AI-assi
 | Work | Size against the shipped room slice | Notes |
 | --- | --- | --- |
 | Capture ledger, per-microphone match, critical warning, gap rows, post-meeting file check | Shipped in code | Extends the recording state. Does not replace join or egress configuration. Grace is 20 seconds until a live room measures it. Validation rehearsals below are still open. |
-| Presenter-only Next, Previous, and jump. Pre-meeting map check. Present-to-everyone versus personal open. | Shipped in code | The first claim holds the presenter role until that person releases it. Followers see the leaf and a presented page on the room poll. The map check is stored on the meeting, not the session, so it does not start the media clock. |
+| Presenter-only Next, Previous, and jump. Pre-meeting map check. Present-to-everyone versus personal open. | Shipped in code | The shared stage is the presented page. Next and Previous advance extracted package pages, then the next leaf. Open PDF stays on the presenter's own screen. Followers see the stage on the room poll. The map check is stored on the meeting, not the session. |
 | Recognizer, meeting-wide and active-item vocabulary, three stored layers | Larger than that slice, and only after a recognizer is chosen | Must be unable to stop egress. Must not insert into the historical transcript artifact. |
 | Content pass over navigation markers, confirmations, gap disclosure in the draft | About that slice | Adapt span intervals, clarifications, and the V2 stage contracts. Do not add a second minutes pipeline. |
 

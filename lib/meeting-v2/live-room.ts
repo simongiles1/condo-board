@@ -362,11 +362,11 @@ export async function joinLiveRoom(
 /**
  * Stores one agenda navigation prior on the room media clock.
  * Only the presenter can move the agenda. The offset is server elapsed time, not a wall clock.
- * Jumping back appends a new row. Clears any page that was being shown to everyone.
+ * Jumping back appends a new row. The shared stage page becomes the requested page, or the leaf's first linked page.
  */
 export async function recordLiveNavigation(
   meetingId: string,
-  target: { agendaItemId: string } | { unscheduled: true },
+  target: { agendaItemId: string; page?: number | null } | { unscheduled: true },
   participant: LiveParticipant,
   at: Date = new Date(),
 ): Promise<LiveRoomSnapshot> {
@@ -377,9 +377,16 @@ export async function recordLiveNavigation(
 
   const unscheduled = "unscheduled" in target;
   const leaves = await loadLeaves(meetingId);
-  if (!unscheduled && !leaves.some((leaf) => leaf.id === target.agendaItemId)) {
+  const leaf = unscheduled ? undefined : leaves.find((item) => item.id === target.agendaItemId);
+  if (!unscheduled && !leaf) {
     throw new LiveRoomError("That agenda item is not a leaf in this meeting.", 400);
   }
+  const requestedPage = !unscheduled && "page" in target ? target.page : null;
+  const presentedPage = leaf
+    ? typeof requestedPage === "number" && leaf.sourcePages.includes(requestedPage)
+      ? requestedPage
+      : (leaf.sourcePages[0] ?? null)
+    : null;
 
   await db.transaction(async (tx) => {
     await tx.insert(meetingsV2LiveNavigationEvents).values({
@@ -395,7 +402,7 @@ export async function recordLiveNavigation(
     });
     await tx
       .update(meetingsV2LiveSessions)
-      .set({ presentedPage: null, updatedAt: at.toISOString() })
+      .set({ presentedPage, updatedAt: at.toISOString() })
       .where(eq(meetingsV2LiveSessions.id, session.id));
   });
 

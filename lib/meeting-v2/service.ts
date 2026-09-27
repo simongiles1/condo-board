@@ -110,6 +110,7 @@ import {
   mergedCuesToSegmentRows,
   parseVttToMergedCues,
 } from "@/lib/meeting-v2/transcript";
+import { isUpcomingMeeting } from "@/lib/meeting-v2/upcoming-meeting";
 
 type LegacyMeetingRow = typeof meetings.$inferSelect;
 type MeetingV2Row = typeof meetingsV2.$inferSelect;
@@ -164,6 +165,7 @@ export type MeetingV2Detail = {
     goldStandardValidationJson?: string | null;
     aiUsageJson?: string | null;
     agendaApproval?: AgendaApprovalSettings | null;
+    upcomingMeeting?: MeetingV2Settings["upcomingMeeting"] | null;
     draftReadiness?: MeetingV2Settings["draftReadiness"];
     pipelineActivelyRunning?: boolean;
   };
@@ -818,7 +820,12 @@ export function deriveMeetingV2ComputedStatus(
   isConsistent: boolean;
   note: string;
 } {
-  if (counts.documentChunks === 0 || counts.transcriptSegments === 0 || counts.documentPages === 0) {
+  const upcoming = isUpcomingMeeting(settings);
+  if (
+    counts.documentChunks === 0 ||
+    counts.documentPages === 0 ||
+    (!upcoming && counts.transcriptSegments === 0)
+  ) {
     return {
       pipelineState: counts.sourceArtifacts > 0 ? "ingesting" : "created",
       currentStep: counts.sourceArtifacts > 0 ? "Source ingestion incomplete" : "Ready to start",
@@ -835,6 +842,16 @@ export function deriveMeetingV2ComputedStatus(
       progressPercent: 30,
       isConsistent: false,
       note: "Agenda items have not been extracted yet.",
+    };
+  }
+
+  if (upcoming) {
+    return {
+      pipelineState: "extracted",
+      currentStep: "Ready for the live room",
+      progressPercent: 40,
+      isConsistent: true,
+      note: "Agenda and attachment pages are prepared. Minutes stages stay off until a transcript exists.",
     };
   }
 
@@ -995,6 +1012,7 @@ export async function loadMeetingsV2DashboardCards(
         note: "",
       } as MeetingV2ExtractionQuality,
       pipelineNotStarted,
+      settings: meeting.settings,
     });
     const needsClarificationCount = investigations.filter(
       (investigation) => storedOpenQuestionTexts(investigation.openQuestionsJson).length > 0,
@@ -1061,8 +1079,9 @@ function buildMeetingV2Stages(options: {
   counts: MeetingV2Detail["meeting"]["counts"];
   extractionQuality: MeetingV2ExtractionQuality;
   pipelineNotStarted?: boolean;
+  settings?: MeetingV2Settings | null;
 }): MeetingV2Detail["meeting"]["stages"] {
-  const { counts, extractionQuality, pipelineNotStarted = false } = options;
+  const { counts, extractionQuality, pipelineNotStarted = false, settings } = options;
 
   if (pipelineNotStarted) {
     return [
@@ -1105,7 +1124,7 @@ function buildMeetingV2Stages(options: {
   }
   const ingestComplete =
     counts.sourceArtifacts > 0 &&
-    counts.transcriptSegments > 0 &&
+    (isUpcomingMeeting(settings) || counts.transcriptSegments > 0) &&
     counts.documentPages > 0 &&
     counts.documentSections > 0 &&
     counts.documentChunks > 0;
@@ -1346,7 +1365,8 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
   documentSections: number;
   documentChunks: number;
 }> {
-  await ensureMeetingV2Seed(meetingId);
+  const seeded = await ensureMeetingV2Seed(meetingId);
+  const upcoming = isUpcomingMeeting(seeded.settings);
   const db = getDb();
   const legacyMeeting = await getLegacyMeeting(meetingId);
 
@@ -1374,7 +1394,7 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
 
   if (
     existingArtifacts.length > 0 &&
-    existingSegments.length > 0 &&
+    (upcoming || existingSegments.length > 0) &&
     existingPages.length > 0 &&
     existingSections.length > 0 &&
     existingChunks.length > 0
@@ -1387,31 +1407,33 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
     };
   }
 
-  const transcriptPath = resolveStoredPath(legacyMeeting.vttFilePath);
+  const transcriptPath = upcoming ? null : resolveStoredPath(legacyMeeting.vttFilePath);
   const boardPackagePath = resolveStoredPath(
     legacyMeeting.boardPackageFilePath || legacyMeeting.pdfFilePath,
   );
 
-  if (!transcriptPath) {
+  if (!upcoming && !transcriptPath) {
     throw new Error("Legacy meeting is missing the transcript path.");
   }
   if (!boardPackagePath) {
     throw new Error("Legacy meeting is missing the board package path.");
   }
 
-  const transcriptBuffer = await readFile(transcriptPath);
   const boardPackageBuffer = await readFile(boardPackagePath);
-  const transcriptText = transcriptBuffer.toString("utf8");
-  const mergedTranscriptCues = parseVttToMergedCues(transcriptText);
+  const mergedTranscriptCues = transcriptPath
+    ? parseVttToMergedCues((await readFile(transcriptPath)).toString("utf8"))
+    : [];
 
-  const transcriptArtifact = await ensureSourceArtifact(
-    meetingId,
-    "transcript",
-    legacyMeeting.vttFilePath,
-    path.basename(legacyMeeting.vttFilePath),
-    "text/vtt",
-    null,
-  );
+  const transcriptArtifact = transcriptPath
+    ? await ensureSourceArtifact(
+        meetingId,
+        "transcript",
+        legacyMeeting.vttFilePath,
+        path.basename(legacyMeeting.vttFilePath),
+        "text/vtt",
+        null,
+      )
+    : null;
   const existingPageNumbers = new Set(existingPages.map(page => page.pageNumber));
   const existingPageCount = existingPageNumbers.size;
   let firstMissingPage = 1;
@@ -1428,7 +1450,7 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
 
   const distinctExistingSegments = dedupeTranscriptSegmentsBySequence(existingSegments);
 
-  if (distinctExistingSegments.length < mergedTranscriptCues.length) {
+  if (transcriptArtifact && distinctExistingSegments.length < mergedTranscriptCues.length) {
     const segmentRows = mergedCuesToSegmentRows(mergedTranscriptCues, {
       meetingId,
       sourceArtifactId: transcriptArtifact.id,
@@ -1537,23 +1559,26 @@ export async function ingestMeetingV2Sources(meetingId: string): Promise<{
       metadataJson: JSON.stringify(chunk.metadata),
       createdAt: nowIso(),
     })) satisfies Array<typeof meetingsV2DocumentChunks.$inferInsert>;
-    const transcriptChunks = chunkTranscriptSegments(segments).map((chunk) => ({
-      id: randomUUID(),
-      meetingV2Id: meetingId,
-      sourceArtifactId: transcriptArtifact.id,
-      chunkKey: chunk.chunkKey,
-      chunkKind: "transcript" as const,
-      sortOrder: documentChunks.length + chunk.sortOrder,
-      pageStart: null,
-      pageEnd: null,
-      sequenceStart: chunk.sequenceStart,
-      sequenceEnd: chunk.sequenceEnd,
-      startTimestamp: chunk.startTimestamp,
-      endTimestamp: chunk.endTimestamp,
-      text: chunk.text,
-      metadataJson: JSON.stringify(chunk.metadata),
-      createdAt: nowIso(),
-    })) satisfies Array<typeof meetingsV2DocumentChunks.$inferInsert>;
+    const transcriptChunks: Array<typeof meetingsV2DocumentChunks.$inferInsert> =
+      transcriptArtifact == null
+        ? []
+        : chunkTranscriptSegments(segments).map((chunk) => ({
+            id: randomUUID(),
+            meetingV2Id: meetingId,
+            sourceArtifactId: transcriptArtifact.id,
+            chunkKey: chunk.chunkKey,
+            chunkKind: "transcript" as const,
+            sortOrder: documentChunks.length + chunk.sortOrder,
+            pageStart: null,
+            pageEnd: null,
+            sequenceStart: chunk.sequenceStart,
+            sequenceEnd: chunk.sequenceEnd,
+            startTimestamp: chunk.startTimestamp,
+            endTimestamp: chunk.endTimestamp,
+            text: chunk.text,
+            metadataJson: JSON.stringify(chunk.metadata),
+            createdAt: nowIso(),
+          }));
     const allChunks = [...documentChunks, ...transcriptChunks];
     if (allChunks.length > 0) {
       await db.insert(meetingsV2DocumentChunks).values(allChunks);
@@ -1632,10 +1657,15 @@ async function clearMeetingV2DownstreamData(meetingId: string): Promise<void> {
 }
 
 async function currentMeetingSourceFingerprint(meetingId: string): Promise<string> {
+  const meeting = await ensureMeetingV2Seed(meetingId);
   const legacy = await getLegacyMeeting(meetingId);
-  const paths = [resolveStoredPath(legacy.vttFilePath), resolveStoredPath(legacy.boardPackageFilePath || legacy.pdfFilePath)];
-  if (paths.some(p => !p)) throw new Error("Both transcript and board package are required.");
-  const checksums = await Promise.all(paths.map(async p => checksumFor(await readFile(p!))));
+  const boardPackagePath = resolveStoredPath(legacy.boardPackageFilePath || legacy.pdfFilePath);
+  if (!boardPackagePath) throw new Error("Board package is required.");
+  const paths = isUpcomingMeeting(meeting.settings)
+    ? [boardPackagePath]
+    : [resolveStoredPath(legacy.vttFilePath), boardPackagePath];
+  if (paths.some((entry) => !entry)) throw new Error("Both transcript and board package are required.");
+  const checksums = await Promise.all(paths.map(async (entry) => checksumFor(await readFile(entry!))));
   return evidenceFingerprint(checksums);
 }
 
@@ -1653,6 +1683,15 @@ export async function prepareMeetingV2Pipeline(meetingId: string): Promise<void>
     await getDb().delete(meetingsV2DocumentSections).where(eq(meetingsV2DocumentSections.meetingV2Id, meetingId));
   }
   const nextSettings = { ...settings, pipelineVersion: MINUTES_PIPELINE_VERSION, sourceFingerprint: fingerprint };
+  if (
+    settings.sourceFingerprint &&
+    settings.sourceFingerprint !== fingerprint &&
+    nextSettings.upcomingMeeting
+  ) {
+    nextSettings.upcomingMeeting = {
+      agendaContentEndsAtPage: nextSettings.upcomingMeeting.agendaContentEndsAtPage,
+    };
+  }
   if (settings.sourceFingerprint && settings.sourceFingerprint !== fingerprint && settings.userClarifications) {
     nextSettings.clarificationHistory = [...(settings.clarificationHistory ?? []), {
       sourceFingerprint: settings.sourceFingerprint, answers: settings.userClarifications, archivedAt: nowIso(),
@@ -3666,6 +3705,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
     },
     extractionQuality,
     pipelineNotStarted,
+    settings: selectedSettings,
   });
   let computedPipelineState = computed.pipelineState;
   let computedCurrentStep = computed.currentStep;
@@ -3769,6 +3809,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
       goldStandardValidationJson,
       aiUsageJson,
       agendaApproval: selectedSettings.agendaApproval ?? null,
+      upcomingMeeting: selectedSettings.upcomingMeeting ?? null,
       draftReadiness: draftReadinessSnapshot,
     },
     items: agendaItems.map((item) => {

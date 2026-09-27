@@ -8,7 +8,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Live room presenter** — Only the person who claims presenter can use Previous, Next, jump, or an unscheduled discussion. Everyone else follows that leaf. Opening a package page stays on your own screen. Present sends that page to the room without changing the leaf. The room still opens when the leaf-to-page map has not been checked, and the room says so until someone records the check.
+- **Create a new meeting** — Meetings V2 has a New meeting action beside the historical upload. It takes a board package and no transcript. On one board-package step you select meeting pages, mark where the agenda ends (teal vs amber), and create. Preparation builds the agenda from those pages and links attachment pages to agenda items. The live room can open once that finishes. Minutes stages stay off until a transcript exists.
+
+- **Live room shared stage** — The live room shows the current agenda item as extracted board-package text, one page at a time. Previous and Next move that shared page, then the next item. Pipeline notes are not on the stage. Open PDF is a personal view of the same page.
+
+- **Live room presenter** — Only the person who claims presenter can use Previous, Next, agenda jump, or an unscheduled discussion. Everyone else follows the shared stage. The room still opens when the leaf-to-page map has not been checked, and the room says so until someone records the check.
 
 - **Live room capture ledger** — The live room no longer treats a connected call or a single active recording as proof that audio was kept. Capture is a full-width critical warning when status cannot be read, the bucket is missing, a publishing microphone has no track recording after a short grace period, or a recording fails without a stored gap. Each gap records the media-clock interval, who was missing, and how it was detected. A person can record that capture is interrupted; discussion after that mark stays absent until capture is healthy. After the room empties, each finished file is opened in the bucket, its duration is checked against publishing time minus gaps, and the difference between the file start and the media clock is stored. Play links appear for files that opened.
 

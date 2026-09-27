@@ -32,6 +32,7 @@ import {
   validateAgendaItemInvestigations,
 } from "@/lib/meeting-v2/service";
 import { runSegmentCompareExperiment } from "@/lib/meeting-v2/segment-compare";
+import { assignUpcomingAttachmentPages, isUpcomingMeeting } from "@/lib/meeting-v2/upcoming-meeting";
 
 export const runMeetingV2Pipeline = inngest.createFunction(
   {
@@ -58,7 +59,8 @@ export const runMeetingV2Pipeline = inngest.createFunction(
       });
       const ingestComplete =
         pipelineSnapshot.counts.sourceArtifacts > 0 &&
-        pipelineSnapshot.counts.transcriptSegments > 0 &&
+        (isUpcomingMeeting(pipelineSnapshot.settings) ||
+          pipelineSnapshot.counts.transcriptSegments > 0) &&
         pipelineSnapshot.counts.documentPages > 0 &&
         pipelineSnapshot.counts.documentSections > 0 &&
         pipelineSnapshot.counts.documentChunks > 0;
@@ -164,6 +166,28 @@ export const runMeetingV2Pipeline = inngest.createFunction(
       });
       if (extractionQuality.likelyIncomplete) {
         return { success: false, meetingId, haltedAt: "extract", reason: extractionQuality.note };
+      }
+
+      const upcomingReady = await step.run("assign-upcoming-attachment-pages", async () => {
+        const db = getDb();
+        const [meeting] = await db
+          .select({ settings: meetingsV2.settings })
+          .from(meetingsV2)
+          .where(eq(meetingsV2.id, meetingId));
+        const settings = (meeting?.settings as MeetingV2Settings) || {};
+        if (!isUpcomingMeeting(settings)) return false;
+        await assignUpcomingAttachmentPages(meetingId);
+        await updateMeetingV2Status(
+          meetingId,
+          "extracted",
+          "Ready for the live room",
+          40,
+          null,
+        );
+        return true;
+      });
+      if (upcomingReady) {
+        return { success: true, meetingId, haltedAt: "upcoming-live-prep" };
       }
 
       const isAgendaApproved = await step.run("check-agenda-approval-state", async () => {

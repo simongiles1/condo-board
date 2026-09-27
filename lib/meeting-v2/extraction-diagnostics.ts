@@ -103,6 +103,11 @@ export type MeetingV2Settings = {
   segmentCompareReviewedKeys?: string[];
   /** Human-labeled transcript spans for agenda leaves, used to score lab runs. */
   segmentGoldStandard?: import("./segment-gold-standard").SegmentGoldStandard | null;
+  /**
+   * A meeting that has not happened yet. No transcript. The split is the last
+   * trimmed-package page that is still agenda content.
+   */
+  upcomingMeeting?: import("./upcoming-meeting").UpcomingMeetingSettings;
 };
 
 export type MeetingV2ExtractionRun = {

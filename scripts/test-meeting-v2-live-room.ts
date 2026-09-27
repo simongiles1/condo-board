@@ -16,6 +16,8 @@ import {
   navigationAllowed,
   packagePageToOpen,
   pageMapCheckView,
+  stageMove,
+  stagePackagePage,
   type LiveAgendaSourceItem,
 } from "../lib/meeting-v2/live-agenda";
 import { liveKitTrackEgress } from "../lib/livekit/config";
@@ -201,6 +203,36 @@ describe("live room agenda", () => {
     });
     assert.equal(checked.checkedAt, "2026-09-26T12:00:00.000Z");
     assert.equal(checked.checkedByName, "Ada");
+  });
+
+  it("advances the shared stage one package page at a time", () => {
+    const leaves = [
+      { id: "steam", sourcePages: [3, 4] },
+      { id: "roof", sourcePages: [9] },
+    ];
+    const onSteam = [{ agendaItemId: "steam", unscheduled: false }];
+    assert.deepEqual(
+      stageMove({ leaves, navigation: onSteam, presentedPage: 3, direction: 1 }),
+      { kind: "page", page: 4 },
+    );
+    assert.deepEqual(
+      stageMove({ leaves, navigation: onSteam, presentedPage: 4, direction: 1 }),
+      { kind: "leaf", agendaItemId: "roof", page: 9 },
+    );
+    assert.deepEqual(
+      stageMove({
+        leaves,
+        navigation: [{ agendaItemId: "roof", unscheduled: false }],
+        presentedPage: 9,
+        direction: -1,
+      }),
+      { kind: "leaf", agendaItemId: "steam", page: 4 },
+    );
+    assert.equal(
+      stagePackagePage({ kind: "leaf", agendaItemId: "steam" }, [3, 4], null),
+      3,
+    );
+    assert.equal(stagePackagePage({ kind: "unscheduled" }, [3], 3), null);
   });
 });
 

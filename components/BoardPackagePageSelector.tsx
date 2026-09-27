@@ -60,6 +60,11 @@ type Props = {
   showFilePicker?: boolean;
   /** Scale preview to the panel width (scroll vertically if needed). */
   previewFitWidth?: boolean;
+  /** Live-meeting create: one picker for agenda + attachments with a boundary page. */
+  variant?: "minutes" | "upcoming";
+  /** PDF page number where the agenda ends; later selected pages are attachments. */
+  agendaEndsAtPage?: number | null;
+  onAgendaEndsAtPage?: (page: number) => void;
 };
 
 export function BoardPackagePageSelector({
@@ -69,6 +74,9 @@ export function BoardPackagePageSelector({
   externalFile = null,
   showFilePicker = true,
   previewFitWidth = false,
+  variant = "minutes",
+  agendaEndsAtPage = null,
+  onAgendaEndsAtPage,
 }: Props) {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -176,15 +184,23 @@ export function BoardPackagePageSelector({
     void loadFile(externalFile);
   }, [clearFile, externalFile, loadFile]);
 
-  const togglePage = useCallback((page: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(page)) next.delete(page);
-      else next.add(page);
-      return next;
-    });
-    setPreviewPage(page);
-  }, []);
+  const togglePage = useCallback(
+    (page: number, options?: { setAgendaBoundary?: boolean }) => {
+      if (options?.setAgendaBoundary && selected.has(page)) {
+        onAgendaEndsAtPage?.(page);
+        setPreviewPage(page);
+        return;
+      }
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(page)) next.delete(page);
+        else next.add(page);
+        return next;
+      });
+      setPreviewPage(page);
+    },
+    [onAgendaEndsAtPage, selected],
+  );
 
   const setPages = useCallback((pages: number[]) => {
     setSelected(new Set(pages));
@@ -247,8 +263,9 @@ export function BoardPackagePageSelector({
           <span className="font-medium text-teal-900">Drop PDF here</span>
           <span className="mt-1 text-slate-600">or click to browse</span>
           <span className="mt-2 text-xs text-slate-500">
-            Large packages often include attachments—select only the management
-            report pages (typically the first 15–20).
+            {variant === "upcoming"
+              ? "Include every page you need for the live meeting—agenda and attachments."
+              : "Large packages often include attachments—select only the management report pages (typically the first 15–20)."}
           </span>
           {loading ? (
             <span className="mt-3 text-xs text-slate-600">Reading PDF…</span>
@@ -261,7 +278,8 @@ export function BoardPackagePageSelector({
               <p className="font-mono text-sm text-slate-800">{sourceFile.name}</p>
               <p className="mt-1 text-xs text-slate-600">
                 {pageCount} pages total · including{" "}
-                <strong>{selectedSorted.length}</strong> for Gemini (
+                <strong>{selectedSorted.length}</strong>
+                {variant === "upcoming" ? " for this meeting" : " for Gemini"} (
                 {formatPageList(selectedSorted)})
               </p>
             </div>
@@ -352,13 +370,18 @@ export function BoardPackagePageSelector({
           <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
             <div className="flex h-72 flex-col rounded-xl border border-slate-200 bg-white">
               <div className="border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Pages to include
+                {variant === "upcoming" ? "Meeting pages" : "Pages to include"}
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
                 <ul className="grid grid-cols-4 gap-1 sm:grid-cols-6 md:grid-cols-8">
                   {Array.from({ length: pageCount }, (_, i) => i + 1).map(
                     (page) => {
                       const on = selected.has(page);
+                      const isAgenda =
+                        on &&
+                        (agendaEndsAtPage == null || page <= agendaEndsAtPage);
+                      const isAttachment =
+                        on && agendaEndsAtPage != null && page > agendaEndsAtPage;
                       return (
                         <li key={page}>
                           <button
@@ -366,11 +389,20 @@ export function BoardPackagePageSelector({
                             disabled={disabled}
                             aria-pressed={on}
                             onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => togglePage(page)}
+                            onClick={(event) =>
+                              togglePage(page, {
+                                setAgendaBoundary:
+                                  variant === "upcoming" &&
+                                  (event.shiftKey || event.altKey) &&
+                                  on,
+                              })
+                            }
                             className={`flex w-full cursor-pointer items-center justify-center rounded-md border px-1 py-1.5 text-xs font-mono transition ${
-                              on
-                                ? "border-teal-500 bg-teal-50 text-teal-900"
-                                : "border-slate-200 bg-slate-50 text-slate-500 line-through decoration-slate-400"
+                              isAttachment
+                                ? "border-amber-500 bg-amber-50 text-amber-950"
+                                : isAgenda
+                                  ? "border-teal-500 bg-teal-50 text-teal-900"
+                                  : "border-slate-200 bg-slate-50 text-slate-500 line-through decoration-slate-400"
                             } ${previewPage === page ? "ring-2 ring-teal-300" : ""} disabled:cursor-not-allowed disabled:opacity-50`}
                           >
                             {page}
@@ -382,7 +414,9 @@ export function BoardPackagePageSelector({
                 </ul>
               </div>
               <p className="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
-                Checked = sent to Gemini. Unchecked pages are stripped out.
+                {variant === "upcoming"
+                  ? "Teal = agenda. Amber = attachments. Shift+click a selected page to set where the agenda ends."
+                  : "Checked = sent to Gemini. Unchecked pages are stripped out."}
               </p>
             </div>
 
@@ -422,6 +456,35 @@ export function BoardPackagePageSelector({
               </div>
             </div>
           </div>
+
+          {variant === "upcoming" && selectedSorted.length >= 2 ? (
+            <label className="flex flex-col gap-1 text-sm font-medium text-slate-800">
+              Last agenda page
+              <select
+                value={
+                  agendaEndsAtPage ??
+                  selectedSorted[selectedSorted.length - 2] ??
+                  ""
+                }
+                disabled={disabled}
+                onChange={(event) => {
+                  const page = Number(event.target.value);
+                  if (Number.isInteger(page) && page > 0) {
+                    onAgendaEndsAtPage?.(page);
+                  }
+                }}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+              >
+                {selectedSorted.slice(0, -1).map((page) => (
+                  <option key={page} value={page}>
+                    PDF page {page} ({selectedSorted.filter((p) => p <= page).length}{" "}
+                    agenda ·{" "}
+                    {selectedSorted.filter((p) => p > page).length} attachment)
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
       )}
 

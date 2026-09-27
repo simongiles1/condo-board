@@ -5,6 +5,7 @@ import { MINUTES_PIPELINE_VERSION, stableAgendaId } from "./evidence-contract";
 import { and, asc, eq } from "drizzle-orm";
 
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
+import { upcomingAgendaSplit } from "@/lib/meeting-v2/upcoming-meeting";
 import type { SegmentationJsonFn } from "@/lib/meeting-v2/segment-json";
 import { getDb } from "@/lib/db";
 import {
@@ -1615,8 +1616,10 @@ export async function extractAgendaItemsWithAi(
   // If starting fresh, extract the authoritative Board Package Agenda JSON
   if (state.documentTopics.length === 0) {
     try {
+      const agendaSplit = upcomingAgendaSplit(meeting[0].settings);
       const fullAgenda = await extractBoardPackageAgendaJson({
         meetingId,
+        agendaContentEndsAtPage: agendaSplit ?? undefined,
         onProgress: async (p) => {
           await options?.onProgress?.({
             current: p.current,

@@ -149,6 +149,14 @@ type MeetingV2Status = {
     goldStandardFilePath?: string | null;
     goldStandardValidationJson?: string | null;
     aiUsageJson?: string | null;
+    upcomingMeeting?: {
+      agendaContentEndsAtPage: number;
+      attachmentAssignment?: {
+        completedAt: string;
+        assignedPageCount: number;
+        unassignedPages: number[];
+      };
+    } | null;
     agendaApproval?: {
       status: "pending_review" | "approved";
       approvedAt: string | null;
@@ -1087,17 +1095,20 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
   const hasMeetingDocuments = Boolean(
     status?.sources.transcript?.available || status?.sources.boardPackage?.available,
   );
+  const isUpcomingMeeting = Boolean(status?.meeting.upcomingMeeting);
   const pipelineSourcesReady = Boolean(
-    status?.sources.transcript?.available && status?.sources.boardPackage?.available,
+    status?.sources.boardPackage?.available &&
+      (isUpcomingMeeting || status?.sources.transcript?.available),
   );
   const pipelineRunning = pipelineActivelyRunning && !pipelineHalted;
   const pipelineDisabledReason = !status
     ? "Loading meeting sources…"
     : pipelineRunning
       ? "Pipeline is already running."
-      : !status.sources.transcript?.available && !status.sources.boardPackage?.available
+      : !status.sources.boardPackage?.available &&
+          (!isUpcomingMeeting && !status.sources.transcript?.available)
         ? "Transcript and board package are not available on this machine."
-        : !status.sources.transcript?.available
+        : !isUpcomingMeeting && !status.sources.transcript?.available
           ? "Transcript file is not available on this machine."
           : !status.sources.boardPackage?.available
             ? "Board package is not available on this machine."
@@ -1140,6 +1151,16 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               >
                 Live room
               </Link>
+              {status?.meeting.upcomingMeeting ? (
+                <p className="mt-1 max-w-md text-xs text-white/70">
+                  {status.meeting.counts.agendaItems > 0
+                    ? "Package is prepared for the live room. Attachment pages are linked onto agenda items."
+                    : "The board package is still being prepared. Open the live room after agenda items appear."}
+                  {status.meeting.upcomingMeeting.attachmentAssignment?.unassignedPages.length
+                    ? ` Unlinked attachment pages: ${status.meeting.upcomingMeeting.attachmentAssignment.unassignedPages.join(", ")}.`
+                    : ""}
+                </p>
+              ) : null}
               <div className="mt-2 hidden flex-col gap-0.5 xl:flex">
                 <label
                   htmlFor="meeting-autonomy-slider-desktop"
@@ -2150,7 +2171,9 @@ function PreRunPanel({
       }
       description={
         pipelineNotStarted
-          ? "Your transcript and board package are uploaded. Click Start Pipeline when you are ready."
+          ? status.meeting.upcomingMeeting
+            ? "The board package is uploaded. Preparation links attachment pages to agenda items, then the live room can use them."
+            : "Your transcript and board package are uploaded. Click Start Pipeline when you are ready."
           : pipelineHalted
             ? "The pipeline did not finish successfully. Review the alerts above, then resume or restart the run."
             : pipelineActivelyRunning

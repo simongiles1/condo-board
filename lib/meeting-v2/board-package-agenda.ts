@@ -356,6 +356,8 @@ function mergePageItemsIntoAgenda(
 export async function extractBoardPackageAgendaJson(options: {
   meetingId: string;
   maxPages?: number;
+  /** When set, only these pages build the agenda. Later pages are attachments. */
+  agendaContentEndsAtPage?: number;
   onProgress?: (progress: { current: number; total: number; label: string }) => Promise<void> | void;
 }): Promise<FullBoardPackageAgenda> {
   const db = getDb();
@@ -377,7 +379,14 @@ export async function extractBoardPackageAgendaJson(options: {
   if (options.maxPages !== undefined && options.maxPages < pages.length) {
     throw new Error("Partial board-package extraction is not a complete agenda. Process every page.");
   }
-  const corePages = pages;
+  const split = options.agendaContentEndsAtPage;
+  const corePages =
+    typeof split === "number"
+      ? pages.filter((page) => page.pageNumber <= split)
+      : pages;
+  if (corePages.length === 0) {
+    throw new Error("The agenda/attachment split left no agenda pages to extract.");
+  }
   const total = corePages.length + 1; // 1 for discovery + page count
 
   await options.onProgress?.({

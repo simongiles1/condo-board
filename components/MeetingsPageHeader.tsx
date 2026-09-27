@@ -7,6 +7,7 @@ import { GenerateMeetingV2Dialog } from "@/components/GenerateMeetingV2Dialog";
 
 export function MeetingsPageHeader({ isV2 = false }: { isV2?: boolean }) {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [upcomingOpen, setUpcomingOpen] = useState(false);
 
   return (
     <>
@@ -19,19 +20,37 @@ export function MeetingsPageHeader({ isV2 = false }: { isV2?: boolean }) {
             Meeting workspaces
           </h1>
         </div>
-        <button
-          type="button"
-          onClick={() => setDialogOpen(true)}
-          className="text-sm font-semibold text-teal-700 hover:text-teal-900"
-        >
-          {isV2 ? "+ New V2 upload" : "+ New upload"}
-        </button>
+        <div className="flex flex-wrap items-center gap-4">
+          {isV2 ? (
+            <button
+              type="button"
+              onClick={() => setUpcomingOpen(true)}
+              className="text-sm font-semibold text-teal-700 hover:text-teal-900"
+            >
+              + New meeting
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setDialogOpen(true)}
+            className="text-sm font-semibold text-teal-700 hover:text-teal-900"
+          >
+            {isV2 ? "+ New V2 upload" : "+ New upload"}
+          </button>
+        </div>
       </div>
       {isV2 ? (
-        <GenerateMeetingV2Dialog
-          open={dialogOpen}
-          onClose={() => setDialogOpen(false)}
-        />
+        <>
+          <GenerateMeetingV2Dialog
+            open={dialogOpen}
+            onClose={() => setDialogOpen(false)}
+          />
+          <GenerateMeetingV2Dialog
+            mode="upcoming"
+            open={upcomingOpen}
+            onClose={() => setUpcomingOpen(false)}
+          />
+        </>
       ) : (
         <GenerateMeetingDialog
           open={dialogOpen}

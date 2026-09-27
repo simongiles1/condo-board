@@ -214,6 +214,75 @@ export function leafStepTarget(
   return adjacentLeafId(leaves, anchor, 1);
 }
 
+export type StageMove =
+  | { kind: "page"; page: number }
+  | { kind: "leaf"; agendaItemId: string; page: number | null };
+
+/**
+ * Package page shown on the shared stage for the active leaf.
+ * Falls back to the leaf's first linked page when nothing is presented yet.
+ */
+export function stagePackagePage(
+  focus: LiveFocus | null,
+  sourcePages: number[],
+  presentedPage: number | null,
+): number | null {
+  if (focus?.kind !== "leaf") return null;
+  if (presentedPage != null && sourcePages.includes(presentedPage)) return presentedPage;
+  return sourcePages[0] ?? null;
+}
+
+/**
+ * One step of the shared stage. Pages of the current leaf come before the next leaf.
+ * Stepping backward onto a leaf lands on its last linked page.
+ */
+export function stageMove(input: {
+  leaves: Array<{ id: string; sourcePages: number[] }>;
+  navigation: LiveNavigationTarget[];
+  presentedPage: number | null;
+  direction: -1 | 1;
+}): StageMove | null {
+  const focus = activeLiveFocus(input.leaves, input.navigation);
+  if (!focus) return null;
+
+  if (focus.kind === "unscheduled") {
+    const leafId = leafStepTarget(input.leaves, input.navigation, input.direction);
+    if (!leafId) return null;
+    const leaf = input.leaves.find((item) => item.id === leafId);
+    const page =
+      input.direction < 0 ? (leaf?.sourcePages.at(-1) ?? null) : (leaf?.sourcePages[0] ?? null);
+    return { kind: "leaf", agendaItemId: leafId, page };
+  }
+
+  const leaf = input.leaves.find((item) => item.id === focus.agendaItemId);
+  if (!leaf) return null;
+  const pages = leaf.sourcePages;
+  const current = stagePackagePage(focus, pages, input.presentedPage);
+  const index = current == null ? -1 : pages.indexOf(current);
+
+  if (input.direction > 0) {
+    if (index >= 0 && index < pages.length - 1) {
+      return { kind: "page", page: pages[index + 1] ?? pages[index] };
+    }
+    const nextId = adjacentLeafId(input.leaves, leaf.id, 1);
+    if (!nextId) return null;
+    const next = input.leaves.find((item) => item.id === nextId);
+    return { kind: "leaf", agendaItemId: nextId, page: next?.sourcePages[0] ?? null };
+  }
+
+  if (index > 0) {
+    return { kind: "page", page: pages[index - 1] ?? pages[0] };
+  }
+  const previousId = adjacentLeafId(input.leaves, leaf.id, -1);
+  if (!previousId) return null;
+  const previous = input.leaves.find((item) => item.id === previousId);
+  return {
+    kind: "leaf",
+    agendaItemId: previousId,
+    page: previous?.sourcePages.at(-1) ?? null,
+  };
+}
+
 /**
  * Page the presenter sent to everyone, when it still belongs to the active leaf.
  * Returns null for an unscheduled discussion or a page that is not on that leaf.

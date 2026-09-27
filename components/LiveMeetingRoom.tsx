@@ -167,10 +167,10 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
   }, [meetingId]);
 
   useEffect(() => {
-    if (!snapshot?.configured || !snapshot.roomName || autoJoined.current) return;
+    if (!snapshot?.configured || autoJoined.current) return;
     autoJoined.current = true;
     void join();
-  }, [join, snapshot?.configured, snapshot?.roomName]);
+  }, [join, snapshot?.configured]);
 
   useEffect(() => {
     if (!snapshot?.roomName) return;
@@ -341,7 +341,7 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-950">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950">
       <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-white">
         <Link
           href={`/operations/meetings/v2/${meetingId}`}

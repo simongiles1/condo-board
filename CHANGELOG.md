@@ -36,6 +36,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Live room opens into the call** — Opening the live room joins LiveKit on the first visit. The room fills the window so Join, Previous, Next, and the presenter controls stay on screen. The Waiting badge is recording status, not a connection spinner.
+
 - **Live room join** — Joining a LiveKit room no longer fails when a storage bucket is not configured. Track recording is requested only after `LIVEKIT_EGRESS_S3_BUCKET`, access key, and secret are set. Until then the room still opens and the recording badge says it is not recording.
 
 - **Transcript search scroll and highlight** — Search jumps in the readable transcript leave room below sticky section badges (including wrapped badge rows). Partial-word highlights no longer add horizontal padding that splits the word.

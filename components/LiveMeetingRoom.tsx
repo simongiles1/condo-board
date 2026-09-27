@@ -4,13 +4,21 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 
-import { BoardPackageViewerDialog } from "@/components/BoardPackageViewerDialog";
+import { MarkdownPreview } from "@/components/MarkdownPreview";
+import { ZoomablePdfViewer } from "@/components/ZoomablePdfViewer";
 import {
+  groupPageRanges,
   navigationAllowed,
   stageMove,
   stagePackagePage,
+  stagePages,
   type LiveRoomSnapshot,
 } from "@/lib/meeting-v2/live-agenda";
+import type { LiveArchiveLink } from "@/lib/meeting-v2/live-archive-links";
+import {
+  linkPackagePageCitations,
+  packagePageFromHref,
+} from "@/lib/meeting-v2/package-page-refs";
 import { formatMediaClock, type RecordingHealthState } from "@/lib/meeting-v2/live-clock";
 
 type JoinPayload = {
@@ -28,6 +36,10 @@ type Person = {
 };
 
 type Connection = "idle" | "connecting" | "connected" | "disconnected";
+
+type DocumentDrawer =
+  | { kind: "package"; page: number; label: string }
+  | { kind: "file"; fileId: string; label: string };
 
 const HEALTH_CLASS: Record<RecordingHealthState, string> = {
   unconfigured: "border-amber-200 bg-amber-50 text-amber-900",
@@ -56,8 +68,8 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
   const [extractPages, setExtractPages] = useState<
     Array<{ pageNumber: number; pageHeading: string | null; extractedText: string }>
   >([]);
-  const [packageOpen, setPackageOpen] = useState(false);
-  const [jumpOpen, setJumpOpen] = useState(false);
+  const [archiveLinks, setArchiveLinks] = useState<LiveArchiveLink[]>([]);
+  const [drawer, setDrawer] = useState<DocumentDrawer | null>(null);
   const roomRef = useRef<Room | null>(null);
   const audioRef = useRef<HTMLDivElement>(null);
   const autoJoined = useRef(false);
@@ -206,6 +218,19 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
     };
   }, [meetingId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/v2/meetings/${meetingId}/live/archive-links`, { cache: "no-store" })
+      .then(async (response) => (response.ok ? response.json() : null))
+      .then((payload: { links?: LiveArchiveLink[] } | null) => {
+        if (!cancelled && payload?.links) setArchiveLinks(payload.links);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [meetingId]);
+
   async function postSnapshot(path: string, body?: unknown): Promise<LiveRoomSnapshot> {
     const response = await fetch(path, {
       method: "POST",
@@ -250,19 +275,12 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
       direction,
     });
     if (!move) return;
-    if (move.kind === "page") {
-      setNavBusy(true);
-      setJoinError(null);
-      try {
-        await postSnapshot(`/api/v2/meetings/${meetingId}/live/present`, { page: move.page });
-      } catch (error) {
-        setJoinError(error instanceof Error ? error.message : "Could not change the shared page.");
-      } finally {
-        setNavBusy(false);
-      }
-      return;
-    }
     await moveTo({ agendaItemId: move.agendaItemId, page: move.page });
+  }
+
+  function openPackagePage(page: number, end = page) {
+    const label = end === page ? `Page ${page}` : `Pages ${page}–${end}`;
+    setDrawer({ kind: "package", page, label });
   }
 
   const viewerIsPresenter = navigationAllowed(
@@ -272,16 +290,18 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
   const active = snapshot?.activeUnscheduled
     ? null
     : (snapshot?.leaves.find((leaf) => leaf.id === snapshot.activeAgendaItemId) ?? null);
-  const stagePage = stagePackagePage(
-    snapshot?.activeUnscheduled
-      ? { kind: "unscheduled" }
-      : active
-        ? { kind: "leaf", agendaItemId: active.id }
-        : null,
-    active?.sourcePages ?? [],
-    snapshot?.presentedPage ?? null,
-  );
-  const stageExtract = extractPages.find((page) => page.pageNumber === stagePage) ?? null;
+  const focus = snapshot?.activeUnscheduled
+    ? { kind: "unscheduled" as const }
+    : active
+      ? { kind: "leaf" as const, agendaItemId: active.id }
+      : null;
+  const pagesOnItem = stagePages(active?.sourcePages ?? []);
+  const stagePage = stagePackagePage(focus, active?.sourcePages ?? []);
+  const stageExtracts = pagesOnItem.shown
+    .map((pageNumber) => extractPages.find((page) => page.pageNumber === pageNumber))
+    .filter((page): page is NonNullable<typeof page> => page != null);
+  const attachedRanges = groupPageRanges(pagesOnItem.attached);
+  const itemArchiveLinks = archiveLinks.filter((link) => link.agendaItemId === active?.id);
   const canStepBack = snapshot
     ? stageMove({
         leaves: snapshot.leaves,
@@ -441,11 +461,16 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
         <p className="mx-4 mb-3 text-sm text-rose-200">{loadError || joinError || micError}</p>
       )}
 
-      <main className="mx-4 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-slate-900 shadow-sm">
+      <div className="mx-4 mb-3 flex min-h-0 flex-1 gap-3">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-slate-900 shadow-sm">
         <div className="border-b border-slate-200 px-6 py-4">
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
             {snapshot?.activeUnscheduled ? "Unscheduled" : "Shared package"}
-            {stagePage != null ? ` · Page ${stagePage}` : ""}
+            {pagesOnItem.shown.length > 1
+              ? ` · Pages ${pagesOnItem.shown[0]}–${pagesOnItem.shown[pagesOnItem.shown.length - 1]}`
+              : stagePage != null
+                ? ` · Page ${stagePage}`
+                : ""}
           </p>
           <h1 className="mt-1 text-2xl font-semibold">
             {snapshot?.activeUnscheduled
@@ -454,8 +479,8 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
                 ? `${active.itemNumber ? `${active.itemNumber} ` : ""}${active.title}`
                 : "Live room"}
           </h1>
-          {stageExtract?.pageHeading ? (
-            <p className="mt-1 text-sm text-slate-500">{stageExtract.pageHeading}</p>
+          {stageExtracts[0]?.pageHeading ? (
+            <p className="mt-1 text-sm text-slate-500">{stageExtracts[0].pageHeading}</p>
           ) : null}
         </div>
         <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
@@ -463,19 +488,128 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
             <p className="text-slate-600">
               This discussion is not an agenda item. Next and Previous return to the package.
             </p>
-          ) : stageExtract?.extractedText.trim() ? (
-            <p className="whitespace-pre-wrap text-base leading-7 text-slate-800">
-              {stageExtract.extractedText}
-            </p>
           ) : (
-            <p className="text-slate-500">
-              {stagePage == null
-                ? "This item has no package page."
-                : `No extracted text is stored for page ${stagePage}.`}
-            </p>
+            <div className="space-y-4">
+              {itemArchiveLinks.length > 0 || attachedRanges.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {itemArchiveLinks.map((link) => (
+                    <button
+                      key={link.fileId}
+                      type="button"
+                      onClick={() =>
+                        setDrawer({ kind: "file", fileId: link.fileId, label: link.label })
+                      }
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-teal-800 hover:bg-slate-50"
+                    >
+                      Open {link.label}
+                    </button>
+                  ))}
+                  {attachedRanges.map((range) => (
+                    <button
+                      key={`${range.start}-${range.end}`}
+                      type="button"
+                      onClick={() => openPackagePage(range.start, range.end)}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-teal-800 hover:bg-slate-50"
+                    >
+                      Open {range.start === range.end ? `page ${range.start}` : `pages ${range.start}–${range.end}`}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {stageExtracts.some((page) => page.extractedText.trim()) ? (
+                stageExtracts.map((page) =>
+                  page.extractedText.trim() ? (
+                    <MarkdownPreview
+                      key={page.pageNumber}
+                      onPackagePage={(href) => {
+                        const target = packagePageFromHref(href);
+                        if (target) openPackagePage(target.start, target.end);
+                      }}
+                    >
+                      {linkPackagePageCitations(page.extractedText)}
+                    </MarkdownPreview>
+                  ) : null,
+                )
+              ) : (
+                <p className="text-slate-500">
+                  {stagePage == null
+                    ? itemArchiveLinks.length > 0
+                      ? "This item has no package page. Open the file above."
+                      : "This item has no package page."
+                    : `No extracted text is stored for page ${stagePage}.`}
+                </p>
+              )}
+            </div>
           )}
         </div>
       </main>
+      {drawer ? (
+        <aside className="flex w-[28rem] max-w-[40%] shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-slate-900 shadow-sm">
+          <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
+            <p className="truncate text-sm font-semibold">{drawer.label}</p>
+            <button
+              type="button"
+              onClick={() => setDrawer(null)}
+              className="rounded-md px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
+            >
+              Close
+            </button>
+          </div>
+          <ZoomablePdfViewer
+            key={drawer.kind === "package" ? `pkg-${drawer.page}` : drawer.fileId}
+            className="min-h-0 flex-1"
+            url={
+              drawer.kind === "package"
+                ? `/api/meetings/${meetingId}/board-package`
+                : `/api/email/attachments/${drawer.fileId}`
+            }
+            initialPage={drawer.kind === "package" ? drawer.page : 1}
+          />
+        </aside>
+      ) : null}
+      <aside className="flex w-64 shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-slate-900 shadow-sm">
+        <p className="border-b border-slate-200 px-3 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
+          Agenda
+        </p>
+        <ul className="min-h-0 flex-1 overflow-auto p-1">
+          {snapshot?.leaves.map((leaf) => {
+            const selected = !snapshot.activeUnscheduled && leaf.id === active?.id;
+            return (
+              <li key={leaf.id}>
+                <button
+                  type="button"
+                  disabled={!viewerIsPresenter || navBusy || !snapshot.roomName}
+                  className={`w-full rounded-lg px-2 py-1.5 text-left text-sm disabled:opacity-60 ${
+                    selected ? "bg-slate-900 text-white" : "hover:bg-slate-50"
+                  }`}
+                  onClick={() => {
+                    void moveTo({
+                      agendaItemId: leaf.id,
+                      page: stagePackagePage({ kind: "leaf", agendaItemId: leaf.id }, leaf.sourcePages),
+                    });
+                  }}
+                >
+                  {leaf.itemNumber ? `${leaf.itemNumber} ` : ""}
+                  {leaf.title}
+                </button>
+              </li>
+            );
+          })}
+          <li>
+            <button
+              type="button"
+              disabled={!viewerIsPresenter || navBusy || !snapshot?.roomName}
+              className={`w-full rounded-lg px-2 py-1.5 text-left text-sm disabled:opacity-60 ${
+                snapshot?.activeUnscheduled ? "bg-slate-900 text-white" : "hover:bg-slate-50"
+              }`}
+              onClick={() => void moveTo({ unscheduled: true })}
+            >
+              Unscheduled discussion
+            </button>
+          </li>
+        </ul>
+      </aside>
+      </div>
 
       <footer className="flex flex-wrap items-center justify-center gap-2 px-4 pb-4">
         {connection !== "connected" ? (
@@ -508,51 +642,6 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
         >
           Next
         </button>
-        <div className="relative">
-          <button
-            type="button"
-            disabled={!viewerIsPresenter || navBusy || !snapshot?.roomName}
-            onClick={() => setJumpOpen((open) => !open)}
-            className={barButton}
-          >
-            Agenda
-          </button>
-          {jumpOpen && snapshot ? (
-            <ul className="absolute bottom-12 left-0 z-10 max-h-64 w-80 overflow-auto rounded-xl border border-slate-200 bg-white p-1 text-slate-900 shadow-lg">
-              {snapshot.leaves.map((leaf) => (
-                <li key={leaf.id}>
-                  <button
-                    type="button"
-                    className={`w-full rounded-lg px-2 py-1.5 text-left text-sm ${
-                      !snapshot.activeUnscheduled && leaf.id === active?.id
-                        ? "bg-slate-900 text-white"
-                        : "hover:bg-slate-50"
-                    }`}
-                    onClick={() => {
-                      setJumpOpen(false);
-                      void moveTo({ agendaItemId: leaf.id, page: leaf.sourcePages[0] ?? null });
-                    }}
-                  >
-                    {leaf.itemNumber ? `${leaf.itemNumber} ` : ""}
-                    {leaf.title}
-                  </button>
-                </li>
-              ))}
-              <li>
-                <button
-                  type="button"
-                  className="w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50"
-                  onClick={() => {
-                    setJumpOpen(false);
-                    void moveTo({ unscheduled: true });
-                  }}
-                >
-                  Unscheduled discussion
-                </button>
-              </li>
-            </ul>
-          ) : null}
-        </div>
         {viewerIsPresenter ? (
           <button
             type="button"
@@ -593,7 +682,7 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
         <button
           type="button"
           disabled={stagePage == null}
-          onClick={() => setPackageOpen(true)}
+          onClick={() => openPackagePage(stagePage ?? 1)}
           className={barButton}
         >
           Open PDF
@@ -612,14 +701,6 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
         ) : null}
       </footer>
       <div ref={audioRef} className="hidden" />
-      {packageOpen && stagePage != null ? (
-        <BoardPackageViewerDialog
-          open
-          meetingId={meetingId}
-          initialPage={stagePage}
-          onClose={() => setPackageOpen(false)}
-        />
-      ) : null}
     </div>
   );
 }

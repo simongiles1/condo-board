@@ -16,10 +16,20 @@ import {
   navigationAllowed,
   packagePageToOpen,
   pageMapCheckView,
+  groupPageRanges,
   stageMove,
   stagePackagePage,
+  stagePages,
   type LiveAgendaSourceItem,
 } from "../lib/meeting-v2/live-agenda";
+import {
+  archiveLinksForLeaves,
+  matchAgendaArchiveFile,
+} from "../lib/meeting-v2/live-archive-links";
+import {
+  linkPackagePageCitations,
+  packagePageFromHref,
+} from "../lib/meeting-v2/package-page-refs";
 import { liveKitTrackEgress } from "../lib/livekit/config";
 import {
   LIVE_TRANSCRIPT_INSERT_GAP,
@@ -205,18 +215,14 @@ describe("live room agenda", () => {
     assert.equal(checked.checkedByName, "Ada");
   });
 
-  it("advances the shared stage one package page at a time", () => {
+  it("moves Next to the next agenda item, not the next attached page", () => {
     const leaves = [
-      { id: "steam", sourcePages: [3, 4] },
+      { id: "steam", sourcePages: [3, 13, 14] },
       { id: "roof", sourcePages: [9] },
     ];
     const onSteam = [{ agendaItemId: "steam", unscheduled: false }];
     assert.deepEqual(
       stageMove({ leaves, navigation: onSteam, presentedPage: 3, direction: 1 }),
-      { kind: "page", page: 4 },
-    );
-    assert.deepEqual(
-      stageMove({ leaves, navigation: onSteam, presentedPage: 4, direction: 1 }),
       { kind: "leaf", agendaItemId: "roof", page: 9 },
     );
     assert.deepEqual(
@@ -226,13 +232,80 @@ describe("live room agenda", () => {
         presentedPage: 9,
         direction: -1,
       }),
-      { kind: "leaf", agendaItemId: "steam", page: 4 },
+      { kind: "leaf", agendaItemId: "steam", page: 3 },
+    );
+    assert.equal(stagePackagePage({ kind: "leaf", agendaItemId: "steam" }, [3, 13]), 3);
+    assert.equal(stagePackagePage({ kind: "unscheduled" }, [3]), null);
+    assert.deepEqual(stagePages([3, 13, 14, 4]), { shown: [3, 4], attached: [13, 14] });
+    assert.deepEqual(groupPageRanges([14, 13, 27]), [
+      { start: 13, end: 14 },
+      { start: 27, end: 27 },
+    ]);
+  });
+});
+
+describe("live room package citations", () => {
+  it("links a Docling page icon and the page numbers that follow it", () => {
+    const linked = linkPackagePageCitations(
+      "signed proposal. (Page ... ... ...) 13 - 26\n(Page ... ... ...) 27\nBell &amp; Gossett",
+    );
+    assert.match(linked, /\[Pages 13–26\]\(#pkg\/13-26\)/);
+    assert.match(linked, /\[Page 27\]\(#pkg\/27\)/);
+    assert.match(linked, /Bell & Gossett/);
+    assert.deepEqual(packagePageFromHref("#pkg/13-26"), { start: 13, end: 26 });
+    assert.equal(packagePageFromHref("https://example.com"), null);
+  });
+});
+
+describe("live room archive documents", () => {
+  const minutes = [
+    {
+      id: "june",
+      filename: "June 30-2026.2517 TSCC.pdf",
+      receivedAt: "2026-07-02T00:00:00.000Z",
+    },
+    {
+      id: "june-copy",
+      filename: "June 30-2026.2517 TSCC (2).pdf",
+      receivedAt: "2026-07-03T00:00:00.000Z",
+    },
+    {
+      id: "may",
+      filename: "May 21-2026.2517 TSCC.pdf",
+      receivedAt: "2026-05-22T00:00:00.000Z",
+    },
+  ];
+  const financials = [
+    {
+      id: "fs-june",
+      filename: "2517 TSCC FS June 2026.pdf",
+      receivedAt: "2026-07-10T00:00:00.000Z",
+    },
+  ];
+
+  it("matches the minutes and statement named in the agenda title", () => {
+    assert.equal(
+      matchAgendaArchiveFile("Review and Approval of Minutes of June 30, 2026", minutes)?.fileId,
+      "june",
     );
     assert.equal(
-      stagePackagePage({ kind: "leaf", agendaItemId: "steam" }, [3, 4], null),
-      3,
+      matchAgendaArchiveFile(
+        "Review and approval of the unaudited financial statements for June 2026",
+        financials,
+      )?.label,
+      "June 2026 financial statements",
     );
-    assert.equal(stagePackagePage({ kind: "unscheduled" }, [3], 3), null);
+    assert.equal(matchAgendaArchiveFile("1.A Booster Pump", minutes), null);
+    assert.deepEqual(
+      archiveLinksForLeaves(
+        [
+          { id: "minutes", title: "Review and Approval of Minutes of June 30, 2026" },
+          { id: "pump", title: "1.A Booster Pump" },
+        ],
+        { minutes, financials },
+      ).map((link) => link.agendaItemId),
+      ["minutes"],
+    );
   });
 });
 

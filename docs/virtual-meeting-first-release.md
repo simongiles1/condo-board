@@ -16,7 +16,7 @@ Committed on `main` as the virtual meeting room slice. Extend it. Do not replace
 | `joinLiveRoom` | Creates `v2-{meetingId}` once. A later join returns that room, so a refresh does not start a second recording. Egress is omitted when no bucket is set, because Cloud would otherwise reject the join. |
 | `meetings_v2_live_sessions` | One row per meeting. `mediaStartedAt` is the time that row was inserted. |
 | `recordLiveNavigation` | Stores the leaf id and `mediaOffsetMs`, computed on the server as elapsed time since `mediaStartedAt`. The click is not stored as the facilitator's wall clock. |
-| `LiveMeetingRoom` | Join, hear remote audio, mute, leave, and a recording badge. The shared stage shows extracted package text for the active leaf's current page. Previous and Next move that page, then the next leaf. Agenda jump is presenter-only. Open PDF is a personal view of the same page. Pipeline notes are not shown. An unchecked leaf-to-page map is a room notice; the room still opens. |
+| `LiveMeetingRoom` | Join, hear remote audio, mute, leave, and a recording badge. The shared stage shows formatted package text for the active leaf. Previous and Next move to the next leaf. The agenda stays open on the right and is presenter-only. Page citations open a personal document drawer. Pipeline notes are not shown. An unchecked leaf-to-page map is a room notice; the room still opens. |
 | Recording badge | Capture health from `assessCaptureHealth`: every publishing microphone must match a live track egress, a failed read or a missing bucket is critical, and failed egress is critical unless a gap row covers it. |
 | Cue shape | `liveCuesToMergedCues` matches the VTT cues V2 already parses. Rows are not inserted. `LIVE_TRANSCRIPT_INSERT_GAP` records why: a second transcript artifact would be read as the historical transcript, and no recognizer is connected. |
 | Tests | `scripts/test-meeting-v2-live-room.ts` covers the clock, leaf order, egress configuration, badge collapse, and the decision not to insert live cues. |
@@ -37,7 +37,7 @@ These are the reasons the current badge is not the capture requirement below.
 
 - One room. Cameras optional. One person per device.
 - One scrollable view per leaf. The presenter uses Next, Previous, or jump, including an unscheduled discussion. Everyone else follows the active leaf.
-- The shared stage is the extracted text of the current package page. Next and Previous change that page for everyone, then move to the next leaf. Open PDF is personal and does not change the leaf.
+- The shared stage is the formatted text of the active leaf's opening package pages. Next and Previous move to the next leaf. A page citation or an attached-page link opens a personal drawer and does not change the leaf.
 - A person checks the leaf-to-page map before the meeting. The room can still open if the check is incomplete, and the facilitator sees that it is incomplete.
 - Vocabulary is meeting-wide plus the active leaf, with a short hangover on the previous leaf after Next. OKF is not a source.
 - Navigation markers are a prior. A content pass still assigns returns, tangents, and speech that crosses a click. Edge detection stays.

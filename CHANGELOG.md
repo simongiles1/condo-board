@@ -10,7 +10,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Create a new meeting** — Meetings V2 has a New meeting action beside the historical upload. It takes a board package and no transcript. On one board-package step you select meeting pages, mark where the agenda ends (teal vs amber), and create. Preparation builds the agenda from those pages and links attachment pages to agenda items. The live room can open once that finishes. Minutes stages stay off until a transcript exists.
 
-- **Live room shared stage** — The live room shows the current agenda item as extracted board-package text, one page at a time. Previous and Next move that shared page, then the next item. Pipeline notes are not on the stage. Open PDF is a personal view of the same page.
+- **Live room shared stage** — The live room shows the current agenda item as formatted board-package text. Previous and Next move to the next agenda item. Page citations and attached pages open in a document drawer. Pipeline notes are not on the stage.
 
 - **Live room presenter** — Only the person who claims presenter can use Previous, Next, agenda jump, or an unscheduled discussion. Everyone else follows the shared stage. The room still opens when the leaf-to-page map has not been checked, and the room says so until someone records the check.
 
@@ -33,6 +33,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V2 empty question submit** — **Submit & Re-evaluate** requires at least one typed answer. Blank fields are not stored as clarifications and no longer re-run investigation, so they cannot drop open questions.
 
 - **Meetings V2 item pipeline debugger** — Each agenda topic has a **Debug** control that opens a sandbox stepper (evidence → fact resolution → investigation → validation → rendered minutes snippet). Pick DeepSeek V4 Flash, V4.1 Flash, or Gemini 3.8 Flash per LLM step, inspect and edit the live prompts, and keep historical runs with token counts and estimated spend. These runs do not overwrite production investigation or validation.
+
+### Changes
+
+- **Live room agenda and documents** — The agenda stays open on the right. Previous and Next move to the next agenda item instead of the next attached page. Package text is formatted, and a page citation opens that package page in a side drawer. A minutes or financial-statement item with no package page opens the matching file already categorized in the archive.
 
 ### Fixed
 

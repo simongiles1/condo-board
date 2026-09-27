@@ -214,27 +214,57 @@ export function leafStepTarget(
   return adjacentLeafId(leaves, anchor, 1);
 }
 
-export type StageMove =
-  | { kind: "page"; page: number }
-  | { kind: "leaf"; agendaItemId: string; page: number | null };
+export type StageMove = { kind: "leaf"; agendaItemId: string; page: number | null };
 
 /**
- * Package page shown on the shared stage for the active leaf.
- * Falls back to the leaf's first linked page when nothing is presented yet.
+ * Package pages that stay on the shared stage, and later pages that open from a link.
+ * The stage is the first page plus any pages that follow it with no gap.
+ * A gap is an attachment (page 3, then page 13), not the next agenda item.
+ */
+export function stagePages(sourcePages: number[]): { shown: number[]; attached: number[] } {
+  const sorted = [...new Set(sourcePages.filter((page) => Number.isInteger(page) && page > 0))].sort(
+    (left, right) => left - right,
+  );
+  if (sorted.length === 0) return { shown: [], attached: [] };
+  const shown: number[] = [sorted[0]];
+  for (const page of sorted.slice(1)) {
+    if (page !== shown[shown.length - 1] + 1) break;
+    shown.push(page);
+  }
+  const onStage = new Set(shown);
+  return { shown, attached: sorted.filter((page) => !onStage.has(page)) };
+}
+
+/**
+ * Collapses page numbers into inclusive ranges, in ascending order.
+ */
+export function groupPageRanges(pages: number[]): Array<{ start: number; end: number }> {
+  const sorted = [...new Set(pages.filter((page) => Number.isInteger(page) && page > 0))].sort(
+    (left, right) => left - right,
+  );
+  const groups: Array<{ start: number; end: number }> = [];
+  for (const page of sorted) {
+    const last = groups[groups.length - 1];
+    if (last && page === last.end + 1) last.end = page;
+    else groups.push({ start: page, end: page });
+  }
+  return groups;
+}
+
+/**
+ * First package page of the active leaf. Null during an unscheduled discussion.
  */
 export function stagePackagePage(
   focus: LiveFocus | null,
   sourcePages: number[],
-  presentedPage: number | null,
 ): number | null {
   if (focus?.kind !== "leaf") return null;
-  if (presentedPage != null && sourcePages.includes(presentedPage)) return presentedPage;
-  return sourcePages[0] ?? null;
+  return stagePages(sourcePages).shown[0] ?? null;
 }
 
 /**
- * One step of the shared stage. Pages of the current leaf come before the next leaf.
- * Stepping backward onto a leaf lands on its last linked page.
+ * One step of the shared stage. Previous and Next move to the neighboring agenda item.
+ * The item opens on its first package page. Attached pages are not steps.
  */
 export function stageMove(input: {
   leaves: Array<{ id: string; sourcePages: number[] }>;
@@ -245,41 +275,16 @@ export function stageMove(input: {
   const focus = activeLiveFocus(input.leaves, input.navigation);
   if (!focus) return null;
 
-  if (focus.kind === "unscheduled") {
-    const leafId = leafStepTarget(input.leaves, input.navigation, input.direction);
-    if (!leafId) return null;
-    const leaf = input.leaves.find((item) => item.id === leafId);
-    const page =
-      input.direction < 0 ? (leaf?.sourcePages.at(-1) ?? null) : (leaf?.sourcePages[0] ?? null);
-    return { kind: "leaf", agendaItemId: leafId, page };
-  }
-
-  const leaf = input.leaves.find((item) => item.id === focus.agendaItemId);
-  if (!leaf) return null;
-  const pages = leaf.sourcePages;
-  const current = stagePackagePage(focus, pages, input.presentedPage);
-  const index = current == null ? -1 : pages.indexOf(current);
-
-  if (input.direction > 0) {
-    if (index >= 0 && index < pages.length - 1) {
-      return { kind: "page", page: pages[index + 1] ?? pages[index] };
-    }
-    const nextId = adjacentLeafId(input.leaves, leaf.id, 1);
-    if (!nextId) return null;
-    const next = input.leaves.find((item) => item.id === nextId);
-    return { kind: "leaf", agendaItemId: nextId, page: next?.sourcePages[0] ?? null };
-  }
-
-  if (index > 0) {
-    return { kind: "page", page: pages[index - 1] ?? pages[0] };
-  }
-  const previousId = adjacentLeafId(input.leaves, leaf.id, -1);
-  if (!previousId) return null;
-  const previous = input.leaves.find((item) => item.id === previousId);
+  const leafId =
+    focus.kind === "unscheduled"
+      ? leafStepTarget(input.leaves, input.navigation, input.direction)
+      : adjacentLeafId(input.leaves, focus.agendaItemId, input.direction);
+  if (!leafId) return null;
+  const leaf = input.leaves.find((item) => item.id === leafId);
   return {
     kind: "leaf",
-    agendaItemId: previousId,
-    page: previous?.sourcePages.at(-1) ?? null,
+    agendaItemId: leafId,
+    page: leaf ? stagePackagePage({ kind: "leaf", agendaItemId: leafId }, leaf.sourcePages) : null,
   };
 }
 

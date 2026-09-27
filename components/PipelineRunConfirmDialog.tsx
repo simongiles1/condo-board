@@ -15,6 +15,8 @@ type Props = {
   open: boolean;
   action: PipelineConfirmAction;
   busy?: boolean;
+  /** Live-meeting create: package prep only, not the full minutes pipeline. */
+  variant?: "minutes" | "upcoming";
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -52,10 +54,35 @@ const ACTION_COPY: Record<
   },
 };
 
+const UPCOMING_ACTION_COPY: Partial<
+  Record<PipelineConfirmAction, { description: string; confirmLabel?: string }>
+> = {
+  start: {
+    description:
+      "This will ingest the board package, extract the agenda through your split point, link attachment pages to agenda items, then stop. Minutes investigation and validation do not run.",
+    confirmLabel: "Prepare package",
+  },
+  resume: {
+    description:
+      "Continue package preparation from the last completed step (ingest, extract, or attachment linking).",
+    confirmLabel: "Resume preparation",
+  },
+  rerun: {
+    description:
+      "Re-run package preparation. Agenda and attachment links may be rebuilt.",
+    confirmLabel: "Re-run preparation",
+  },
+  restart: {
+    description:
+      "Wipe extracted agenda data for this meeting and run package preparation again from the uploaded PDF.",
+  },
+};
+
 export function PipelineRunConfirmDialog({
   open,
   action,
   busy = false,
+  variant = "minutes",
   onConfirm,
   onCancel,
 }: Props) {
@@ -123,7 +150,13 @@ export function PipelineRunConfirmDialog({
 
   if (!open) return null;
 
-  const copy = ACTION_COPY[action];
+  const base = ACTION_COPY[action];
+  const upcoming = variant === "upcoming" ? UPCOMING_ACTION_COPY[action] : null;
+  const copy = {
+    ...base,
+    description: upcoming?.description ?? base.description,
+    confirmLabel: upcoming?.confirmLabel ?? base.confirmLabel,
+  };
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">

@@ -1263,6 +1263,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                     pipelineActivelyRunning={pipelineRunning}
                     disabled={!pipelineSourcesReady || pipelineRunning}
                     disabledReason={pipelineDisabledReason}
+                    upcomingMeeting={isUpcomingMeeting}
                     onRun={handleRunPipeline}
                     onRestart={handleRestartPipeline}
                     presentation="menu"
@@ -1277,6 +1278,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   pipelineActivelyRunning={pipelineRunning}
                   disabled={!pipelineSourcesReady || pipelineRunning}
                   disabledReason={pipelineDisabledReason}
+                  upcomingMeeting={isUpcomingMeeting}
                   onRun={handleRunPipeline}
                   onRestart={handleRestartPipeline}
                 />
@@ -1875,6 +1877,7 @@ function PipelineActionButton({
   pipelineActivelyRunning = false,
   disabled = false,
   disabledReason,
+  upcomingMeeting = false,
   onRun,
   onRestart,
   presentation = "header",
@@ -1885,6 +1888,7 @@ function PipelineActionButton({
   pipelineActivelyRunning?: boolean;
   disabled?: boolean;
   disabledReason?: string | null;
+  upcomingMeeting?: boolean;
   onRun: () => void | Promise<void>;
   onRestart: () => void | Promise<void>;
   presentation?: "header" | "menu";
@@ -1946,10 +1950,16 @@ function PipelineActionButton({
     : pipelineActivelyRunning
       ? "Pipeline Running"
       : pipelineNotStarted
-        ? "Start Pipeline"
+        ? upcomingMeeting
+          ? "Prepare package"
+          : "Start Pipeline"
         : pipelineValidated
-          ? "Re-run Pipeline"
-          : "Resume Pipeline";
+          ? upcomingMeeting
+            ? "Re-run preparation"
+            : "Re-run Pipeline"
+          : upcomingMeeting
+            ? "Resume preparation"
+            : "Resume Pipeline";
 
   const title = isDisabled && disabledReason ? disabledReason : undefined;
   const showDropdown = pipelineValidated || !pipelineNotStarted;
@@ -2003,6 +2013,7 @@ function PipelineActionButton({
         open={confirmOpen}
         action={pendingAction}
         busy={runBusy}
+        variant={upcomingMeeting ? "upcoming" : "minutes"}
         onConfirm={() => void handleConfirm()}
         onCancel={() => {
           if (!runBusy) setConfirmOpen(false);

@@ -14,6 +14,7 @@ import {
   leafStepTarget,
   liveAgendaLeaves,
   liveAgendaOutlineRows,
+  liveRoomAgendaSidebarRows,
   navigationAllowed,
   packagePageToOpen,
   pageMapCheckView,
@@ -258,6 +259,21 @@ describe("live room agenda", () => {
     });
     assert.equal(checked.checkedAt, "2026-09-26T12:00:00.000Z");
     assert.equal(checked.checkedByName, "Ada");
+  });
+
+  it("sidebar rows tolerate a missing snapshot and empty outline", () => {
+    assert.deepEqual(liveRoomAgendaSidebarRows(null), []);
+    assert.deepEqual(liveRoomAgendaSidebarRows(undefined), []);
+    const leaves = liveAgendaLeaves(items);
+    assert.equal(
+      liveRoomAgendaSidebarRows({ outline: [], leaves }).length,
+      leaves.length,
+    );
+    const outline = liveAgendaOutlineRows(items);
+    assert.deepEqual(
+      liveRoomAgendaSidebarRows({ outline, leaves }).map((row) => row.key),
+      outline.map((row) => row.key),
+    );
   });
 
   it("moves Next to the next agenda item, not the next attached page", () => {

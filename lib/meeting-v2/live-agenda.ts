@@ -273,6 +273,24 @@ export function liveAgendaOutlineRows(items: LiveAgendaOutlineSourceItem[]): Liv
 }
 
 /**
+ * Sidebar rows for the live room, including fallbacks before the snapshot loads or when outline is empty.
+ */
+export function liveRoomAgendaSidebarRows(
+  snapshot: Pick<LiveRoomSnapshot, "outline" | "leaves"> | null | undefined,
+): LiveAgendaOutlineRow[] {
+  if (!snapshot) return [];
+  if (snapshot.outline?.length) return snapshot.outline;
+  return (snapshot.leaves ?? []).map((leaf) => ({
+    key: leaf.id,
+    itemNumber: leaf.itemNumber ?? "",
+    title: leaf.title,
+    kind: "leaf" as const,
+    agendaItemId: leaf.id,
+    sourcePages: leaf.sourcePages,
+  }));
+}
+
+/**
  * The next or previous leaf id, or null at either end.
  */
 export function adjacentLeafId(

@@ -9,6 +9,7 @@ import { ZoomablePdfViewer } from "@/components/ZoomablePdfViewer";
 import { agendaItemIndentDepth } from "@/lib/meeting-v2/agenda-outline";
 import {
   groupPageRanges,
+  liveRoomAgendaSidebarRows,
   navigationAllowed,
   stageMove,
   stagePackagePage,
@@ -291,7 +292,7 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
   );
   const active = snapshot?.activeUnscheduled
     ? null
-    : (snapshot?.leaves.find((leaf) => leaf.id === snapshot.activeAgendaItemId) ?? null);
+    : (snapshot?.leaves?.find((leaf) => leaf.id === snapshot.activeAgendaItemId) ?? null);
   const focus = snapshot?.activeUnscheduled
     ? { kind: "unscheduled" as const }
     : active
@@ -349,7 +350,8 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
   }
 
   const critical = snapshot?.recording.severity === "critical";
-  const interrupted = snapshot?.captureGaps.find((gap) => gap.acceptedAt) ?? null;
+  const interrupted = snapshot?.captureGaps?.find((gap) => gap.acceptedAt) ?? null;
+  const agendaSidebarRows = liveRoomAgendaSidebarRows(snapshot);
   const barButton =
     "rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-medium text-white disabled:opacity-40";
 
@@ -582,14 +584,7 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
           Agenda
         </p>
         <ul className="min-h-0 flex-1 overflow-auto p-1">
-          {(snapshot?.outline ?? snapshot?.leaves.map((leaf) => ({
-            key: leaf.id,
-            itemNumber: leaf.itemNumber ?? "",
-            title: leaf.title,
-            kind: "leaf" as const,
-            agendaItemId: leaf.id,
-            sourcePages: leaf.sourcePages,
-          }))).map((row) => {
+          {agendaSidebarRows.map((row) => {
             const selected =
               row.kind === "leaf" &&
               !snapshot?.activeUnscheduled &&
@@ -612,7 +607,7 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
               <li key={row.key}>
                 <button
                   type="button"
-                  disabled={!viewerIsPresenter || navBusy || !snapshot.roomName}
+                  disabled={!viewerIsPresenter || navBusy || !snapshot?.roomName}
                   style={{ paddingLeft }}
                   className={`w-full rounded-lg py-1.5 pr-2 text-left text-sm disabled:opacity-60 ${
                     selected ? "bg-slate-900 text-white" : "hover:bg-slate-50"

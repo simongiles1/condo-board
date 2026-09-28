@@ -46,6 +46,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Live room agenda sidebar crash** — Opening the live room no longer throws when the snapshot is still loading or the API omits `outline`; the sidebar falls back to leaf rows instead of calling `.map` on undefined.
+
 - **V2 meetings list row navigation** — Clicking a pipeline row did nothing because row navigation called `router.push` without a router instance; the list again opens the meeting workspace on row click.
 
 - **V2 meetings list after create** — New and duplicated V2 workspaces appear at the top of the pipeline list for that meeting date. The list now sorts by workspace creation time when dates match (so upcoming “Meeting - …” rows are not buried under older “Minutes - …” titles) and revalidates after create like V1 upload.

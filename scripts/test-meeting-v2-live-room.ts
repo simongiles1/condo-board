@@ -36,6 +36,7 @@ import {
   storedPackageCitationGap,
   packagePageFromHref,
 } from "../lib/meeting-v2/package-page-refs";
+import { applySpeechGrammar } from "../components/useLiveSpeechRecognition";
 import {
   isDuplicateRecognitionCue,
   normalizeRecognitionText,
@@ -863,6 +864,23 @@ describe("live recognition cues", () => {
       { heardText: "Trace Consultin Group", proposedText: "Trace Consulting Group" },
     ]);
     assert.equal(originalRecognitionText(original), original);
+  });
+});
+
+describe("speech grammar assignment", () => {
+  it("does not throw when the browser rejects a grammar list and null", () => {
+    const recognition = {
+      set grammars(_value: unknown) {
+        throw new TypeError(
+          "Failed to set the 'grammars' property on 'SpeechRecognition': Failed to convert value to 'SpeechGrammarList'.",
+        );
+      },
+      get grammars() {
+        return null;
+      },
+    };
+    assert.doesNotThrow(() => applySpeechGrammar(recognition, { length: 1 } as SpeechGrammarList));
+    assert.doesNotThrow(() => applySpeechGrammar(recognition, null));
   });
 });
 

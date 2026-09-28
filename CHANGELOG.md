@@ -52,6 +52,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Live room speech grammar crash** — Opening the live room no longer throws when the browser rejects `SpeechRecognition.grammars` (including assigning `null`). Captions still start; phrase hints are skipped when the browser will not accept a grammar.
+
 - **Upcoming meeting attachment links** — A page range written in the agenda (for example pages 13–26) is linked to that agenda item even when the attachment pass only matched the first pages of the range. The meeting card no longer prints the leftover page numbers.
 
 - **Live room client crash** — Joining the room no longer takes down the whole page when the call fails or a snapshot is missing a field. The room shows the error instead of the blank application error screen.

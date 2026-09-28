@@ -45,6 +45,23 @@ function grammarForPhrases(phrases: string[]): SpeechGrammarList | null {
 }
 
 /**
+ * Sets a speech grammar when the browser accepts one.
+ * Chromium throws if the value cannot convert to SpeechGrammarList, including null, so a rejection leaves the property unset and captions still start.
+ */
+export function applySpeechGrammar(
+  recognition: { grammars: SpeechGrammarList | null },
+  grammar: SpeechGrammarList | null,
+): void {
+  if (!grammar) return;
+  try {
+    recognition.grammars = grammar;
+  } catch {
+    // Chromium's grammars setter throws for a JSGF list and for null
+    // ("Failed to convert value to 'SpeechGrammarList'"). Leave the default unset.
+  }
+}
+
+/**
  * Transcribes this device's microphone in the browser.
  * Phrase hints are passed when the browser accepts a grammar. A failure here does not touch LiveKit egress.
  */
@@ -84,11 +101,7 @@ export function useLiveSpeechRecognition(input: {
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = "en-US";
-    try {
-      recognition.grammars = grammarForPhrases(phrasesRef.current);
-    } catch {
-      recognition.grammars = null;
-    }
+    applySpeechGrammar(recognition, grammarForPhrases(phrasesRef.current));
     recognition.onresult = (event) => {
       let pending = "";
       for (let index = event.resultIndex; index < event.results.length; index += 1) {

@@ -1154,6 +1154,14 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
                   ? formatMeetingDate(status.meeting.meetingDate)
                   : "Loading date"}
               </p>
+              {status?.meeting.upcomingMeeting && status.meeting.counts.agendaItems > 0 ? (
+                <Link
+                  href={`/operations/meetings/v2/${meetingId}/attachments`}
+                  className="mt-2 inline-flex text-sm font-medium text-teal-200 underline decoration-teal-200/40 underline-offset-2 hover:text-white"
+                >
+                  Review attachments
+                </Link>
+              ) : null}
               <Link
                 href={`/operations/meetings/v2/${meetingId}/room`}
                 className="mt-2 inline-flex text-sm font-medium text-teal-200 underline decoration-teal-200/40 underline-offset-2 hover:text-white"
@@ -1163,7 +1171,7 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               {status?.meeting.upcomingMeeting ? (
                 <p className="mt-1 max-w-md text-xs text-white/70">
                   {status.meeting.counts.agendaItems > 0
-                    ? "Package is prepared for the live room."
+                    ? "Review which agenda items have attachment pages, then start the meeting."
                     : "The board package is still being prepared. Open the live room after agenda items appear."}
                 </p>
               ) : null}

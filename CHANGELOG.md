@@ -42,6 +42,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **V2 meetings list after create** — New and duplicated V2 workspaces appear on the pipeline list when you go back from the detail page. The list was a stale client cache; create now revalidates the meetings page like V1 upload does.
+
 - **Upcoming meeting package pages** — Creating a meeting now keeps every page of the board package unless you clear some. The last-agenda control only marks where the written agenda stops; later pages stay as attachments. A page citation that runs past the stored package says those pages were left out when the meeting was created.
 
 - **Live room opens into the call** — Opening the live room joins LiveKit on the first visit. The room fills the window so Join, Previous, Next, and the presenter controls stay on screen. The Waiting badge is recording status, not a connection spinner.

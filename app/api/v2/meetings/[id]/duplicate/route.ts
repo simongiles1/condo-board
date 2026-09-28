@@ -4,6 +4,7 @@ import {
   duplicateMeetingV2ToAgendaApproval,
   MeetingV2DuplicateError,
 } from "@/lib/meeting-v2/duplicate-meeting";
+import { revalidateMeetingsWorkspaceList } from "@/lib/meeting-v2/revalidate-workspace-list";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,7 @@ export async function POST(
       sourceMeetingId: id,
       title,
     });
+    revalidateMeetingsWorkspaceList();
     return NextResponse.json(duplicated);
   } catch (error) {
     if (error instanceof MeetingV2DuplicateError) {

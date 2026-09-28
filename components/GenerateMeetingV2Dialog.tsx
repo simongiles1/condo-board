@@ -438,6 +438,7 @@ export function GenerateMeetingV2Dialog({
       sessionStorage.setItem(`meeting-v2-fresh:${payload.id}`, "1");
       onClose();
       router.push(`/operations/meetings/v2/${payload.id}`);
+      router.refresh();
       resetForm();
     } catch (e) {
       setError(

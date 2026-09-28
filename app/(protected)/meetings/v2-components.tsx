@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -390,6 +391,7 @@ function AgendaReviewViewToggle({
 type MeetingDateSort = "asc" | "desc";
 
 export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
+  const router = useRouter();
   const [panelMeetingId, setPanelMeetingId] = useState<string | null>(null);
   const [compareDialogMeetingId, setCompareDialogMeetingId] = useState<string | null>(null);
   const [meetingDateSort, setMeetingDateSort] = useState<MeetingDateSort>("desc");
@@ -399,6 +401,10 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
   const [liveAiUsageByMeetingId, setLiveAiUsageByMeetingId] = useState<
     Record<string, string>
   >({});
+
+  useEffect(() => {
+    router.refresh();
+  }, [router]);
 
   const panelMeeting = useMemo(() => {
     const meeting = meetings.find((row) => row.id === panelMeetingId) ?? null;

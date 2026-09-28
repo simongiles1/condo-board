@@ -10,6 +10,7 @@ import { getDb } from "@/lib/db";
 import { meetings, meetingsV2 } from "@/lib/db/schema";
 import { inngest } from "@/lib/inngest/client";
 import { getPdfPageCount } from "@/lib/pdf/pdf-page-count";
+import { revalidateMeetingsWorkspaceList } from "@/lib/meeting-v2/revalidate-workspace-list";
 import { parseAgendaContentEndsAtPage } from "@/lib/meeting-v2/upcoming-meeting";
 
 function assertFile(value: unknown): value is File {
@@ -156,6 +157,8 @@ export async function POST(req: Request) {
     }
 
     console.info("[meetings:v2:upload] rows created", { meetingId });
+
+    revalidateMeetingsWorkspaceList();
 
     return NextResponse.json({ id: meetingId });
   } catch (error) {

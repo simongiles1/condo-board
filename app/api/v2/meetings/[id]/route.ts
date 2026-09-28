@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { meetings, meetingsV2 } from "@/lib/db/schema";
+import { revalidateMeetingsWorkspaceList } from "@/lib/meeting-v2/revalidate-workspace-list";
 
 export async function PATCH(
   req: Request,
@@ -56,6 +57,8 @@ export async function PATCH(
       await db.update(meetings).set({ title }).where(eq(meetings.id, id));
     }
 
+    revalidateMeetingsWorkspaceList();
+
     return NextResponse.json({ ok: true, title });
   } catch (error) {
     console.error("[meetings/v2:patch]", error);
@@ -103,6 +106,8 @@ export async function DELETE(
     } catch (fsError) {
       console.warn("[meetings/v2:delete] upload cleanup", fsError);
     }
+
+    revalidateMeetingsWorkspaceList();
 
     return NextResponse.json({ ok: true });
   } catch (error) {

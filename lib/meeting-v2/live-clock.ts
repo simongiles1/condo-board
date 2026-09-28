@@ -73,7 +73,7 @@ export type LiveRecognitionCue = {
  * The cue shape already matches. Inserting it would change which transcript the minutes pipeline reads.
  */
 export const LIVE_TRANSCRIPT_INSERT_GAP =
-  "Live cues use the same start, end, speaker, and text shape as meetings_v2_transcript_segments, and parseVttToMergedCues already accepts that VTT. Rows are not inserted because each segment requires the meeting's transcript source artifact, and the minutes pipeline uses the first artifact of type transcript. A second live artifact would be read as the historical transcript. No recognizer is connected, so there is nothing to store.";
+  "Live cues use the same start, end, speaker, and text shape as meetings_v2_transcript_segments, and parseVttToMergedCues already accepts that VTT. Original recognition is stored on meetings_v2_live_recognition_cues. Rows are not inserted into meetings_v2_transcript_segments because each segment requires the meeting's transcript source artifact, and the minutes pipeline uses the first artifact of type transcript. A live artifact must not be created.";
 
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_MINUTE = 60_000;

@@ -454,6 +454,65 @@ export const meetingsV2LiveCaptureTracks = pgTable(
   }),
 );
 
+export const meetingsV2LiveRecognitionCues = pgTable(
+  "meetings_v2_live_recognition_cues",
+  {
+    id: text("id").primaryKey(),
+    meetingV2Id: text("meeting_v2_id")
+      .notNull()
+      .references(() => meetingsV2.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => meetingsV2LiveSessions.id, { onDelete: "cascade" }),
+    startOffsetMs: integer("start_offset_ms").notNull(),
+    endOffsetMs: integer("end_offset_ms").notNull(),
+    speakerIdentity: text("speaker_identity").notNull(),
+    speakerLabel: text("speaker_label").notNull(),
+    text: text("text").notNull(),
+    agendaItemId: text("agenda_item_id").references(() => meetingsV2AgendaItems.id, {
+      onDelete: "set null",
+    }),
+    /** Phrase hints active when this utterance was stored. The text column stays original. */
+    vocabularyJson: text("vocabulary_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    sessionIdx: index("meetings_v2_live_recognition_cues_session_idx").on(
+      table.sessionId,
+      table.startOffsetMs,
+    ),
+  }),
+);
+
+export const meetingsV2LiveRecognitionCorrections = pgTable(
+  "meetings_v2_live_recognition_corrections",
+  {
+    id: text("id").primaryKey(),
+    meetingV2Id: text("meeting_v2_id")
+      .notNull()
+      .references(() => meetingsV2.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => meetingsV2LiveSessions.id, { onDelete: "cascade" }),
+    cueId: text("cue_id")
+      .notNull()
+      .references(() => meetingsV2LiveRecognitionCues.id, { onDelete: "cascade" }),
+    heardText: text("heard_text").notNull(),
+    proposedText: text("proposed_text").notNull(),
+    source: text("source", { enum: ["vocabulary", "manual"] }).notNull(),
+    status: text("status", { enum: ["proposed", "accepted", "rejected"] })
+      .notNull()
+      .default("proposed"),
+    createdByIdentity: text("created_by_identity").notNull(),
+    createdAt: text("created_at").notNull(),
+    decidedByIdentity: text("decided_by_identity"),
+    decidedAt: text("decided_at"),
+  },
+  (table) => ({
+    cueIdx: index("meetings_v2_live_recognition_corrections_cue_idx").on(table.cueId),
+  }),
+);
+
 export const meetingsV2LiveCaptureGaps = pgTable(
   "meetings_v2_live_capture_gaps",
   {
@@ -510,6 +569,8 @@ export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   liveNavigationEvents: many(meetingsV2LiveNavigationEvents),
   liveCaptureTracks: many(meetingsV2LiveCaptureTracks),
   liveCaptureGaps: many(meetingsV2LiveCaptureGaps),
+  liveRecognitionCues: many(meetingsV2LiveRecognitionCues),
+  liveRecognitionCorrections: many(meetingsV2LiveRecognitionCorrections),
 }));
 
 export const meetingsV2SourceArtifactsRelations = relations(

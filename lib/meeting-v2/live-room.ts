@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 
-import { and, asc, eq, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { RoomServiceClient, AccessToken } from "livekit-server-sdk";
 
 import { getDb } from "@/lib/db";
@@ -9,6 +9,8 @@ import {
   meetingsV2AgendaItems,
   meetingsV2LiveCaptureTracks,
   meetingsV2LiveNavigationEvents,
+  meetingsV2LiveRecognitionCues,
+  meetingsV2LiveRecognitionCorrections,
   meetingsV2LiveSessions,
 } from "@/lib/db/schema";
 import { acceptCaptureInterruption, syncCaptureLedger } from "@/lib/meeting-v2/capture-ledger";
@@ -29,6 +31,19 @@ import {
   type LiveRoomLeaf,
   type LiveRoomSnapshot,
 } from "@/lib/meeting-v2/live-agenda";
+import { proposeVocabularyCorrections } from "@/lib/meeting-v2/live-corrections";
+import {
+  isDuplicateRecognitionCue,
+  normalizeRecognitionText,
+  recognitionCueOffsets,
+  type LiveRecognitionCorrectionView,
+  type LiveRecognitionCueView,
+} from "@/lib/meeting-v2/live-recognition";
+import {
+  liveVocabularyPhrases,
+  vocabularyFocus,
+  type LiveVocabulary,
+} from "@/lib/meeting-v2/live-vocabulary";
 import {
   mediaOffsetMs,
   missingStorageRecordingHealth,
@@ -258,6 +273,249 @@ export async function presentLivePage(
 }
 
 /**
+ * Stores one finalized utterance as original recognition.
+ * Does not write a transcript artifact or a transcript segment.
+ * Returns null when the text is empty or the same utterance was just stored.
+ */
+export async function recordLiveRecognitionCue(
+  meetingId: string,
+  participant: LiveParticipant,
+  input: { text: string; durationMs: number },
+  at: Date = new Date(),
+): Promise<LiveRecognitionCueView | null> {
+  const text = normalizeRecognitionText(input.text);
+  if (!text) {
+    throw new LiveRoomError("Recognition text is empty.", 400);
+  }
+  const db = getDb();
+  await requireMeeting(meetingId);
+  const session = await loadSession(meetingId);
+  const offsets = recognitionCueOffsets({
+    endOffsetMs: mediaOffsetMs(session.mediaStartedAt, at),
+    durationMs: input.durationMs,
+  });
+
+  const [previous] = await db
+    .select({
+      speakerIdentity: meetingsV2LiveRecognitionCues.speakerIdentity,
+      text: meetingsV2LiveRecognitionCues.text,
+      startOffsetMs: meetingsV2LiveRecognitionCues.startOffsetMs,
+    })
+    .from(meetingsV2LiveRecognitionCues)
+    .where(
+      and(
+        eq(meetingsV2LiveRecognitionCues.sessionId, session.id),
+        eq(meetingsV2LiveRecognitionCues.speakerIdentity, participant.identity),
+      ),
+    )
+    .orderBy(desc(meetingsV2LiveRecognitionCues.createdAt))
+    .limit(1);
+
+  if (
+    isDuplicateRecognitionCue({
+      previous: previous ?? null,
+      next: {
+        speakerIdentity: participant.identity,
+        text,
+        startOffsetMs: offsets.startOffsetMs,
+      },
+    })
+  ) {
+    return null;
+  }
+
+  const leaves = await loadLeaves(meetingId);
+  const navigation = await loadVocabularyNavigation(session.id);
+  const focus = activeLiveFocus(leaves, navigation);
+  const vocabulary = liveVocabularyFor(leaves, navigation, offsets.endOffsetMs);
+  const id = randomUUID();
+  const createdAt = at.toISOString();
+  const row: LiveRecognitionCueView = {
+    id,
+    startOffsetMs: offsets.startOffsetMs,
+    endOffsetMs: offsets.endOffsetMs,
+    speakerIdentity: participant.identity,
+    speakerLabel: participant.displayName,
+    text,
+    agendaItemId: focus?.kind === "leaf" ? focus.agendaItemId : null,
+    corrections: [],
+  };
+
+  await db.insert(meetingsV2LiveRecognitionCues).values({
+    id: row.id,
+    startOffsetMs: row.startOffsetMs,
+    endOffsetMs: row.endOffsetMs,
+    speakerIdentity: row.speakerIdentity,
+    speakerLabel: row.speakerLabel,
+    text: row.text,
+    agendaItemId: row.agendaItemId,
+    meetingV2Id: meetingId,
+    sessionId: session.id,
+    vocabularyJson: JSON.stringify(vocabulary.phrases),
+    createdAt,
+  });
+
+  const proposals = proposeVocabularyCorrections(text, vocabulary.phrases);
+  const corrections: LiveRecognitionCorrectionView[] = [];
+  for (const proposal of proposals) {
+    const correction: LiveRecognitionCorrectionView = {
+      id: randomUUID(),
+      cueId: row.id,
+      heardText: proposal.heardText,
+      proposedText: proposal.proposedText,
+      source: "vocabulary",
+      status: "proposed",
+      createdByIdentity: "vocabulary",
+      decidedByIdentity: null,
+    };
+    corrections.push(correction);
+    await db.insert(meetingsV2LiveRecognitionCorrections).values({
+      ...correction,
+      meetingV2Id: meetingId,
+      sessionId: session.id,
+      createdAt,
+    });
+  }
+
+  return { ...row, corrections };
+}
+
+/**
+ * Phrase hints for the open room at the current media clock.
+ * Returns an empty list before anyone has joined.
+ */
+export async function listLiveVocabulary(
+  meetingId: string,
+  at: Date = new Date(),
+): Promise<LiveVocabulary> {
+  const empty: LiveVocabulary = { phrases: [], activeLeafId: null, hangoverLeafId: null };
+  const db = getDb();
+  await requireMeeting(meetingId);
+  const [session] = await db
+    .select()
+    .from(meetingsV2LiveSessions)
+    .where(eq(meetingsV2LiveSessions.meetingV2Id, meetingId));
+  if (!session) return empty;
+  const leaves = await loadLeaves(meetingId);
+  const navigation = await loadVocabularyNavigation(session.id);
+  return liveVocabularyFor(leaves, navigation, mediaOffsetMs(session.mediaStartedAt, at));
+}
+
+function liveVocabularyFor(
+  leaves: LiveRoomLeaf[],
+  navigation: Array<{ agendaItemId: string | null; unscheduled: boolean; mediaOffsetMs: number }>,
+  nowOffsetMs: number,
+): LiveVocabulary {
+  const focus = vocabularyFocus({ leaves, navigation, nowOffsetMs });
+  return liveVocabularyPhrases({
+    leaves: leaves.map((leaf) => ({
+      id: leaf.id,
+      title: leaf.title,
+      sourceText: leaf.sourceText,
+    })),
+    activeLeafId: focus.activeLeafId,
+    hangoverLeafId: focus.hangoverLeafId,
+  });
+}
+
+/**
+ * Recent original recognition cues for the open room, oldest first.
+ */
+export async function listLiveRecognitionCues(
+  meetingId: string,
+  limit = 40,
+): Promise<LiveRecognitionCueView[]> {
+  const db = getDb();
+  await requireMeeting(meetingId);
+  const session = await loadSession(meetingId);
+  const rows = await db
+    .select({
+      id: meetingsV2LiveRecognitionCues.id,
+      startOffsetMs: meetingsV2LiveRecognitionCues.startOffsetMs,
+      endOffsetMs: meetingsV2LiveRecognitionCues.endOffsetMs,
+      speakerIdentity: meetingsV2LiveRecognitionCues.speakerIdentity,
+      speakerLabel: meetingsV2LiveRecognitionCues.speakerLabel,
+      text: meetingsV2LiveRecognitionCues.text,
+      agendaItemId: meetingsV2LiveRecognitionCues.agendaItemId,
+    })
+    .from(meetingsV2LiveRecognitionCues)
+    .where(eq(meetingsV2LiveRecognitionCues.sessionId, session.id))
+    .orderBy(desc(meetingsV2LiveRecognitionCues.startOffsetMs))
+    .limit(Math.min(80, Math.max(1, limit)));
+  const ordered = rows.reverse();
+  const cueIds = ordered.map((row) => row.id);
+  const corrections = cueIds.length
+    ? await db
+        .select({
+          id: meetingsV2LiveRecognitionCorrections.id,
+          cueId: meetingsV2LiveRecognitionCorrections.cueId,
+          heardText: meetingsV2LiveRecognitionCorrections.heardText,
+          proposedText: meetingsV2LiveRecognitionCorrections.proposedText,
+          source: meetingsV2LiveRecognitionCorrections.source,
+          status: meetingsV2LiveRecognitionCorrections.status,
+          createdByIdentity: meetingsV2LiveRecognitionCorrections.createdByIdentity,
+          decidedByIdentity: meetingsV2LiveRecognitionCorrections.decidedByIdentity,
+        })
+        .from(meetingsV2LiveRecognitionCorrections)
+        .where(inArray(meetingsV2LiveRecognitionCorrections.cueId, cueIds))
+    : [];
+  return ordered.map((row) => ({
+    ...row,
+    corrections: corrections.filter((correction) => correction.cueId === row.id),
+  }));
+}
+
+/**
+ * Accepts or dismisses a caption suggestion. The original cue text is left as heard.
+ */
+export async function decideLiveRecognitionCorrection(
+  meetingId: string,
+  correctionId: string,
+  participant: LiveParticipant,
+  status: "accepted" | "rejected",
+  at: Date = new Date(),
+): Promise<LiveRecognitionCorrectionView> {
+  const db = getDb();
+  await requireMeeting(meetingId);
+  const [existing] = await db
+    .select()
+    .from(meetingsV2LiveRecognitionCorrections)
+    .where(
+      and(
+        eq(meetingsV2LiveRecognitionCorrections.id, correctionId),
+        eq(meetingsV2LiveRecognitionCorrections.meetingV2Id, meetingId),
+      ),
+    );
+  if (!existing) {
+    throw new LiveRoomError("That caption suggestion was not found.", 404);
+  }
+  if (existing.status !== "proposed") {
+    throw new LiveRoomError("That caption suggestion was already decided.", 409);
+  }
+
+  const decidedAt = at.toISOString();
+  await db
+    .update(meetingsV2LiveRecognitionCorrections)
+    .set({
+      status,
+      decidedByIdentity: participant.identity,
+      decidedAt,
+    })
+    .where(eq(meetingsV2LiveRecognitionCorrections.id, correctionId));
+
+  return {
+    id: existing.id,
+    cueId: existing.cueId,
+    heardText: existing.heardText,
+    proposedText: existing.proposedText,
+    source: existing.source,
+    status,
+    createdByIdentity: existing.createdByIdentity,
+    decidedByIdentity: participant.identity,
+  };
+}
+
+/**
  * Records that discussion after this moment is absent until capture is healthy again.
  */
 export async function recordCaptureInterruption(
@@ -434,11 +692,20 @@ async function loadSession(meetingId: string) {
 }
 
 async function loadNavigationTargets(sessionId: string) {
+  const rows = await loadVocabularyNavigation(sessionId);
+  return rows.map((row) => ({
+    agendaItemId: row.agendaItemId,
+    unscheduled: row.unscheduled,
+  }));
+}
+
+async function loadVocabularyNavigation(sessionId: string) {
   const db = getDb();
   return db
     .select({
       agendaItemId: meetingsV2LiveNavigationEvents.agendaItemId,
       unscheduled: meetingsV2LiveNavigationEvents.unscheduled,
+      mediaOffsetMs: meetingsV2LiveNavigationEvents.mediaOffsetMs,
     })
     .from(meetingsV2LiveNavigationEvents)
     .where(eq(meetingsV2LiveNavigationEvents.sessionId, sessionId))

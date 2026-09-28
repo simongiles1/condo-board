@@ -624,6 +624,27 @@
       "when": 1790950000000,
       "tag": "0088_meetings_v2_live_presenter",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1791000000000,
+      "tag": "0089_meetings_v2_live_recognition",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1791050000000,
+      "tag": "0090_meetings_v2_live_vocabulary",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1791100000000,
+      "tag": "0091_meetings_v2_live_corrections",
+      "breakpoints": true
     }
   ]
 }

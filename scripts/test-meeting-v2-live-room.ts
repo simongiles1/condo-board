@@ -32,9 +32,24 @@ import {
 import { clipStageTextToItem } from "../lib/meeting-v2/stage-item-text";
 import {
   linkPackagePageCitations,
+  packagePdfViewRange,
   storedPackageCitationGap,
   packagePageFromHref,
 } from "../lib/meeting-v2/package-page-refs";
+import {
+  isDuplicateRecognitionCue,
+  normalizeRecognitionText,
+  recognitionCueOffsets,
+} from "../lib/meeting-v2/live-recognition";
+import {
+  originalRecognitionText,
+  proposeVocabularyCorrections,
+} from "../lib/meeting-v2/live-corrections";
+import {
+  LIVE_VOCABULARY_HANGOVER_MS,
+  liveVocabularyPhrases,
+  vocabularyFocus,
+} from "../lib/meeting-v2/live-vocabulary";
 import { liveKitTrackEgress } from "../lib/livekit/config";
 import {
   LIVE_TRANSCRIPT_INSERT_GAP,
@@ -326,6 +341,36 @@ describe("live room package citations", () => {
     assert.equal(
       storedPackageCitationGap({ citedStart: 13, citedEnd: 26, storedPageCount: 80 }),
       null,
+    );
+    assert.deepEqual(
+      packagePdfViewRange({ initialPage: 13, citedEnd: 26, storedPageCount: 216 }),
+      {
+        start: 13,
+        end: 26,
+        pageNumbers: Array.from({ length: 14 }, (_, index) => 13 + index),
+        continuousScroll: true,
+        openPage: 13,
+      },
+    );
+    assert.deepEqual(
+      packagePdfViewRange({ initialPage: 27, citedEnd: 27, storedPageCount: 216 }),
+      {
+        start: 27,
+        end: 27,
+        pageNumbers: [27],
+        continuousScroll: false,
+        openPage: 27,
+      },
+    );
+    assert.deepEqual(
+      packagePdfViewRange({ initialPage: 40, storedPageCount: 216 }),
+      {
+        start: 1,
+        end: 216,
+        pageNumbers: [],
+        continuousScroll: false,
+        openPage: 40,
+      },
     );
   });
 });
@@ -727,6 +772,100 @@ describe("live room track egress", () => {
   });
 });
 
+describe("live recognition cues", () => {
+  it("keeps original utterances off the historical transcript clock math", () => {
+    assert.equal(normalizeRecognitionText("  Stairwell   F "), "Stairwell F");
+    assert.equal(normalizeRecognitionText("   "), null);
+    assert.deepEqual(recognitionCueOffsets({ endOffsetMs: 4200, durationMs: 2700 }), {
+      startOffsetMs: 1500,
+      endOffsetMs: 4200,
+    });
+    assert.equal(
+      isDuplicateRecognitionCue({
+        previous: { speakerIdentity: "ada", text: "Stairwell F", startOffsetMs: 1500 },
+        next: { speakerIdentity: "ada", text: "Stairwell F", startOffsetMs: 1800 },
+      }),
+      true,
+    );
+    assert.equal(
+      isDuplicateRecognitionCue({
+        previous: { speakerIdentity: "ada", text: "Stairwell F", startOffsetMs: 1500 },
+        next: { speakerIdentity: "ada", text: "Passed", startOffsetMs: 1600 },
+      }),
+      false,
+    );
+  });
+
+  it("keeps meeting titles, the active leaf, and a short hangover", () => {
+    const leaves = [
+      {
+        id: "steam",
+        title: "Steam Room Heat Pump",
+        sourceText: "Trace Consulting Group signed the proposal for $48,000. Approved.",
+      },
+      {
+        id: "roof",
+        title: "Roof Replacement",
+        sourceText: "Absolute Roofing Ltd will start in June.",
+      },
+    ];
+    const onSteam = vocabularyFocus({
+      leaves,
+      navigation: [{ agendaItemId: "steam", unscheduled: false, mediaOffsetMs: 0 }],
+      nowOffsetMs: 10_000,
+    });
+    assert.equal(onSteam.hangoverLeafId, null);
+    const steamHints = liveVocabularyPhrases({ leaves, ...onSteam });
+    assert.ok(steamHints.phrases.includes("Trace Consulting Group"));
+    assert.ok(steamHints.phrases.includes("Steam Room Heat Pump"));
+    assert.ok(steamHints.phrases.includes("Roof Replacement"));
+    assert.equal(
+      steamHints.phrases.some((phrase) => phrase.includes("48,000") || phrase === "Approved"),
+      false,
+    );
+
+    const justMoved = vocabularyFocus({
+      leaves,
+      navigation: [
+        { agendaItemId: "steam", unscheduled: false, mediaOffsetMs: 0 },
+        { agendaItemId: "roof", unscheduled: false, mediaOffsetMs: 20_000 },
+      ],
+      nowOffsetMs: 30_000,
+    });
+    assert.equal(justMoved.activeLeafId, "roof");
+    assert.equal(justMoved.hangoverLeafId, "steam");
+    const during = liveVocabularyPhrases({ leaves, ...justMoved });
+    assert.ok(during.phrases.includes("Trace Consulting Group"));
+    assert.ok(during.phrases.includes("Absolute Roofing Ltd"));
+
+    const later = vocabularyFocus({
+      leaves,
+      navigation: [
+        { agendaItemId: "steam", unscheduled: false, mediaOffsetMs: 0 },
+        { agendaItemId: "roof", unscheduled: false, mediaOffsetMs: 20_000 },
+      ],
+      nowOffsetMs: 20_000 + LIVE_VOCABULARY_HANGOVER_MS + 1,
+    });
+    assert.equal(later.hangoverLeafId, null);
+    const after = liveVocabularyPhrases({ leaves, ...later });
+    assert.equal(after.phrases.includes("Trace Consulting Group"), false);
+    assert.ok(after.phrases.includes("Absolute Roofing Ltd"));
+  });
+
+  it("suggests a near name and leaves the original caption unchanged", () => {
+    const original = "Trace Consultin Group signed for $48,000 and it was approved.";
+    const proposals = proposeVocabularyCorrections(original, [
+      "Trace Consulting Group",
+      "$48,000",
+      "Approved",
+    ]);
+    assert.deepEqual(proposals, [
+      { heardText: "Trace Consultin Group", proposedText: "Trace Consulting Group" },
+    ]);
+    assert.equal(originalRecognitionText(original), original);
+  });
+});
+
 describe("live recognition cue shape", () => {
   it("round-trips through the VTT parser the minutes pipeline already uses", () => {
     const merged = liveCuesToMergedCues([
@@ -754,6 +893,7 @@ describe("live recognition cue shape", () => {
 
   it("names why those rows are not inserted yet", () => {
     assert.match(LIVE_TRANSCRIPT_INSERT_GAP, /first artifact of type transcript/);
-    assert.match(LIVE_TRANSCRIPT_INSERT_GAP, /No recognizer is connected/);
+    assert.match(LIVE_TRANSCRIPT_INSERT_GAP, /meetings_v2_live_recognition_cues/);
+    assert.doesNotMatch(LIVE_TRANSCRIPT_INSERT_GAP, /No recognizer is connected/);
   });
 });

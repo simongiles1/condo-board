@@ -8,6 +8,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Live room caption layers** — The room keeps three separate records: the audio file, the original caption, and a suggestion beside it. A close vocabulary match can be accepted or dismissed. Accepting does not change the original words. Amounts and decision words are not suggested.
+
+- **Live room vocabulary** — Caption hints are the agenda titles for the whole meeting, names from the active item's package text, and names from the previous item for 45 seconds after Next. Dollar amounts and bare decision words are not hints. The stored caption stays the original words.
+
+- **Live room speech captions** — Each participant's browser transcribes their own microphone and stores the finalized lines as original recognition on the meeting. Captions appear in the room. A caption failure is separate from recording and does not stop capture. Those lines are not written into the historical transcript the minutes pipeline reads.
+
 - **Create a new meeting** — Meetings V2 has a New meeting action beside the historical upload. It takes a board package and no transcript. On one board-package step you select meeting pages, mark where the agenda ends (teal vs amber), and create. Preparation builds the agenda from those pages and links attachment pages to agenda items. The live room can open once that finishes. Minutes stages stay off until a transcript exists.
 
 - **Live room shared stage** — The live room shows the current agenda item as formatted board-package text. Previous and Next move to the next agenda item. Page citations and attached pages open in a document drawer. Pipeline notes are not on the stage.
@@ -45,6 +51,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Live room agenda outline** — The agenda sidebar lists package headings (for example item 4 and subsection 4.A) even when only leaf items are stored in the database. Heading rows are not clickable; Previous, Next, and direct jumps still move only between leaves.
 
 ### Fixed
+
+- **Live room package citations in the drawer** — Opening a page range (for example pages 13–26) shows only those pages in a continuous scroll instead of the full package with prev/next through every page.
 
 - **Live room agenda sidebar crash** — Opening the live room no longer throws when the snapshot is still loading or the API omits `outline`; the sidebar falls back to leaf rows instead of calling `.map` on undefined.
 

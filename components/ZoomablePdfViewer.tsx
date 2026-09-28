@@ -1,11 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { storedPackageCitationGap } from "@/lib/meeting-v2/package-page-refs";
+import {
+  packagePdfViewRange,
+  storedPackageCitationGap,
+} from "@/lib/meeting-v2/package-page-refs";
 import { getPdfPageCount } from "@/lib/pdf/pdf-page-count";
 import {
   cancelPdfCanvasRender,
+  renderPdfPageRangeToCanvases,
   renderPdfPageToCanvas,
 } from "@/lib/pdf/pdfjs-browser";
 
@@ -21,12 +25,11 @@ const MIN_SCALE = 0.5;
 const MAX_SCALE = 3;
 const SCALE_STEP = 0.25;
 
-/** Scrollable PDF page viewer with zoom and an optional missing-page notice. */
+/** Scrollable PDF viewer with zoom, citation ranges, and continuous scroll for multi-page citations. */
 export function ZoomablePdfViewer({ url, className, initialPage, citedEnd }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRootRef = useRef<HTMLDivElement>(null);
+  const scrollCanvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
   const initialPageRef = useRef(initialPage && initialPage > 0 ? initialPage : 1);
   initialPageRef.current = initialPage && initialPage > 0 ? initialPage : 1;
 
@@ -41,6 +44,17 @@ export function ZoomablePdfViewer({ url, className, initialPage, citedEnd }: Pro
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [pageWidthPt, setPageWidthPt] = useState<number | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
+  const singleCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  const viewRange = useMemo(
+    () =>
+      packagePdfViewRange({
+        initialPage,
+        citedEnd,
+        storedPageCount: pageCount,
+      }),
+    [citedEnd, initialPage, pageCount],
+  );
 
   const effectiveScale = (() => {
     if (!fitWidth || !pageWidthPt || viewportWidth <= 0) return scale;
@@ -59,6 +73,7 @@ export function ZoomablePdfViewer({ url, className, initialPage, citedEnd }: Pro
     setRenderingPage(false);
     setErrorMessage(null);
     setFitWidth(true);
+    scrollCanvasRefs.current.clear();
 
     fetch(url)
       .then(async (response) => {
@@ -74,7 +89,12 @@ export function ZoomablePdfViewer({ url, className, initialPage, citedEnd }: Pro
         if (cancelled) return;
         setPdfData(buffer);
         setPageCount(count);
-        setPage(Math.min(count, Math.max(1, initialPageRef.current)));
+        const range = packagePdfViewRange({
+          initialPage: initialPageRef.current,
+          citedEnd,
+          storedPageCount: count,
+        });
+        setPage(range.openPage);
         setLoadingPdf(false);
       })
       .catch((error: unknown) => {
@@ -86,16 +106,17 @@ export function ZoomablePdfViewer({ url, className, initialPage, citedEnd }: Pro
     return () => {
       cancelled = true;
     };
-  }, [url]);
+  }, [citedEnd, url]);
 
   useEffect(() => {
-    if (!pageCount || !initialPage || initialPage < 1) return;
-    setPage(Math.min(pageCount, initialPage));
-  }, [initialPage, pageCount]);
+    if (!pageCount || !initialPage || initialPage < 1 || viewRange.continuousScroll) return;
+    setPage(viewRange.openPage);
+  }, [initialPage, pageCount, viewRange.openPage, viewRange.continuousScroll]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!pdfData || !canvas) return;
+    if (!pdfData || viewRange.continuousScroll) return;
+    const canvas = singleCanvasRef.current;
+    if (!canvas) return;
 
     let cancelled = false;
     setRenderingPage(true);
@@ -121,7 +142,56 @@ export function ZoomablePdfViewer({ url, className, initialPage, citedEnd }: Pro
       cancelled = true;
       cancelPdfCanvasRender(canvas);
     };
-  }, [pdfData, page, effectiveScale]);
+  }, [effectiveScale, page, pdfData, viewRange.continuousScroll]);
+
+  useLayoutEffect(() => {
+    if (!pdfData || !viewRange.continuousScroll || viewRange.pageNumbers.length === 0) return;
+
+    let cancelled = false;
+    setRenderingPage(true);
+    setErrorMessage(null);
+    for (const canvas of scrollCanvasRefs.current.values()) {
+      cancelPdfCanvasRender(canvas);
+    }
+
+    void renderPdfPageRangeToCanvases(
+      pdfData,
+      viewRange.pageNumbers,
+      (pageNumber) => scrollCanvasRefs.current.get(pageNumber) ?? null,
+      effectiveScale,
+      {
+        isCancelled: () => cancelled,
+        onPageWidth: (pageWidthPt) => {
+          setPageWidthPt((current) => current ?? pageWidthPt);
+        },
+      },
+    )
+      .then(() => {
+        if (!cancelled) setRenderingPage(false);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        console.error("[ZoomablePdfViewer] PDF range render failed:", error);
+        setRenderingPage(false);
+        setErrorMessage("Could not render PDF pages.");
+      });
+
+    return () => {
+      cancelled = true;
+      for (const canvas of scrollCanvasRefs.current.values()) {
+        cancelPdfCanvasRender(canvas);
+      }
+    };
+  }, [effectiveScale, pdfData, viewRange]);
+
+  useEffect(() => {
+    if (loadingPdf || !viewRange.continuousScroll || !initialPage) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    const target = container.querySelector(`[data-pdf-page="${initialPage}"]`);
+    if (!(target instanceof HTMLElement)) return;
+    container.scrollTop = target.offsetTop - container.offsetTop;
+  }, [initialPage, loadingPdf, renderingPage, viewRange.continuousScroll, viewRange.pageNumbers]);
 
   useEffect(() => {
     if (loadingPdf) return;
@@ -172,11 +242,21 @@ export function ZoomablePdfViewer({ url, className, initialPage, citedEnd }: Pro
   const citationGap =
     pageCount > 0 && initialPage
       ? storedPackageCitationGap({
-          citedStart: initialPage,
-          citedEnd: citedEnd && citedEnd > initialPage ? citedEnd : initialPage,
+          citedStart: viewRange.start,
+          citedEnd: viewRange.end,
           storedPageCount: pageCount,
         })
       : null;
+
+  const pageLabel = viewRange.continuousScroll
+    ? viewRange.start === viewRange.end
+      ? `Page ${viewRange.start}`
+      : `Pages ${viewRange.start}–${viewRange.end}`
+    : citedEnd == null
+      ? `${page} / ${pageCount}`
+      : viewRange.start === viewRange.end
+        ? `Page ${page}`
+        : `Page ${page} · ${viewRange.start}–${viewRange.end}`;
 
   if (loadingPdf) {
     return (
@@ -205,25 +285,29 @@ export function ZoomablePdfViewer({ url, className, initialPage, citedEnd }: Pro
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            disabled={page <= 1 || renderingPage}
-            onClick={() => setPage((current) => Math.max(1, current - 1))}
-            className="rounded-md border border-slate-200 px-2.5 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Prev
-          </button>
-          <span className="text-sm tabular-nums text-slate-700">
-            {page} / {pageCount}
-          </span>
-          <button
-            type="button"
-            disabled={page >= pageCount || renderingPage}
-            onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
-            className="rounded-md border border-slate-200 px-2.5 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Next
-          </button>
+          {viewRange.continuousScroll ? (
+            <span className="text-sm font-medium text-slate-700">{pageLabel}</span>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={page <= viewRange.start || renderingPage}
+                onClick={() => setPage((current) => Math.max(viewRange.start, current - 1))}
+                className="rounded-md border border-slate-200 px-2.5 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Prev
+              </button>
+              <span className="text-sm tabular-nums text-slate-700">{pageLabel}</span>
+              <button
+                type="button"
+                disabled={page >= viewRange.end || renderingPage}
+                onClick={() => setPage((current) => Math.min(viewRange.end, current + 1))}
+                className="rounded-md border border-slate-200 px-2.5 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -276,17 +360,38 @@ export function ZoomablePdfViewer({ url, className, initialPage, citedEnd }: Pro
         ref={scrollRef}
         className={`min-h-0 flex-1 overflow-auto p-4 ${isFullscreen ? "h-[calc(100vh-3rem)]" : ""}`}
       >
-        <div ref={containerRef} className="relative mx-auto flex w-max min-w-full justify-center">
-          {renderingPage ? (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-100/80 text-sm text-slate-600">
-              Rendering page…
-            </div>
-          ) : null}
-          <canvas
-            ref={canvasRef}
-            className="rounded border border-slate-300 bg-white shadow-sm"
-          />
-        </div>
+        {viewRange.continuousScroll ? (
+          <div className="relative mx-auto flex w-max min-w-full flex-col items-center gap-4">
+            {renderingPage ? (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-100/80 text-sm text-slate-600">
+                Rendering pages…
+              </div>
+            ) : null}
+            {viewRange.pageNumbers.map((pageNumber) => (
+              <div key={pageNumber} data-pdf-page={pageNumber} className="w-full flex justify-center">
+                <canvas
+                  ref={(element) => {
+                    if (element) scrollCanvasRefs.current.set(pageNumber, element);
+                    else scrollCanvasRefs.current.delete(pageNumber);
+                  }}
+                  className="rounded border border-slate-300 bg-white shadow-sm"
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="relative mx-auto flex w-max min-w-full justify-center">
+            {renderingPage ? (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-100/80 text-sm text-slate-600">
+                Rendering page…
+              </div>
+            ) : null}
+            <canvas
+              ref={singleCanvasRef}
+              className="rounded border border-slate-300 bg-white shadow-sm"
+            />
+          </div>
+        )}
       </div>
     </div>
   );

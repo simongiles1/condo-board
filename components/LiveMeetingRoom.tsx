@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 
 import { MarkdownPreview } from "@/components/MarkdownPreview";
+import { useLiveSpeechRecognition } from "@/components/useLiveSpeechRecognition";
 import { ZoomablePdfViewer } from "@/components/ZoomablePdfViewer";
 import { agendaItemIndentDepth } from "@/lib/meeting-v2/agenda-outline";
 import {
@@ -73,9 +74,116 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
   >([]);
   const [archiveLinks, setArchiveLinks] = useState<LiveArchiveLink[]>([]);
   const [drawer, setDrawer] = useState<DocumentDrawer | null>(null);
+  const [captions, setCaptions] = useState<
+    Array<{
+      id: string;
+      speakerLabel: string;
+      text: string;
+      corrections: Array<{
+        id: string;
+        heardText: string;
+        proposedText: string;
+        status: "proposed" | "accepted" | "rejected";
+        decidedByIdentity: string | null;
+      }>;
+    }>
+  >([]);
+  const [hintPhrases, setHintPhrases] = useState<string[]>([]);
   const roomRef = useRef<Room | null>(null);
   const audioRef = useRef<HTMLDivElement>(null);
   const autoJoined = useRef(false);
+
+  const postRecognitionCue = useCallback(
+    (text: string, durationMs: number) => {
+      void fetch(`/api/v2/meetings/${meetingId}/live/recognition`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, durationMs }),
+      })
+        .then(async (response) => (response.ok ? response.json() : null))
+        .then((payload: { cue?: { id: string; speakerLabel: string; text: string; corrections?: Array<{ id: string; heardText: string; proposedText: string; status: "proposed" | "accepted" | "rejected"; decidedByIdentity: string | null }> } | null } | null) => {
+          const cue = payload?.cue;
+          if (!cue) return;
+          setCaptions((current) =>
+            current.some((row) => row.id === cue.id)
+              ? current
+              : [...current, { ...cue, corrections: cue.corrections ?? [] }].slice(-40),
+          );
+        })
+        .catch(() => undefined);
+    },
+    [meetingId],
+  );
+  const decideCorrection = useCallback(
+    async (correctionId: string, status: "accepted" | "rejected") => {
+      const response = await fetch(`/api/v2/meetings/${meetingId}/live/recognition/corrections`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ correctionId, status }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        correction?: { id: string; status: "accepted" | "rejected"; decidedByIdentity: string | null };
+      } | null;
+      const correction = payload?.correction;
+      if (!response.ok || !correction) return;
+      setCaptions((current) =>
+        current.map((cue) => ({
+          ...cue,
+          corrections: cue.corrections.map((row) =>
+            row.id === correction.id
+              ? { ...row, status: correction.status, decidedByIdentity: correction.decidedByIdentity }
+              : row,
+          ),
+        })),
+      );
+    },
+    [meetingId],
+  );
+  const speech = useLiveSpeechRecognition({
+    enabled: connection === "connected",
+    phrases: hintPhrases,
+    onFinal: postRecognitionCue,
+  });
+
+  useEffect(() => {
+    if (connection !== "connected") return;
+    let cancelled = false;
+    const load = () => {
+      void fetch(`/api/v2/meetings/${meetingId}/live/recognition`, { cache: "no-store" })
+        .then(async (response) => (response.ok ? response.json() : null))
+        .then((payload: { cues?: Array<{ id: string; speakerLabel: string; text: string; corrections?: Array<{ id: string; heardText: string; proposedText: string; status: "proposed" | "accepted" | "rejected"; decidedByIdentity: string | null }> }> } | null) => {
+          if (!cancelled && payload?.cues) {
+            setCaptions(payload.cues.map((cue) => ({ ...cue, corrections: cue.corrections ?? [] })));
+          }
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const timer = window.setInterval(load, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [connection, meetingId]);
+
+  useEffect(() => {
+    if (connection !== "connected") return;
+    let cancelled = false;
+    const load = () => {
+      void fetch(`/api/v2/meetings/${meetingId}/live/vocabulary`, { cache: "no-store" })
+        .then(async (response) => (response.ok ? response.json() : null))
+        .then((payload: { phrases?: string[] } | null) => {
+          if (!cancelled && payload?.phrases) setHintPhrases(payload.phrases);
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const timer = window.setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [connection, meetingId]);
 
   const refreshPeople = useCallback((room: Room) => {
     const local = room.localParticipant;
@@ -400,6 +508,24 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
         ) : (
           <span />
         )}
+        {connection === "connected" && speech.status !== "idle" ? (
+          <span
+            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+              speech.status === "listening"
+                ? "border-slate-500 bg-slate-800 text-slate-100"
+                : "border-amber-300 bg-amber-50 text-amber-950"
+            }`}
+            title={speech.detail ?? undefined}
+          >
+            {speech.status === "listening"
+              ? hintPhrases.length > 0
+                ? `Captions on · ${hintPhrases.length} hints`
+                : "Captions on"
+              : speech.status === "unsupported"
+                ? "No captions"
+                : "Captions stopped"}
+          </span>
+        ) : null}
       </header>
 
       {critical && snapshot ? (
@@ -553,6 +679,61 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
             </div>
           )}
         </div>
+        {captions.length > 0 || speech.interim || (snapshot?.captureFiles.length ?? 0) > 0 ? (
+          <div className="max-h-48 overflow-auto border-t border-slate-200 bg-slate-50 px-6 py-3 text-sm">
+            {snapshot?.captureFiles.some((file) => file.playable) ? (
+              <p className="mb-2 text-xs text-slate-500">
+                Audio{" "}
+                {snapshot.captureFiles
+                  .filter((file) => file.playable)
+                  .map((file) => (
+                    <a
+                      key={file.trackId}
+                      href={`/api/v2/meetings/${meetingId}/live/capture/${file.trackId}`}
+                      className="ml-2 font-medium text-teal-800 underline"
+                    >
+                      Play {file.participantIdentity}
+                    </a>
+                  ))}
+              </p>
+            ) : null}
+            {captions.slice(-6).map((cue) => (
+              <div key={cue.id} className="mb-2 text-slate-800">
+                <p>
+                  <span className="font-semibold text-slate-600">{cue.speakerLabel}: </span>
+                  {cue.text}
+                </p>
+                {cue.corrections
+                  .filter((correction) => correction.status !== "rejected")
+                  .map((correction) => (
+                    <p key={correction.id} className="mt-1 text-xs text-slate-600">
+                      {correction.status === "accepted" ? "Accepted correction" : "Suggestion"}:{" "}
+                      {correction.heardText} → {correction.proposedText}
+                      {correction.status === "proposed" ? (
+                        <>
+                          <button
+                            type="button"
+                            className="ml-2 font-medium text-teal-800 underline"
+                            onClick={() => void decideCorrection(correction.id, "accepted")}
+                          >
+                            Accept
+                          </button>
+                          <button
+                            type="button"
+                            className="ml-2 font-medium text-slate-500 underline"
+                            onClick={() => void decideCorrection(correction.id, "rejected")}
+                          >
+                            Dismiss
+                          </button>
+                        </>
+                      ) : null}
+                    </p>
+                  ))}
+              </div>
+            ))}
+            {speech.interim ? <p className="text-slate-500">{speech.interim}</p> : null}
+          </div>
+        ) : null}
       </main>
       {drawer ? (
         <aside className="absolute inset-y-0 right-72 z-20 flex w-[min(42rem,calc(100%-19rem))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl">

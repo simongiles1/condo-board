@@ -134,6 +134,57 @@ function isRenderCancelled(error: unknown): boolean {
   );
 }
 
+async function renderOpenPdfPageToCanvas(
+  page: {
+    getViewport: (params: { scale: number }) => { width: number; height: number };
+    render: (params: {
+      canvas: HTMLCanvasElement;
+      canvasContext: CanvasRenderingContext2D;
+      viewport: { width: number; height: number };
+      background: string;
+    }) => { promise: Promise<void>; cancel: () => void };
+    cleanup?: () => void;
+  },
+  canvas: HTMLCanvasElement,
+  scale: number,
+  generation: number,
+): Promise<PdfPageRenderInfo | void> {
+  if (!isCurrentFullPageRender(canvas, generation)) return;
+
+  const unscaled = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale });
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  if (!isCurrentFullPageRender(canvas, generation)) return;
+
+  const task = page.render({
+    canvas,
+    canvasContext: ctx,
+    viewport,
+    background: "#ffffff",
+  });
+  activeFullPageRenders.set(canvas, { cancel: () => task.cancel() });
+  try {
+    await task.promise;
+    if (!isCurrentFullPageRender(canvas, generation)) return;
+    return {
+      canvasWidth: viewport.width,
+      canvasHeight: viewport.height,
+      pageWidthPt: unscaled.width,
+      pageHeightPt: unscaled.height,
+      scale,
+    };
+  } catch (error) {
+    if (isRenderCancelled(error)) return;
+    throw error;
+  } finally {
+    activeFullPageRenders.delete(canvas);
+    page.cleanup?.();
+  }
+}
+
 export async function renderPdfPageToCanvas(
   data: ArrayBuffer,
   pageNumber: number,
@@ -152,38 +203,37 @@ export async function renderPdfPageToCanvas(
 
     const page = await doc.getPage(pageNumber);
     if (!isCurrentFullPageRender(canvas, generation)) return;
+    return await renderOpenPdfPageToCanvas(page, canvas, scale, generation);
+  } finally {
+    await destroyPdfDocument(doc);
+  }
+}
 
-    const unscaled = page.getViewport({ scale: 1 });
-    const viewport = page.getViewport({ scale });
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    if (!isCurrentFullPageRender(canvas, generation)) return;
+/**
+ * Renders several pages from one PDF into canvases, opening the document once.
+ */
+export async function renderPdfPageRangeToCanvases(
+  data: ArrayBuffer,
+  pageNumbers: number[],
+  canvasForPage: (pageNumber: number) => HTMLCanvasElement | null,
+  scale = 1.25,
+  options?: { isCancelled?: () => boolean; onPageWidth?: (pageWidthPt: number) => void },
+): Promise<void> {
+  if (pageNumbers.length === 0) return;
 
-    const task = page.render({
-      canvas,
-      canvasContext: ctx,
-      viewport,
-      background: "#ffffff",
-    });
-    activeFullPageRenders.set(canvas, { cancel: () => task.cancel() });
-    try {
-      await task.promise;
-      if (!isCurrentFullPageRender(canvas, generation)) return;
-      return {
-        canvasWidth: viewport.width,
-        canvasHeight: viewport.height,
-        pageWidthPt: unscaled.width,
-        pageHeightPt: unscaled.height,
-        scale,
-      };
-    } catch (error) {
-      if (isRenderCancelled(error)) return;
-      throw error;
-    } finally {
-      activeFullPageRenders.delete(canvas);
-      page.cleanup?.();
+  const pdfjs = await getPdfjs();
+  const doc = await pdfjs.getDocument({ data: data.slice(0) }).promise;
+  try {
+    for (const pageNumber of pageNumbers) {
+      if (options?.isCancelled?.()) return;
+      const canvas = canvasForPage(pageNumber);
+      if (!canvas) continue;
+      cancelPdfCanvasRender(canvas);
+      const generation = bumpFullPageRenderGeneration(canvas);
+      const page = await doc.getPage(pageNumber);
+      if (options?.isCancelled?.()) return;
+      const info = await renderOpenPdfPageToCanvas(page, canvas, scale, generation);
+      if (info?.pageWidthPt) options?.onPageWidth?.(info.pageWidthPt);
     }
   } finally {
     await destroyPdfDocument(doc);

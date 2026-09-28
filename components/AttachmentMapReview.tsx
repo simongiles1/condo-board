@@ -8,6 +8,7 @@ import { agendaItemIndentDepth } from "@/lib/meeting-v2/agenda-outline";
 import {
   attachmentPageCards,
   buildAttachmentMap,
+  type AttachmentMapBand,
   type AttachmentMapRange,
   type AttachmentPageCard,
 } from "@/lib/meeting-v2/attachment-map";
@@ -52,9 +53,15 @@ const ITEM_COLORS: ItemColor[] = [
 ];
 
 const UNLINKED_COLOR: ItemColor = {
-  border: "border-amber-400",
-  wash: "bg-amber-50",
-  dot: "bg-amber-400",
+  border: "border-slate-200",
+  wash: "bg-white",
+  dot: "bg-transparent",
+};
+
+type ScrollMetrics = {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
 };
 
 /**
@@ -65,6 +72,7 @@ export function AttachmentMapReview({ meetingId }: { meetingId: string }) {
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openRange, setOpenRange] = useState<OpenRange | null>(null);
+  const [scrollMetrics, setScrollMetrics] = useState<ScrollMetrics | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,6 +132,10 @@ export function AttachmentMapReview({ meetingId }: { meetingId: string }) {
   }, [map]);
 
   const pdfUrl = `/api/meetings/${meetingId}/board-package`;
+  const scrollWindow = useMemo(
+    () => thumbnailScrollWindow(map?.pageCount ?? 0, map?.agendaContentEndsAtPage ?? 0, scrollMetrics),
+    [map, scrollMetrics],
+  );
 
   function openRanges(agendaItemId: string, ranges: AttachmentMapRange[], label: string) {
     const first = ranges[0];
@@ -211,9 +223,17 @@ export function AttachmentMapReview({ meetingId }: { meetingId: string }) {
                   agendaItemId ? colorByItem.get(agendaItemId) ?? UNLINKED_COLOR : UNLINKED_COLOR
                 }
                 onOpen={openCard}
+                onScrollMetrics={setScrollMetrics}
               />
             )}
           </main>
+          {openRange ? null : (
+            <VerticalPackageMap
+              bands={map.bands}
+              colorByItem={colorByItem}
+              scrollWindow={scrollWindow}
+            />
+          )}
           <aside className="flex w-80 shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-slate-900 shadow-sm">
             <p className="border-b border-slate-200 px-3 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
               Agenda
@@ -254,20 +274,20 @@ export function AttachmentMapReview({ meetingId }: { meetingId: string }) {
                         selected
                           ? "bg-slate-900 text-white"
                           : missing
-                            ? "bg-amber-50 text-amber-950"
+                            ? "text-slate-700"
                             : `${color?.wash ?? ""} hover:bg-slate-50`
                       }`}
                     >
                       <span
                         className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-sm ${
-                          missing ? "bg-amber-400" : color?.dot ?? "bg-slate-300"
+                          missing ? "bg-transparent" : color?.dot ?? "bg-slate-300"
                         }`}
                       />
                       <span>
                         {row.itemNumber ? `${row.itemNumber} ` : ""}
                         {row.title}
                         {missing ? (
-                          <span className="mt-0.5 block text-xs text-amber-800">No attachment pages</span>
+                          <span className="mt-0.5 block text-xs text-slate-500">No attachment pages</span>
                         ) : (
                           <span className={`mt-0.5 block text-xs ${selected ? "text-white/70" : "text-slate-500"}`}>
                             {row.attachmentRanges.map((range) => rangeLabel(range.start, range.end)).join(", ")}
@@ -290,16 +310,83 @@ function rangeLabel(start: number, end: number): string {
   return start === end ? `Page ${start}` : `Pages ${start}–${end}`;
 }
 
+function thumbnailScrollWindow(
+  pageCount: number,
+  agendaContentEndsAtPage: number,
+  metrics: ScrollMetrics | null,
+): { top: number; height: number } {
+  if (pageCount < 1) return { top: 0, height: 100 };
+  const attachmentShare = Math.max(pageCount - agendaContentEndsAtPage, 0) / pageCount;
+  const agendaShare = agendaContentEndsAtPage / pageCount;
+  if (!metrics || metrics.scrollHeight <= 0 || attachmentShare <= 0) {
+    return { top: agendaShare * 100, height: Math.max(attachmentShare, 0.04) * 100 };
+  }
+  const scrollable = metrics.scrollHeight - metrics.clientHeight;
+  const visible = metrics.clientHeight / metrics.scrollHeight;
+  const progress = scrollable <= 1 ? 0 : metrics.scrollTop / scrollable;
+  const height = Math.min(Math.max(visible * attachmentShare, 0.04), attachmentShare);
+  const travel = Math.max(attachmentShare - height, 0);
+  return {
+    top: (agendaShare + progress * travel) * 100,
+    height: height * 100,
+  };
+}
+
+function VerticalPackageMap({
+  bands,
+  colorByItem,
+  scrollWindow,
+}: {
+  bands: AttachmentMapBand[];
+  colorByItem: Map<string, ItemColor>;
+  scrollWindow: { top: number; height: number };
+}) {
+  return (
+    <div className="relative w-6 shrink-0 self-stretch" aria-hidden="true">
+      <div className="absolute inset-y-2 inset-x-1">
+      <div className="relative h-full overflow-hidden rounded-full bg-white">
+        <div className="flex h-full flex-col">
+          {bands.map((band) => {
+            const span = band.end - band.start + 1;
+            const linked = band.kind === "linked" ? colorByItem.get(band.agendaItemId) : null;
+            return (
+              <div
+                key={`${band.kind}-${band.start}-${band.end}`}
+                title={rangeLabel(band.start, band.end)}
+                style={{ flex: `${span} 0 0px` }}
+                className={`min-h-0 ${
+                  band.kind === "agenda"
+                    ? "bg-slate-300"
+                    : band.kind === "linked"
+                      ? linked?.dot ?? "bg-slate-400"
+                      : "bg-transparent"
+                }`}
+              />
+            );
+          })}
+        </div>
+        <div
+          className="pointer-events-none absolute inset-x-0 z-10 rounded-sm border-2 border-slate-900 bg-slate-900/15"
+          style={{ top: `${scrollWindow.top}%`, height: `${scrollWindow.height}%` }}
+        />
+      </div>
+      </div>
+    </div>
+  );
+}
+
 function AttachmentThumbnailGrid({
   url,
   cards,
   colorFor,
   onOpen,
+  onScrollMetrics,
 }: {
   url: string;
   cards: AttachmentPageCard[];
   colorFor: (agendaItemId: string | null) => ItemColor;
   onOpen: (card: AttachmentPageCard) => void;
+  onScrollMetrics: (metrics: ScrollMetrics) => void;
 }) {
   const gridRef = useRef<HTMLDivElement>(null);
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
@@ -307,6 +394,8 @@ function AttachmentThumbnailGrid({
   const started = useRef(new Set<number>());
   const pending = useRef(new Set<number>());
   const dataRef = useRef<ArrayBuffer | null>(null);
+  const onScrollMetricsRef = useRef(onScrollMetrics);
+  onScrollMetricsRef.current = onScrollMetrics;
   const [pdfReady, setPdfReady] = useState(false);
 
   const flush = useCallback(() => {
@@ -360,7 +449,22 @@ function AttachmentThumbnailGrid({
       { root, rootMargin: "240px" },
     );
     nodes.forEach((node) => observer.observe(node));
-    return () => observer.disconnect();
+    const emitScroll = () => {
+      onScrollMetricsRef.current({
+        scrollTop: root.scrollTop,
+        scrollHeight: root.scrollHeight,
+        clientHeight: root.clientHeight,
+      });
+    };
+    emitScroll();
+    root.addEventListener("scroll", emitScroll, { passive: true });
+    const resizeObserver = new ResizeObserver(emitScroll);
+    resizeObserver.observe(root);
+    return () => {
+      observer.disconnect();
+      root.removeEventListener("scroll", emitScroll);
+      resizeObserver.disconnect();
+    };
   }, [pdfReady, cards, flush]);
 
   return (
@@ -383,9 +487,8 @@ function AttachmentThumbnailGrid({
                   }}
                   className="h-36 w-full bg-slate-100 object-contain object-top"
                 />
-                <span className={`px-2 py-1 text-xs font-medium ${color.wash}`}>
+                <span className={`px-2 py-1 text-xs font-medium text-slate-600 ${color.wash}`}>
                   Page {card.page}
-                  {card.agendaItemId ? "" : " · not linked"}
                 </span>
               </button>
             </li>

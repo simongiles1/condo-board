@@ -84,7 +84,11 @@ export function useLiveSpeechRecognition(input: {
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = "en-US";
-    recognition.grammars = grammarForPhrases(phrasesRef.current);
+    try {
+      recognition.grammars = grammarForPhrases(phrasesRef.current);
+    } catch {
+      recognition.grammars = null;
+    }
     recognition.onresult = (event) => {
       let pending = "";
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
@@ -135,7 +139,11 @@ export function useLiveSpeechRecognition(input: {
     return () => {
       stopped = true;
       recognition.onend = null;
-      recognition.stop();
+      try {
+        recognition.stop();
+      } catch {
+        // stop() throws if recognition never reached the started state.
+      }
     };
   }, [enabled, onFinal, phraseKey]);
 

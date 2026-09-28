@@ -8,6 +8,8 @@ import { describe, it } from "node:test";
 
 import {
   applyAttachmentPageAssignments,
+  citedAttachmentAssignments,
+  mergeCitedAttachmentPages,
   parseAgendaContentEndsAtPage,
 } from "../lib/meeting-v2/upcoming-meeting";
 import {
@@ -39,6 +41,38 @@ describe("upcoming meeting package split", () => {
     assert.deepEqual(applied.pagesByLeafId.get("steam"), [2, 5, 6]);
     assert.deepEqual(applied.pagesByLeafId.get("budget"), [3]);
     assert.deepEqual(applied.unassignedPages, [7]);
+  });
+
+  it("keeps model-linked pages and adds the rest of a citation the model omitted", () => {
+    const cited = citedAttachmentAssignments({
+      leaves: [
+        {
+          id: "steam",
+          text: "Please find attached a copy of minutes. (Page ... ... ...) 13 - 26",
+        },
+      ],
+      attachmentPageNumbers: [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27],
+    });
+    assert.deepEqual(cited, [
+      { agendaItemId: "steam", pages: [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26] },
+    ]);
+
+    const merged = mergeCitedAttachmentPages({
+      leaves: [
+        {
+          id: "steam",
+          sourcePages: [2, 13, 14, 15, 16, 17, 18, 19, 20],
+          text: "Please find attached a copy of minutes. (Page ... ... ...) 13 - 26",
+        },
+      ],
+      attachmentPageNumbers: [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27],
+    });
+    assert.equal(merged.changed, true);
+    assert.deepEqual(
+      merged.pagesByLeafId.get("steam"),
+      [2, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26],
+    );
+    assert.deepEqual(merged.unassignedPages, [27]);
   });
 
   it("keeps later package pages when the agenda boundary defaults to page 12", () => {

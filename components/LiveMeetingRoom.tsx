@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 
 import { MarkdownPreview } from "@/components/MarkdownPreview";
@@ -54,10 +54,47 @@ const HEALTH_CLASS: Record<RecordingHealthState, string> = {
   unknown: "border-rose-200 bg-rose-50 text-rose-900",
 };
 
+type BoundaryState = { error: Error | null };
+
+/** Keeps a live-room render throw on this page, with the message Next's blank error screen hides. */
+class LiveRoomErrorBoundary extends Component<{ children: ReactNode }, BoundaryState> {
+  state: BoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): BoundaryState {
+    return { error };
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="flex min-h-0 flex-1 flex-col items-start gap-3 bg-slate-950 p-6 text-white">
+        <p className="text-base font-semibold">The live room hit an error.</p>
+        <p className="max-w-xl text-sm text-rose-200">{this.state.error.message}</p>
+        <button
+          type="button"
+          className="rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-medium"
+          onClick={() => this.setState({ error: null })}
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+}
+
 /**
  * LiveKit room, recording health, and one shared agenda leaf for a V2 meeting.
+ * A render failure stays in this panel instead of replacing the whole app.
  */
 export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
+  return (
+    <LiveRoomErrorBoundary>
+      <LiveMeetingRoomBody meetingId={meetingId} />
+    </LiveRoomErrorBoundary>
+  );
+}
+
+function LiveMeetingRoomBody({ meetingId }: { meetingId: string }) {
   const [snapshot, setSnapshot] = useState<LiveRoomSnapshot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
@@ -250,18 +287,23 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
 
   const join = useCallback(async () => {
     setJoinError(null);
-    const response = await fetch(`/api/v2/meetings/${meetingId}/live/join`, { method: "POST" });
-    const payload = (await response.json().catch(() => null)) as
-      | (JoinPayload & { error?: string })
-      | null;
-    if (!response.ok || !payload || payload.error || !payload.token) {
-      setJoinError(payload?.error ?? "Could not join the room.");
+    try {
+      const response = await fetch(`/api/v2/meetings/${meetingId}/live/join`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | (JoinPayload & { error?: string })
+        | null;
+      if (!response.ok || !payload || payload.error || !payload.token) {
+        setJoinError(payload?.error ?? "Could not join the room.");
+        setConnection("idle");
+        return;
+      }
+      setSelfIdentity(payload.identity);
+      if (payload.snapshot) setSnapshot(payload.snapshot);
+      await connectRoom(payload);
+    } catch (error) {
+      setJoinError(error instanceof Error ? error.message : "Could not join the room.");
       setConnection("idle");
-      return;
     }
-    setSelfIdentity(payload.identity);
-    setSnapshot(payload.snapshot);
-    await connectRoom(payload);
   }, [connectRoom, meetingId]);
 
   useEffect(() => {
@@ -377,11 +419,14 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
     }
   }
 
+  const leaves = snapshot?.leaves ?? [];
+  const navigation = snapshot?.navigation ?? [];
+
   async function stepStage(direction: -1 | 1) {
     if (!snapshot) return;
     const move = stageMove({
-      leaves: snapshot.leaves,
-      navigation: snapshot.navigation,
+      leaves,
+      navigation,
       presentedPage: snapshot.presentedPage,
       direction,
     });
@@ -400,7 +445,7 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
   );
   const active = snapshot?.activeUnscheduled
     ? null
-    : (snapshot?.leaves?.find((leaf) => leaf.id === snapshot.activeAgendaItemId) ?? null);
+    : (leaves.find((leaf) => leaf.id === snapshot?.activeAgendaItemId) ?? null);
   const focus = snapshot?.activeUnscheduled
     ? { kind: "unscheduled" as const }
     : active
@@ -418,16 +463,16 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
     .map((leaf) => leaf.title);
   const canStepBack = snapshot
     ? stageMove({
-        leaves: snapshot.leaves,
-        navigation: snapshot.navigation,
+        leaves,
+        navigation,
         presentedPage: snapshot.presentedPage,
         direction: -1,
       }) != null
     : false;
   const canStepForward = snapshot
     ? stageMove({
-        leaves: snapshot.leaves,
-        navigation: snapshot.navigation,
+        leaves,
+        navigation,
         presentedPage: snapshot.presentedPage,
         direction: 1,
       }) != null
@@ -457,8 +502,12 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
     }
   }
 
-  const critical = snapshot?.recording.severity === "critical";
-  const interrupted = snapshot?.captureGaps?.find((gap) => gap.acceptedAt) ?? null;
+  const recording = snapshot?.recording;
+  const pageMap = snapshot?.pageMap;
+  const captureGaps = snapshot?.captureGaps ?? [];
+  const captureFiles = snapshot?.captureFiles ?? [];
+  const critical = recording?.severity === "critical";
+  const interrupted = captureGaps.find((gap) => gap.acceptedAt) ?? null;
   const agendaSidebarRows = liveRoomAgendaSidebarRows(snapshot);
   const barButton =
     "rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-medium text-white disabled:opacity-40";
@@ -499,11 +548,11 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
               ? ` · ${snapshot.presenterDisplayName} is presenting`
               : ""}
         </p>
-        {snapshot && !critical ? (
+        {recording && !critical ? (
           <span
-            className={`rounded-full border px-3 py-1 text-xs font-semibold ${HEALTH_CLASS[snapshot.recording.state]}`}
+            className={`rounded-full border px-3 py-1 text-xs font-semibold ${HEALTH_CLASS[recording.state] ?? ""}`}
           >
-            {snapshot.recording.label}
+            {recording.label}
           </span>
         ) : (
           <span />
@@ -531,10 +580,10 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
       {critical && snapshot ? (
         <div role="alert" className="mx-4 mb-3 rounded-2xl border border-rose-300 bg-rose-50 px-4 py-4 text-rose-950">
           <p className="text-base font-semibold">Critical: capture is not healthy</p>
-          <p className="mt-2 text-sm">{snapshot.recording.detail}</p>
-          {snapshot.captureGaps.length > 0 ? (
+          <p className="mt-2 text-sm">{recording?.detail}</p>
+          {captureGaps.length > 0 ? (
             <ul className="mt-3 space-y-1 text-sm">
-              {snapshot.captureGaps.map((gap) => (
+              {captureGaps.map((gap) => (
                 <li key={gap.id}>
                   Gap from {formatMediaClock(gap.startOffsetMs)}
                   {gap.endOffsetMs == null ? "" : ` to ${formatMediaClock(gap.endOffsetMs)}`}
@@ -560,13 +609,13 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
         </div>
       ) : null}
 
-      {snapshot && !snapshot.pageMap.checkedAt ? (
+      {pageMap && !pageMap.checkedAt ? (
         <div role="status" className="mx-4 mb-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-3 text-amber-950">
           <p className="text-sm font-semibold">The leaf-to-page map has not been checked.</p>
-          {snapshot.pageMap.leavesWithoutPages.length > 0 ? (
+          {(pageMap.leavesWithoutPages?.length ?? 0) > 0 ? (
             <p className="mt-1 text-sm">
-              {snapshot.pageMap.leavesWithoutPages.length} item
-              {snapshot.pageMap.leavesWithoutPages.length === 1 ? "" : "s"} have no package pages.
+              {pageMap.leavesWithoutPages.length} item
+              {pageMap.leavesWithoutPages.length === 1 ? "" : "s"} have no package pages.
             </p>
           ) : null}
           <button
@@ -649,9 +698,9 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
                   ))}
                 </div>
               ) : null}
-              {stageExtracts.some((page) => page.extractedText.trim()) ? (
+              {stageExtracts.some((page) => page.extractedText?.trim()) ? (
                 stageExtracts.map((page) =>
-                  page.extractedText.trim() ? (
+                  page.extractedText?.trim() ? (
                     <MarkdownPreview
                       key={page.pageNumber}
                       onPackagePage={(href) => {
@@ -679,12 +728,12 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
             </div>
           )}
         </div>
-        {captions.length > 0 || speech.interim || (snapshot?.captureFiles.length ?? 0) > 0 ? (
+        {captions.length > 0 || speech.interim || captureFiles.length > 0 ? (
           <div className="max-h-48 overflow-auto border-t border-slate-200 bg-slate-50 px-6 py-3 text-sm">
-            {snapshot?.captureFiles.some((file) => file.playable) ? (
+            {captureFiles.some((file) => file.playable) ? (
               <p className="mb-2 text-xs text-slate-500">
                 Audio{" "}
-                {snapshot.captureFiles
+                {captureFiles
                   .filter((file) => file.playable)
                   .map((file) => (
                     <a

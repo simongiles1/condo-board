@@ -52,6 +52,8 @@ import {
   type CaptureGapView,
   type RecordingHealth,
 } from "@/lib/meeting-v2/live-clock";
+import { applyStoredCitationLinks } from "@/lib/meeting-v2/upcoming-meeting";
+import type { MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 
 export type { LiveRoomSnapshot, LiveNavigationEventView };
 
@@ -89,9 +91,19 @@ export async function getLiveRoomSnapshot(meetingId: string): Promise<LiveRoomSn
       livePageMapCheckedAt: meetingsV2.livePageMapCheckedAt,
       livePageMapCheckedByIdentity: meetingsV2.livePageMapCheckedByIdentity,
       livePageMapCheckedByName: meetingsV2.livePageMapCheckedByName,
+      settings: meetingsV2.settings,
     })
     .from(meetingsV2)
     .where(eq(meetingsV2.id, meetingId));
+
+  const upcoming = ((meeting?.settings ?? {}) as MeetingV2Settings).upcomingMeeting;
+  if (upcoming?.attachmentAssignment?.completedAt && !upcoming.attachmentAssignment.citationsAppliedAt) {
+    try {
+      await applyStoredCitationLinks(meetingId);
+    } catch (error) {
+      console.error("[meetings/v2/live] citation links", error);
+    }
+  }
 
   const { leaves, outline } = await loadLiveAgenda(meetingId);
   const [session] = await db

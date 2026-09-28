@@ -113,6 +113,28 @@ export function packagePdfViewRange(input: {
 }
 
 /**
+ * Page ranges named in package text, such as `(Page …) 13 - 26` or `(Page 27)`.
+ * The same shapes `linkPackagePageCitations` turns into links.
+ */
+export function packageCitationRanges(text: string): Array<{ start: number; end: number }> {
+  const decoded = decodeExtractedText(text);
+  const ranges: Array<{ start: number; end: number }> = [];
+  const patterns = [
+    /\(Page\b[^)\n]{0,80}\)\s*(\d{1,4})(?:\s*[-–—]\s*(\d{1,4}))?/gi,
+    /\(\s*Pages?\s+(\d{1,4})(?:\s*[-–—]\s*(\d{1,4}))?\s*\)/gi,
+  ];
+  for (const pattern of patterns) {
+    for (const match of decoded.matchAll(pattern)) {
+      const start = Number(match[1]);
+      const end = match[2] == null ? start : Number(match[2]);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < 1) continue;
+      ranges.push({ start: Math.min(start, end), end: Math.max(start, end) });
+    }
+  }
+  return ranges;
+}
+
+/**
  * Reads a `#pkg/13` or `#pkg/13-26` href. Returns null for any other link.
  */
 export function packagePageFromHref(href: string): { start: number; end: number } | null {

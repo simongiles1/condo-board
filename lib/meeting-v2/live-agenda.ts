@@ -394,7 +394,8 @@ export type StageMove = { kind: "leaf"; agendaItemId: string; page: number | nul
  * A gap is an attachment (page 3, then page 13), not the next agenda item.
  */
 export function stagePages(sourcePages: number[]): { shown: number[]; attached: number[] } {
-  const sorted = [...new Set(sourcePages.filter((page) => Number.isInteger(page) && page > 0))].sort(
+  const pages = Array.isArray(sourcePages) ? sourcePages : [];
+  const sorted = [...new Set(pages.filter((page) => Number.isInteger(page) && page > 0))].sort(
     (left, right) => left - right,
   );
   if (sorted.length === 0) return { shown: [], attached: [] };
@@ -411,7 +412,8 @@ export function stagePages(sourcePages: number[]): { shown: number[]; attached: 
  * Collapses page numbers into inclusive ranges, in ascending order.
  */
 export function groupPageRanges(pages: number[]): Array<{ start: number; end: number }> {
-  const sorted = [...new Set(pages.filter((page) => Number.isInteger(page) && page > 0))].sort(
+  const list = Array.isArray(pages) ? pages : [];
+  const sorted = [...new Set(list.filter((page) => Number.isInteger(page) && page > 0))].sort(
     (left, right) => left - right,
   );
   const groups: Array<{ start: number; end: number }> = [];
@@ -444,15 +446,17 @@ export function stageMove(input: {
   presentedPage: number | null;
   direction: -1 | 1;
 }): StageMove | null {
-  const focus = activeLiveFocus(input.leaves, input.navigation);
+  const leaves = input.leaves ?? [];
+  const navigation = input.navigation ?? [];
+  const focus = activeLiveFocus(leaves, navigation);
   if (!focus) return null;
 
   const leafId =
     focus.kind === "unscheduled"
-      ? leafStepTarget(input.leaves, input.navigation, input.direction)
-      : adjacentLeafId(input.leaves, focus.agendaItemId, input.direction);
+      ? leafStepTarget(leaves, navigation, input.direction)
+      : adjacentLeafId(leaves, focus.agendaItemId, input.direction);
   if (!leafId) return null;
-  const leaf = input.leaves.find((item) => item.id === leafId);
+  const leaf = leaves.find((item) => item.id === leafId);
   return {
     kind: "leaf",
     agendaItemId: leafId,
@@ -471,7 +475,7 @@ export function effectivePresentedPage(
 ): number | null {
   if (presentedPage == null || focus?.kind !== "leaf") return null;
   const leaf = leaves.find((item) => item.id === focus.agendaItemId);
-  if (!leaf?.sourcePages.includes(presentedPage)) return null;
+  if (!leaf?.sourcePages?.includes(presentedPage)) return null;
   return presentedPage;
 }
 

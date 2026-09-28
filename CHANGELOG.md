@@ -52,6 +52,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Upcoming meeting attachment links** — A page range written in the agenda (for example pages 13–26) is linked to that agenda item even when the attachment pass only matched the first pages of the range. The meeting card no longer prints the leftover page numbers.
+
+- **Live room client crash** — Joining the room no longer takes down the whole page when the call fails or a snapshot is missing a field. The room shows the error instead of the blank application error screen.
+
 - **Live room package citations in the drawer** — Opening a page range (for example pages 13–26) shows only those pages in a continuous scroll instead of the full package with prev/next through every page.
 
 - **Live room agenda sidebar crash** — Opening the live room no longer throws when the snapshot is still loading or the API omits `outline`; the sidebar falls back to leaf rows instead of calling `.map` on undefined.

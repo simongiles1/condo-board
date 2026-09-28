@@ -5,6 +5,7 @@ import { meetingsV2, meetingsV2AgendaItems, meetingsV2DocumentPages } from "@/li
 import { generateDeepSeekJson } from "@/lib/deepseek/client";
 import { isDeepSeekKeyConfigured, type MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { liveAgendaLeaves, type LiveAgendaSourceItem } from "@/lib/meeting-v2/live-agenda";
+import { packageCitationRanges } from "@/lib/meeting-v2/package-page-refs";
 
 /** Last agenda page in the trimmed package, plus the attachment-page pass once it finishes. */
 export type UpcomingMeetingSettings = {
@@ -13,6 +14,8 @@ export type UpcomingMeetingSettings = {
     completedAt: string;
     assignedPageCount: number;
     unassignedPages: number[];
+    /** Set after agenda-text citations have been applied on top of the model pass. */
+    citationsAppliedAt?: string;
   };
 };
 
@@ -94,6 +97,166 @@ export function applyAttachmentPageAssignments(input: AttachmentAssignmentInput)
 }
 
 /**
+ * Attachment pages named in an agenda item's own text.
+ * A line such as "pages 13–26" is the package telling us which pages belong to that item.
+ * Pages already stored on any item stay there.
+ */
+export function mergeCitedAttachmentPages(input: {
+  leaves: Array<{ id: string; sourcePages: number[]; text: string }>;
+  attachmentPageNumbers: number[];
+}): {
+  pagesByLeafId: Map<string, number[]>;
+  unassignedPages: number[];
+  changed: boolean;
+} {
+  const attachmentPages = new Set(
+    input.attachmentPageNumbers.filter((page) => Number.isInteger(page) && page > 0),
+  );
+  const pagesByLeafId = new Map<string, number[]>();
+  const claimed = new Set<number>();
+  for (const leaf of input.leaves) {
+    const current = uniqueSorted(leaf.sourcePages.filter((page) => Number.isInteger(page) && page > 0));
+    pagesByLeafId.set(leaf.id, current);
+    for (const page of current) {
+      if (attachmentPages.has(page)) claimed.add(page);
+    }
+  }
+
+  let changed = false;
+  for (const leaf of input.leaves) {
+    const cited = new Set<number>();
+    for (const range of packageCitationRanges(leaf.text)) {
+      for (let page = range.start; page <= range.end; page += 1) {
+        if (attachmentPages.has(page) && !claimed.has(page)) cited.add(page);
+      }
+    }
+    if (cited.size === 0) continue;
+    changed = true;
+    for (const page of cited) claimed.add(page);
+    pagesByLeafId.set(leaf.id, uniqueSorted([...(pagesByLeafId.get(leaf.id) ?? []), ...cited]));
+  }
+
+  const unassignedPages = [...attachmentPages].filter((page) => !claimed.has(page)).sort((a, b) => a - b);
+  return { pagesByLeafId, unassignedPages, changed };
+}
+
+/**
+ * Page numbers an agenda item cites, limited to the attachment range.
+ */
+export function citedAttachmentAssignments(input: {
+  leaves: Array<{ id: string; text: string }>;
+  attachmentPageNumbers: number[];
+}): Array<{ agendaItemId: string; pages: number[] }> {
+  const attachmentPages = new Set(input.attachmentPageNumbers);
+  const claimed = new Set<number>();
+  const assignments: Array<{ agendaItemId: string; pages: number[] }> = [];
+  for (const leaf of input.leaves) {
+    const pages: number[] = [];
+    for (const range of packageCitationRanges(leaf.text)) {
+      for (let page = range.start; page <= range.end; page += 1) {
+        if (!attachmentPages.has(page) || claimed.has(page)) continue;
+        claimed.add(page);
+        pages.push(page);
+      }
+    }
+    if (pages.length > 0) assignments.push({ agendaItemId: leaf.id, pages });
+  }
+  return assignments;
+}
+
+function agendaCitationText(
+  leaf: { sourceText: string | null; sourcePages: number[] },
+  pageText: Map<number, string>,
+  agendaContentEndsAtPage: number,
+): string {
+  const agendaPages = leaf.sourcePages.filter((page) => page <= agendaContentEndsAtPage);
+  return [leaf.sourceText ?? "", ...agendaPages.map((page) => pageText.get(page) ?? "")].join("\n");
+}
+
+/**
+ * Writes attachment pages that agenda text already names onto those agenda items.
+ * Safe to call more than once: after the first pass it returns without reading page text.
+ * Does not call the model.
+ */
+export async function applyStoredCitationLinks(meetingId: string): Promise<void> {
+  const db = getDb();
+  const [meeting] = await db.select().from(meetingsV2).where(eq(meetingsV2.id, meetingId));
+  if (!meeting) return;
+  const settings = (meeting.settings ?? {}) as MeetingV2Settings;
+  const split = upcomingAgendaSplit(settings);
+  const stored = settings.upcomingMeeting?.attachmentAssignment;
+  if (split == null || !stored?.completedAt || stored.citationsAppliedAt) return;
+
+  const [itemRows, pageRows] = await Promise.all([
+    db
+      .select()
+      .from(meetingsV2AgendaItems)
+      .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId)),
+    db
+      .select({
+        pageNumber: meetingsV2DocumentPages.pageNumber,
+        text: meetingsV2DocumentPages.extractedText,
+      })
+      .from(meetingsV2DocumentPages)
+      .where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
+  ]);
+
+  const leaves = liveAgendaLeaves(
+    itemRows.map(
+      (item): LiveAgendaSourceItem => ({
+        id: item.id,
+        itemNumber: item.itemNumber,
+        title: item.title,
+        sourceText: item.sourceText,
+        sourcePagesJson: item.sourcePagesJson,
+      }),
+    ),
+  );
+  const pageText = new Map(pageRows.map((page) => [page.pageNumber, page.text ?? ""]));
+  const attachmentPageNumbers = pageRows
+    .map((page) => page.pageNumber)
+    .filter((page) => page > split);
+  const merged = mergeCitedAttachmentPages({
+    leaves: leaves.map((leaf) => ({
+      id: leaf.id,
+      sourcePages: leaf.sourcePages,
+      text: agendaCitationText(leaf, pageText, split),
+    })),
+    attachmentPageNumbers,
+  });
+
+  if (merged.changed) {
+    for (const leaf of leaves) {
+      const pages = merged.pagesByLeafId.get(leaf.id) ?? [];
+      await db
+        .update(meetingsV2AgendaItems)
+        .set({ sourcePagesJson: JSON.stringify(pages) })
+        .where(eq(meetingsV2AgendaItems.id, leaf.id));
+    }
+  }
+
+  const citationsAppliedAt = new Date().toISOString();
+  await db
+    .update(meetingsV2)
+    .set({
+      settings: {
+        ...settings,
+        upcomingMeeting: {
+          agendaContentEndsAtPage: split,
+          attachmentAssignment: {
+            ...stored,
+            assignedPageCount: attachmentPageNumbers.length - merged.unassignedPages.length,
+            unassignedPages: merged.unassignedPages,
+            citationsAppliedAt,
+          },
+        },
+      },
+      updatedAt: citationsAppliedAt,
+    })
+    .where(eq(meetingsV2.id, meetingId));
+}
+
+/**
  * Read attachment pages after the saved split and store which agenda leaf each one belongs to.
  * Throws when the model key is missing or the model response is not usable.
  */
@@ -112,9 +275,13 @@ export async function assignUpcomingAttachmentPages(meetingId: string): Promise<
     throw new Error("This meeting has no agenda/attachment split.");
   }
   if (settings.upcomingMeeting?.attachmentAssignment?.completedAt) {
+    await applyStoredCitationLinks(meetingId);
+    const [fresh] = await db.select().from(meetingsV2).where(eq(meetingsV2.id, meetingId));
+    const freshSettings = (fresh?.settings ?? {}) as MeetingV2Settings;
+    const stored = freshSettings.upcomingMeeting?.attachmentAssignment;
     return {
-      assignedPageCount: settings.upcomingMeeting.attachmentAssignment.assignedPageCount,
-      unassignedPages: settings.upcomingMeeting.attachmentAssignment.unassignedPages,
+      assignedPageCount: stored?.assignedPageCount ?? 0,
+      unassignedPages: stored?.unassignedPages ?? [],
     };
   }
   if (!isDeepSeekKeyConfigured()) {
@@ -154,7 +321,14 @@ export async function assignUpcomingAttachmentPages(meetingId: string): Promise<
   const attachmentPages = pageRows
     .filter((page) => page.pageNumber > split)
     .sort((left, right) => left.pageNumber - right.pageNumber);
-  const assignments: Array<{ agendaItemId: string; pages: number[] }> = [];
+  const pageText = new Map(pageRows.map((page) => [page.pageNumber, page.text ?? ""]));
+  const assignments: Array<{ agendaItemId: string; pages: number[] }> = citedAttachmentAssignments({
+    leaves: leaves.map((leaf) => ({
+      id: leaf.id,
+      text: agendaCitationText(leaf, pageText, split),
+    })),
+    attachmentPageNumbers: attachmentPages.map((page) => page.pageNumber),
+  });
 
   for (let offset = 0; offset < attachmentPages.length; offset += 8) {
     const batch = attachmentPages.slice(offset, offset + 8);
@@ -198,6 +372,7 @@ export async function assignUpcomingAttachmentPages(meetingId: string): Promise<
     completedAt: new Date().toISOString(),
     assignedPageCount: attachmentPages.length - applied.unassignedPages.length,
     unassignedPages: applied.unassignedPages,
+    citationsAppliedAt: new Date().toISOString(),
   };
   await db
     .update(meetingsV2)

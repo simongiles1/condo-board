@@ -1163,11 +1163,8 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
               {status?.meeting.upcomingMeeting ? (
                 <p className="mt-1 max-w-md text-xs text-white/70">
                   {status.meeting.counts.agendaItems > 0
-                    ? "Package is prepared for the live room. Attachment pages are linked onto agenda items."
+                    ? "Package is prepared for the live room."
                     : "The board package is still being prepared. Open the live room after agenda items appear."}
-                  {status.meeting.upcomingMeeting.attachmentAssignment?.unassignedPages.length
-                    ? ` Unlinked attachment pages: ${status.meeting.upcomingMeeting.attachmentAssignment.unassignedPages.join(", ")}.`
-                    : ""}
                 </p>
               ) : null}
               <div className="mt-2 hidden flex-col gap-0.5 xl:flex">

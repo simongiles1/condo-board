@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -93,6 +92,7 @@ import {
   type MeetingV2WorkflowProgress,
 } from "@/lib/meeting-v2/workflow-progress";
 import { useMeetingV2StepRateEta } from "@/lib/ui/use-meeting-v2-step-rate-eta";
+import { compareMeetingsV2ListRows } from "@/lib/meeting-v2/dashboard-list-sort";
 import type { MeetingV2DashboardCard } from "@/lib/meeting-v2/service";
 import type {
   MeetingV2Alert,
@@ -104,6 +104,7 @@ import {
 } from "@/lib/meeting-v2/transcript-discrepancies";
 import {
   formatMeetingDate,
+  formatMeetingDateStacked,
   meetingDateSortKey,
 } from "@/lib/format-meeting-date";
 
@@ -391,7 +392,6 @@ function AgendaReviewViewToggle({
 type MeetingDateSort = "asc" | "desc";
 
 export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
-  const router = useRouter();
   const [panelMeetingId, setPanelMeetingId] = useState<string | null>(null);
   const [compareDialogMeetingId, setCompareDialogMeetingId] = useState<string | null>(null);
   const [meetingDateSort, setMeetingDateSort] = useState<MeetingDateSort>("desc");
@@ -401,10 +401,6 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
   const [liveAiUsageByMeetingId, setLiveAiUsageByMeetingId] = useState<
     Record<string, string>
   >({});
-
-  useEffect(() => {
-    router.refresh();
-  }, [router]);
 
   const panelMeeting = useMemo(() => {
     const meeting = meetings.find((row) => row.id === panelMeetingId) ?? null;
@@ -472,17 +468,7 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
 
   const sortedMeetings = useMemo(() => {
     const rows = [...meetings];
-    rows.sort((left, right) => {
-      const delta = meetingDateSortKey(left.meetingDate) - meetingDateSortKey(right.meetingDate);
-      if (delta !== 0) {
-        return meetingDateSort === "asc" ? delta : -delta;
-      }
-      const titleCmp = left.title.localeCompare(right.title, undefined, {
-        numeric: true,
-        sensitivity: "base",
-      });
-      return meetingDateSort === "asc" ? titleCmp : -titleCmp;
-    });
+    rows.sort((left, right) => compareMeetingsV2ListRows(left, right, meetingDateSort));
     return rows;
   }, [meetings, meetingDateSort]);
 
@@ -494,88 +480,103 @@ export function MeetingsV2Dashboard({ meetings }: { meetings: MeetingCard[] }) {
     );
   }
 
+  function openMeetingWorkspace(meetingId: string) {
+    router.push(`/operations/meetings/v2/${meetingId}`);
+  }
+
   return (
     <>
       <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
         <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
           <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-600">
             <tr>
-              <th scope="col" className="whitespace-nowrap px-3 py-2.5">
+              <th scope="col" className="px-2 py-2 md:px-3 md:py-2.5">
                 <button
                   type="button"
                   onClick={() =>
                     setMeetingDateSort((current) => (current === "asc" ? "desc" : "asc"))
                   }
-                  className="inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left uppercase tracking-wide transition hover:bg-slate-200/80 hover:text-slate-900"
+                  className="inline-flex max-w-[4.75rem] flex-col items-start gap-0.5 rounded-md px-1 py-0.5 text-left uppercase leading-tight tracking-wide transition hover:bg-slate-200/80 hover:text-slate-900 sm:max-w-none sm:flex-row sm:items-center sm:gap-1.5 sm:whitespace-nowrap"
                   aria-sort={meetingDateSort === "asc" ? "ascending" : "descending"}
                 >
-                  Meeting date
+                  <span>Meeting date</span>
                   <span className="font-normal normal-case tracking-normal text-slate-500" aria-hidden>
                     {meetingDateSort === "asc" ? "↑" : "↓"}
                   </span>
                 </button>
               </th>
-              <th scope="col" className="px-3 py-2.5">Title</th>
-              <th scope="col" className="px-3 py-2.5">Pipeline</th>
-              <th scope="col" className="px-3 py-2.5">Validation</th>
-              <th scope="col" className="px-3 py-2.5">Stage</th>
-              <th scope="col" className="min-w-[12rem] px-3 py-2.5">Note</th>
-              <th scope="col" className="px-3 py-2.5 text-right"> </th>
+              <th scope="col" className="px-2 py-2 md:px-3 md:py-2.5">Title</th>
+              <th scope="col" className="px-2 py-2 md:px-3 md:py-2.5">Pipeline</th>
+              <th scope="col" className="hidden px-2 py-2 md:table-cell md:px-3 md:py-2.5">
+                Validation
+              </th>
+              <th scope="col" className="px-2 py-2 md:px-3 md:py-2.5">Stage</th>
+              <th scope="col" className="min-w-[12rem] px-2 py-2 md:px-3 md:py-2.5">Note</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {sortedMeetings.map((meeting) => (
-              <tr key={meeting.id} className="hover:bg-slate-50/80">
-                <td className="whitespace-nowrap px-3 py-2.5 tabular-nums text-slate-700">
-                  <time dateTime={meeting.meetingDate}>
-                    {formatMeetingDate(meeting.meetingDate)}
-                  </time>
-                </td>
-                <td className="px-3 py-2.5 font-medium text-slate-900">
-                  <Link
-                    href={`/operations/meetings/v2/${meeting.id}`}
-                    className="hover:text-teal-700"
-                  >
+            {sortedMeetings.map((meeting) => {
+              const stackedDate = formatMeetingDateStacked(meeting.meetingDate);
+              return (
+                <tr
+                  key={meeting.id}
+                  tabIndex={0}
+                  role="link"
+                  aria-label={`Open ${meeting.title}`}
+                  className="cursor-pointer hover:bg-slate-50/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-teal-600"
+                  onClick={() => openMeetingWorkspace(meeting.id)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    if (event.target !== event.currentTarget) return;
+                    event.preventDefault();
+                    openMeetingWorkspace(meeting.id);
+                  }}
+                >
+                  <td className="px-2 py-2 align-top tabular-nums text-slate-700 md:px-3 md:py-2.5">
+                    <time dateTime={meeting.meetingDate} className="block max-w-[4.75rem] leading-snug">
+                      {stackedDate ? (
+                        <>
+                          <span className="block">{stackedDate.monthDay}</span>
+                          <span className="block">{stackedDate.year}</span>
+                        </>
+                      ) : (
+                        formatMeetingDate(meeting.meetingDate)
+                      )}
+                    </time>
+                  </td>
+                  <td className="px-2 py-2 font-medium text-slate-900 md:px-3 md:py-2.5">
                     {meeting.title}
-                  </Link>
-                </td>
-                <td className="px-3 py-2.5">
-                  <span
-                    className={`inline-flex whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] ${statusTone(meeting.pipelineState)}`}
-                    title={getMeetingV2PipelineStateDescription(meeting.pipelineState)}
-                  >
-                    {startCase(meeting.pipelineState)}
-                  </span>
-                </td>
-                <td className="px-3 py-2.5">
-                  <GoldStandardValidationBadge
-                    validationScore={getValidationScore(meeting)}
-                    onClick={() => handleValidationBadgeClick(meeting)}
-                  />
-                </td>
-                <td className="px-3 py-2.5">
-                  <span
-                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold ${stageTone(meeting.progressStatus)}`}
-                  >
-                    <span>{meeting.progressLabel}</span>
-                    <span className="rounded-full border border-current/20 px-1.5 py-px text-[10px] font-bold tabular-nums tracking-normal">
-                      {meeting.progressStepNumber}/{meeting.progressTotalSteps}
+                  </td>
+                  <td className="px-2 py-2 md:px-3 md:py-2.5">
+                    <span
+                      className={`inline-flex whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] ${statusTone(meeting.pipelineState)}`}
+                      title={getMeetingV2PipelineStateDescription(meeting.pipelineState)}
+                    >
+                      {startCase(meeting.pipelineState)}
                     </span>
-                  </span>
-                </td>
-                <td className="max-w-md px-3 py-2.5 text-slate-600">
-                  <span className="line-clamp-2">{meeting.progressNote}</span>
-                </td>
-                <td className="whitespace-nowrap px-3 py-2.5 text-right">
-                  <Link
-                    href={`/operations/meetings/v2/${meeting.id}`}
-                    className="font-medium text-teal-700 hover:text-teal-900"
-                  >
-                    Open →
-                  </Link>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className="hidden px-2 py-2 md:table-cell md:px-3 md:py-2.5">
+                    <GoldStandardValidationBadge
+                      validationScore={getValidationScore(meeting)}
+                      onClick={() => handleValidationBadgeClick(meeting)}
+                    />
+                  </td>
+                  <td className="px-2 py-2 md:px-3 md:py-2.5">
+                    <span
+                      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold ${stageTone(meeting.progressStatus)}`}
+                    >
+                      <span>{meeting.progressLabel}</span>
+                      <span className="rounded-full border border-current/20 px-1.5 py-px text-[10px] font-bold tabular-nums tracking-normal">
+                        {meeting.progressStepNumber}/{meeting.progressTotalSteps}
+                      </span>
+                    </span>
+                  </td>
+                  <td className="max-w-md px-2 py-2 text-slate-600 md:px-3 md:py-2.5">
+                    <span className="line-clamp-2">{meeting.progressNote}</span>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

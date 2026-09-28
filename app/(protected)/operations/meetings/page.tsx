@@ -35,7 +35,7 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
   const meetingV2Cards = await loadMeetingsV2DashboardCards(meetingV2Rows);
 
   return (
-    <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-6">
+    <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-0 py-4 md:px-6 md:py-6">
       <div className="flex flex-col space-y-4">
         <MeetingsPageHeader isV2={isV2} />
         
@@ -71,9 +71,7 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
           <MeetingsGrid meetings={visibleMeetingRows} />
         )
       ) : (
-        <div className="px-4">
-          <MeetingsV2Dashboard meetings={meetingV2Cards} />
-        </div>
+        <MeetingsV2Dashboard meetings={meetingV2Cards} />
       )}
     </div>
   );

@@ -37,3 +37,33 @@ export function formatMeetingDate(isoDate: string): string {
     year: "numeric",
   });
 }
+
+/** Month/day and year split for narrow table columns where the year wraps below. */
+export function formatMeetingDateStacked(isoDate: string): {
+  monthDay: string;
+  year: string;
+} | null {
+  const match = MEETING_DATE_ONLY_RE.exec(isoDate.trim());
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return {
+    monthDay: date.toLocaleDateString("en-US", {
+      month: "long",
+      day: "numeric",
+    }),
+    year: String(year),
+  };
+}

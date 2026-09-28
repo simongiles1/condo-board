@@ -36,13 +36,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changes
 
+- **Meeting workspaces mobile layout** — Tighter horizontal padding on the meetings page on small screens. The V2 list stacks the meeting year under the month/day, hides the validation column below `md`, drops the Open column, and opens a workspace when you click or activate a row (validation badges still open compare on desktop).
+
 - **Live room agenda and documents** — The agenda stays open on the right. Previous and Next move to the next agenda item instead of the next attached page. Package text is formatted, and a page citation opens that package page in a side drawer. A minutes or financial-statement item with no package page opens the matching file already categorized in the archive.
 
 - **Live room layout** — The live room fills the window beside the navigation. Agenda rows indent by outline depth. A document opens over the stage and leaves the agenda in place. A package page that holds two agenda items shows only the item on screen.
 
 ### Fixed
 
-- **V2 meetings list after create** — New and duplicated V2 workspaces appear on the pipeline list when you go back from the detail page. The list was a stale client cache; create now revalidates the meetings page like V1 upload does.
+- **V2 meetings list after create** — New and duplicated V2 workspaces appear at the top of the pipeline list for that meeting date. The list now sorts by workspace creation time when dates match (so upcoming “Meeting - …” rows are not buried under older “Minutes - …” titles) and revalidates after create like V1 upload.
 
 - **Upcoming meeting package pages** — Creating a meeting now keeps every page of the board package unless you clear some. The last-agenda control only marks where the written agenda stops; later pages stay as attachments. A page citation that runs past the stored package says those pages were left out when the meeting was created.
 

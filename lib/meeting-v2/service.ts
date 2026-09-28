@@ -917,7 +917,7 @@ export function isMeetingV2PipelineNotStarted(pipelineState: string): boolean {
 
 export type MeetingV2DashboardCard = Pick<
   MeetingV2Row,
-  "id" | "title" | "meetingDate" | "pipelineState"
+  "id" | "title" | "meetingDate" | "pipelineState" | "createdAt"
 > & {
   progressLabel: string;
   progressStepNumber: number;
@@ -1063,6 +1063,7 @@ export async function loadMeetingsV2DashboardCards(
       id: meeting.id,
       title: meeting.title,
       meetingDate: meeting.meetingDate,
+      createdAt: meeting.createdAt,
       pipelineState: meeting.pipelineState,
       progressLabel: displayProgress.currentLabel,
       progressStepNumber: activeStepIndex >= 0 ? activeStepIndex + 1 : workflowProgress.totalCount,

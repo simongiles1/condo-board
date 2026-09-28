@@ -131,3 +131,27 @@ export function buildAttachmentMap(input: {
     unlinkedAttachmentPages,
   };
 }
+
+/** One attachment page for the thumbnail grid. Agenda-section pages are omitted. */
+export type AttachmentPageCard = {
+  page: number;
+  agendaItemId: string | null;
+};
+
+/**
+ * Expands coverage bands into one card per attachment page, in page order.
+ * A null agenda item means that page is not linked.
+ */
+export function attachmentPageCards(bands: AttachmentMapBand[]): AttachmentPageCard[] {
+  const cards: AttachmentPageCard[] = [];
+  for (const band of bands) {
+    if (band.kind === "agenda") continue;
+    for (let page = band.start; page <= band.end; page += 1) {
+      cards.push({
+        page,
+        agendaItemId: band.kind === "linked" ? band.agendaItemId : null,
+      });
+    }
+  }
+  return cards;
+}

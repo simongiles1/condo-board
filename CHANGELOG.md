@@ -8,7 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Attachment map before the live room** — After an upcoming meeting package is analyzed, Review attachments shows the agenda list, highlights items with no attachment pages, and lists page ranges for the ones that have them. Choosing an item opens that part of the package PDF. A bar across the package shows agenda pages, linked attachment pages, and attachment pages that are not linked to any item. Start meeting opens the live room from that screen.
+- **Attachment map before the live room** — After an upcoming meeting package is analyzed, Review attachments shows each attachment page as a thumbnail colored to match its agenda item. Items with no attachment pages stay highlighted. Choosing an agenda item opens that part of the package PDF, and Back returns to the thumbnails. Start meeting opens the live room from that screen.
 
 - **Live room caption layers** — The room keeps three separate records: the audio file, the original caption, and a suggestion beside it. A close vocabulary match can be accepted or dismissed. Accepting does not change the original words. Amounts and decision words are not suggested.
 

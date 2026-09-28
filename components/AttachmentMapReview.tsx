@@ -1,15 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ZoomablePdfViewer } from "@/components/ZoomablePdfViewer";
 import { agendaItemIndentDepth } from "@/lib/meeting-v2/agenda-outline";
 import {
+  attachmentPageCards,
   buildAttachmentMap,
-  type AttachmentMapBand,
   type AttachmentMapRange,
+  type AttachmentPageCard,
 } from "@/lib/meeting-v2/attachment-map";
+import { loadPdfBuffer, renderPdfPageRangeToCanvases } from "@/lib/pdf/pdfjs-browser";
 
 type StatusPayload = {
   meeting: {
@@ -30,25 +32,34 @@ type StatusPayload = {
 };
 
 type OpenRange = {
-  agendaItemId: string;
+  agendaItemId: string | null;
   start: number;
   end: number;
+  label: string;
 };
 
-const ITEM_COLORS = [
-  "bg-teal-500",
-  "bg-sky-500",
-  "bg-violet-500",
-  "bg-emerald-500",
-  "bg-orange-500",
-  "bg-rose-500",
-  "bg-indigo-500",
-  "bg-lime-600",
+type ItemColor = { border: string; wash: string; dot: string };
+
+const ITEM_COLORS: ItemColor[] = [
+  { border: "border-teal-500", wash: "bg-teal-50", dot: "bg-teal-500" },
+  { border: "border-sky-500", wash: "bg-sky-50", dot: "bg-sky-500" },
+  { border: "border-violet-500", wash: "bg-violet-50", dot: "bg-violet-500" },
+  { border: "border-emerald-500", wash: "bg-emerald-50", dot: "bg-emerald-500" },
+  { border: "border-orange-500", wash: "bg-orange-50", dot: "bg-orange-500" },
+  { border: "border-rose-500", wash: "bg-rose-50", dot: "bg-rose-500" },
+  { border: "border-indigo-500", wash: "bg-indigo-50", dot: "bg-indigo-500" },
+  { border: "border-lime-600", wash: "bg-lime-50", dot: "bg-lime-600" },
 ];
+
+const UNLINKED_COLOR: ItemColor = {
+  border: "border-amber-400",
+  wash: "bg-amber-50",
+  dot: "bg-amber-400",
+};
 
 /**
  * Review screen between package analysis and the live room.
- * Shows which agenda items own attachment pages, and which package pages are still unlinked.
+ * Attachment pages are thumbnails colored to match the agenda item that owns them.
  */
 export function AttachmentMapReview({ meetingId }: { meetingId: string }) {
   const [status, setStatus] = useState<StatusPayload | null>(null);
@@ -95,25 +106,52 @@ export function AttachmentMapReview({ meetingId }: { meetingId: string }) {
     });
   }, [status, split, pageCount]);
 
+  const cards = useMemo(() => (map ? attachmentPageCards(map.bands) : []), [map]);
+
   const colorByItem = useMemo(() => {
-    const colors = new Map<string, string>();
+    const colors = new Map<string, ItemColor>();
     if (!map) return colors;
     for (const row of map.rows) {
       if (!row.agendaItemId || row.attachmentRanges.length === 0 || colors.has(row.agendaItemId)) {
         continue;
       }
-      colors.set(row.agendaItemId, ITEM_COLORS[colors.size % ITEM_COLORS.length] ?? ITEM_COLORS[0]);
+      colors.set(
+        row.agendaItemId,
+        ITEM_COLORS[colors.size % ITEM_COLORS.length] ?? ITEM_COLORS[0],
+      );
     }
     return colors;
   }, [map]);
 
-  function openItem(agendaItemId: string, ranges: AttachmentMapRange[]) {
+  const pdfUrl = `/api/meetings/${meetingId}/board-package`;
+
+  function openRanges(agendaItemId: string, ranges: AttachmentMapRange[], label: string) {
     const first = ranges[0];
-    if (!first) {
-      setOpenRange(null);
+    if (!first) return;
+    setOpenRange({ agendaItemId, start: first.start, end: first.end, label });
+  }
+
+  function openCard(card: AttachmentPageCard) {
+    if (!map || !card.agendaItemId) {
+      setOpenRange({
+        agendaItemId: null,
+        start: card.page,
+        end: card.page,
+        label: `Page ${card.page}`,
+      });
       return;
     }
-    setOpenRange({ agendaItemId, start: first.start, end: first.end });
+    const row = map.rows.find((item) => item.agendaItemId === card.agendaItemId);
+    const range = row?.attachmentRanges.find(
+      (item) => card.page >= item.start && card.page <= item.end,
+    ) ?? { start: card.page, end: card.page };
+    const title = row ? `${row.itemNumber ? `${row.itemNumber} ` : ""}${row.title}` : `Page ${card.page}`;
+    setOpenRange({
+      agendaItemId: card.agendaItemId,
+      start: range.start,
+      end: range.end,
+      label: title,
+    });
   }
 
   return (
@@ -143,162 +181,106 @@ export function AttachmentMapReview({ meetingId }: { meetingId: string }) {
       ) : null}
 
       {map ? (
-        <>
-          <section className="px-4 pb-3">
-            <div className="flex h-8 overflow-hidden rounded-lg bg-slate-800">
-              {map.bands.map((band) => (
-                <MapBand
-                  key={`${band.kind}-${band.start}-${band.end}`}
-                  band={band}
-                  pageCount={map.pageCount}
-                  colorClass={
-                    band.kind === "linked" ? colorByItem.get(band.agendaItemId) ?? "bg-teal-500" : ""
-                  }
-                  selected={
-                    band.kind === "linked" &&
-                    openRange?.agendaItemId === band.agendaItemId &&
-                    openRange.start === band.start &&
-                    openRange.end === band.end
-                  }
-                  onOpen={
-                    band.kind === "linked"
-                      ? () =>
-                          setOpenRange({
-                            agendaItemId: band.agendaItemId,
-                            start: band.start,
-                            end: band.end,
-                          })
-                      : undefined
-                  }
-                />
-              ))}
-            </div>
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-300">
-              <Legend swatch="bg-slate-500" label="Agenda pages" />
-              <Legend swatch="bg-teal-500" label="Linked attachments, one color per item" />
-              <Legend swatch="bg-amber-400" label="Attachment pages not linked" />
-              <span>
-                {map.itemsWithoutAttachments} agenda item
-                {map.itemsWithoutAttachments === 1 ? "" : "s"} with no attachments
-                {" · "}
-                {map.unlinkedAttachmentPages} attachment page
-                {map.unlinkedAttachmentPages === 1 ? "" : "s"} not linked
-              </span>
-            </div>
-          </section>
-
-          <div className="relative mx-4 mb-4 flex min-h-0 flex-1 gap-3">
-            <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-slate-900">
-              {openRange ? (
-                <>
-                  <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
-                    <p className="truncate text-sm font-semibold">
-                      {rangeLabel(openRange.start, openRange.end)}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setOpenRange(null)}
-                      className="rounded-md px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
-                    >
-                      Close
-                    </button>
-                  </div>
-                  <ZoomablePdfViewer
-                    key={`${openRange.start}-${openRange.end}`}
-                    className="min-h-0 flex-1"
-                    url={`/api/meetings/${meetingId}/board-package`}
-                    initialPage={openRange.start}
-                    citedEnd={openRange.end}
-                  />
-                </>
-              ) : (
-                <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-slate-500">
-                  Choose an agenda item that has attachment pages to open that part of the package.
+        <div className="mx-4 mb-4 flex min-h-0 flex-1 gap-3">
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-slate-900">
+            {openRange ? (
+              <>
+                <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
+                  <button
+                    type="button"
+                    onClick={() => setOpenRange(null)}
+                    className="rounded-md px-2 py-1 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                  >
+                    &larr; Back to pages
+                  </button>
+                  <p className="truncate text-sm font-semibold">{openRange.label}</p>
                 </div>
-              )}
-            </main>
-            <aside className="flex w-80 shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-slate-900 shadow-sm">
-              <p className="border-b border-slate-200 px-3 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Agenda
-              </p>
-              <ul className="min-h-0 flex-1 overflow-auto p-1">
-                {map.rows.map((row) => {
-                  const paddingLeft = `${12 + agendaItemIndentDepth(row.itemNumber) * 16}px`;
-                  if (row.kind === "heading" || !row.agendaItemId) {
-                    return (
-                      <li key={row.key}>
-                        <div
-                          style={{ paddingLeft }}
-                          className="w-full rounded-lg py-1.5 pr-2 text-left text-sm font-medium text-slate-600"
-                        >
-                          {row.itemNumber ? `${row.itemNumber} ` : ""}
-                          {row.title}
-                        </div>
-                      </li>
-                    );
-                  }
-                  const missing = row.attachmentRanges.length === 0;
-                  const selected = openRange?.agendaItemId === row.agendaItemId;
+                <ZoomablePdfViewer
+                  key={`${openRange.start}-${openRange.end}`}
+                  className="min-h-0 flex-1"
+                  url={pdfUrl}
+                  initialPage={openRange.start}
+                  citedEnd={openRange.end}
+                />
+              </>
+            ) : (
+              <AttachmentThumbnailGrid
+                url={pdfUrl}
+                cards={cards}
+                colorFor={(agendaItemId) =>
+                  agendaItemId ? colorByItem.get(agendaItemId) ?? UNLINKED_COLOR : UNLINKED_COLOR
+                }
+                onOpen={openCard}
+              />
+            )}
+          </main>
+          <aside className="flex w-80 shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-slate-900 shadow-sm">
+            <p className="border-b border-slate-200 px-3 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              Agenda
+            </p>
+            <ul className="min-h-0 flex-1 overflow-auto p-1">
+              {map.rows.map((row) => {
+                const paddingLeft = `${12 + agendaItemIndentDepth(row.itemNumber) * 16}px`;
+                if (row.kind === "heading" || !row.agendaItemId) {
                   return (
                     <li key={row.key}>
                       <div
                         style={{ paddingLeft }}
-                        className={`rounded-lg py-1.5 pr-2 ${
-                          selected
-                            ? "bg-slate-900 text-white"
-                            : missing
-                              ? "bg-amber-50 text-amber-950"
-                              : ""
-                        }`}
+                        className="w-full rounded-lg py-1.5 pr-2 text-left text-sm font-medium text-slate-600"
                       >
-                        <button
-                          type="button"
-                          className="w-full text-left text-sm"
-                          onClick={() => openItem(row.agendaItemId!, row.attachmentRanges)}
-                        >
-                          {row.itemNumber ? `${row.itemNumber} ` : ""}
-                          {row.title}
-                        </button>
-                        {row.attachmentRanges.length > 0 ? (
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            {row.attachmentRanges.map((range) => {
-                              const active =
-                                selected &&
-                                openRange?.start === range.start &&
-                                openRange?.end === range.end;
-                              return (
-                                <button
-                                  key={`${range.start}-${range.end}`}
-                                  type="button"
-                                  onClick={() =>
-                                    setOpenRange({
-                                      agendaItemId: row.agendaItemId!,
-                                      start: range.start,
-                                      end: range.end,
-                                    })
-                                  }
-                                  className={`rounded-md px-1.5 py-0.5 text-xs font-medium ${
-                                    active
-                                      ? "bg-white/15 text-white"
-                                      : "bg-slate-100 text-teal-800 hover:bg-slate-200"
-                                  }`}
-                                >
-                                  {rangeLabel(range.start, range.end)}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <p className="mt-0.5 text-xs text-amber-800">No attachment pages</p>
-                        )}
+                        {row.itemNumber ? `${row.itemNumber} ` : ""}
+                        {row.title}
                       </div>
                     </li>
                   );
-                })}
-              </ul>
-            </aside>
-          </div>
-        </>
+                }
+                const missing = row.attachmentRanges.length === 0;
+                const color = colorByItem.get(row.agendaItemId);
+                const selected = openRange?.agendaItemId === row.agendaItemId;
+                return (
+                  <li key={row.key}>
+                    <button
+                      type="button"
+                      style={{ paddingLeft }}
+                      disabled={missing}
+                      onClick={() =>
+                        openRanges(
+                          row.agendaItemId!,
+                          row.attachmentRanges,
+                          `${row.itemNumber ? `${row.itemNumber} ` : ""}${row.title}`,
+                        )
+                      }
+                      className={`flex w-full items-start gap-2 rounded-lg py-1.5 pr-2 text-left text-sm disabled:cursor-default ${
+                        selected
+                          ? "bg-slate-900 text-white"
+                          : missing
+                            ? "bg-amber-50 text-amber-950"
+                            : `${color?.wash ?? ""} hover:bg-slate-50`
+                      }`}
+                    >
+                      <span
+                        className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-sm ${
+                          missing ? "bg-amber-400" : color?.dot ?? "bg-slate-300"
+                        }`}
+                      />
+                      <span>
+                        {row.itemNumber ? `${row.itemNumber} ` : ""}
+                        {row.title}
+                        {missing ? (
+                          <span className="mt-0.5 block text-xs text-amber-800">No attachment pages</span>
+                        ) : (
+                          <span className={`mt-0.5 block text-xs ${selected ? "text-white/70" : "text-slate-500"}`}>
+                            {row.attachmentRanges.map((range) => rangeLabel(range.start, range.end)).join(", ")}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </aside>
+        </div>
       ) : null}
     </div>
   );
@@ -308,43 +290,108 @@ function rangeLabel(start: number, end: number): string {
   return start === end ? `Page ${start}` : `Pages ${start}–${end}`;
 }
 
-function Legend({ swatch, label }: { swatch: string; label: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className={`inline-block h-2.5 w-4 rounded-sm ${swatch}`} />
-      {label}
-    </span>
-  );
-}
-
-function MapBand({
-  band,
-  pageCount,
-  colorClass,
-  selected,
+function AttachmentThumbnailGrid({
+  url,
+  cards,
+  colorFor,
   onOpen,
 }: {
-  band: AttachmentMapBand;
-  pageCount: number;
-  colorClass: string;
-  selected: boolean;
-  onOpen?: () => void;
+  url: string;
+  cards: AttachmentPageCard[];
+  colorFor: (agendaItemId: string | null) => ItemColor;
+  onOpen: (card: AttachmentPageCard) => void;
 }) {
-  const width = `${((band.end - band.start + 1) / pageCount) * 100}%`;
-  const label = rangeLabel(band.start, band.end);
-  const className = `h-full min-w-px ${
-    band.kind === "agenda" ? "bg-slate-500" : band.kind === "gap" ? "bg-amber-400" : colorClass
-  } ${selected ? "ring-2 ring-inset ring-white" : ""}`;
-  if (!onOpen) {
-    return <div title={label} style={{ width }} className={className} />;
-  }
+  const gridRef = useRef<HTMLDivElement>(null);
+  const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
+  const rendered = useRef(new Set<number>());
+  const started = useRef(new Set<number>());
+  const pending = useRef(new Set<number>());
+  const dataRef = useRef<ArrayBuffer | null>(null);
+  const [pdfReady, setPdfReady] = useState(false);
+
+  const flush = useCallback(() => {
+    const data = dataRef.current;
+    if (!data) return;
+    const pages = [...pending.current].filter(
+      (page) => !rendered.current.has(page) && !started.current.has(page),
+    );
+    pending.current.clear();
+    for (const page of pages) started.current.add(page);
+    if (pages.length === 0) return;
+    void renderPdfPageRangeToCanvases(
+      data,
+      pages,
+      (page) => canvasRefs.current.get(page) ?? null,
+      0.22,
+    ).then(() => {
+      for (const page of pages) rendered.current.add(page);
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    rendered.current = new Set();
+    started.current = new Set();
+    setPdfReady(false);
+    void loadPdfBuffer(url).then((data) => {
+      if (cancelled) return;
+      dataRef.current = data;
+      setPdfReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  useEffect(() => {
+    if (!pdfReady) return;
+    const root = gridRef.current;
+    if (!root) return;
+    const nodes = root.querySelectorAll<HTMLElement>("[data-attachment-page]");
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const page = Number((entry.target as HTMLElement).dataset.attachmentPage);
+          if (Number.isInteger(page) && !rendered.current.has(page)) pending.current.add(page);
+        }
+        flush();
+      },
+      { root, rootMargin: "240px" },
+    );
+    nodes.forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, [pdfReady, cards, flush]);
+
   return (
-    <button
-      type="button"
-      title={label}
-      style={{ width }}
-      className={className}
-      onClick={onOpen}
-    />
+    <div ref={gridRef} className="min-h-0 flex-1 overflow-auto p-4">
+      <ul className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-3">
+        {cards.map((card) => {
+          const color = colorFor(card.agendaItemId);
+          return (
+            <li key={card.page}>
+              <button
+                type="button"
+                data-attachment-page={card.page}
+                onClick={() => onOpen(card)}
+                className={`flex w-full flex-col overflow-hidden rounded-lg border-2 bg-white text-left ${color.border}`}
+              >
+                <canvas
+                  ref={(node) => {
+                    if (node) canvasRefs.current.set(card.page, node);
+                    else canvasRefs.current.delete(card.page);
+                  }}
+                  className="h-36 w-full bg-slate-100 object-contain object-top"
+                />
+                <span className={`px-2 py-1 text-xs font-medium ${color.wash}`}>
+                  Page {card.page}
+                  {card.agendaItemId ? "" : " · not linked"}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }

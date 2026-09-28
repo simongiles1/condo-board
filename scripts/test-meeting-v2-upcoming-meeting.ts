@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildAttachmentMap } from "../lib/meeting-v2/attachment-map";
+import { attachmentPageCards, buildAttachmentMap } from "../lib/meeting-v2/attachment-map";
 import {
   applyAttachmentPageAssignments,
   citedAttachmentAssignments,
@@ -121,5 +121,10 @@ describe("attachment map review", () => {
     );
     assert.equal(map.unlinkedAttachmentPages, 12);
     assert.deepEqual(map.bands[0], { kind: "agenda", start: 1, end: 12 });
+    const cards = attachmentPageCards(map.bands);
+    assert.equal(cards.find((card) => card.page === 13)?.agendaItemId, "lobby");
+    assert.equal(cards.find((card) => card.page === 27)?.agendaItemId, null);
+    assert.equal(cards.some((card) => card.page <= 12), false);
+    assert.equal(cards.length, 18);
   });
 });

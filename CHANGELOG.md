@@ -44,6 +44,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **V2 meetings list row navigation** — Clicking a pipeline row did nothing because row navigation called `router.push` without a router instance; the list again opens the meeting workspace on row click.
+
 - **V2 meetings list after create** — New and duplicated V2 workspaces appear at the top of the pipeline list for that meeting date. The list now sorts by workspace creation time when dates match (so upcoming “Meeting - …” rows are not buried under older “Minutes - …” titles) and revalidates after create like V1 upload.
 
 - **Upcoming meeting package pages** — Creating a meeting now keeps every page of the board package unless you clear some. The last-agenda control only marks where the written agenda stops; later pages stay as attachments. A page citation that runs past the stored package says those pages were left out when the meeting was created.

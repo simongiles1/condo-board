@@ -22,6 +22,7 @@ import {
   activeLiveFocus,
   effectivePresentedPage,
   liveAgendaLeaves,
+  liveAgendaOutlineRows,
   navigationAllowed,
   pageMapCheckView,
   type LiveNavigationEventView,
@@ -77,7 +78,7 @@ export async function getLiveRoomSnapshot(meetingId: string): Promise<LiveRoomSn
     .from(meetingsV2)
     .where(eq(meetingsV2.id, meetingId));
 
-  const leaves = await loadLeaves(meetingId);
+  const { leaves, outline } = await loadLiveAgenda(meetingId);
   const [session] = await db
     .select()
     .from(meetingsV2LiveSessions)
@@ -118,6 +119,7 @@ export async function getLiveRoomSnapshot(meetingId: string): Promise<LiveRoomSn
       leaves,
     }),
     leaves,
+    outline,
     navigation,
     recording: capture.recording,
     captureGaps: capture.captureGaps,
@@ -454,20 +456,31 @@ async function requireMeeting(meetingId: string): Promise<void> {
   }
 }
 
-async function loadLeaves(meetingId: string): Promise<LiveRoomLeaf[]> {
+async function loadLiveAgenda(
+  meetingId: string,
+): Promise<{ leaves: LiveRoomLeaf[]; outline: ReturnType<typeof liveAgendaOutlineRows> }> {
   const db = getDb();
   const items = await db
     .select({
       id: meetingsV2AgendaItems.id,
       itemNumber: meetingsV2AgendaItems.itemNumber,
       title: meetingsV2AgendaItems.title,
+      sectionLabel: meetingsV2AgendaItems.sectionLabel,
       sourceText: meetingsV2AgendaItems.sourceText,
       sourcePagesJson: meetingsV2AgendaItems.sourcePagesJson,
     })
     .from(meetingsV2AgendaItems)
     .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId))
     .orderBy(asc(meetingsV2AgendaItems.sortOrder));
-  return liveAgendaLeaves(items);
+  return {
+    leaves: liveAgendaLeaves(items),
+    outline: liveAgendaOutlineRows(items),
+  };
+}
+
+async function loadLeaves(meetingId: string): Promise<LiveRoomLeaf[]> {
+  const { leaves } = await loadLiveAgenda(meetingId);
+  return leaves;
 }
 
 async function ensureSession(meetingId: string) {

@@ -1,4 +1,9 @@
-import { buildAgendaOutlineTree } from "@/lib/meeting-v2/agenda-outline";
+import {
+  buildAgendaOutlineTree,
+  parentAgendaItemCode,
+  parseAgendaItemCode,
+  type AgendaOutlineNode,
+} from "@/lib/meeting-v2/agenda-outline";
 import type {
   CaptureFileView,
   CaptureGapView,
@@ -19,6 +24,25 @@ export type LiveRoomLeaf = {
   title: string;
   sourceText: string | null;
   sourcePages: number[];
+};
+
+/** One agenda row in the live room sidebar: a navigable leaf or a non-interactive heading. */
+export type LiveAgendaOutlineRow = {
+  key: string;
+  itemNumber: string;
+  title: string;
+  kind: "leaf" | "heading";
+  agendaItemId: string | null;
+  sourcePages: number[];
+};
+
+const SYNTHETIC_OUTLINE_ID_PREFIX = "outline-synthetic:";
+
+const PROPERTY_MANAGEMENT_SUBSECTION_TITLES: Record<string, string> = {
+  a: "Ratification of email decisions made since the last board meeting.",
+  b: "Review and approval of the project",
+  c: "Items completed.",
+  d: "The items for discussion",
 };
 
 export type LiveNavigationEventView = {
@@ -65,6 +89,7 @@ export type LiveRoomSnapshot = {
   presentedPage: number | null;
   pageMap: PageMapCheckView;
   leaves: LiveRoomLeaf[];
+  outline: LiveAgendaOutlineRow[];
   navigation: LiveNavigationEventView[];
   recording: RecordingHealth;
   captureGaps: CaptureGapView[];
@@ -116,6 +141,135 @@ export function liveAgendaLeaves(items: LiveAgendaSourceItem[]): LiveRoomLeaf[] 
 
   walk(tree);
   return leaves;
+}
+
+type LiveAgendaOutlineSourceItem = LiveAgendaSourceItem & {
+  sectionLabel?: string | null;
+};
+
+function agendaItemsWithCodePrefix<T extends { itemNumber?: string | null }>(
+  code: string,
+  items: T[],
+): T[] {
+  const normalized = code.trim().toLowerCase();
+  if (!normalized) return [];
+  return items.filter((item) => {
+    const raw = (item.itemNumber || "").trim().toLowerCase();
+    return raw === normalized || raw.startsWith(`${normalized}.`);
+  });
+}
+
+/**
+ * Titles for outline rows that exist in the package hierarchy but were not stored as agenda items.
+ */
+function inferSyntheticOutlineTitle(
+  code: string,
+  items: LiveAgendaOutlineSourceItem[],
+  byCode: Map<string, LiveAgendaOutlineSourceItem>,
+): string {
+  const existing = byCode.get(code.trim().toLowerCase());
+  if (existing?.title?.trim()) return existing.title.trim();
+
+  const depth = parseAgendaItemCode(code).segments.length;
+  const descendants = agendaItemsWithCodePrefix(code, items);
+
+  if (depth === 1) {
+    for (const item of descendants) {
+      const label = item.sectionLabel?.trim();
+      if (!label) continue;
+      const colon = label.indexOf(":");
+      if (colon > 0) return label.slice(0, colon).trim();
+      return label;
+    }
+    return code;
+  }
+
+  if (depth === 2) {
+    for (const item of descendants) {
+      const label = item.sectionLabel?.trim();
+      if (!label) continue;
+      const colon = label.indexOf(":");
+      if (colon > 0) return label.slice(colon + 1).trim();
+    }
+    const letter = parseAgendaItemCode(code).segments.find((segment) => segment.kind === "letter");
+    if (letter) {
+      const known = PROPERTY_MANAGEMENT_SUBSECTION_TITLES[letter.raw.toLowerCase()];
+      if (known) return known;
+    }
+  }
+
+  return code;
+}
+
+function augmentAgendaItemsWithSyntheticAncestors(
+  items: LiveAgendaOutlineSourceItem[],
+): LiveAgendaSourceItem[] {
+  const byCode = new Map<string, LiveAgendaOutlineSourceItem>();
+  for (const item of items) {
+    const code = (item.itemNumber || "").trim();
+    if (code) byCode.set(code.toLowerCase(), item);
+  }
+
+  const extras: LiveAgendaSourceItem[] = [];
+  for (const item of items) {
+    let parentCode = parentAgendaItemCode(item.itemNumber);
+    while (parentCode) {
+      const key = parentCode.toLowerCase();
+      if (!byCode.has(key)) {
+        const synthetic: LiveAgendaSourceItem = {
+          id: `${SYNTHETIC_OUTLINE_ID_PREFIX}${parentCode}`,
+          itemNumber: parentCode,
+          title: inferSyntheticOutlineTitle(parentCode, items, byCode),
+          sourceText: null,
+          sourcePagesJson: "[]",
+        };
+        extras.push(synthetic);
+        byCode.set(key, synthetic);
+      }
+      parentCode = parentAgendaItemCode(parentCode);
+    }
+  }
+
+  return [...items, ...extras];
+}
+
+function flattenLiveAgendaOutline(
+  nodes: Array<AgendaOutlineNode<LiveAgendaSourceItem>>,
+  leafIds: Set<string>,
+  sourcePagesById: Map<string, number[]>,
+): LiveAgendaOutlineRow[] {
+  const rows: LiveAgendaOutlineRow[] = [];
+  const walk = (outlineNodes: Array<AgendaOutlineNode<LiveAgendaSourceItem>>) => {
+    for (const node of outlineNodes) {
+      const itemNumber = (node.item.itemNumber || "").trim();
+      const isLeaf = leafIds.has(node.item.id);
+      rows.push({
+        key: node.item.id,
+        itemNumber,
+        title: node.item.title,
+        kind: isLeaf ? "leaf" : "heading",
+        agendaItemId: isLeaf ? node.item.id : null,
+        sourcePages: isLeaf ? (sourcePagesById.get(node.item.id) ?? []) : [],
+      });
+      walk(node.children);
+    }
+  };
+  walk(nodes);
+  return rows;
+}
+
+/**
+ * Full printed agenda order for the live room, including package headings that have no leaf row.
+ * Only rows with kind "leaf" are navigable.
+ */
+export function liveAgendaOutlineRows(items: LiveAgendaOutlineSourceItem[]): LiveAgendaOutlineRow[] {
+  const leaves = liveAgendaLeaves(items);
+  const leafIds = new Set(leaves.map((leaf) => leaf.id));
+  const sourcePagesById = new Map(
+    items.map((item) => [item.id, parseAgendaSourcePages(item.sourcePagesJson)]),
+  );
+  const tree = buildAgendaOutlineTree(augmentAgendaItemsWithSyntheticAncestors(items));
+  return flattenLiveAgendaOutline(tree, leafIds, sourcePagesById);
 }
 
 /**

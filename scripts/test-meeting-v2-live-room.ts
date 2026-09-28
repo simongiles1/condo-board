@@ -13,6 +13,7 @@ import {
   effectivePresentedPage,
   leafStepTarget,
   liveAgendaLeaves,
+  liveAgendaOutlineRows,
   navigationAllowed,
   packagePageToOpen,
   pageMapCheckView,
@@ -112,6 +113,47 @@ describe("live room agenda", () => {
     assert.equal(leaves[0]?.sourceText, "steam text");
     assert.deepEqual(leaves[0]?.sourcePages, [4, 5]);
     assert.deepEqual(leaves[1]?.sourcePages, []);
+  });
+
+  it("lists package headings before leaves and marks only leaves navigable", () => {
+    const outline = liveAgendaOutlineRows(items);
+    assert.deepEqual(
+      outline.map((row) => [row.itemNumber, row.kind, row.agendaItemId]),
+      [
+        ["1", "heading", null],
+        ["1.A", "leaf", "steam"],
+        ["1.B", "leaf", "roof"],
+      ],
+    );
+  });
+
+  it("inserts missing subsection headings from section labels", () => {
+    const outline = liveAgendaOutlineRows([
+      {
+        id: "fin",
+        itemNumber: "3",
+        title: "Financial statements",
+        sourceText: null,
+        sourcePagesJson: "[]",
+      },
+      {
+        id: "rat-one",
+        itemNumber: "4.A.1",
+        title: "Steam Room Heat Pump",
+        sectionLabel:
+          "Property Management Report: Ratification of email decisions made since the last board meeting.",
+        sourceText: null,
+        sourcePagesJson: "[10]",
+      },
+    ]);
+    assert.deepEqual(
+      outline.map((row) => row.itemNumber),
+      ["3", "4", "4.A", "4.A.1"],
+    );
+    assert.equal(outline.find((row) => row.itemNumber === "4")?.kind, "heading");
+    assert.equal(outline.find((row) => row.itemNumber === "4.A")?.title, outline[2]?.title);
+    assert.match(outline[2]?.title ?? "", /ratification/i);
+    assert.equal(outline.find((row) => row.itemNumber === "4.A.1")?.kind, "leaf");
   });
 
   it("moves to the next leaf and restores the last marked leaf", () => {

@@ -42,6 +42,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Live room layout** — The live room fills the window beside the navigation. Agenda rows indent by outline depth. A document opens over the stage and leaves the agenda in place. A package page that holds two agenda items shows only the item on screen.
 
+- **Live room agenda outline** — The agenda sidebar lists package headings (for example item 4 and subsection 4.A) even when only leaf items are stored in the database. Heading rows are not clickable; Previous, Next, and direct jumps still move only between leaves.
+
 ### Fixed
 
 - **V2 meetings list row navigation** — Clicking a pipeline row did nothing because row navigation called `router.push` without a router instance; the list again opens the meeting workspace on row click.

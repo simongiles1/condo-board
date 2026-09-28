@@ -582,26 +582,54 @@ export function LiveMeetingRoom({ meetingId }: { meetingId: string }) {
           Agenda
         </p>
         <ul className="min-h-0 flex-1 overflow-auto p-1">
-          {snapshot?.leaves.map((leaf) => {
-            const selected = !snapshot.activeUnscheduled && leaf.id === active?.id;
+          {(snapshot?.outline ?? snapshot?.leaves.map((leaf) => ({
+            key: leaf.id,
+            itemNumber: leaf.itemNumber ?? "",
+            title: leaf.title,
+            kind: "leaf" as const,
+            agendaItemId: leaf.id,
+            sourcePages: leaf.sourcePages,
+          }))).map((row) => {
+            const selected =
+              row.kind === "leaf" &&
+              !snapshot?.activeUnscheduled &&
+              row.agendaItemId === active?.id;
+            const paddingLeft = `${12 + agendaItemIndentDepth(row.itemNumber) * 20}px`;
+            if (row.kind === "heading") {
+              return (
+                <li key={row.key}>
+                  <div
+                    style={{ paddingLeft }}
+                    className="w-full rounded-lg py-1.5 pr-2 text-left text-sm font-medium text-slate-600"
+                  >
+                    {row.itemNumber ? `${row.itemNumber} ` : ""}
+                    {row.title}
+                  </div>
+                </li>
+              );
+            }
             return (
-              <li key={leaf.id}>
+              <li key={row.key}>
                 <button
                   type="button"
                   disabled={!viewerIsPresenter || navBusy || !snapshot.roomName}
-                  style={{ paddingLeft: `${12 + agendaItemIndentDepth(leaf.itemNumber) * 20}px` }}
+                  style={{ paddingLeft }}
                   className={`w-full rounded-lg py-1.5 pr-2 text-left text-sm disabled:opacity-60 ${
                     selected ? "bg-slate-900 text-white" : "hover:bg-slate-50"
                   }`}
                   onClick={() => {
+                    if (!row.agendaItemId) return;
                     void moveTo({
-                      agendaItemId: leaf.id,
-                      page: stagePackagePage({ kind: "leaf", agendaItemId: leaf.id }, leaf.sourcePages),
+                      agendaItemId: row.agendaItemId,
+                      page: stagePackagePage(
+                        { kind: "leaf", agendaItemId: row.agendaItemId },
+                        row.sourcePages,
+                      ),
                     });
                   }}
                 >
-                  {leaf.itemNumber ? `${leaf.itemNumber} ` : ""}
-                  {leaf.title}
+                  {row.itemNumber ? `${row.itemNumber} ` : ""}
+                  {row.title}
                 </button>
               </li>
             );

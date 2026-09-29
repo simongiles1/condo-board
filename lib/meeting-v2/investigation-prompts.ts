@@ -1,3 +1,5 @@
+import { CONFIDENTIAL_VISIBILITY_PROMPT } from "@/lib/minutes/confidential-definition";
+
 /** User-prompt label for the fact ledger passed into investigation. */
 export const RESOLVED_FACTS_MARKER =
   "Resolved facts (publish selected values only; unselected package proposals are not minutes content):";
@@ -55,8 +57,7 @@ When writing the discussion_summary, you must adopt the exact summarization capa
 - If a formal motion was introduced but the transcript does not show it was finished or withdrawn, keep motion.result as UNKNOWN. That is separate from a discussion that never used motion language.
 - Use INFORMATION_ONLY when the evidence shows reporting, updates, or review and nobody proposed an approval or direction.
 - If evidence is weak, choose LOW or INSUFFICIENT confidence.
-- Use RESTRICTED when the content clearly involves legal matters, owner/unit disputes, insurance/holdback disputes, or similar confidential topics.
-- Use PUBLIC for routine vendor, project, maintenance, budget, and operational matters unless the evidence clearly indicates confidentiality.
+${CONFIDENTIAL_VISIBILITY_PROMPT}
 
 Working method:
 

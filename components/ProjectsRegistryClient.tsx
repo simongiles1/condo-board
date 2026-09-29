@@ -716,13 +716,23 @@ function MultiValueField({
   );
 }
 
+const PROJECT_SCOPE_BADGE_CLASS: Record<ProjectScope, string> = {
+  building:
+    "inline-flex rounded bg-sky-50 px-1.5 py-px text-[11px] font-medium text-sky-800 ring-1 ring-sky-200/90",
+  common_area:
+    "inline-flex rounded bg-teal-50 px-1.5 py-px text-[11px] font-medium text-teal-900 ring-1 ring-teal-200/90",
+  multi_unit:
+    "inline-flex rounded bg-sky-50 px-1.5 py-px text-[11px] font-medium text-sky-800 ring-1 ring-sky-200/90",
+  unit:
+    "inline-flex rounded bg-sky-50 px-1.5 py-px text-[11px] font-medium text-sky-800 ring-1 ring-sky-200/90",
+  unknown:
+    "inline-flex rounded bg-slate-50 px-1.5 py-px text-[11px] font-medium text-slate-700 ring-1 ring-slate-200/90",
+};
+
 function ProjectScopeBadge({ scope }: { scope: ProjectScope | null | undefined }) {
-  const label = PROJECT_SCOPE_LABELS[scope ?? "unknown"];
-  return (
-    <span className="inline-flex rounded bg-sky-50 px-1.5 py-px text-[11px] font-medium text-sky-800 ring-1 ring-sky-200/90">
-      {label}
-    </span>
-  );
+  const key = scope ?? "unknown";
+  const label = PROJECT_SCOPE_LABELS[key];
+  return <span className={PROJECT_SCOPE_BADGE_CLASS[key]}>{label}</span>;
 }
 
 function ProjectPhaseBadge({ phase }: { phase: string | null | undefined }) {

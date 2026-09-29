@@ -19,6 +19,9 @@ import {
   getLatestGoldStandardValidationRun,
   parseStoredAiUsage,
 } from "@/lib/gemini/usage";
+import { CONFIDENTIAL_DEFINITION_PROMPT } from "@/lib/minutes/confidential-definition";
+import { buildCompareNavEntries, type CompareAgendaRef } from "@/lib/minutes/gold-standard-nav";
+import { standardizedProceduralBody } from "@/lib/minutes/minutes-boilerplate";
 import {
   computeCompareCoverage,
   computePairCoverage,
@@ -61,6 +64,7 @@ type Props = {
   initialTab?: ValidationTab;
   focusAgendaItemId?: string | null;
   reCompareBusy?: boolean;
+  agendaItems?: CompareAgendaRef[];
   onClose: () => void;
   onReCompare: () => void;
   onUploadDifferent?: () => void;
@@ -518,15 +522,29 @@ function ConceptSectionHeader({
   alignment,
   findings,
   coverage,
+  confidential = false,
+  number,
 }: {
   alignment: CompareAlignment;
   findings: ValidationFinding[];
   coverage: CompareCoverage | null;
+  confidential?: boolean;
+  number?: string;
 }) {
   return (
     <div className="flex flex-col gap-2 border-b border-slate-100 px-2 py-2 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-center sm:gap-2 sm:px-4">
       <h3 className="min-w-0 text-left text-sm font-semibold text-slate-900">
-        <ConceptTitle alignment={alignment} />
+        <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+          {number ? (
+            <span className="font-mono text-xs font-semibold text-slate-500">{number}</span>
+          ) : null}
+          <ConceptTitle alignment={alignment} />
+          {confidential ? (
+            <span className="inline-flex rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-900">
+              Confidential
+            </span>
+          ) : null}
+        </span>
       </h3>
       <div className="max-w-full sm:justify-self-center">
         <ConceptMatchCluster
@@ -654,10 +672,12 @@ export function GoldStandardValidationSidePanel({
   initialTab = "generatedOnly",
   focusAgendaItemId = null,
   reCompareBusy = false,
+  agendaItems = [],
   onClose,
   onReCompare,
   onUploadDifferent,
 }: Props) {
+  const [confidentialPromptOpen, setConfidentialPromptOpen] = useState(false);
   const [differencesOnly, setDifferencesOnly] = useState(
     initialTab === "generatedOnly" || initialTab === "goldOnly",
   );
@@ -698,6 +718,37 @@ export function GoldStandardValidationSidePanel({
         pair.aiSegments.some((segment) => segment.mark !== "same");
     });
   }, [compare, differencesOnly, pairByAlignmentId]);
+
+  const headingsByAlignmentId = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!compare) return map;
+    const goldById = new Map(compare.goldConcepts.map((concept) => [concept.id, concept]));
+    const aiById = new Map(compare.aiConcepts.map((concept) => [concept.id, concept]));
+    for (const alignment of compare.alignments) {
+      const goldHeading = alignment.goldConceptIds
+        .map((id) => goldById.get(id)?.heading)
+        .find(Boolean);
+      const aiHeading = alignment.aiConceptIds
+        .map((id) => aiById.get(id)?.heading)
+        .find(Boolean);
+      map.set(alignment.id, goldHeading || aiHeading || alignment.label);
+    }
+    return map;
+  }, [compare]);
+
+  const navEntries = useMemo(
+    () =>
+      buildCompareNavEntries({
+        alignments: visibleAlignments,
+        headingsByAlignmentId,
+        agendaItems,
+      }),
+    [visibleAlignments, headingsByAlignmentId, agendaItems],
+  );
+  const navByAlignmentId = useMemo(
+    () => new Map(navEntries.map((entry) => [entry.alignmentId, entry])),
+    [navEntries],
+  );
 
   const conceptCounts = useMemo(() => {
     if (!compare) {
@@ -897,7 +948,7 @@ export function GoldStandardValidationSidePanel({
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <nav
             ref={navRef}
-            className="hidden w-72 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50 lg:block"
+            className="hidden w-80 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50 lg:block"
           >
             <div className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-3 py-2">
               <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
@@ -908,28 +959,54 @@ export function GoldStandardValidationSidePanel({
                 />
                 Differences only
               </label>
+              <button
+                type="button"
+                className="mt-2 text-left text-xs font-medium text-teal-800 underline hover:text-teal-950"
+                onClick={() => setConfidentialPromptOpen(true)}
+              >
+                What counts as confidential
+              </button>
             </div>
             <ul className="p-2">
-              {visibleAlignments.map((alignment) => {
-                const selected = alignment.id === activeAlignmentId;
+              {navEntries.map((entry) => {
+                const selected = entry.alignmentId === activeAlignmentId;
                 return (
-                  <li key={alignment.id}>
+                  <li key={entry.alignmentId}>
                     <button
                       type="button"
-                      data-nav-alignment-id={alignment.id}
+                      data-nav-alignment-id={entry.alignmentId}
                       onClick={() => {
                         pendingContentScrollRef.current = true;
                         skipScrollSpyRef.current = true;
-                        setActiveAlignmentId(alignment.id);
+                        setActiveAlignmentId(entry.alignmentId);
                       }}
-                      className={`mb-1 w-full rounded-lg px-2.5 py-2 text-left transition ${
+                      className={`mb-1 flex w-full items-start gap-2 rounded-lg py-2 pr-2 text-left transition ${
                         selected
                           ? "bg-white shadow-sm ring-1 ring-slate-200"
                           : "hover:bg-white/70"
-                      }`}
+                      } ${entry.isLeaf ? "" : "text-slate-500"}`}
+                      style={{ paddingLeft: `${entry.depth * 0.75 + 0.5}rem` }}
                     >
-                      <span className="block truncate text-xs font-semibold text-slate-900">
-                        {alignment.label}
+                      {entry.number ? (
+                        <span className="w-14 shrink-0 font-mono text-[11px] font-semibold text-slate-500">
+                          {entry.number}
+                        </span>
+                      ) : (
+                        <span className="w-14 shrink-0" />
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span
+                          className={`block text-xs ${
+                            entry.isLeaf ? "font-semibold text-slate-900" : "font-medium text-slate-600"
+                          }`}
+                        >
+                          {entry.label}
+                        </span>
+                        {entry.confidential ? (
+                          <span className="mt-1 inline-flex rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-900">
+                            Confidential
+                          </span>
+                        ) : null}
                       </span>
                     </button>
                   </li>
@@ -956,6 +1033,14 @@ export function GoldStandardValidationSidePanel({
             {visibleAlignments.map((alignment) => {
               const pair = pairByAlignmentId.get(alignment.id);
               const findings = pair?.findings ?? [];
+              const nav = navByAlignmentId.get(alignment.id);
+              const showDescription = nav?.isLeaf !== false;
+              const heading = headingsByAlignmentId.get(alignment.id) || alignment.label;
+              const aiText = (pair?.aiSegments ?? []).map((segment) => segment.text).join("");
+              const standardAi = standardizedProceduralBody(heading, aiText);
+              const aiSegments = standardAi
+                ? [{ text: standardAi, mark: "same" as const }]
+                : (pair?.aiSegments ?? []);
               return (
                 <section
                   key={alignment.id}
@@ -968,18 +1053,19 @@ export function GoldStandardValidationSidePanel({
                     alignment={alignment}
                     findings={findings}
                     coverage={pair ? computePairCoverage(pair) : null}
+                    confidential={nav?.confidential}
+                    number={nav?.number}
                   />
-                  <div className="grid min-w-0 grid-cols-2 items-start pb-3 pt-2">
-                    <div className="min-w-0 overflow-hidden border-r border-slate-100 px-2 pb-1 pt-1 sm:px-4">
-                      <HighlightedProse segments={pair?.goldSegments ?? []} />
+                  {showDescription ? (
+                    <div className="grid min-w-0 grid-cols-2 items-start pb-3 pt-2">
+                      <div className="min-w-0 overflow-hidden border-r border-slate-100 px-2 pb-1 pt-1 sm:px-4">
+                        <HighlightedProse segments={pair?.goldSegments ?? []} />
+                      </div>
+                      <div className="min-w-0 overflow-hidden px-2 pb-1 pt-1 sm:px-4">
+                        <HighlightedProse segments={aiSegments} asMarkdown />
+                      </div>
                     </div>
-                    <div className="min-w-0 overflow-hidden px-2 pb-1 pt-1 sm:px-4">
-                      <HighlightedProse
-                        segments={pair?.aiSegments ?? []}
-                        asMarkdown
-                      />
-                    </div>
-                  </div>
+                  ) : null}
                 </section>
               );
             })}
@@ -1054,6 +1140,38 @@ export function GoldStandardValidationSidePanel({
           </button>
         </div>
       </footer>
+      {confidentialPromptOpen ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4"
+          onClick={() => setConfidentialPromptOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-labelledby="confidential-prompt-title"
+            className="max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-5 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 id="confidential-prompt-title" className="text-base font-semibold text-slate-900">
+              Confidential definition
+            </h3>
+            <p className="mt-1 text-xs text-slate-500">
+              This is the prompt text used to decide whether an item is confidential.
+            </p>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+              {CONFIDENTIAL_DEFINITION_PROMPT}
+            </p>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
+                onClick={() => setConfidentialPromptOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,4 +1,8 @@
 import {
+  formatCallToOrderSentence,
+  formatMeetingCloseSentences,
+} from "@/lib/minutes/minutes-boilerplate";
+import {
   RESTRICTED_ADDENDUM_DISCLAIMER,
   RESTRICTED_ADDENDUM_SECTION_HEADING,
   RESTRICTED_ADDENDUM_SUBTITLE,
@@ -169,10 +173,8 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   lines.push("## 1. CALL TO ORDER");
   lines.push("");
   if (doc.callToOrder) {
-    const chair = doc.callToOrder.chairName?.trim();
-    const time = doc.callToOrder.time?.trim();
     lines.push(
-      `${chair ? `${chair} called the meeting to order` : "The meeting was called to order"}${time ? ` at ${time.replace(/\.+$/, "")}` : ""}.`,
+      formatCallToOrderSentence(doc.callToOrder.chairName, doc.callToOrder.time),
     );
   }
   lines.push("");
@@ -293,13 +295,12 @@ export function v2ToMarkdown(doc: MinutesDocumentV2): string {
   // 7. MEETING CONCLUSION
   lines.push("## 7. MEETING CONCLUSION");
   lines.push("");
-  if (doc.termination?.time) {
-    lines.push(
-      `The meeting concluded at ${doc.termination.time.replace(/\.+$/, "")}.`,
-    );
-  } else {
-    lines.push("The adjournment time was not recorded.");
-  }
+  lines.push(
+    formatMeetingCloseSentences(
+      doc.termination?.time,
+      doc.termination?.guestDepartureTime,
+    ),
+  );
   lines.push("");
 
   // Post-termination sections (e.g. 8. BUDGET DISCUSSION)

@@ -18,11 +18,17 @@ import {
   updateApprovalOfPreviousMinutes,
   updateCallToOrder,
   updateDateOfNextMeeting,
+  updateGuestDepartureTime,
   updateMotion,
   updateTermination,
   type AgendaBucket,
   type AgendaPath,
 } from "@/lib/minutes/doc-v2-edits";
+import {
+  formatCallToOrderSentence,
+  formatGuestDepartureSentence,
+  formatMeetingConclusionSentence,
+} from "@/lib/minutes/minutes-boilerplate";
 import {
   RESTRICTED_ADDENDUM_DISCLAIMER,
   RESTRICTED_ADDENDUM_SECTION_HEADING,
@@ -982,6 +988,9 @@ export function MinutesStructuredEditor({
               placeholder="7:00 p.m."
             />
           </label>
+          <p className="text-sm leading-relaxed text-slate-800">
+            {formatCallToOrderSentence(doc.callToOrder?.chairName, doc.callToOrder?.time)}
+          </p>
         </div>
       </section>
 
@@ -1258,6 +1267,26 @@ export function MinutesStructuredEditor({
             placeholder="9:30 p.m."
           />
         </label>
+        <label className="mt-2 block text-xs font-medium text-slate-500">
+          Guests left
+          <input
+            type="text"
+            className={`${inputClass} mt-1`}
+            value={doc.termination?.guestDepartureTime ?? ""}
+            onChange={(e) =>
+              onDocChange(updateGuestDepartureTime(doc, e.target.value))
+            }
+            placeholder="8:05 p.m."
+          />
+        </label>
+        <p className="mt-2 text-sm leading-relaxed text-slate-800">
+          {formatMeetingConclusionSentence(doc.termination?.time)}
+        </p>
+        {formatGuestDepartureSentence(doc.termination?.guestDepartureTime) ? (
+          <p className="mt-1 text-sm leading-relaxed text-slate-800">
+            {formatGuestDepartureSentence(doc.termination?.guestDepartureTime)}
+          </p>
+        ) : null}
       </section>
 
       {/* Post-termination sections */}

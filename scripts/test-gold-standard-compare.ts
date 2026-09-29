@@ -7,6 +7,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { buildAiMinutesConcepts } from "../lib/minutes/gold-standard-ai-concepts";
+import { buildCompareNavEntries } from "../lib/minutes/gold-standard-nav";
+import {
+  formatCallToOrderSentence,
+  formatGuestDepartureSentence,
+  formatMeetingConclusionSentence,
+  lastGuestFarewellEndTimestamp,
+} from "../lib/minutes/minutes-boilerplate";
 import {
   completeAlignments,
   computePairCoverage,
@@ -621,5 +628,109 @@ describe("deriveBidirectionalFindings", () => {
     });
     assert.equal(derived.goldOnly.length, 1);
     assert.equal(derived.generatedOnly.length, 0);
+  });
+});
+
+describe("minutes boilerplate", () => {
+  it("fills the call-to-order template and rejects a meeting label as chair", () => {
+    assert.equal(
+      formatCallToOrderSentence("the AGM", "6:00 pm"),
+      "Proper notice having been given and there being a quorum present, Management called the meeting to order at 6:00 p.m. and presided as Chair.",
+    );
+    assert.equal(
+      formatCallToOrderSentence("S. Greenspan", "6:00 p.m."),
+      "Proper notice having been given and there being a quorum present, S. Greenspan called the meeting to order at 6:00 p.m. and presided as Chair.",
+    );
+  });
+
+  it("fills the conclusion template and notes when guests leave", () => {
+    assert.equal(
+      formatMeetingConclusionSentence("8:10 p.m."),
+      "There being no further business to discuss, the meeting was unanimously concluded at 8:10 p.m.",
+    );
+    assert.equal(
+      formatGuestDepartureSentence("8:08 pm"),
+      "The guests left the meeting at 8:08 p.m.",
+    );
+    assert.equal(
+      lastGuestFarewellEndTimestamp([
+        { endTimestamp: "00:10:00.000", text: "Thank you." },
+        { endTimestamp: "02:08:10.000", text: "Nice to meet everybody. Have a great night." },
+      ]),
+      "02:08:10.000",
+    );
+  });
+});
+
+describe("gold compare nav", () => {
+  it("numbers and indents leaves and withholds descriptions on parent headings", () => {
+    const entries = buildCompareNavEntries({
+      alignments: [
+        {
+          id: "steam",
+          kind: "1:1",
+          goldConceptIds: ["g"],
+          aiConceptIds: [],
+          confidence: "high",
+          label: "Steam",
+        },
+        {
+          id: "parent",
+          kind: "ai_only",
+          goldConceptIds: [],
+          aiConceptIds: [],
+          confidence: "high",
+          label: "Ratification of email decisions made since the last board meeting.",
+        },
+      ],
+      headingsByAlignmentId: new Map([
+        ["steam", "4.1 Items for Ratification - (a) Steam Room Heat Pump"],
+        ["parent", "Ratification of email decisions made since the last board meeting."],
+      ]),
+      agendaItems: [
+        {
+          title: "Ratification of email decisions made since the last board meeting.",
+          itemNumber: "4.A",
+          visibility: "PUBLIC",
+        },
+        { title: "Steam Room Heat Pump", itemNumber: "4.A.1", visibility: "PUBLIC" },
+        {
+          title: "Unit 422 Request for Records",
+          itemNumber: "4.D.11",
+          visibility: "RESTRICTED",
+        },
+      ],
+    });
+    assert.equal(entries[0]?.number, "4.1(a)");
+    assert.equal(entries[0]?.depth, 2);
+    assert.equal(entries[0]?.label, "Steam Room Heat Pump");
+    assert.equal(entries[0]?.isLeaf, true);
+    assert.equal(entries[1]?.number, "4.A");
+    assert.equal(entries[1]?.depth, 1);
+    assert.equal(entries[1]?.isLeaf, false);
+  });
+
+  it("marks addendum rows confidential", () => {
+    const entries = buildCompareNavEntries({
+      alignments: [
+        {
+          id: "unit",
+          kind: "gold_only",
+          goldConceptIds: ["g"],
+          aiConceptIds: [],
+          confidence: "high",
+          label: "Unit 712",
+        },
+      ],
+      headingsByAlignmentId: new Map([
+        [
+          "unit",
+          "Addendum - 4.4 Items for Discussion - (i) Unit 712 Leak Chargeback",
+        ],
+      ]),
+    });
+    assert.equal(entries[0]?.confidential, true);
+    assert.equal(entries[0]?.number, "4.4(i)");
+    assert.equal(entries[0]?.isLeaf, true);
   });
 });

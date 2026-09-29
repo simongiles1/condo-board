@@ -11,6 +11,11 @@ import {
   validateMinutesV2,
   wrapMinutesV2,
 } from "@/lib/minutes/schema-v2";
+import {
+  callToOrderChair,
+  lastGuestFarewellEndTimestamp,
+  normalizeMinutesClock,
+} from "@/lib/minutes/minutes-boilerplate";
 import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
 import {
   meetingsV2,
@@ -849,14 +854,28 @@ export function buildMeetingFrame(
       ],
       closingTranscriptText,
     ) ?? null;
+  const callChunk = transcriptChunks.find((chunk) => /call to order/i.test(chunk.text));
+  const startOffset =
+    callToOrder.offsetSeconds ??
+    (callChunk?.startTimestamp ? parseVttClockToSeconds(callChunk.startTimestamp) : null);
+  const scheduledTime = normalizeMinutesClock(meetingTime) ?? null;
+  const callTime = callToOrder.clockTime ?? scheduledTime;
+  const callChair = callToOrderChair(callToOrder.chairName) ?? (callTime ? "Management" : null);
+  const endOffset = transcriptChunks.at(-1)?.endTimestamp
+    ? parseVttClockToSeconds(transcriptChunks.at(-1)?.endTimestamp ?? null)
+    : null;
   const inferredTerminationTime = inferAbsoluteClockTime({
-    startClock: callToOrder.clockTime,
-    startOffsetSeconds: callToOrder.offsetSeconds,
-    targetOffsetSeconds: closingTranscript.at(-1)?.endTimestamp
-      ? parseVttClockToSeconds(closingTranscript.at(-1)?.endTimestamp ?? null)
-      : null,
+    startClock: callTime,
+    startOffsetSeconds: startOffset,
+    targetOffsetSeconds: endOffset,
   });
-  const terminationTime = explicitTerminationTime;
+  const terminationTime = explicitTerminationTime ?? inferredTerminationTime;
+  const farewellStamp = lastGuestFarewellEndTimestamp(transcriptChunks);
+  const guestDepartureTime = inferAbsoluteClockTime({
+    startClock: callTime,
+    startOffsetSeconds: startOffset,
+    targetOffsetSeconds: farewellStamp ? parseVttClockToSeconds(farewellStamp) : null,
+  });
   const speakerMatchesPerson = (speaker: string, person: MeetingFramePerson) => {
     const normalizedSpeaker = speaker.toLowerCase();
     return person.name
@@ -924,12 +943,13 @@ export function buildMeetingFrame(
       regrets,
     },
     callToOrderHints: {
-      time: callToOrder.clockTime,
-      chairName: callToOrder.chairName,
+      time: callTime,
+      chairName: callChair,
     },
     nextMeetingHints: nextMeeting,
     terminationHints: {
       time: terminationTime,
+      guestDepartureTime,
     },
     sourceNotes: [
       ...boardRoster.filter(person => !presentBoard.includes(person) && !regrets.includes(person)).map(person => `Attendance not confirmed: ${person.name}. Silence is not evidence of absence.`),
@@ -1183,6 +1203,7 @@ function buildTerminationSection(
   }
   return {
     time: meetingFrame.terminationHints.time,
+    guestDepartureTime: meetingFrame.terminationHints.guestDepartureTime ?? undefined,
   };
 }
 

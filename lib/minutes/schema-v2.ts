@@ -108,6 +108,8 @@ export type DateOfNextMeetingV2 = {
 
 export type TerminationV2 = {
   time?: string;
+  /** Clock time when guests or the recording secretary left, when that is separate from adjournment. */
+  guestDepartureTime?: string;
 };
 
 export type PostTerminationSectionV2 = {
@@ -731,7 +733,12 @@ export function validateMinutesV2(raw: unknown): ValidateMinutesV2Result {
   let termination: TerminationV2 | undefined;
   const termRaw = data.termination;
   if (isRecord(termRaw)) {
-    termination = { time: asOptionalString(termRaw.time) };
+    termination = {
+      time: asOptionalString(termRaw.time),
+      guestDepartureTime: asOptionalString(
+        termRaw.guest_departure_time ?? termRaw.guestDepartureTime,
+      ),
+    };
   }
 
   if (errors.length > 0) {

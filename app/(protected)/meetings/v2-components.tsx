@@ -192,6 +192,7 @@ type MeetingV2Status = {
     sourcePages?: number[];
     sourceTranscriptRanges?: Array<[number, number]>;
     discussionSummary: string | null;
+    visibility?: string | null;
     confidence: string | null;
     outcome: string | null;
     openQuestions: string[];
@@ -1480,6 +1481,11 @@ export function MeetingV2Detail({ meetingId }: { meetingId: string }) {
         initialTab={sidePanelInitialTab}
         focusAgendaItemId={focusAgendaItemId}
         reCompareBusy={reCompareBusy}
+        agendaItems={(status?.items ?? []).map((item) => ({
+          title: item.title,
+          itemNumber: item.itemNumber,
+          visibility: item.visibility,
+        }))}
         onClose={() => setSidePanelOpen(false)}
         onReCompare={() => {
           void handleReuseCompare();

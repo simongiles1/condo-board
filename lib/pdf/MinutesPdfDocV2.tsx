@@ -10,6 +10,11 @@ import {
 import type { Style } from "@react-pdf/types";
 
 import {
+  formatCallToOrderSentence,
+  formatGuestDepartureSentence,
+  formatMeetingConclusionSentence,
+} from "@/lib/minutes/minutes-boilerplate";
+import {
   hasAnyRestrictedItem,
   partitionRestricted,
   stripLeadingThatFromResolution,
@@ -745,14 +750,9 @@ function TitleAndAttendees({
 
 function CallToOrderBody({ doc }: { doc: MinutesDocumentV2 }) {
   if (!doc.callToOrder) return null;
-  const chairName = doc.callToOrder.chairName?.trim();
-  const time = doc.callToOrder.time?.trim().replace(/\.+$/, "");
-  const timePhrase = time ? ` at ${time}.` : ".";
-
   return (
     <ContentParagraph>
-      {chairName ? `${chairName} called the meeting to order` : "The meeting was called to order"}
-      {timePhrase}
+      {formatCallToOrderSentence(doc.callToOrder.chairName, doc.callToOrder.time)}
     </ContentParagraph>
   );
 }
@@ -893,10 +893,14 @@ function MainBody({ doc }: { doc: MinutesDocumentV2 }) {
 
       <View>
         <TopSectionHeading number="7" title="Meeting Conclusion" />
-        {doc.termination?.time ? <ContentParagraph>
-            The meeting concluded at{" "}
-            {doc.termination.time.replace(/\.+$/, "")}.
-        </ContentParagraph> : <ContentParagraph>The adjournment time was not recorded.</ContentParagraph>}
+        <ContentParagraph>
+          {formatMeetingConclusionSentence(doc.termination?.time)}
+        </ContentParagraph>
+        {formatGuestDepartureSentence(doc.termination?.guestDepartureTime) ? (
+          <ContentParagraph>
+            {formatGuestDepartureSentence(doc.termination?.guestDepartureTime)}
+          </ContentParagraph>
+        ) : null}
       </View>
 
       {doc.postTerminationSections.map((section, idx) => (

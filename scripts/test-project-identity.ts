@@ -347,6 +347,8 @@ describe("project minting gate", () => {
 describe("project scope", () => {
   it("parses aliases like building_wide", () => {
     assert.equal(parseProjectScope("building_wide"), "building");
+    assert.equal(parseProjectScope("common_area"), "common_area");
+    assert.equal(parseProjectScope("common element"), "common_area");
     assert.equal(parseProjectScope("unit_specific"), "unit");
     assert.equal(parseProjectScope("nope"), null);
   });
@@ -358,6 +360,11 @@ describe("project scope", () => {
       "multi_unit",
     );
     assert.equal(deriveProjectScopeFromLocation("roof"), "building");
+    assert.equal(deriveProjectScopeFromLocation("lobby"), "common_area");
+    assert.equal(
+      deriveProjectScopeFromLocation("ninth floor amenity space"),
+      "common_area",
+    );
     assert.equal(deriveProjectScopeFromLocation(null), null);
   });
 });

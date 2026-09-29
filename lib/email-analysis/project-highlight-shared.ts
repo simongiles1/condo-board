@@ -80,6 +80,7 @@ export function emptyProjectHighlightExtraction(): ProjectHighlightExtraction {
 
 export const PROJECT_SCOPES = [
   "building",
+  "common_area",
   "multi_unit",
   "unit",
   "unknown",
@@ -89,10 +90,22 @@ export type ProjectScope = (typeof PROJECT_SCOPES)[number];
 
 export const PROJECT_SCOPE_LABELS: Record<ProjectScope, string> = {
   building: "Building-wide",
+  common_area: "Common area",
   multi_unit: "Multi-unit",
   unit: "Unit",
   unknown: "Unknown",
 };
+
+const PROJECT_SCOPE_SPECIFICITY: Record<ProjectScope, number> = {
+  unknown: 0,
+  building: 1,
+  common_area: 2,
+  multi_unit: 3,
+  unit: 4,
+};
+
+const COMMON_AREA_LOCATION_RE =
+  /\b(?:common\s+areas?|common\s+elements?|lobby|corridors?|hallways?|amenity(?:\s+space)?|party\s+room|rec(?:reation)?\s+room|fitness(?:\s+room)?|mail\s+room)\b/i;
 
 /** Prefix match for firm names: "Applied" vs "Applied System Technology". */
 export function isOrgStyleNameMatch(aKey: string, bKey: string): boolean {
@@ -157,6 +170,14 @@ export function parseProjectScope(raw: unknown): ProjectScope | null {
   if (typeof raw !== "string") return null;
   const key = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
   if (key === "building" || key === "building_wide") return "building";
+  if (
+    key === "common_area" ||
+    key === "commonarea" ||
+    key === "common_element" ||
+    key === "common_elements"
+  ) {
+    return "common_area";
+  }
   if (key === "multi_unit" || key === "multiunit") return "multi_unit";
   if (key === "unit" || key === "unit_specific") return "unit";
   if (key === "unknown") return "unknown";
@@ -186,6 +207,8 @@ export function deriveProjectScopeFromLocation(
   }
   if (unitIds.size >= 2) return "multi_unit";
   if (unitIds.size === 1) return "unit";
+  const joined = parts.join(" ");
+  if (COMMON_AREA_LOCATION_RE.test(joined)) return "common_area";
   return "building";
 }
 
@@ -209,7 +232,9 @@ export function preferProjectScope(
   if (left === right) return left;
   if (left === "unknown") return right;
   if (right === "unknown") return left;
-  return left;
+  const leftRank = PROJECT_SCOPE_SPECIFICITY[left];
+  const rightRank = PROJECT_SCOPE_SPECIFICITY[right];
+  return rightRank > leftRank ? right : left;
 }
 
 export function buildProjectHighlightDomainContext(): string {
@@ -699,7 +724,7 @@ Return ONLY valid JSON with this exact shape:
       "contractor": string | null,
       "location": string | null,
       "equipment_mentions": string | null,
-      "scope": "building" | "multi_unit" | "unit" | "unknown" | null
+      "scope": "building" | "common_area" | "multi_unit" | "unit" | "unknown" | null
     }
   ]
 }
@@ -720,7 +745,7 @@ Rules:
 - phase: exactly one of planning, tender, awarded, in progress, complete, on hold, cancelled. Map synonyms (quote/quoted/quotes received → awarded; bidding/getting quotes → tender; completed → complete). Leave null for work-package labels ("Phase 1").
 - location: a specific place (unit 201, ninth floor amenity space, P1, roof). Never "building", "property", "site", or other generic words.
 - equipment_mentions: physical systems the job is about (boiler, maglocks), as written. Do not invent registry IDs.
-- scope: building = whole building / common element / amenity / roof / garage; multi_unit = two or more named units; unit = a single unit/suite; unknown if not evidenced. Prefer location evidence over guessing.
+- scope: building = whole-building systems or exterior (roof, garage, envelope-wide); common_area = shared interior spaces (lobby, corridors, amenity, common element work not tied to one unit); multi_unit = two or more named units; unit = a single unit/suite; unknown if not evidenced. Prefer location evidence over guessing.
 - Do NOT invent missing pieces.
 - Deduplicate: one card per project identity in this message (same name + same year).
 - Ignore quoted reply history if somehow present.`;
@@ -779,7 +804,7 @@ Return ONLY valid JSON with this exact shape:
       "contractor": string | null,
       "location": string | null,
       "equipment_mentions": string | null,
-      "scope": "building" | "multi_unit" | "unit" | "unknown" | null
+      "scope": "building" | "common_area" | "multi_unit" | "unit" | "unknown" | null
     }
   ]
 }
@@ -803,7 +828,7 @@ Other merge rules:
 - When merging, keep non-null fields; prefer the most complete name; keep contractor/location/phase/equipment/scope when any source has it. Do not invent values.
 - year_hint: store "2024" or "2024-2026". Never "this year", "3-year", or a season.
 - phase: planning, tender, awarded, in progress, complete, on hold, or cancelled. Never work-package labels.
-- scope: building / multi_unit / unit / unknown. Prefer a specific value over unknown. Do not invent.
+- scope: building / common_area / multi_unit / unit / unknown. Prefer a specific value over unknown. Do not invent.
 - If two cards have conflicting non-null values for the same field, prefer the longer/more specific value; never invent a compromise.
 - Drop empty cards and contractor-only cards.
 - Output cards only — no source_email_id / source_label fields.`;

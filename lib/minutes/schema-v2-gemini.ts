@@ -198,6 +198,7 @@ export const minutesSchemaV2Gemini: ResponseSchema = {
       type: SchemaType.OBJECT,
       properties: {
         time: { type: SchemaType.STRING },
+        guest_departure_time: { type: SchemaType.STRING },
       },
     },
     post_termination_sections: {
@@ -329,6 +330,7 @@ export const minutesSchemaV2GeminiSlim: ResponseSchema = {
       type: SchemaType.OBJECT,
       properties: {
         time: { type: SchemaType.STRING },
+        guest_departure_time: { type: SchemaType.STRING },
       },
     },
     post_termination_sections: {

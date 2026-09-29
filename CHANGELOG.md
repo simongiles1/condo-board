@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Project scope: Common area** — Projects registry scope filter, legend, and list badges include **Common area** (teal badge), distinct from building-wide. Harvest prompts and location inference assign `common_area` for shared interior spaces such as lobby, corridors, and amenity areas.
+
 - **Attachment map before the live room** — After an upcoming meeting package is analyzed, Review attachments shows each attachment page as a thumbnail colored to match its agenda item. A vertical map between the thumbnails and the agenda uses the same colors, leaves unlinked pages blank, and frames the part of the package currently in view. Choosing an agenda item opens that part of the package PDF, and Back returns to the thumbnails. Start meeting opens the live room from that screen.
 
 - **Live room caption layers** — The room keeps three separate records: the audio file, the original caption, and a suggestion beside it. A close vocabulary match can be accepted or dismissed. Accepting does not change the original words. Amounts and decision words are not suggested.
@@ -43,6 +45,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V2 item pipeline debugger** — Each agenda topic has a **Debug** control that opens a sandbox stepper (evidence → fact resolution → investigation → validation → rendered minutes snippet). Pick DeepSeek V4 Flash, V4.1 Flash, or Gemini 3.8 Flash per LLM step, inspect and edit the live prompts, and keep historical runs with token counts and estimated spend. These runs do not overwrite production investigation or validation.
 
 ### Changes
+
+- **Gold-standard compare outline** — The compare navigation shows each item’s number and indent. Section headings no longer carry a description; only leaf items do. Confidential items are marked, and **What counts as confidential** opens the prompt that defines that.
+
+- **Call to order and meeting close** — Call to order, adjournment, and guests leaving use one fixed sentence each. The only variables are who called the meeting to order, the call-to-order time, the conclusion time, and when guests left.
 
 - **Meeting workspaces mobile layout** — Tighter horizontal padding on the meetings page on small screens. The V2 list stacks the meeting year under the month/day, hides the validation column below `md`, drops the Open column, and opens a workspace when you click or activate a row (validation badges still open compare on desktop).
 

@@ -893,7 +893,7 @@ export const projectEntities = pgTable(
     /** JSON string[] of promotion triggers (multiple_quotes, board_briefed, …). */
     promotionReasonsJson: text("promotion_reasons_json").notNull().default("[]"),
     scope: text("scope", {
-      enum: ["building", "multi_unit", "unit", "unknown"],
+      enum: ["building", "common_area", "multi_unit", "unit", "unknown"],
     }),
     status: text("status", {
       enum: ["active", "merged"],

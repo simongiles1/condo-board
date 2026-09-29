@@ -490,13 +490,31 @@ export function updateDateOfNextMeeting(
   };
 }
 
+/** Sets the adjournment clock without dropping a recorded guest-departure time. */
 export function updateTermination(
   doc: MinutesDocumentV2,
   time: string | undefined,
 ): MinutesDocumentV2 {
   return {
     ...doc,
-    termination: time !== undefined ? { time } : doc.termination,
+    termination: {
+      ...doc.termination,
+      time: time || undefined,
+    },
+  };
+}
+
+/** Sets when guests left. Clears the field when the value is empty. */
+export function updateGuestDepartureTime(
+  doc: MinutesDocumentV2,
+  time: string | undefined,
+): MinutesDocumentV2 {
+  return {
+    ...doc,
+    termination: {
+      ...doc.termination,
+      guestDepartureTime: time || undefined,
+    },
   };
 }
 

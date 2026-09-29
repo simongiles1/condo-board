@@ -180,6 +180,7 @@ export type MeetingV2Detail = {
     sourceSectionId: string | null;
     sourcePages: number[];
     discussionSummary: string | null;
+    visibility?: string | null;
     confidence: string | null;
     outcome: string | null;
     openQuestions: string[];
@@ -3879,6 +3880,7 @@ export async function loadMeetingV2Detail(meetingId: string): Promise<MeetingV2D
         sourcePages,
         sourceTranscriptRanges,
         discussionSummary: investigation?.discussionSummary ?? null,
+        visibility: investigation?.visibility ?? null,
         confidence: investigation?.confidence ?? null,
         outcome: investigation?.outcome ?? null,
         pipelineOpenQuestions: reviewQuestions.map((question) => question.id),

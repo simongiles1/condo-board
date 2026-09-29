@@ -1,4 +1,8 @@
 import { parseDraftMinutesDoc } from "@/lib/minutes/doc-v2-edits";
+import {
+  formatCallToOrderSentence,
+  formatMeetingCloseSentences,
+} from "@/lib/minutes/minutes-boilerplate";
 import { pairMatchScore } from "@/lib/minutes/gold-standard-item-match";
 import type {
   AiMinutesConcept,
@@ -41,7 +45,7 @@ function pushConcept(
   concepts.push({
     id: options.id,
     heading: heading || options.kind,
-    body: body || heading,
+    body,
     kind: options.kind,
     sortOrder: concepts.length,
     ...(options.sectionLabel ? { sectionLabel: options.sectionLabel } : {}),
@@ -72,12 +76,13 @@ function walkAgendaItems(
     const id = `${parentId}.${index}`;
     const body = formatAgendaItemBody(item);
     const topic = item.topic.trim();
+    const hasChildren = item.subItems.length > 0;
     const hasOwnRecord = Boolean(body);
-    if (topic && (hasOwnRecord || item.subItems.length === 0)) {
+    if (topic && (hasOwnRecord || !hasChildren)) {
       pushConcept(concepts, {
         id,
         heading: topic,
-        body: body || topic,
+        body: hasChildren ? "" : body || topic,
         kind,
         sectionLabel,
       });
@@ -119,14 +124,10 @@ function flattenMinutesV2(doc: MinutesDocumentV2): AiMinutesConcept[] {
   });
 
   if (doc.callToOrder) {
-    const parts = [
-      doc.callToOrder.chairName ? `Chair: ${doc.callToOrder.chairName}` : "",
-      doc.callToOrder.time ? `Time: ${doc.callToOrder.time}` : "",
-    ].filter(Boolean);
     pushConcept(concepts, {
       id: "ai:call-to-order",
       heading: "Call to Order",
-      body: parts.join("\n"),
+      body: formatCallToOrderSentence(doc.callToOrder.chairName, doc.callToOrder.time),
       kind: "call_to_order",
       sectionLabel: "Call to Order",
     });
@@ -228,13 +229,16 @@ function flattenMinutesV2(doc: MinutesDocumentV2): AiMinutesConcept[] {
     });
   }
 
-  if (doc.termination?.time) {
+  if (doc.termination?.time || doc.termination?.guestDepartureTime) {
     pushConcept(concepts, {
       id: "ai:termination",
-      heading: "Termination",
-      body: `Time: ${doc.termination.time}`,
+      heading: "Meeting Conclusion",
+      body: formatMeetingCloseSentences(
+        doc.termination?.time,
+        doc.termination?.guestDepartureTime,
+      ),
       kind: "termination",
-      sectionLabel: "Termination",
+      sectionLabel: "Meeting Conclusion",
     });
   }
 
@@ -357,13 +361,41 @@ export function attachAgendaItemIds(
   });
 }
 
+function blankNonLeafConceptBodies(
+  concepts: AiMinutesConcept[],
+  agendaItems: AgendaItemRef[],
+): AiMinutesConcept[] {
+  const parentIds = new Set<string>();
+  const parentTitles = new Set<string>();
+  for (const item of agendaItems) {
+    const code = (item.itemNumber || "").trim();
+    if (!code) continue;
+    const prefix = `${code}.`;
+    if (!agendaItems.some((other) => (other.itemNumber || "").trim().startsWith(prefix))) {
+      continue;
+    }
+    parentIds.add(item.id);
+    parentTitles.add(item.title.trim().toLowerCase());
+  }
+  if (parentIds.size === 0) return concepts;
+  return concepts.map((concept) => {
+    const linked = concept.agendaItemIds.some((id) => parentIds.has(id));
+    const titled = parentTitles.has(concept.heading.trim().toLowerCase());
+    if (!linked && !titled) return concept;
+    return { ...concept, body: "" };
+  });
+}
+
 export function buildAiMinutesConcepts(
   minutesJson: string,
   agendaItems: AgendaItemRef[] = [],
 ): AiMinutesConcept[] {
   const fromDraft = parseDraftMinutesDoc(minutesJson);
   if (fromDraft) {
-    return attachAgendaItemIds(flattenMinutesV2(fromDraft), agendaItems);
+    return blankNonLeafConceptBodies(
+      attachAgendaItemIds(flattenMinutesV2(fromDraft), agendaItems),
+      agendaItems,
+    );
   }
 
   try {
@@ -374,11 +406,17 @@ export function buildAiMinutesConcepts(
         : parsed,
     );
     if (v2.value) {
-      return attachAgendaItemIds(flattenMinutesV2(v2.value), agendaItems);
+      return blankNonLeafConceptBodies(
+        attachAgendaItemIds(flattenMinutesV2(v2.value), agendaItems),
+        agendaItems,
+      );
     }
     const v1 = validateMinutesJson(parsed);
     if (v1.value) {
-      return attachAgendaItemIds(flattenMinutesV1(v1.value), agendaItems);
+      return blankNonLeafConceptBodies(
+        attachAgendaItemIds(flattenMinutesV1(v1.value), agendaItems),
+        agendaItems,
+      );
     }
   } catch {
     /* fall through */

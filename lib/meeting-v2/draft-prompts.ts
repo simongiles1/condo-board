@@ -12,6 +12,8 @@ You will receive:
 Your job:
 - Produce one complete minutes JSON document that matches the local v2 minutes shape.
 - Use the meeting frame for attendance, call to order, next meeting, and termination details when available.
+- call_to_order stores only chair_name and time. The sentence is fixed: "Proper notice having been given and there being a quorum present, [chair] called the meeting to order at [time] and presided as Chair." Use Management when no director is named. Never use a meeting label such as AGM as the chair.
+- termination.time is when the meeting concluded. termination.guest_departure_time is when guests or the recording secretary left.
 - Preserve the agenda blueprint and seed bucket placement unless the evidence clearly requires a different bucket.
 - Treat the seed minutes document as a structural starting point, then improve it with better wording and any supported meeting-level fields.
 - Use the investigated agenda items as the authoritative source for topic-level discussion, outcomes, motions, and follow-ups.

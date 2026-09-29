@@ -1,3 +1,5 @@
+import { CONFIDENTIAL_FLAG_PROMPT } from "@/lib/minutes/confidential-definition";
+
 /** System prompts derived from [.doc/constitution.md](../../.doc/constitution.md). */
 
 export const MINUTES_SYSTEM_PROMPT = `**Role:** You are a professional recording secretary and expert minute-taker for a Toronto condominium corporation board.
@@ -83,15 +85,7 @@ export const MINUTES_SYSTEM_PROMPT = `**Role:** You are a professional recording
 - Place EVERY topic in its NATURAL bucket (\`financial_matters\`, \`management_report.items_for_ratification\` / \`items_for_approval\` / \`items_for_information\` / \`items_for_discussion\`, \`correspondence\`, \`new_or_other_business\`, etc.), **whether public or restricted**.
 - On each agenda item that is confidential under s. 55(4), set \`"restricted": true\` directly on the agenda_item object. Omit the field (or set false) for public items.
 - **Place restricted items at the END of their bucket array**, after every public item in the same bucket. Public items are listed first in encounter order; restricted items follow in encounter order. This is how the renderer knows to continue letter markers like \`(e)\`, \`(f)\` past the public \`(a)\`–\`(d)\`.
-- Flag \`restricted: true\` whenever the topic involves:
-  - Specific **suite/unit numbers** and owner disputes (access refusal, window damage, water meter chargebacks, compliance letters, etc.)
-  - **Insurance/holdback/settlement** files tied to a contractor flood or unit loss (deductible, premium increase, release of holdback)
-  - **Legal counsel** direction (e.g. Lash Condo Law demand letters, compliance notices)
-  - **Shared facilities / audit disputes** with vendors **only when they involve owner chargebacks, owner-facing records, vendor litigation, or an active legal demand/compliance letter**. The Egis shared-facilities reserve-fund-study dispute is restricted because it involves a Lash Condo Law demand letter.
-  - **Litigation**, requests for records in a restricted sense, or other s. 55(4) confidential matters
-- Do NOT flag (these are public even though they touch shared infrastructure or large dollars):
-  - Routine **joint capital projects** shared with a neighbouring corporation (e.g. Enwave shared steam room cooling, Studio 2 cost-share HVAC) where the discussion is about scope, design, or cost-sharing and there is no litigation, owner chargeback, or demand letter.
-  - General engineering proposals, RFPs, or contractor quotes that are not tied to a specific owner dispute or s. 55(4) matter.
+${CONFIDENTIAL_FLAG_PROMPT}
 - **Do not duplicate** the same item once public and once restricted — pick the right bucket and the right flag, once. The public minutes will simply not show restricted items; their full detail lives in the addendum.
 - Example placement (Items for Board Discussion and/or Approval has 4 public + 2 restricted):
   \`\`\`

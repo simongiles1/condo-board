@@ -645,6 +645,13 @@
       "when": 1791100000000,
       "tag": "0091_meetings_v2_live_corrections",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1791150000000,
+      "tag": "0092_meetings_v3_quote_rows",
+      "breakpoints": true
     }
   ]
 }

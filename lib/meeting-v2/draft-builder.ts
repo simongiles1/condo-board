@@ -1086,15 +1086,6 @@ function mapAgendaItemStatus(item: DraftInputItem, presentDirectors: MeetingFram
   return mapOutcomeToStatus(item.investigation.outcome);
 }
 
-function detectContractor(item: DraftInputItem): string | undefined {
-  const aliases = [...item.aliases, ...item.notes];
-  return aliases.find((entry) =>
-    /\b(inc|ltd|limited|engineering|engineers|consulting|plumbing|electric|insurance|solutions|touch|pool|spa|counsel)\b/i.test(
-      entry,
-    ),
-  );
-}
-
 function inferRestricted(item: DraftInputItem): boolean {
   return canonicalEnum(item.investigation.visibility) === "RESTRICTED";
 }

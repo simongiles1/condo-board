@@ -551,6 +551,39 @@ export const meetingsV2LiveCaptureGaps = pgTable(
   }),
 );
 
+/** One bid cell from an agenda page, read from the page itself. */
+export const meetingsV3QuoteRows = pgTable(
+  "meetings_v3_quote_rows",
+  {
+    id: text("id").primaryKey(),
+    meetingV2Id: text("meeting_v2_id")
+      .notNull()
+      .references(() => meetingsV2.id, { onDelete: "cascade" }),
+    pageNumber: integer("page_number").notNull(),
+    itemLabel: text("item_label").notNull(),
+    vendor: text("vendor").notNull(),
+    equipment: text("equipment"),
+    lineKind: text("line_kind", {
+      enum: ["base", "optional", "total", "alternative"],
+    }).notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    taxBasis: text("tax_basis", {
+      enum: ["plus_hst", "hst_included", "unspecified"],
+    }).notNull(),
+    checkStatus: text("check_status", {
+      enum: ["ok", "mismatch", "incomplete", "unchecked"],
+    }).notNull(),
+    checkDetail: text("check_detail").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    meetingPageIdx: index("meetings_v3_quote_rows_meeting_page_idx").on(
+      table.meetingV2Id,
+      table.pageNumber,
+    ),
+  }),
+);
+
 export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   sourceArtifacts: many(meetingsV2SourceArtifacts),
   transcriptSegments: many(meetingsV2TranscriptSegments),
@@ -571,6 +604,7 @@ export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   liveCaptureGaps: many(meetingsV2LiveCaptureGaps),
   liveRecognitionCues: many(meetingsV2LiveRecognitionCues),
   liveRecognitionCorrections: many(meetingsV2LiveRecognitionCorrections),
+  quoteRows: many(meetingsV3QuoteRows),
 }));
 
 export const meetingsV2SourceArtifactsRelations = relations(

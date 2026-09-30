@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
 import type { AnnotatedQuoteRow } from "@/lib/meeting-v3/quote-ledger";
 import type { MeetingsV3PackageStage } from "@/lib/meeting-v3/workspace";
@@ -30,6 +31,174 @@ const CHECK_TONE: Record<AnnotatedQuoteRow["checkStatus"], string> = {
 
 const money = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" });
 
+type PageNavProps = {
+  pages: ExtractedPage[];
+  pageIndex: number;
+  pageNumber: number | null;
+  rowCount: number;
+  onPageChange: (pageNumber: number) => void;
+  onExpand?: () => void;
+};
+
+function PageNavBar({ pages, pageIndex, pageNumber, rowCount, onPageChange, onExpand }: PageNavProps) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
+        disabled={pageIndex <= 0}
+        onClick={() => {
+          const previous = pages[pageIndex - 1];
+          if (previous) onPageChange(previous.pageNumber);
+        }}
+      >
+        Previous page
+      </button>
+      <label className="text-sm text-slate-700">
+        Page
+        <select
+          className="ml-2 rounded-md border border-slate-300 bg-white px-2 py-1.5"
+          value={pageNumber ?? ""}
+          onChange={(event) => onPageChange(Number(event.target.value))}
+        >
+          {pages.map((page) => (
+            <option key={page.pageNumber} value={page.pageNumber}>
+              {page.pageNumber}
+              {page.pageHeading ? ` — ${page.pageHeading}` : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
+        disabled={pageIndex < 0 || pageIndex >= pages.length - 1}
+        onClick={() => {
+          const next = pages[pageIndex + 1];
+          if (next) onPageChange(next.pageNumber);
+        }}
+      >
+        Next page
+      </button>
+      <span className="text-sm text-slate-500">
+        {rowCount} quote {rowCount === 1 ? "row" : "rows"} stored
+      </span>
+      {onExpand ? (
+        <button
+          type="button"
+          onClick={onExpand}
+          className="ml-auto rounded-md border border-teal-700 px-3 py-1.5 text-sm font-semibold text-teal-800 hover:bg-teal-50"
+        >
+          Expand comparison
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+type CompareColumnsProps = {
+  meetingId: string;
+  pageNumber: number | null;
+  selectedPage: ExtractedPage | null;
+  pageRows: AnnotatedQuoteRow[];
+  inLedgerWindow: boolean;
+  busy: boolean;
+  totalRowCount: number;
+  panelMinHeightClass: string;
+};
+
+function CompareColumns({
+  meetingId,
+  pageNumber,
+  selectedPage,
+  pageRows,
+  inLedgerWindow,
+  busy,
+  totalRowCount,
+  panelMinHeightClass,
+}: CompareColumnsProps) {
+  const extractText = selectedPage?.extractedText?.trim() || "No extracted text on this page.";
+
+  return (
+    <div className={`grid min-h-0 flex-1 gap-3 lg:grid-cols-3 ${panelMinHeightClass}`}>
+      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+          Board package
+        </h2>
+        {pageNumber != null ? (
+          <iframe
+            key={pageNumber}
+            title={`Board package page ${pageNumber}`}
+            src={`/api/meetings/${meetingId}/board-package#page=${pageNumber}`}
+            className="min-h-0 w-full flex-1"
+          />
+        ) : null}
+      </section>
+
+      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+          Docling extract
+        </h2>
+        <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+          <MarkdownPreview>{extractText}</MarkdownPreview>
+        </div>
+      </section>
+
+      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+          Quote ledger
+        </h2>
+        <div className="min-h-0 flex-1 overflow-auto">
+          {busy && totalRowCount === 0 ? (
+            <p className="px-3 py-4 text-sm text-slate-600">Reading quote rows from the agenda pages.</p>
+          ) : !inLedgerWindow ? (
+            <p className="px-3 py-4 text-sm text-slate-600">
+              This page is outside the agenda window, so it is not in the quote ledger.
+            </p>
+          ) : pageRows.length === 0 ? (
+            <p className="px-3 py-4 text-sm text-slate-600">No quote rows on this page.</p>
+          ) : (
+            <table className="min-w-full text-left text-sm">
+              <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+                <tr>
+                  <th className="px-3 py-2">Vendor</th>
+                  <th className="px-3 py-2">Kind</th>
+                  <th className="px-3 py-2">Amount</th>
+                  <th className="px-3 py-2">Check</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {pageRows.map((row) => (
+                  <tr key={`${row.pageNumber}-${row.vendor}-${row.lineKind}-${row.amountCents}-${row.itemLabel}`}>
+                    <td className="px-3 py-2 align-top">
+                      <div className="font-medium text-slate-900">{row.vendor}</div>
+                      <div className="text-xs text-slate-500">{row.itemLabel}</div>
+                      {row.equipment ? <div className="text-xs text-slate-500">{row.equipment}</div> : null}
+                    </td>
+                    <td className="px-3 py-2 align-top capitalize text-slate-700">{row.lineKind}</td>
+                    <td className="px-3 py-2 align-top tabular-nums text-slate-900">
+                      {money.format(row.amountCents / 100)}
+                      <div className="text-xs capitalize text-slate-500">{row.taxBasis.replaceAll("_", " ")}</div>
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <span
+                        className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${CHECK_TONE[row.checkStatus]}`}
+                      >
+                        {row.checkStatus}
+                      </span>
+                      <p className="mt-1 text-xs text-slate-600">{row.checkDetail}</p>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 /**
  * Board-package PDF, Docling text, and quote ledger for one page at a time.
  */
@@ -42,8 +211,18 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [pages, setPages] = useState<ExtractedPage[]>([]);
   const [rows, setRows] = useState<AnnotatedQuoteRow[]>([]);
   const [pageNumber, setPageNumber] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const busy = running || status.stage === "extracting" || status.stage === "reading_quotes";
+
+  useEffect(() => {
+    if (!expanded) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setExpanded(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [expanded]);
 
   useEffect(() => {
     if (!busy) return;
@@ -109,6 +288,17 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   );
   const inLedgerWindow = pageNumber != null && status.ledgerPageNumbers.includes(pageNumber);
 
+  const compareProps: CompareColumnsProps = {
+    meetingId: status.id,
+    pageNumber,
+    selectedPage,
+    pageRows,
+    inLedgerWindow,
+    busy,
+    totalRowCount: rows.length,
+    panelMinHeightClass: "min-h-[28rem]",
+  };
+
   async function extractPackage() {
     setRunning(true);
     setError(null);
@@ -172,124 +362,54 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         </div>
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
-              disabled={pageIndex <= 0}
-              onClick={() => {
-                const previous = pages[pageIndex - 1];
-                if (previous) setPageNumber(previous.pageNumber);
-              }}
-            >
-              Previous page
-            </button>
-            <label className="text-sm text-slate-700">
-              Page
-              <select
-                className="ml-2 rounded-md border border-slate-300 bg-white px-2 py-1.5"
-                value={pageNumber ?? ""}
-                onChange={(event) => setPageNumber(Number(event.target.value))}
-              >
-                {pages.map((page) => (
-                  <option key={page.pageNumber} value={page.pageNumber}>
-                    {page.pageNumber}
-                    {page.pageHeading ? ` — ${page.pageHeading}` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
-              disabled={pageIndex < 0 || pageIndex >= pages.length - 1}
-              onClick={() => {
-                const next = pages[pageIndex + 1];
-                if (next) setPageNumber(next.pageNumber);
-              }}
-            >
-              Next page
-            </button>
-            <span className="text-sm text-slate-500">
-              {rows.length} quote {rows.length === 1 ? "row" : "rows"} stored
-            </span>
-          </div>
-
-          <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-3">
-            <section className="flex min-h-[28rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-              <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">Board package</h2>
-              {pageNumber != null ? (
-                <iframe
-                  key={pageNumber}
-                  title={`Board package page ${pageNumber}`}
-                  src={`/api/meetings/${status.id}/board-package#page=${pageNumber}`}
-                  className="min-h-0 w-full flex-1"
-                />
-              ) : null}
-            </section>
-
-            <section className="flex min-h-[28rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-              <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">Docling extract</h2>
-              <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
-                {selectedPage?.pageHeading ? (
-                  <p className="mb-2 text-sm font-medium text-slate-800">{selectedPage.pageHeading}</p>
-                ) : null}
-                <pre className="whitespace-pre-wrap font-sans text-sm leading-6 text-slate-800">
-                  {selectedPage?.extractedText?.trim() || "No extracted text on this page."}
-                </pre>
-              </div>
-            </section>
-
-            <section className="flex min-h-[28rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-              <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">Quote ledger</h2>
-              <div className="min-h-0 flex-1 overflow-auto">
-                {busy && rows.length === 0 ? (
-                  <p className="px-3 py-4 text-sm text-slate-600">Reading quote rows from the agenda pages.</p>
-                ) : !inLedgerWindow ? (
-                  <p className="px-3 py-4 text-sm text-slate-600">
-                    This page is outside the agenda window, so it is not in the quote ledger.
-                  </p>
-                ) : pageRows.length === 0 ? (
-                  <p className="px-3 py-4 text-sm text-slate-600">No quote rows on this page.</p>
-                ) : (
-                  <table className="min-w-full text-left text-sm">
-                    <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
-                      <tr>
-                        <th className="px-3 py-2">Vendor</th>
-                        <th className="px-3 py-2">Kind</th>
-                        <th className="px-3 py-2">Amount</th>
-                        <th className="px-3 py-2">Check</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {pageRows.map((row) => (
-                        <tr key={`${row.pageNumber}-${row.vendor}-${row.lineKind}-${row.amountCents}-${row.itemLabel}`}>
-                          <td className="px-3 py-2 align-top">
-                            <div className="font-medium text-slate-900">{row.vendor}</div>
-                            <div className="text-xs text-slate-500">{row.itemLabel}</div>
-                            {row.equipment ? <div className="text-xs text-slate-500">{row.equipment}</div> : null}
-                          </td>
-                          <td className="px-3 py-2 align-top capitalize text-slate-700">{row.lineKind}</td>
-                          <td className="px-3 py-2 align-top tabular-nums text-slate-900">
-                            {money.format(row.amountCents / 100)}
-                            <div className="text-xs capitalize text-slate-500">{row.taxBasis.replaceAll("_", " ")}</div>
-                          </td>
-                          <td className="px-3 py-2 align-top">
-                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${CHECK_TONE[row.checkStatus]}`}>
-                              {row.checkStatus}
-                            </span>
-                            <p className="mt-1 text-xs text-slate-600">{row.checkDetail}</p>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </section>
-          </div>
+          <PageNavBar
+            pages={pages}
+            pageIndex={pageIndex}
+            pageNumber={pageNumber}
+            rowCount={rows.length}
+            onPageChange={setPageNumber}
+            onExpand={() => setExpanded(true)}
+          />
+          <CompareColumns {...compareProps} />
         </>
       )}
+
+      {expanded && status.pageCount > 0 ? (
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-slate-900/70 p-2 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="v3-compare-expanded-title"
+        >
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-2xl">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-3">
+              <div>
+                <p id="v3-compare-expanded-title" className="text-sm font-semibold text-slate-900">
+                  Page comparison — {status.title}
+                </p>
+                <p className="text-xs text-slate-500">Escape or Close to return</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExpanded(false)}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4">
+              <PageNavBar
+                pages={pages}
+                pageIndex={pageIndex}
+                pageNumber={pageNumber}
+                rowCount={rows.length}
+                onPageChange={setPageNumber}
+              />
+              <CompareColumns {...compareProps} panelMinHeightClass="min-h-0 flex-1" />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

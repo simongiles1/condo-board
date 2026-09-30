@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { MeetingsV3PackageError, runMeetingsV3PackageExtraction } from "@/lib/meeting-v3/package-extract";
 import { loadMeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
-import { QuoteLedgerError } from "@/lib/meeting-v3/quote-ledger-run";
+import { PageRewriteError } from "@/lib/meeting-v3/page-rewrite-run";
 
 export const maxDuration = 900;
 
@@ -26,7 +26,7 @@ export async function GET(
 }
 
 /**
- * Extracts the board package, then rebuilds the quote ledger.
+ * Extracts the board package, then corrects every stored page.
  */
 export async function POST(
   _request: Request,
@@ -37,7 +37,7 @@ export async function POST(
     const status = await runMeetingsV3PackageExtraction(id);
     return NextResponse.json(status);
   } catch (error) {
-    if (error instanceof MeetingsV3PackageError || error instanceof QuoteLedgerError) {
+    if (error instanceof MeetingsV3PackageError || error instanceof PageRewriteError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
     const detail = error instanceof Error ? error.message : "Package extraction failed.";

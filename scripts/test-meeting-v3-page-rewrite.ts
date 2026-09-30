@@ -7,6 +7,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { PAGE_REWRITE_SYSTEM_PROMPT, readPageRewriteMarkdown } from "../lib/meeting-v3/page-rewrite";
+import {
+  isMeetingsV3Workspace,
+  meetingsV3PackageError,
+  meetingsV3PackageStage,
+} from "../lib/meeting-v3/workspace";
 
 const page = `## Booster pump
 
@@ -37,10 +42,38 @@ describe("page rewrite markdown", () => {
 });
 
 describe("page rewrite prompt", () => {
-  it("asks for the Docling style and the non-dollar cells", () => {
+  it("asks for the same markdown style on every kind of page", () => {
     assert.match(PAGE_REWRITE_SYSTEM_PROMPT, /same markdown style/);
     assert.match(PAGE_REWRITE_SYSTEM_PROMPT, /lead times/);
     assert.match(PAGE_REWRITE_SYSTEM_PROMPT, /weeks or months/);
-    assert.match(PAGE_REWRITE_SYSTEM_PROMPT, /Do not turn the page into a list of bids/);
+    assert.match(PAGE_REWRITE_SYSTEM_PROMPT, /reference lists/);
+    assert.match(PAGE_REWRITE_SYSTEM_PROMPT, /on page 174 - 175/);
+  });
+});
+
+describe("v3 workspace flag", () => {
+  it("keeps V2 meetings off the V3 list", () => {
+    assert.equal(isMeetingsV3Workspace(null), false);
+    assert.equal(isMeetingsV3Workspace({}), false);
+    assert.equal(meetingsV3PackageStage({}), "created");
+    assert.equal(meetingsV3PackageError({}), null);
+  });
+
+  it("reads a V3 package stage and error", () => {
+    const settings = {
+      v3Package: {
+        workspace: true as const,
+        stage: "failed" as const,
+        error: "Docling sidecar is down",
+        updatedAt: "2026-09-30T00:00:00.000Z",
+      },
+    };
+    assert.equal(isMeetingsV3Workspace(settings), true);
+    assert.equal(meetingsV3PackageStage(settings), "failed");
+    assert.equal(meetingsV3PackageError(settings), "Docling sidecar is down");
+  });
+
+  it("treats a stored quote-ledger stage as page correction", () => {
+    assert.equal(meetingsV3PackageStage({ v3Package: { stage: "reading_quotes" } }), "correcting");
   });
 });

@@ -1,11 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
-import type { AnnotatedQuoteRow } from "@/lib/meeting-v3/quote-ledger";
 import type { MeetingsV3PackageStage } from "@/lib/meeting-v3/workspace";
 
 type ExtractedPage = {
@@ -19,35 +18,24 @@ type PageRewrite = {
   correctedText: string;
 };
 
-type ExtractView = "docling" | "corrected";
-
 const STAGE_LABEL: Record<MeetingsV3PackageStage, string> = {
   created: "Ready to extract",
   extracting: "Extracting the board package",
-  reading_quotes: "Building the quote ledger",
-  ready: "Quote ledger ready",
+  correcting: "Correcting every page",
+  ready: "Pages corrected",
   failed: "Extraction failed",
 };
-
-const CHECK_TONE: Record<AnnotatedQuoteRow["checkStatus"], string> = {
-  ok: "bg-emerald-50 text-emerald-800 border-emerald-200",
-  mismatch: "bg-red-50 text-red-800 border-red-200",
-  incomplete: "bg-amber-50 text-amber-900 border-amber-200",
-  unchecked: "bg-slate-50 text-slate-700 border-slate-200",
-};
-
-const money = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" });
 
 type PageNavProps = {
   pages: ExtractedPage[];
   pageIndex: number;
   pageNumber: number | null;
-  rowCount: number;
+  correctedCount: number;
   onPageChange: (pageNumber: number) => void;
   onExpand?: () => void;
 };
 
-function PageNavBar({ pages, pageIndex, pageNumber, rowCount, onPageChange, onExpand }: PageNavProps) {
+function PageNavBar({ pages, pageIndex, pageNumber, correctedCount, onPageChange, onExpand }: PageNavProps) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <button
@@ -88,7 +76,7 @@ function PageNavBar({ pages, pageIndex, pageNumber, rowCount, onPageChange, onEx
         Next page
       </button>
       <span className="text-sm text-slate-500">
-        {rowCount} quote {rowCount === 1 ? "row" : "rows"} stored
+        {correctedCount} corrected {correctedCount === 1 ? "page" : "pages"}
       </span>
       {onExpand ? (
         <button
@@ -107,36 +95,22 @@ type CompareColumnsProps = {
   meetingId: string;
   pageNumber: number | null;
   selectedPage: ExtractedPage | null;
-  pageRows: AnnotatedQuoteRow[];
-  inLedgerWindow: boolean;
   busy: boolean;
-  totalRowCount: number;
-  panelMinHeightClass: string;
   correctedText: string | null;
-  extractView: ExtractView;
-  showCorrected: boolean;
-  onExtractViewChange: (view: ExtractView) => void;
+  panelMinHeightClass: string;
 };
 
 function CompareColumns({
   meetingId,
   pageNumber,
   selectedPage,
-  pageRows,
-  inLedgerWindow,
   busy,
-  totalRowCount,
-  panelMinHeightClass,
   correctedText,
-  extractView,
-  showCorrected,
-  onExtractViewChange,
+  panelMinHeightClass,
 }: CompareColumnsProps) {
   const doclingText = selectedPage?.extractedText?.trim() || "No extracted text on this page.";
-  const showingCorrected = showCorrected && extractView === "corrected";
-  const extractText = showingCorrected
-    ? (correctedText?.trim() || "This page has not been rewritten.")
-    : doclingText;
+  const corrected = correctedText?.trim()
+    || (busy ? "Correcting this page." : "This page has not been corrected yet.");
 
   return (
     <div className={`grid min-h-0 flex-1 gap-3 lg:grid-cols-3 ${panelMinHeightClass}`}>
@@ -155,83 +129,20 @@ function CompareColumns({
       </section>
 
       <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
-          <h2 className="text-sm font-semibold text-slate-900">
-            {showingCorrected ? "Corrected extract" : "Docling extract"}
-          </h2>
-          {showCorrected ? (
-            <div className="flex rounded-md border border-slate-300 p-0.5 text-xs font-semibold">
-              <button
-                type="button"
-                onClick={() => onExtractViewChange("docling")}
-                className={`rounded px-2 py-1 ${extractView === "docling" ? "bg-slate-800 text-white" : "text-slate-700 hover:bg-slate-50"}`}
-              >
-                Docling
-              </button>
-              <button
-                type="button"
-                onClick={() => onExtractViewChange("corrected")}
-                className={`rounded px-2 py-1 ${extractView === "corrected" ? "bg-teal-700 text-white" : "text-slate-700 hover:bg-slate-50"}`}
-              >
-                Corrected
-              </button>
-            </div>
-          ) : null}
-        </div>
+        <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+          Docling extract
+        </h2>
         <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
-          <MarkdownPreview>{extractText}</MarkdownPreview>
+          <MarkdownPreview>{doclingText}</MarkdownPreview>
         </div>
       </section>
 
       <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
         <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
-          Quote ledger
+          Corrected extract
         </h2>
-        <div className="min-h-0 flex-1 overflow-auto">
-          {busy && totalRowCount === 0 ? (
-            <p className="px-3 py-4 text-sm text-slate-600">Reading quote rows from the agenda pages.</p>
-          ) : !inLedgerWindow ? (
-            <p className="px-3 py-4 text-sm text-slate-600">
-              This page is outside the agenda window, so it is not in the quote ledger.
-            </p>
-          ) : pageRows.length === 0 ? (
-            <p className="px-3 py-4 text-sm text-slate-600">No quote rows on this page.</p>
-          ) : (
-            <table className="min-w-full text-left text-sm">
-              <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
-                <tr>
-                  <th className="px-3 py-2">Vendor</th>
-                  <th className="px-3 py-2">Kind</th>
-                  <th className="px-3 py-2">Amount</th>
-                  <th className="px-3 py-2">Check</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {pageRows.map((row) => (
-                  <tr key={`${row.pageNumber}-${row.vendor}-${row.lineKind}-${row.amountCents}-${row.itemLabel}`}>
-                    <td className="px-3 py-2 align-top">
-                      <div className="font-medium text-slate-900">{row.vendor}</div>
-                      <div className="text-xs text-slate-500">{row.itemLabel}</div>
-                      {row.equipment ? <div className="text-xs text-slate-500">{row.equipment}</div> : null}
-                    </td>
-                    <td className="px-3 py-2 align-top capitalize text-slate-700">{row.lineKind}</td>
-                    <td className="px-3 py-2 align-top tabular-nums text-slate-900">
-                      {money.format(row.amountCents / 100)}
-                      <div className="text-xs capitalize text-slate-500">{row.taxBasis.replaceAll("_", " ")}</div>
-                    </td>
-                    <td className="px-3 py-2 align-top">
-                      <span
-                        className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${CHECK_TONE[row.checkStatus]}`}
-                      >
-                        {row.checkStatus}
-                      </span>
-                      <p className="mt-1 text-xs text-slate-600">{row.checkDetail}</p>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+        <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+          <MarkdownPreview>{corrected}</MarkdownPreview>
         </div>
       </section>
     </div>
@@ -239,24 +150,21 @@ function CompareColumns({
 }
 
 /**
- * Board-package PDF, Docling text or its corrected rewrite, and quote ledger for one page at a time.
+ * Board-package PDF, Docling text, and the corrected page, one page at a time.
  */
 export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageStatus }) {
   const [status, setStatus] = useState(initial);
   const [running, setRunning] = useState(
-    initial.stage === "extracting" || initial.stage === "reading_quotes",
+    initial.stage === "extracting" || initial.stage === "correcting",
   );
   const [error, setError] = useState<string | null>(initial.error);
   const [pages, setPages] = useState<ExtractedPage[]>([]);
-  const [rows, setRows] = useState<AnnotatedQuoteRow[]>([]);
   const [pageNumber, setPageNumber] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [rewrites, setRewrites] = useState<PageRewrite[]>([]);
-  const [extractView, setExtractView] = useState<ExtractView>("docling");
   const [rewriting, setRewriting] = useState(false);
-  const extractViewChosen = useRef(false);
 
-  const busy = running || rewriting || status.stage === "extracting" || status.stage === "reading_quotes";
+  const busy = running || rewriting || status.stage === "extracting" || status.stage === "correcting";
 
   useEffect(() => {
     if (!expanded) return;
@@ -278,7 +186,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           if (cancelled) return;
           setStatus(next);
           setError(next.error);
-          if (next.stage !== "extracting" && next.stage !== "reading_quotes") {
+          if (next.stage !== "extracting" && next.stage !== "correcting") {
             setRunning(false);
           }
         })
@@ -309,21 +217,6 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   }, [status.id, status.pageCount, status.stage]);
 
   useEffect(() => {
-    if (status.quoteRowCount === 0 && status.stage !== "ready") return;
-    let cancelled = false;
-    void fetch(`/api/v3/meetings/${status.id}/quote-ledger`, { cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok || cancelled) return;
-        const payload = (await response.json()) as { rows?: AnnotatedQuoteRow[] };
-        if (!cancelled) setRows(payload.rows ?? []);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [status.id, status.quoteRowCount, status.stage]);
-
-  useEffect(() => {
     if (status.pageCount === 0) return;
     let cancelled = false;
     void fetch(`/api/v3/meetings/${status.id}/page-rewrite`, { cache: "no-store" })
@@ -331,43 +224,25 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         if (!response.ok || cancelled) return;
         const payload = (await response.json()) as { pages?: PageRewrite[] };
         if (cancelled) return;
-        const next = payload.pages ?? [];
-        setRewrites(next);
-        if (!extractViewChosen.current && next.length > 0) setExtractView("corrected");
+        setRewrites(payload.pages ?? []);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [status.id, status.pageCount]);
+  }, [status.id, status.pageCount, status.correctedPageCount, status.stage]);
 
   const pageIndex = pages.findIndex((page) => page.pageNumber === pageNumber);
   const selectedPage = pageIndex >= 0 ? pages[pageIndex] : null;
-  const pageRows = useMemo(
-    () => rows.filter((row) => row.pageNumber === pageNumber),
-    [rows, pageNumber],
-  );
-  const inLedgerWindow = pageNumber != null && status.ledgerPageNumbers.includes(pageNumber);
   const correctedText = rewrites.find((page) => page.pageNumber === pageNumber)?.correctedText ?? null;
-
-  function chooseExtractView(view: ExtractView) {
-    extractViewChosen.current = true;
-    setExtractView(view);
-  }
 
   const compareProps: CompareColumnsProps = {
     meetingId: status.id,
     pageNumber,
     selectedPage,
-    pageRows,
-    inLedgerWindow,
     busy,
-    totalRowCount: rows.length,
-    panelMinHeightClass: "min-h-[28rem]",
     correctedText,
-    extractView,
-    showCorrected: rewrites.length > 0,
-    onExtractViewChange: chooseExtractView,
+    panelMinHeightClass: "min-h-[28rem]",
   };
 
   async function rewritePages() {
@@ -381,10 +256,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       if (!response.ok) {
         throw new Error(payload?.error || "Page rewrite failed.");
       }
-      const next = payload?.pages ?? [];
-      setRewrites(next);
-      extractViewChosen.current = true;
-      setExtractView("corrected");
+      setRewrites(payload?.pages ?? []);
       setExpanded(true);
     } catch (rewriteError) {
       const message = rewriteError instanceof Error ? rewriteError.message : "Page rewrite failed.";
@@ -438,7 +310,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               disabled={busy}
               className="rounded-lg border border-teal-700 bg-white px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
             >
-              {rewriting ? "Rewriting pages…" : "Correct Docling extract"}
+              {rewriting ? "Correcting every page…" : "Correct every page"}
             </button>
           ) : null}
           <button
@@ -447,7 +319,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
             disabled={busy}
             className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            {running || status.stage === "extracting" || status.stage === "reading_quotes"
+            {running || status.stage === "extracting" || status.stage === "correcting"
               ? "Working…"
               : status.pageCount > 0
                 ? "Re-run extraction"
@@ -459,17 +331,11 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       {error ? (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
       ) : null}
-      {status.truncated ? (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
-          No agenda split is recorded, so the quote ledger stops at page 15. Later extracted pages stay in the Docling column.
-        </p>
-      ) : null}
-
       {status.pageCount === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
           {busy
-            ? "Docling is reading the board package. The comparison opens when the quote ledger is stored."
-            : "Extract the meeting package to compare the PDF, the Docling text, and the quote ledger."}
+            ? "Docling is reading the board package. Every stored page is then corrected."
+            : "Extract the meeting package to compare the PDF, the Docling text, and the corrected page."}
         </div>
       ) : (
         <>
@@ -477,7 +343,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
             pages={pages}
             pageIndex={pageIndex}
             pageNumber={pageNumber}
-            rowCount={rows.length}
+            correctedCount={rewrites.length}
             onPageChange={setPageNumber}
             onExpand={() => setExpanded(true)}
           />
@@ -513,7 +379,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                 pages={pages}
                 pageIndex={pageIndex}
                 pageNumber={pageNumber}
-                rowCount={rows.length}
+                correctedCount={rewrites.length}
                 onPageChange={setPageNumber}
               />
               <CompareColumns {...compareProps} panelMinHeightClass="min-h-0 flex-1" />

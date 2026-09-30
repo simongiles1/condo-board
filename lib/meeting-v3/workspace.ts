@@ -7,7 +7,7 @@
 export const MEETINGS_V3_PACKAGE_STAGES = [
   "created",
   "extracting",
-  "reading_quotes",
+  "correcting",
   "ready",
   "failed",
 ] as const;
@@ -39,6 +39,8 @@ export function meetingsV3PackageStage(
   settings: { v3Package?: { stage?: string } | null } | null | undefined,
 ): MeetingsV3PackageStage {
   const stage = settings?.v3Package?.stage;
+  // Settings saved while the quote ledger was the second stage.
+  if (stage === "reading_quotes") return "correcting";
   if (stage && (MEETINGS_V3_PACKAGE_STAGES as readonly string[]).includes(stage)) {
     return stage as MeetingsV3PackageStage;
   }

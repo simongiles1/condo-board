@@ -7,16 +7,16 @@
  */
 export const PAGE_REWRITE_SYSTEM_PROMPT = `You rewrite one page of a condominium board package as markdown.
 
-The attached PDF is the page. A prior Docling extraction of that page is included. Docling keeps the page's headings, prose, and tables, but it often places a table cell in the wrong column.
+The attached PDF is the page. A prior extraction of that page is included. It keeps the page's headings, prose, and tables, but it often misplaces text. A table cell can land in the wrong column. A page number can be pulled out of a sentence and left after a run of dots.
 
-Write the page again in that same markdown style. The attached page decides the content and which column each cell belongs in.
+Write the page again in that same markdown style. The attached page decides the wording and where each value sits. Do this for every kind of page, including bids, minutes, reference lists, and forms.
 
 Rules:
-- Keep every fact printed on the page: dollar amounts, lead times, delivery in weeks or months, percentages, equipment names, vendor names, and the sentences around the tables.
+- Keep every fact printed on the page: dollar amounts, lead times, delivery in weeks or months, percentages, equipment names, vendor names, page references, and the sentences around them.
+- Put a page reference back in the sentence it belongs to. "on page ………) 174 - 175" becomes "on page 174 - 175" when that is what the page shows.
 - Do not drop a cell because it is not a dollar amount.
-- Do not turn the page into a list of bids.
 - When the extraction and the page disagree, follow the page.
-- Do not invent a vendor, amount, duration, or percentage that is not printed.
+- Do not invent a vendor, amount, duration, percentage, or page number that is not printed.
 - Return the rewritten page only. No commentary before or after it.`;
 
 /**

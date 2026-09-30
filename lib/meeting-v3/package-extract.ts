@@ -1,5 +1,5 @@
 /**
- * Extracts a V3 meeting's board package, then rebuilds the quote ledger.
+ * Extracts a V3 meeting's board package, then corrects every stored page.
  */
 
 import { ingestMeetingV2Sources, updateMeetingV2Status } from "@/lib/meeting-v2/service";
@@ -8,7 +8,7 @@ import {
   writeMeetingsV3PackageStage,
   type MeetingsV3PackageStatus,
 } from "@/lib/meeting-v3/package-status";
-import { buildMeetingQuoteLedger, QuoteLedgerError } from "@/lib/meeting-v3/quote-ledger-run";
+import { buildMeetingPageRewrites, PageRewriteError } from "@/lib/meeting-v3/page-rewrite-run";
 
 /** A V3 package run the route can return with an HTTP status. */
 export class MeetingsV3PackageError extends Error {
@@ -22,9 +22,9 @@ export class MeetingsV3PackageError extends Error {
 }
 
 /**
- * Reads the board package into stored pages, then replaces the quote ledger.
+ * Reads the board package into stored pages, then rewrites every page from its PDF.
  * Throws MeetingsV3PackageError when the meeting is missing or is not a V3 workspace.
- * A quote-ledger failure leaves the extracted pages in place and marks the run failed.
+ * A correction failure leaves the extracted pages in place and marks the run failed.
  */
 export async function runMeetingsV3PackageExtraction(meetingId: string): Promise<MeetingsV3PackageStatus> {
   const existing = await loadMeetingsV3PackageStatus(meetingId);
@@ -46,22 +46,22 @@ export async function runMeetingsV3PackageExtraction(meetingId: string): Promise
     if (ingested.documentPages === 0) {
       throw new MeetingsV3PackageError("The board package produced no pages.", 422);
     }
-    await writeMeetingsV3PackageStage(meetingId, "reading_quotes", null);
+    await writeMeetingsV3PackageStage(meetingId, "correcting", null);
     await updateMeetingV2Status(
       meetingId,
       "ingested",
-      "Reading quote rows from agenda pages",
+      "Correcting every extracted page",
       70,
       null,
     );
-    await buildMeetingQuoteLedger(meetingId);
+    await buildMeetingPageRewrites(meetingId);
     await writeMeetingsV3PackageStage(meetingId, "ready", null);
-    await updateMeetingV2Status(meetingId, "ingested", "Quote ledger ready", 100, null);
+    await updateMeetingV2Status(meetingId, "ingested", "Every extracted page is corrected", 100, null);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Package extraction failed.";
     await writeMeetingsV3PackageStage(meetingId, "failed", message);
     await updateMeetingV2Status(meetingId, "failed", "Package extraction failed", 0, message);
-    if (error instanceof MeetingsV3PackageError || error instanceof QuoteLedgerError) {
+    if (error instanceof MeetingsV3PackageError || error instanceof PageRewriteError) {
       throw error;
     }
     throw new MeetingsV3PackageError(message, 500);

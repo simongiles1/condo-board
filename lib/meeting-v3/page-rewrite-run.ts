@@ -1,5 +1,5 @@
 /**
- * Rewrites each stored Docling page from that page's PDF.
+ * Rewrites every stored package page from that page's PDF.
  * The stored extraction is the style to keep. The page PDF is what the rewrite follows.
  * Docling text is left unchanged.
  */

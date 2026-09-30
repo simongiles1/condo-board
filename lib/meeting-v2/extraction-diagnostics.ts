@@ -109,7 +109,7 @@ export type MeetingV2Settings = {
    */
   upcomingMeeting?: import("./upcoming-meeting").UpcomingMeetingSettings;
   /**
-   * Meetings V3 test workspace. Package extraction and the quote ledger run
+   * Meetings V3 test workspace. Package extraction and the page correction run
    * here. The V2 minutes pipeline does not start for these rows.
    */
   v3Package?: import("@/lib/meeting-v3/workspace").MeetingsV3PackageSettings;

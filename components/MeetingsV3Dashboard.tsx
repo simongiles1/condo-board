@@ -6,8 +6,8 @@ import type { MeetingsV3PackageStage } from "@/lib/meeting-v3/workspace";
 const STAGE_LABEL: Record<MeetingsV3PackageStage, string> = {
   created: "Not extracted",
   extracting: "Extracting package",
-  reading_quotes: "Building quote ledger",
-  ready: "Quote ledger ready",
+  correcting: "Correcting every page",
+  ready: "Pages corrected",
   failed: "Extraction failed",
 };
 
@@ -18,7 +18,7 @@ export function MeetingsV3Dashboard({ meetings }: { meetings: MeetingsV3Workspac
   if (meetings.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
-        No V3 meetings yet. Create one with a board package, then extract it to compare the PDF, Docling text, and quote ledger.
+        No V3 meetings yet. Create one with a board package, then extract it to compare the PDF, Docling text, and the corrected page.
       </div>
     );
   }
@@ -31,7 +31,7 @@ export function MeetingsV3Dashboard({ meetings }: { meetings: MeetingsV3Workspac
             <th scope="col" className="px-3 py-2.5">Meeting date</th>
             <th scope="col" className="px-3 py-2.5">Title</th>
             <th scope="col" className="px-3 py-2.5">Package</th>
-            <th scope="col" className="px-3 py-2.5">Quote ledger</th>
+            <th scope="col" className="px-3 py-2.5">Corrected</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
@@ -62,8 +62,8 @@ export function MeetingsV3Dashboard({ meetings }: { meetings: MeetingsV3Workspac
               </td>
               <td className="px-3 py-2.5 text-slate-700">
                 <Link href={`/operations/meetings/v3/${meeting.id}`} className="block">
-                  {meeting.quoteRowCount > 0
-                    ? `${meeting.quoteRowCount} ${meeting.quoteRowCount === 1 ? "row" : "rows"}`
+                  {meeting.correctedPageCount > 0
+                    ? `${meeting.correctedPageCount} of ${meeting.pageCount} ${meeting.pageCount === 1 ? "page" : "pages"}`
                     : "None yet"}
                 </Link>
               </td>

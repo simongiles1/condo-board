@@ -8,11 +8,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Meetings V3 Docling correction** — After Docling has read a board package, Correct Docling extract sends each page PDF back with that page's Docling markdown and stores a rewrite in the same style. Dollar amounts, lead times, weeks, and percentages stay in the table. The original Docling text is left in place. The comparison can switch the middle column between Docling and the corrected page, beside the quote ledger.
+- **Meetings V3 Docling correction** — After a board package is read, every stored page is rewritten from that page's PDF in the same markdown style. Table cells go back to the column on the page, and a page number pulled out of a sentence is put back. The original extract stays visible beside the corrected page.
 
-- **Meetings V3 quote ledger** — Agenda pages of a board package can be read into one bid row per money cell (vendor, product, base or alternative, amount). The page PDF is the source when the extracted table has shifted columns. Each vendor is checked by whether the base plus optional items equals the stated total. A cell that contains more than one amount is kept out. Run it with `POST /api/v3/meetings/{id}/quote-ledger`. Pages after a recorded agenda split are skipped; without a split, reading stops at page 15.
+- **Meetings V3 package test** — The meetings strip has a V3 Pipeline tab. Creating a meeting there uses the same board-package steps as V2 and does not start the minutes pipeline. Extract meeting package reads the PDF, then corrects every stored page. The meeting page shows that page's PDF, the original extract, and the corrected page together.
 
-- **Meetings V3 package test** — The meetings strip has a V3 Pipeline tab. Creating a meeting there uses the same board-package steps as V2 and does not start the minutes pipeline. Extract meeting package reads the PDF with Docling, then builds the quote ledger. The meeting page shows that page's PDF, the Docling text, and the quote rows together.
+### Removed
+
+- **Meetings V3 quote ledger** — Bid rows are no longer stored separately. The corrected page is the extract the comparison uses.
+
+### Added
 
 - **Meetings V3 comparison layout** — Docling extract renders as formatted markdown. Expand comparison opens a full-page modal with the same three columns for easier review.
 

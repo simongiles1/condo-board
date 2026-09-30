@@ -5,13 +5,8 @@
 import { count, desc, eq, inArray } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
-import { meetingsV2, meetingsV2DocumentPages, meetingsV3QuoteRows } from "@/lib/db/schema-v2";
+import { meetingsV2, meetingsV2DocumentPages, meetingsV3PageRewrites } from "@/lib/db/schema-v2";
 import { readMeetingV2Settings, type MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
-import { upcomingAgendaSplit } from "@/lib/meeting-v2/upcoming-meeting";
-import {
-  quoteLedgerPageNumbers,
-  quoteLedgerTruncated,
-} from "@/lib/meeting-v3/quote-ledger";
 import {
   isMeetingsV3Workspace,
   meetingsV3PackageError,
@@ -29,7 +24,7 @@ export type MeetingsV3WorkspaceCard = {
   error: string | null;
   currentStep: string | null;
   pageCount: number;
-  quoteRowCount: number;
+  correctedPageCount: number;
 };
 
 /** Package progress for one V3 meeting. */
@@ -41,10 +36,7 @@ export type MeetingsV3PackageStatus = {
   error: string | null;
   currentStep: string | null;
   pageCount: number;
-  quoteRowCount: number;
-  agendaContentEndsAtPage: number | null;
-  ledgerPageNumbers: number[];
-  truncated: boolean;
+  correctedPageCount: number;
 };
 
 /**
@@ -66,7 +58,7 @@ export async function listMeetingsV3Workspaces(): Promise<MeetingsV3WorkspaceCar
   if (workspaces.length === 0) return [];
 
   const ids = workspaces.map((row) => row.id);
-  const [pageCounts, quoteCounts] = await Promise.all([
+  const [pageCounts, correctedCounts] = await Promise.all([
     db
       .select({
         meetingV2Id: meetingsV2DocumentPages.meetingV2Id,
@@ -77,15 +69,17 @@ export async function listMeetingsV3Workspaces(): Promise<MeetingsV3WorkspaceCar
       .groupBy(meetingsV2DocumentPages.meetingV2Id),
     db
       .select({
-        meetingV2Id: meetingsV3QuoteRows.meetingV2Id,
-        quoteRowCount: count(),
+        meetingV2Id: meetingsV3PageRewrites.meetingV2Id,
+        correctedPageCount: count(),
       })
-      .from(meetingsV3QuoteRows)
-      .where(inArray(meetingsV3QuoteRows.meetingV2Id, ids))
-      .groupBy(meetingsV3QuoteRows.meetingV2Id),
+      .from(meetingsV3PageRewrites)
+      .where(inArray(meetingsV3PageRewrites.meetingV2Id, ids))
+      .groupBy(meetingsV3PageRewrites.meetingV2Id),
   ]);
   const pagesByMeeting = new Map(pageCounts.map((row) => [row.meetingV2Id, Number(row.pageCount)]));
-  const quotesByMeeting = new Map(quoteCounts.map((row) => [row.meetingV2Id, Number(row.quoteRowCount)]));
+  const correctedByMeeting = new Map(
+    correctedCounts.map((row) => [row.meetingV2Id, Number(row.correctedPageCount)]),
+  );
 
   return workspaces.map((row) => ({
     id: row.id,
@@ -95,7 +89,7 @@ export async function listMeetingsV3Workspaces(): Promise<MeetingsV3WorkspaceCar
     error: meetingsV3PackageError(row.settings),
     currentStep: row.currentStep,
     pageCount: pagesByMeeting.get(row.id) ?? 0,
-    quoteRowCount: quotesByMeeting.get(row.id) ?? 0,
+    correctedPageCount: correctedByMeeting.get(row.id) ?? 0,
   }));
 }
 
@@ -119,18 +113,16 @@ export async function loadMeetingsV3PackageStatus(
     .where(eq(meetingsV2.id, meetingId));
   if (!meeting || !isMeetingsV3Workspace(meeting.settings)) return null;
 
-  const [pageRows, quoteCountRows] = await Promise.all([
+  const [pageRows, correctedCountRows] = await Promise.all([
     db
       .select({ pageNumber: meetingsV2DocumentPages.pageNumber })
       .from(meetingsV2DocumentPages)
       .where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
     db
-      .select({ quoteRowCount: count() })
-      .from(meetingsV3QuoteRows)
-      .where(eq(meetingsV3QuoteRows.meetingV2Id, meetingId)),
+      .select({ correctedPageCount: count() })
+      .from(meetingsV3PageRewrites)
+      .where(eq(meetingsV3PageRewrites.meetingV2Id, meetingId)),
   ]);
-  const pageNumbers = pageRows.map((row) => row.pageNumber);
-  const split = upcomingAgendaSplit(meeting.settings);
   return {
     id: meeting.id,
     title: meeting.title,
@@ -138,11 +130,8 @@ export async function loadMeetingsV3PackageStatus(
     stage: meetingsV3PackageStage(meeting.settings),
     error: meetingsV3PackageError(meeting.settings),
     currentStep: meeting.currentStep,
-    pageCount: pageNumbers.length,
-    quoteRowCount: Number(quoteCountRows[0]?.quoteRowCount ?? 0),
-    agendaContentEndsAtPage: split,
-    ledgerPageNumbers: quoteLedgerPageNumbers(pageNumbers, split),
-    truncated: quoteLedgerTruncated(pageNumbers, split),
+    pageCount: pageRows.length,
+    correctedPageCount: Number(correctedCountRows[0]?.correctedPageCount ?? 0),
   };
 }
 

@@ -571,6 +571,34 @@ export const meetingsV3PageRewrites = pgTable(
   }),
 );
 
+/** Agenda topics built from a V3 meeting's corrected pages. Not the V2 agenda rows. */
+export const meetingsV3AgendaItems = pgTable(
+  "meetings_v3_agenda_items",
+  {
+    id: text("id").primaryKey(),
+    meetingV2Id: text("meeting_v2_id")
+      .notNull()
+      .references(() => meetingsV2.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").notNull(),
+    itemNumber: text("item_number").notNull(),
+    title: text("title").notNull(),
+    sectionLabel: text("section_label").notNull(),
+    itemType: text("item_type").notNull(),
+    sourcePagesJson: text("source_pages_json").notNull(),
+    summary: text("summary"),
+    amount: text("amount"),
+    vendorsJson: text("vendors_json"),
+    recommendation: text("recommendation"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    meetingIdx: index("meetings_v3_agenda_items_meeting_idx").on(
+      table.meetingV2Id,
+      table.sortOrder,
+    ),
+  }),
+);
+
 export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   sourceArtifacts: many(meetingsV2SourceArtifacts),
   transcriptSegments: many(meetingsV2TranscriptSegments),
@@ -592,6 +620,7 @@ export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   liveRecognitionCues: many(meetingsV2LiveRecognitionCues),
   liveRecognitionCorrections: many(meetingsV2LiveRecognitionCorrections),
   pageRewrites: many(meetingsV3PageRewrites),
+  v3AgendaItems: many(meetingsV3AgendaItems),
 }));
 
 export const meetingsV2SourceArtifactsRelations = relations(

@@ -18,6 +18,16 @@ type PageRewrite = {
   correctedText: string;
 };
 
+type AgendaItem = {
+  itemNumber: string;
+  title: string;
+  sourcePages: number[];
+  summary: string | null;
+  amount: string | null;
+  vendors: string[];
+  recommendation: string | null;
+};
+
 const STAGE_LABEL: Record<MeetingsV3PackageStage, string> = {
   created: "Ready to extract",
   extracting: "Extracting the board package",
@@ -150,7 +160,7 @@ function CompareColumns({
 }
 
 /**
- * Board-package PDF, Docling text, and the corrected page, one page at a time.
+ * Board-package PDF, Docling text, and the corrected page, with the agenda built from those corrections.
  */
 export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageStatus }) {
   const [status, setStatus] = useState(initial);
@@ -163,8 +173,10 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [expanded, setExpanded] = useState(false);
   const [rewrites, setRewrites] = useState<PageRewrite[]>([]);
   const [rewriting, setRewriting] = useState(false);
+  const [agendaItems, setAgendaItems] = useState<AgendaItem[]>([]);
+  const [buildingAgenda, setBuildingAgenda] = useState(false);
 
-  const busy = running || rewriting || status.stage === "extracting" || status.stage === "correcting";
+  const busy = running || rewriting || buildingAgenda || status.stage === "extracting" || status.stage === "correcting";
 
   useEffect(() => {
     if (!expanded) return;
@@ -232,6 +244,22 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     };
   }, [status.id, status.pageCount, status.correctedPageCount, status.stage]);
 
+  useEffect(() => {
+    if (status.pageCount === 0) return;
+    let cancelled = false;
+    void fetch(`/api/v3/meetings/${status.id}/agenda`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok || cancelled) return;
+        const payload = (await response.json()) as { items?: AgendaItem[] };
+        if (cancelled) return;
+        setAgendaItems(payload.items ?? []);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [status.id, status.pageCount, status.agendaItemCount, status.stage]);
+
   const pageIndex = pages.findIndex((page) => page.pageNumber === pageNumber);
   const selectedPage = pageIndex >= 0 ? pages[pageIndex] : null;
   const correctedText = rewrites.find((page) => page.pageNumber === pageNumber)?.correctedText ?? null;
@@ -257,6 +285,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         throw new Error(payload?.error || "Page rewrite failed.");
       }
       setRewrites(payload?.pages ?? []);
+      setAgendaItems([]);
       setExpanded(true);
     } catch (rewriteError) {
       const message = rewriteError instanceof Error ? rewriteError.message : "Page rewrite failed.";
@@ -278,7 +307,10 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       if (!response.ok) {
         throw new Error(payload?.error || "Package extraction failed.");
       }
-      if (payload && "stage" in payload) setStatus(payload);
+      if (payload && "stage" in payload) {
+        setStatus(payload);
+        setAgendaItems([]);
+      }
     } catch (extractError) {
       const message = extractError instanceof Error ? extractError.message : "Package extraction failed.";
       setError(message);
@@ -287,6 +319,34 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       setRunning(false);
     }
   }
+
+  async function buildAgenda() {
+    setBuildingAgenda(true);
+    setError(null);
+    setStatus((current) => ({ ...current, currentStep: "Building the agenda from corrected pages" }));
+    try {
+      const response = await fetch(`/api/v3/meetings/${status.id}/agenda`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | { items?: AgendaItem[]; error?: string }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Agenda extraction failed.");
+      }
+      setAgendaItems(payload?.items ?? []);
+      setStatus((current) => ({
+        ...current,
+        currentStep: "Agenda built from corrected pages",
+        agendaItemCount: payload?.items?.length ?? 0,
+      }));
+    } catch (agendaError) {
+      const message = agendaError instanceof Error ? agendaError.message : "Agenda extraction failed.";
+      setError(message);
+    } finally {
+      setBuildingAgenda(false);
+    }
+  }
+
+  const pageAgenda = agendaItems.filter((item) => item.sourcePages.includes(pageNumber ?? -1));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
@@ -303,6 +363,16 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {status.correctedPageCount > 0 || rewrites.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => void buildAgenda()}
+              disabled={busy}
+              className="rounded-lg border border-teal-700 bg-white px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+            >
+              {buildingAgenda ? "Building agenda…" : agendaItems.length > 0 ? "Rebuild agenda" : "Build agenda"}
+            </button>
+          ) : null}
           {status.pageCount > 0 ? (
             <button
               type="button"
@@ -339,6 +409,51 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         </div>
       ) : (
         <>
+          {agendaItems.length > 0 ? (
+            <section className="rounded-xl border border-slate-200 bg-white">
+              <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+                Agenda from corrected pages
+              </h2>
+              <ul className="max-h-52 divide-y divide-slate-100 overflow-auto">
+                {agendaItems.map((item) => {
+                  const sourcePages = [...item.sourcePages].sort((left, right) => left - right);
+                  const onPage = sourcePages.includes(pageNumber ?? -1);
+                  const firstPage = sourcePages[0];
+                  return (
+                    <li key={`${item.itemNumber}-${item.title}`}>
+                      <button
+                        type="button"
+                        disabled={firstPage == null}
+                        onClick={() => {
+                          if (firstPage != null) setPageNumber(firstPage);
+                        }}
+                        className={`flex w-full flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:cursor-default ${onPage ? "bg-teal-50" : ""}`}
+                      >
+                        <span className="font-semibold tabular-nums text-slate-900">{item.itemNumber}</span>
+                        <span className="font-medium text-slate-800">{item.title}</span>
+                        {sourcePages.length > 0 ? (
+                          <span className="text-xs text-slate-500">
+                            {sourcePages.length === 1
+                              ? `page ${sourcePages[0]}`
+                              : `pages ${sourcePages[0]}–${sourcePages[sourcePages.length - 1]}`}
+                          </span>
+                        ) : null}
+                        {item.amount ? <span className="text-xs font-medium text-slate-700">{item.amount}</span> : null}
+                        {item.vendors.length > 0 ? (
+                          <span className="text-xs text-slate-600">{item.vendors.join(", ")}</span>
+                        ) : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              {pageAgenda.length > 0 && pageNumber != null ? (
+                <p className="border-t border-slate-200 px-3 py-2 text-xs text-slate-600">
+                  Page {pageNumber}: {pageAgenda.map((item) => item.itemNumber).join(", ")}
+                </p>
+              ) : null}
+            </section>
+          ) : null}
           <PageNavBar
             pages={pages}
             pageIndex={pageIndex}

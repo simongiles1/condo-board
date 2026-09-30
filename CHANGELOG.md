@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Meetings V3 agenda** — After the corrected pages are stored, Build agenda reads those pages (stopping at the agenda/attachment split) and lists each topic with its pages, amount, and vendors. The original Docling text and the V2 agenda are left unchanged. Correcting the pages again clears that agenda.
+
 - **Meetings V3 Docling correction** — After a board package is read, every stored page is rewritten from that page's PDF in the same markdown style. Table cells go back to the column on the page, and a page number pulled out of a sentence is put back. The original extract stays visible beside the corrected page.
 
 - **Meetings V3 package test** — The meetings strip has a V3 Pipeline tab. Creating a meeting there uses the same board-package steps as V2 and does not start the minutes pipeline. Extract meeting package reads the PDF, then corrects every stored page. The meeting page shows that page's PDF, the original extract, and the corrected page together.

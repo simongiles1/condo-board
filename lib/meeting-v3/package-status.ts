@@ -5,7 +5,12 @@
 import { count, desc, eq, inArray } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
-import { meetingsV2, meetingsV2DocumentPages, meetingsV3PageRewrites } from "@/lib/db/schema-v2";
+import {
+  meetingsV2,
+  meetingsV2DocumentPages,
+  meetingsV3AgendaItems,
+  meetingsV3PageRewrites,
+} from "@/lib/db/schema-v2";
 import { readMeetingV2Settings, type MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import {
   isMeetingsV3Workspace,
@@ -25,6 +30,7 @@ export type MeetingsV3WorkspaceCard = {
   currentStep: string | null;
   pageCount: number;
   correctedPageCount: number;
+  agendaItemCount: number;
 };
 
 /** Package progress for one V3 meeting. */
@@ -37,6 +43,7 @@ export type MeetingsV3PackageStatus = {
   currentStep: string | null;
   pageCount: number;
   correctedPageCount: number;
+  agendaItemCount: number;
 };
 
 /**
@@ -58,7 +65,7 @@ export async function listMeetingsV3Workspaces(): Promise<MeetingsV3WorkspaceCar
   if (workspaces.length === 0) return [];
 
   const ids = workspaces.map((row) => row.id);
-  const [pageCounts, correctedCounts] = await Promise.all([
+  const [pageCounts, correctedCounts, agendaCounts] = await Promise.all([
     db
       .select({
         meetingV2Id: meetingsV2DocumentPages.meetingV2Id,
@@ -75,10 +82,21 @@ export async function listMeetingsV3Workspaces(): Promise<MeetingsV3WorkspaceCar
       .from(meetingsV3PageRewrites)
       .where(inArray(meetingsV3PageRewrites.meetingV2Id, ids))
       .groupBy(meetingsV3PageRewrites.meetingV2Id),
+    db
+      .select({
+        meetingV2Id: meetingsV3AgendaItems.meetingV2Id,
+        agendaItemCount: count(),
+      })
+      .from(meetingsV3AgendaItems)
+      .where(inArray(meetingsV3AgendaItems.meetingV2Id, ids))
+      .groupBy(meetingsV3AgendaItems.meetingV2Id),
   ]);
   const pagesByMeeting = new Map(pageCounts.map((row) => [row.meetingV2Id, Number(row.pageCount)]));
   const correctedByMeeting = new Map(
     correctedCounts.map((row) => [row.meetingV2Id, Number(row.correctedPageCount)]),
+  );
+  const agendaByMeeting = new Map(
+    agendaCounts.map((row) => [row.meetingV2Id, Number(row.agendaItemCount)]),
   );
 
   return workspaces.map((row) => ({
@@ -90,6 +108,7 @@ export async function listMeetingsV3Workspaces(): Promise<MeetingsV3WorkspaceCar
     currentStep: row.currentStep,
     pageCount: pagesByMeeting.get(row.id) ?? 0,
     correctedPageCount: correctedByMeeting.get(row.id) ?? 0,
+    agendaItemCount: agendaByMeeting.get(row.id) ?? 0,
   }));
 }
 
@@ -113,7 +132,7 @@ export async function loadMeetingsV3PackageStatus(
     .where(eq(meetingsV2.id, meetingId));
   if (!meeting || !isMeetingsV3Workspace(meeting.settings)) return null;
 
-  const [pageRows, correctedCountRows] = await Promise.all([
+  const [pageRows, correctedCountRows, agendaCountRows] = await Promise.all([
     db
       .select({ pageNumber: meetingsV2DocumentPages.pageNumber })
       .from(meetingsV2DocumentPages)
@@ -122,6 +141,10 @@ export async function loadMeetingsV3PackageStatus(
       .select({ correctedPageCount: count() })
       .from(meetingsV3PageRewrites)
       .where(eq(meetingsV3PageRewrites.meetingV2Id, meetingId)),
+    db
+      .select({ agendaItemCount: count() })
+      .from(meetingsV3AgendaItems)
+      .where(eq(meetingsV3AgendaItems.meetingV2Id, meetingId)),
   ]);
   return {
     id: meeting.id,
@@ -132,6 +155,7 @@ export async function loadMeetingsV3PackageStatus(
     currentStep: meeting.currentStep,
     pageCount: pageRows.length,
     correctedPageCount: Number(correctedCountRows[0]?.correctedPageCount ?? 0),
+    agendaItemCount: Number(agendaCountRows[0]?.agendaItemCount ?? 0),
   };
 }
 

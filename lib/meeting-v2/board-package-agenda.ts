@@ -358,10 +358,15 @@ export async function extractBoardPackageAgendaJson(options: {
   maxPages?: number;
   /** When set, only these pages build the agenda. Later pages are attachments. */
   agendaContentEndsAtPage?: number;
+  /**
+   * Page text to read instead of the stored Docling extract.
+   * Meetings V3 passes corrected markdown so the stored extract stays unchanged.
+   */
+  pages?: Array<{ pageNumber: number; heading: string | null; text: string }>;
   onProgress?: (progress: { current: number; total: number; label: string }) => Promise<void> | void;
 }): Promise<FullBoardPackageAgenda> {
   const db = getDb();
-  const pages = await db
+  const pages = options.pages ?? await db
     .select({
       pageNumber: meetingsV2DocumentPages.pageNumber,
       heading: meetingsV2DocumentPages.pageHeading,

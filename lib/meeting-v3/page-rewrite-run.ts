@@ -9,7 +9,12 @@ import { randomUUID } from "crypto";
 import { asc, eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
-import { meetingsV2, meetingsV2DocumentPages, meetingsV3PageRewrites } from "@/lib/db/schema-v2";
+import {
+  meetingsV2,
+  meetingsV2DocumentPages,
+  meetingsV3AgendaItems,
+  meetingsV3PageRewrites,
+} from "@/lib/db/schema-v2";
 import { generatePageVision } from "@/lib/gemini/client";
 import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { loadMeetingBoardPackage } from "@/lib/meeting-v2/board-package";
@@ -45,6 +50,7 @@ export type PageRewriteBuildResult = {
  * Replaces the meeting's page rewrites with a fresh read of each extracted page.
  * Throws PageRewriteError when the meeting, pages, or PDF are missing.
  * A page that does not return markdown leaves the previous rewrites in place.
+ * A successful rewrite drops the stored V3 agenda, which was built from the previous correction.
  */
 export async function buildMeetingPageRewrites(meetingId: string): Promise<PageRewriteBuildResult> {
   const db = getDb();
@@ -114,6 +120,7 @@ export async function buildMeetingPageRewrites(meetingId: string): Promise<PageR
 
   const createdAt = new Date().toISOString();
   await db.transaction(async (tx) => {
+    await tx.delete(meetingsV3AgendaItems).where(eq(meetingsV3AgendaItems.meetingV2Id, meetingId));
     await tx.delete(meetingsV3PageRewrites).where(eq(meetingsV3PageRewrites.meetingV2Id, meetingId));
     await tx.insert(meetingsV3PageRewrites).values(
       rewritten.map((page) => ({

@@ -32,6 +32,7 @@ export function MeetingsV3Dashboard({ meetings }: { meetings: MeetingsV3Workspac
             <th scope="col" className="px-3 py-2.5">Title</th>
             <th scope="col" className="px-3 py-2.5">Package</th>
             <th scope="col" className="px-3 py-2.5">Corrected</th>
+            <th scope="col" className="px-3 py-2.5">Agenda</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
@@ -65,6 +66,13 @@ export function MeetingsV3Dashboard({ meetings }: { meetings: MeetingsV3Workspac
                   {meeting.correctedPageCount > 0
                     ? `${meeting.correctedPageCount} of ${meeting.pageCount} ${meeting.pageCount === 1 ? "page" : "pages"}`
                     : "None yet"}
+                </Link>
+              </td>
+              <td className="px-3 py-2.5 text-slate-700">
+                <Link href={`/operations/meetings/v3/${meeting.id}`} className="block">
+                  {meeting.agendaItemCount > 0
+                    ? `${meeting.agendaItemCount} ${meeting.agendaItemCount === 1 ? "item" : "items"}`
+                    : "Not built"}
                 </Link>
               </td>
             </tr>

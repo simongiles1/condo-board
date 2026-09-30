@@ -24,7 +24,7 @@ import {
   stagePages,
   type LiveAgendaSourceItem,
 } from "../lib/meeting-v2/live-agenda";
-import { agendaItemIndentDepth } from "../lib/meeting-v2/agenda-outline";
+import { agendaItemIndentDepth, displayAgendaSegment } from "../lib/meeting-v2/agenda-outline";
 import {
   archiveLinksForLeaves,
   matchAgendaArchiveFile,
@@ -410,6 +410,9 @@ describe("live room stage item text", () => {
     assert.equal(agendaItemIndentDepth("1.A"), 1);
     assert.equal(agendaItemIndentDepth("4.A.1"), 2);
     assert.equal(agendaItemIndentDepth("4.B.1"), 2);
+    assert.equal(displayAgendaSegment("4"), "4");
+    assert.equal(displayAgendaSegment("4.A"), "A");
+    assert.equal(displayAgendaSegment("4.A.1"), "1");
   });
 });
 

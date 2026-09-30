@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AiUsageDialog, AiUsageIconButton } from "@/components/AiUsageDialog";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
+import { agendaItemIndentDepth, displayAgendaSegment } from "@/lib/meeting-v2/agenda-outline";
 import { countAgendaPages, formatSourcePages, isAgendaPageForCorrection } from "@/lib/meeting-v3/agenda-pages";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
 import {
@@ -44,6 +45,97 @@ type PageNavProps = {
   onExpand?: () => void;
 };
 
+function pageMenuLabel(page: ExtractedPage): string {
+  const heading = page.pageHeading?.replace(/\s+/g, " ").trim();
+  return heading ? `${page.pageNumber} — ${heading}` : String(page.pageNumber);
+}
+
+function pagesWithoutTextNotice(pageNumbers: number[] | undefined): string | null {
+  if (!pageNumbers || pageNumbers.length === 0) return null;
+  if (pageNumbers.length === 1) {
+    return `Page ${pageNumbers[0]} has no extracted text, so it was left unlinked.`;
+  }
+  return `Pages ${pageNumbers.join(", ")} have no extracted text, so they were left unlinked.`;
+}
+
+function PageMenu({
+  pages,
+  pageNumber,
+  onPageChange,
+}: {
+  pages: ExtractedPage[];
+  pageNumber: number | null;
+  onPageChange: (pageNumber: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = pages.find((page) => page.pageNumber === pageNumber) ?? null;
+  const label = selected ? pageMenuLabel(selected) : "Select a page";
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative min-w-0">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={label}
+        onClick={() => setOpen((current) => !current)}
+        className="flex w-[min(24rem,70vw)] max-w-full items-center gap-2 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-left text-sm text-slate-800"
+      >
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        <span aria-hidden className="shrink-0 text-slate-500">▾</span>
+      </button>
+      {open ? (
+        <ul
+          role="listbox"
+          className="absolute left-0 top-full z-30 mt-1 max-h-72 w-[min(36rem,calc(100vw-2rem))] overflow-auto rounded-md border border-slate-200 bg-white py-1 shadow-lg"
+        >
+          {pages.map((page) => {
+            const optionLabel = pageMenuLabel(page);
+            const isSelected = page.pageNumber === pageNumber;
+            return (
+              <li key={page.pageNumber}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => {
+                    onPageChange(page.pageNumber);
+                    setOpen(false);
+                  }}
+                  className={`block w-full whitespace-normal break-words px-3 py-1.5 text-left text-sm ${
+                    isSelected ? "bg-slate-100 font-medium text-slate-900" : "text-slate-800 hover:bg-slate-50"
+                  }`}
+                >
+                  {optionLabel}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function PageNavBar({
   pages,
   pageIndex,
@@ -66,21 +158,10 @@ function PageNavBar({
       >
         Previous page
       </button>
-      <label className="text-sm text-slate-700">
+      <div className="flex min-w-0 items-center gap-2 text-sm text-slate-700">
         Page
-        <select
-          className="ml-2 rounded-md border border-slate-300 bg-white px-2 py-1.5"
-          value={pageNumber ?? ""}
-          onChange={(event) => onPageChange(Number(event.target.value))}
-        >
-          {pages.map((page) => (
-            <option key={page.pageNumber} value={page.pageNumber}>
-              {page.pageNumber}
-              {page.pageHeading ? ` — ${page.pageHeading}` : ""}
-            </option>
-          ))}
-        </select>
-      </label>
+        <PageMenu pages={pages} pageNumber={pageNumber} onPageChange={onPageChange} />
+      </div>
       <button
         type="button"
         className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
@@ -458,6 +539,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         agendaItemCount: payload?.items?.length ?? 0,
         attachmentsLinked: false,
         unassignedAttachmentPages: [],
+        attachmentPagesWithoutText: [],
       }));
       setPickedStep(null);
     } catch (agendaError) {
@@ -475,7 +557,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     try {
       const response = await fetch(`/api/v3/meetings/${status.id}/attachments`, { method: "POST" });
       const payload = (await response.json().catch(() => null)) as
-        | { items?: AgendaItem[]; unassignedPages?: number[]; error?: string }
+        | { items?: AgendaItem[]; unassignedPages?: number[]; pagesWithoutText?: number[]; error?: string }
         | null;
       if (!response.ok) {
         throw new Error(payload?.error || "Attachment linking failed.");
@@ -485,6 +567,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         ...current,
         attachmentsLinked: true,
         unassignedAttachmentPages: payload?.unassignedPages ?? [],
+        attachmentPagesWithoutText: payload?.pagesWithoutText ?? [],
         agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
         currentStep: "Attachment pages linked to agenda topics",
       }));
@@ -671,9 +754,15 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                           setPageNumber(firstPage);
                           setPickedStep("extract");
                         }}
-                        className="flex w-full flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:cursor-default"
+                        className="flex w-full flex-wrap items-baseline gap-x-3 gap-y-1 py-2 pr-3 text-left text-sm hover:bg-slate-50 disabled:cursor-default"
+                        style={{ paddingLeft: `${12 + agendaItemIndentDepth(item.itemNumber) * 20}px` }}
                       >
-                        <span className="font-semibold tabular-nums text-slate-900">{item.itemNumber}</span>
+                        <span
+                          className="w-8 shrink-0 font-semibold tabular-nums text-slate-900"
+                          title={item.itemNumber}
+                        >
+                          {displayAgendaSegment(item.itemNumber)}
+                        </span>
                         <span className="font-medium text-slate-800">{item.title}</span>
                         {pageLabel ? (
                           <span className="text-xs text-slate-500">{pageLabel}</span>
@@ -729,12 +818,26 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
                 Attachment pages
               </h2>
+              {pagesWithoutTextNotice(status.attachmentPagesWithoutText) ? (
+                <p className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {pagesWithoutTextNotice(status.attachmentPagesWithoutText)}
+                </p>
+              ) : null}
               <ul className="max-h-80 divide-y divide-slate-100 overflow-auto">
                 {attachmentRows.map(({ item, attachmentPages }) => (
-                  <li key={`${item.itemNumber}-${item.title}`} className="px-3 py-2 text-sm">
+                  <li
+                    key={`${item.itemNumber}-${item.title}`}
+                    className="py-2 pr-3 text-sm"
+                    style={{ paddingLeft: `${12 + agendaItemIndentDepth(item.itemNumber) * 20}px` }}
+                  >
                     <p>
-                      <span className="font-semibold tabular-nums text-slate-900">{item.itemNumber}</span>
-                      <span className="ml-3 font-medium text-slate-800">{item.title}</span>
+                      <span
+                        className="inline-block w-8 font-semibold tabular-nums text-slate-900"
+                        title={item.itemNumber}
+                      >
+                        {displayAgendaSegment(item.itemNumber)}
+                      </span>
+                      <span className="font-medium text-slate-800">{item.title}</span>
                     </p>
                     <p className="mt-1 flex flex-wrap gap-1">
                       {attachmentPages.map((page) => (

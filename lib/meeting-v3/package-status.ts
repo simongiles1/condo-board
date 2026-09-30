@@ -52,6 +52,7 @@ export type MeetingsV3PackageStatus = {
   agendaContentEndsAtPage: number | null;
   attachmentsLinked: boolean;
   unassignedAttachmentPages: number[];
+  attachmentPagesWithoutText: number[];
 };
 
 /**
@@ -171,6 +172,7 @@ export async function loadMeetingsV3PackageStatus(
     agendaContentEndsAtPage: upcomingAgendaSplit(settings),
     attachmentsLinked: attachmentLink != null,
     unassignedAttachmentPages: attachmentLink?.unassignedPages ?? [],
+    attachmentPagesWithoutText: attachmentLink?.pagesWithoutText ?? [],
   };
 }
 

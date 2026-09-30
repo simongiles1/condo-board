@@ -33,10 +33,11 @@ describe("corrected attachment pages", () => {
       ],
     });
     assert.deepEqual(
-      selected.map((page) => page.pageNumber),
+      selected.pages.map((page) => page.pageNumber),
       [13, 14, 15],
     );
-    assert.equal(selected[0]?.text, "quote");
+    assert.equal(selected.pages[0]?.text, "quote");
+    assert.deepEqual(selected.pagesWithoutText, []);
   });
 
   it("returns no pages when the package has no attachment split", () => {
@@ -45,7 +46,7 @@ describe("corrected attachment pages", () => {
       agendaContentEndsAtPage: null,
       rewrites: pages.map((page) => ({ pageNumber: page.pageNumber, correctedText: "text" })),
     });
-    assert.deepEqual(selected, []);
+    assert.deepEqual(selected, { pages: [], pagesWithoutText: [] });
   });
 
   it("uses Docling extract when an attachment page was not corrected", () => {
@@ -54,18 +55,26 @@ describe("corrected attachment pages", () => {
       agendaContentEndsAtPage: 12,
       rewrites: [{ pageNumber: 13, correctedText: "quote" }],
     });
-    assert.equal(selected.find((page) => page.pageNumber === 14)?.text, "more docling");
+    assert.equal(selected.pages.find((page) => page.pageNumber === 14)?.text, "more docling");
   });
 
-  it("rejects an attachment page with no correction and no extract", () => {
-    assert.throws(
-      () =>
-        selectCorrectedAttachmentPages({
-          pages: [{ pageNumber: 13, heading: null, extractedText: "   " }],
-          agendaContentEndsAtPage: 12,
-          rewrites: [],
-        }),
-      /Page 13 has no extracted text/,
+  it("keeps linking when a page has no body and no heading", () => {
+    const selected = selectCorrectedAttachmentPages({
+      pages: [
+        { pageNumber: 13, heading: null, extractedText: "   " },
+        { pageNumber: 14, heading: "  Quote  ", extractedText: "" },
+        { pageNumber: 15, heading: null, extractedText: "more docling" },
+      ],
+      agendaContentEndsAtPage: 12,
+      rewrites: [],
+    });
+    assert.deepEqual(selected.pagesWithoutText, [13]);
+    assert.deepEqual(
+      selected.pages.map((page) => ({ pageNumber: page.pageNumber, text: page.text })),
+      [
+        { pageNumber: 14, text: "Quote" },
+        { pageNumber: 15, text: "more docling" },
+      ],
     );
   });
 });

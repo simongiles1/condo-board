@@ -6,6 +6,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Meetings V3 page menu** — The page picker truncates a long heading and wraps the open list instead of stretching across the screen.
+- **Meetings V3 agenda outline** — Agenda rows indent by level and show only the local number, so 4.A reads as A under 4.
+- **Meetings V3 blank attachment pages** — A page with no extracted text no longer stops attachment linking. It stays listed as not linked, and a page that still has a heading is linked from that heading.
+
 ### Changes
 
 - **Meetings V3 correction retry** — When Docling extraction is already stored but agenda correction failed or is incomplete, **Retry correction only** runs Gemini on agenda pages without re-running Docling. **Re-extract package** still runs the full pipeline.

@@ -15,31 +15,44 @@ export type AttachmentPageText = {
   text: string;
 };
 
+/** Attachment pages that can be linked, plus pages that have nothing to read. */
+export type SelectedAttachmentPages = {
+  pages: AttachmentPageText[];
+  pagesWithoutText: number[];
+};
+
 /**
  * Text for pages after the agenda split used when linking attachments.
- * Returns an empty list when the meeting has no split.
+ * Returns no pages when the meeting has no split.
  * Uses the Docling extract when that page was not corrected.
+ * A page whose body is empty still contributes its heading.
+ * A page with neither is listed in `pagesWithoutText` and left out of linking.
  */
 export function selectCorrectedAttachmentPages(input: {
   pages: Array<{ pageNumber: number; heading: string | null; extractedText: string | null }>;
   rewrites: Array<{ pageNumber: number; correctedText: string }>;
   agendaContentEndsAtPage: number | null;
-}): AttachmentPageText[] {
+}): SelectedAttachmentPages {
   const split = input.agendaContentEndsAtPage;
-  if (split == null) return [];
+  if (split == null) return { pages: [], pagesWithoutText: [] };
   const selected = [...input.pages]
     .filter((page) => page.pageNumber > split)
     .sort((left, right) => left.pageNumber - right.pageNumber);
   const byPage = new Map(
     input.rewrites.map((row) => [row.pageNumber, row.correctedText.trim()]),
   );
-  return selected.map((page) => {
+  const pages: AttachmentPageText[] = [];
+  const pagesWithoutText: number[] = [];
+  for (const page of selected) {
+    const heading = page.heading?.trim() ?? "";
     const text = byPage.get(page.pageNumber) ?? page.extractedText?.trim() ?? "";
-    if (!text) {
-      throw new Error(`Page ${page.pageNumber} has no extracted text.`);
+    if (!text && !heading) {
+      pagesWithoutText.push(page.pageNumber);
+      continue;
     }
-    return { pageNumber: page.pageNumber, heading: page.heading, text };
-  });
+    pages.push({ pageNumber: page.pageNumber, heading: page.heading, text: text || heading });
+  }
+  return { pages, pagesWithoutText };
 }
 
 /**

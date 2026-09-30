@@ -20,6 +20,7 @@ export type MeetingsV3AttachmentLink = {
   completedAt: string;
   assignedPageCount: number;
   unassignedPages: number[];
+  pagesWithoutText: number[];
 };
 
 /** One V3 pipeline stage in the stored AI cost log. */
@@ -94,6 +95,7 @@ export function meetingsV3AttachmentLink(
     completedAt?: unknown;
     assignedPageCount?: unknown;
     unassignedPages?: unknown;
+    pagesWithoutText?: unknown;
   };
   if (typeof record.completedAt !== "string" || !record.completedAt.trim()) return null;
   if (typeof record.assignedPageCount !== "number" || !Number.isInteger(record.assignedPageCount)) {
@@ -103,10 +105,16 @@ export function meetingsV3AttachmentLink(
   const unassignedPages = record.unassignedPages.filter(
     (page): page is number => typeof page === "number" && Number.isInteger(page) && page > 0,
   );
+  const pagesWithoutText = Array.isArray(record.pagesWithoutText)
+    ? record.pagesWithoutText.filter(
+        (page): page is number => typeof page === "number" && Number.isInteger(page) && page > 0,
+      )
+    : [];
   return {
     completedAt: record.completedAt,
     assignedPageCount: record.assignedPageCount,
     unassignedPages,
+    pagesWithoutText,
   };
 }
 

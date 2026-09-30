@@ -43,6 +43,7 @@ export type AttachmentLinkResult = {
   meetingId: string;
   assignedPageCount: number;
   unassignedPages: number[];
+  pagesWithoutText: number[];
   items: MeetingsV3AgendaItem[];
 };
 
@@ -58,8 +59,9 @@ Rules:
 /**
  * Replaces attachment pages on the V3 agenda using corrected text.
  * A page the agenda already names is linked before any model call.
- * Throws AttachmentLinkError when the meeting, agenda, or corrections are not ready.
+ * Throws AttachmentLinkError when the meeting or agenda is not ready.
  * A model failure leaves the previous pages in place.
+ * A page with no text and no heading is left unlinked instead of failing the run.
  */
 export async function linkMeetingV3Attachments(meetingId: string): Promise<AttachmentLinkResult> {
   const db = getDb();
@@ -97,17 +99,13 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
     .orderBy(asc(meetingsV2DocumentPages.pageNumber));
   const split = upcomingAgendaSplit(readMeetingV2Settings(meeting.settings));
   const rewrites = await listMeetingPageRewrites(meetingId);
-  let attachmentPages;
-  try {
-    attachmentPages = selectCorrectedAttachmentPages({
-      pages: storedPages,
-      rewrites,
-      agendaContentEndsAtPage: split,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Corrected pages are not ready.";
-    throw new AttachmentLinkError(message, 409);
-  }
+  const selected = selectCorrectedAttachmentPages({
+    pages: storedPages,
+    rewrites,
+    agendaContentEndsAtPage: split,
+  });
+  const attachmentPages = selected.pages;
+  const pagesWithoutText = selected.pagesWithoutText;
 
   const correctedByPage = new Map(attachmentPages.map((page) => [page.pageNumber, page.text]));
   const agendaText = new Map(
@@ -187,6 +185,9 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
     attachmentPageNumbers: attachmentPages.map((page) => page.pageNumber),
     modelAssignments,
   });
+  const unassignedPages = [...new Set([...linked.unassignedPages, ...pagesWithoutText])].sort(
+    (left, right) => left - right,
+  );
   const completedAt = new Date().toISOString();
   await db.transaction(async (tx) => {
     for (const item of items) {
@@ -200,13 +201,16 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
   await writeMeetingsV3AttachmentLink(meetingId, {
     completedAt,
     assignedPageCount: linked.assignedPageCount,
-    unassignedPages: linked.unassignedPages,
+    unassignedPages,
+    pagesWithoutText,
   });
   await setAttachmentStep(
     meetingId,
-    linked.assignedPageCount === 0 && linked.unassignedPages.length === 0
-      ? "No attachment pages after the agenda split"
-      : "Attachment pages linked to agenda topics",
+    attachmentPages.length === 0 && pagesWithoutText.length > 0
+      ? "Attachment pages had no extracted text"
+      : linked.assignedPageCount === 0 && linked.unassignedPages.length === 0
+        ? "No attachment pages after the agenda split"
+        : "Attachment pages linked to agenda topics",
   );
 
   if (deepSeekUsage.length > 0) {
@@ -220,9 +224,11 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
       buildMeetingsV3NotApplicableStageRow("v3_attachments", {
         modelName: "N/A",
         usageDetail:
-          remaining.length === 0
-            ? "Agenda citations linked every attachment page; no model call."
-            : "No attachment pages after the agenda split.",
+          attachmentPages.length === 0
+            ? pagesWithoutText.length > 0
+              ? "Attachment pages had no extracted text."
+              : "No attachment pages after the agenda split."
+            : "Agenda citations linked every attachment page; no model call.",
       }),
     );
   }
@@ -230,7 +236,8 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
   return {
     meetingId,
     assignedPageCount: linked.assignedPageCount,
-    unassignedPages: linked.unassignedPages,
+    unassignedPages,
+    pagesWithoutText,
     items: await listMeetingV3Agenda(meetingId),
   };
 }

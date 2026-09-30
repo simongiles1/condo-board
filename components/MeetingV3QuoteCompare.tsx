@@ -5,7 +5,10 @@ import { useEffect, useState } from "react";
 
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
-import type { MeetingsV3PackageStage } from "@/lib/meeting-v3/workspace";
+import {
+  meetingsV3WizardProgress,
+  type MeetingsV3WizardStep,
+} from "@/lib/meeting-v3/wizard";
 
 type ExtractedPage = {
   pageNumber: number;
@@ -26,14 +29,6 @@ type AgendaItem = {
   amount: string | null;
   vendors: string[];
   recommendation: string | null;
-};
-
-const STAGE_LABEL: Record<MeetingsV3PackageStage, string> = {
-  created: "Ready to extract",
-  extracting: "Extracting the board package",
-  correcting: "Correcting every page",
-  ready: "Pages corrected",
-  failed: "Extraction failed",
 };
 
 type PageNavProps = {
@@ -159,8 +154,71 @@ function CompareColumns({
   );
 }
 
+type WizardBarProps = {
+  steps: Array<MeetingsV3WizardStep & { state: "complete" | "current" | "upcoming" }>;
+  shownId: MeetingsV3WizardStep["id"];
+  completedCount: number;
+  busy: boolean;
+  onShow: (id: MeetingsV3WizardStep["id"]) => void;
+};
+
+function WizardBar({ steps, shownId, completedCount, busy, onShow }: WizardBarProps) {
+  const width = steps.length === 0 ? 0 : Math.round((completedCount / steps.length) * 100);
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+      <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-slate-200" aria-hidden="true">
+        <div className="h-full rounded-full bg-teal-700" style={{ width: `${width}%` }} />
+      </div>
+      <ol className="flex flex-col gap-2 sm:flex-row sm:items-stretch sm:gap-0">
+        {steps.map((step, index) => {
+          const open = step.state !== "upcoming";
+          const shown = step.id === shownId;
+          return (
+            <li key={step.id} className="flex min-w-0 flex-1 items-center">
+              {index > 0 ? (
+                <span
+                  className={`mx-2 hidden h-px w-6 shrink-0 sm:block ${steps[index - 1]?.state === "complete" ? "bg-teal-700" : "bg-slate-200"}`}
+                  aria-hidden="true"
+                />
+              ) : null}
+              <button
+                type="button"
+                disabled={!open || busy}
+                aria-current={shown ? "step" : undefined}
+                onClick={() => onShow(step.id)}
+                className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left disabled:cursor-not-allowed ${shown ? "bg-teal-50" : "hover:bg-slate-50"}`}
+              >
+                <span
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                    step.state === "complete"
+                      ? "bg-teal-700 text-white"
+                      : step.state === "current"
+                        ? "border-2 border-teal-700 text-teal-800"
+                        : "border border-slate-300 text-slate-400"
+                  }`}
+                >
+                  {step.state === "complete" ? "✓" : index + 1}
+                </span>
+                <span className="min-w-0">
+                  <span className={`block text-sm font-semibold ${step.state === "upcoming" ? "text-slate-400" : "text-slate-900"}`}>
+                    {step.title}
+                  </span>
+                  <span className="block text-xs text-slate-500">
+                    {step.state === "complete" ? "Done" : step.state === "current" ? "Current" : "Later"}
+                  </span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 /**
- * Board-package PDF, Docling text, and the corrected page, with the agenda built from those corrections.
+ * Walks a V3 meeting through extract-and-correct, then the agenda.
+ * Finished stages stay open. The next stage is another entry on the same bar.
  */
 export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageStatus }) {
   const [status, setStatus] = useState(initial);
@@ -172,11 +230,11 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [pageNumber, setPageNumber] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [rewrites, setRewrites] = useState<PageRewrite[]>([]);
-  const [rewriting, setRewriting] = useState(false);
   const [agendaItems, setAgendaItems] = useState<AgendaItem[]>([]);
   const [buildingAgenda, setBuildingAgenda] = useState(false);
+  const [pickedStep, setPickedStep] = useState<MeetingsV3WizardStep["id"] | null>(null);
 
-  const busy = running || rewriting || buildingAgenda || status.stage === "extracting" || status.stage === "correcting";
+  const busy = running || buildingAgenda || status.stage === "extracting" || status.stage === "correcting";
 
   useEffect(() => {
     if (!expanded) return;
@@ -273,28 +331,6 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     panelMinHeightClass: "min-h-[28rem]",
   };
 
-  async function rewritePages() {
-    setRewriting(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/v3/meetings/${status.id}/page-rewrite`, { method: "POST" });
-      const payload = (await response.json().catch(() => null)) as
-        | { pages?: PageRewrite[]; error?: string }
-        | null;
-      if (!response.ok) {
-        throw new Error(payload?.error || "Page rewrite failed.");
-      }
-      setRewrites(payload?.pages ?? []);
-      setAgendaItems([]);
-      setExpanded(true);
-    } catch (rewriteError) {
-      const message = rewriteError instanceof Error ? rewriteError.message : "Page rewrite failed.";
-      setError(message);
-    } finally {
-      setRewriting(false);
-    }
-  }
-
   async function extractPackage() {
     setRunning(true);
     setError(null);
@@ -310,6 +346,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       if (payload && "stage" in payload) {
         setStatus(payload);
         setAgendaItems([]);
+        if (payload.stage === "ready") setPickedStep("extract");
       }
     } catch (extractError) {
       const message = extractError instanceof Error ? extractError.message : "Package extraction failed.";
@@ -338,6 +375,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         currentStep: "Agenda built from corrected pages",
         agendaItemCount: payload?.items?.length ?? 0,
       }));
+      setPickedStep(null);
     } catch (agendaError) {
       const message = agendaError instanceof Error ? agendaError.message : "Agenda extraction failed.";
       setError(message);
@@ -346,78 +384,124 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     }
   }
 
+  const wizard = meetingsV3WizardProgress({
+    pageCount: Math.max(status.pageCount, pages.length),
+    correctedPageCount: Math.max(status.correctedPageCount, rewrites.length),
+    agendaItemCount: Math.max(status.agendaItemCount, agendaItems.length),
+  });
+  const shownStep = wizard.steps.find((step) => step.id === pickedStep && step.state !== "upcoming")
+    ?? wizard.steps.find((step) => step.id === wizard.activeId)
+    ?? wizard.steps[0];
   const pageAgenda = agendaItems.filter((item) => item.sourcePages.includes(pageNumber ?? -1));
+  const extractRunning = running || status.stage === "extracting" || status.stage === "correcting";
+  const extractLabel = extractRunning
+    ? (status.stage === "correcting" ? "Correcting every page…" : "Extracting the package…")
+    : shownStep?.state === "complete"
+      ? "Run again"
+      : "Extract and correct";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <Link href="/operations/meetings?v=3" className="text-xs font-semibold uppercase tracking-wide text-teal-700 hover:text-teal-900">
-            Meetings V3
-          </Link>
-          <h1 className="text-2xl font-semibold text-slate-900">{status.title}</h1>
-          <p className="text-sm text-slate-600">
-            {status.meetingDate}
-            {" · "}
-            {status.currentStep || STAGE_LABEL[status.stage]}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {status.correctedPageCount > 0 || rewrites.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => void buildAgenda()}
-              disabled={busy}
-              className="rounded-lg border border-teal-700 bg-white px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
-            >
-              {buildingAgenda ? "Building agenda…" : agendaItems.length > 0 ? "Rebuild agenda" : "Build agenda"}
-            </button>
-          ) : null}
-          {status.pageCount > 0 ? (
-            <button
-              type="button"
-              onClick={() => void rewritePages()}
-              disabled={busy}
-              className="rounded-lg border border-teal-700 bg-white px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
-            >
-              {rewriting ? "Correcting every page…" : "Correct every page"}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => void extractPackage()}
-            disabled={busy}
-            className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-          >
-            {running || status.stage === "extracting" || status.stage === "correcting"
-              ? "Working…"
-              : status.pageCount > 0
-                ? "Re-run extraction"
-                : "Extract meeting package"}
-          </button>
-        </div>
+      <div>
+        <Link href="/operations/meetings?v=3" className="text-xs font-semibold uppercase tracking-wide text-teal-700 hover:text-teal-900">
+          Meetings V3
+        </Link>
+        <h1 className="text-2xl font-semibold text-slate-900">{status.title}</h1>
+        <p className="text-sm text-slate-600">
+          {status.meetingDate}
+          {busy && status.currentStep ? ` · ${status.currentStep}` : ""}
+        </p>
       </div>
+
+      {shownStep ? (
+        <WizardBar
+          steps={wizard.steps}
+          shownId={shownStep.id}
+          completedCount={wizard.completedCount}
+          busy={busy}
+          onShow={setPickedStep}
+        />
+      ) : null}
 
       {error ? (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
       ) : null}
-      {status.pageCount === 0 ? (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
-          {busy
-            ? "Docling is reading the board package. Every stored page is then corrected."
-            : "Extract the meeting package to compare the PDF, the Docling text, and the corrected page."}
-        </div>
-      ) : (
+
+      {shownStep?.id === "extract" ? (
         <>
-          {agendaItems.length > 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
+            <div className="flex flex-wrap gap-2">
+              {shownStep.state === "complete" && !extractRunning ? (
+                <button
+                  type="button"
+                  onClick={() => setPickedStep("agenda")}
+                  className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
+                >
+                  Continue to agenda
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void extractPackage()}
+                disabled={busy}
+                className={shownStep.state === "complete" && !extractRunning
+                  ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                  : "rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"}
+              >
+                {extractLabel}
+              </button>
+            </div>
+          </div>
+          {status.pageCount === 0 && pages.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              {extractRunning
+                ? "Docling is reading the board package. Every stored page is then corrected."
+                : "This step reads the package, then corrects every page."}
+            </div>
+          ) : (
+            <>
+              <PageNavBar
+                pages={pages}
+                pageIndex={pageIndex}
+                pageNumber={pageNumber}
+                correctedCount={rewrites.length}
+                onPageChange={setPageNumber}
+                onExpand={() => setExpanded(true)}
+              />
+              <CompareColumns {...compareProps} />
+            </>
+          )}
+        </>
+      ) : null}
+
+      {shownStep?.id === "agenda" ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
+            <button
+              type="button"
+              onClick={() => void buildAgenda()}
+              disabled={busy}
+              className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {buildingAgenda ? "Building agenda…" : agendaItems.length > 0 ? "Run again" : "Build agenda"}
+            </button>
+          </div>
+          {agendaItems.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              {buildingAgenda
+                ? "Reading the corrected pages into agenda topics."
+                : "Build the agenda when the corrected pages look right."}
+            </div>
+          ) : (
             <section className="rounded-xl border border-slate-200 bg-white">
               <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
                 Agenda from corrected pages
               </h2>
-              <ul className="max-h-52 divide-y divide-slate-100 overflow-auto">
+              <ul className="max-h-80 divide-y divide-slate-100 overflow-auto">
                 {agendaItems.map((item) => {
                   const sourcePages = [...item.sourcePages].sort((left, right) => left - right);
-                  const onPage = sourcePages.includes(pageNumber ?? -1);
                   const firstPage = sourcePages[0];
                   return (
                     <li key={`${item.itemNumber}-${item.title}`}>
@@ -425,9 +509,11 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                         type="button"
                         disabled={firstPage == null}
                         onClick={() => {
-                          if (firstPage != null) setPageNumber(firstPage);
+                          if (firstPage == null) return;
+                          setPageNumber(firstPage);
+                          setPickedStep("extract");
                         }}
-                        className={`flex w-full flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:cursor-default ${onPage ? "bg-teal-50" : ""}`}
+                        className="flex w-full flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:cursor-default"
                       >
                         <span className="font-semibold tabular-nums text-slate-900">{item.itemNumber}</span>
                         <span className="font-medium text-slate-800">{item.title}</span>
@@ -449,22 +535,13 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               </ul>
               {pageAgenda.length > 0 && pageNumber != null ? (
                 <p className="border-t border-slate-200 px-3 py-2 text-xs text-slate-600">
-                  Page {pageNumber}: {pageAgenda.map((item) => item.itemNumber).join(", ")}
+                  Open a topic to compare that page.
                 </p>
               ) : null}
             </section>
-          ) : null}
-          <PageNavBar
-            pages={pages}
-            pageIndex={pageIndex}
-            pageNumber={pageNumber}
-            correctedCount={rewrites.length}
-            onPageChange={setPageNumber}
-            onExpand={() => setExpanded(true)}
-          />
-          <CompareColumns {...compareProps} />
+          )}
         </>
-      )}
+      ) : null}
 
       {expanded && status.pageCount > 0 ? (
         <div

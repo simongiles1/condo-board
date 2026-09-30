@@ -1,15 +1,7 @@
 import Link from "next/link";
 
 import type { MeetingsV3WorkspaceCard } from "@/lib/meeting-v3/package-status";
-import type { MeetingsV3PackageStage } from "@/lib/meeting-v3/workspace";
-
-const STAGE_LABEL: Record<MeetingsV3PackageStage, string> = {
-  created: "Not extracted",
-  extracting: "Extracting package",
-  correcting: "Correcting every page",
-  ready: "Pages corrected",
-  failed: "Extraction failed",
-};
+import { meetingsV3WizardProgress } from "@/lib/meeting-v3/wizard";
 
 /**
  * Lists V3 meetings and opens the package comparison.
@@ -18,7 +10,7 @@ export function MeetingsV3Dashboard({ meetings }: { meetings: MeetingsV3Workspac
   if (meetings.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
-        No V3 meetings yet. Create one with a board package, then extract it to compare the PDF, Docling text, and the corrected page.
+        No V3 meetings yet. Create one with a board package. The meeting then walks through extract and correct, then the agenda.
       </div>
     );
   }
@@ -30,7 +22,7 @@ export function MeetingsV3Dashboard({ meetings }: { meetings: MeetingsV3Workspac
           <tr>
             <th scope="col" className="px-3 py-2.5">Meeting date</th>
             <th scope="col" className="px-3 py-2.5">Title</th>
-            <th scope="col" className="px-3 py-2.5">Package</th>
+            <th scope="col" className="px-3 py-2.5">Stage</th>
             <th scope="col" className="px-3 py-2.5">Corrected</th>
             <th scope="col" className="px-3 py-2.5">Agenda</th>
           </tr>
@@ -50,15 +42,7 @@ export function MeetingsV3Dashboard({ meetings }: { meetings: MeetingsV3Workspac
               </td>
               <td className="px-3 py-2.5 text-slate-700">
                 <Link href={`/operations/meetings/v3/${meeting.id}`} className="block">
-                  <span className="font-medium">{STAGE_LABEL[meeting.stage]}</span>
-                  {meeting.pageCount > 0 ? (
-                    <span className="mt-0.5 block text-xs text-slate-500">
-                      {meeting.pageCount} extracted {meeting.pageCount === 1 ? "page" : "pages"}
-                    </span>
-                  ) : null}
-                  {meeting.stage === "failed" && meeting.error ? (
-                    <span className="mt-0.5 block text-xs text-red-700">{meeting.error}</span>
-                  ) : null}
+                  <WizardStage meeting={meeting} />
                 </Link>
               </td>
               <td className="px-3 py-2.5 text-slate-700">
@@ -80,5 +64,22 @@ export function MeetingsV3Dashboard({ meetings }: { meetings: MeetingsV3Workspac
         </tbody>
       </table>
     </div>
+  );
+}
+
+function WizardStage({ meeting }: { meeting: MeetingsV3WorkspaceCard }) {
+  const progress = meetingsV3WizardProgress(meeting);
+  const index = Math.max(0, progress.steps.findIndex((step) => step.id === progress.activeId));
+  const title = progress.steps[index]?.title ?? "Extract and correct";
+  return (
+    <>
+      <span className="font-medium">
+        {progress.finished ? "Finished" : `Step ${index + 1} of ${progress.steps.length}`}
+      </span>
+      <span className="mt-0.5 block text-xs text-slate-500">{title}</span>
+      {meeting.stage === "failed" && meeting.error ? (
+        <span className="mt-0.5 block text-xs text-red-700">{meeting.error}</span>
+      ) : null}
+    </>
   );
 }

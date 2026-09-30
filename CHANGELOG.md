@@ -60,6 +60,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changes
 
+- **Meetings V3 wizard** — After a board package is uploaded, the V3 meeting walks one stage at a time: extract and correct, then build the agenda. A progress bar shows which stage is current. Finished stages stay open for review. The next stage is added to that same bar.
+
 - **Gold-standard compare outline** — The compare navigation shows each item’s number and indent. Section headings no longer carry a description; only leaf items do. Confidential items are marked, and **What counts as confidential** opens the prompt that defines that.
 
 - **Call to order and meeting close** — Call to order, adjournment, and guests leaving use one fixed sentence each. The only variables are who called the meeting to order, the call-to-order time, the conclusion time, and when guests left.

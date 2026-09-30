@@ -15,6 +15,11 @@ import {
   quoteLedgerTruncated,
   type QuoteRow,
 } from "../lib/meeting-v3/quote-ledger";
+import {
+  isMeetingsV3Workspace,
+  meetingsV3PackageError,
+  meetingsV3PackageStage,
+} from "../lib/meeting-v3/workspace";
 
 const boosterItem = "Booster Pump Replacement";
 
@@ -47,6 +52,29 @@ function correctBoosterRows(): QuoteRow[] {
     row({ vendor: "ABM", lineKind: "alternative", equipment: "Grundfos", amountCents: 21_890_000 }),
   ];
 }
+
+describe("v3 workspace flag", () => {
+  it("keeps V2 meetings off the V3 list", () => {
+    assert.equal(isMeetingsV3Workspace(null), false);
+    assert.equal(isMeetingsV3Workspace({}), false);
+    assert.equal(meetingsV3PackageStage({}), "created");
+    assert.equal(meetingsV3PackageError({}), null);
+  });
+
+  it("reads a V3 package stage and error", () => {
+    const settings = {
+      v3Package: {
+        workspace: true as const,
+        stage: "failed" as const,
+        error: "Docling sidecar is down",
+        updatedAt: "2026-09-30T00:00:00.000Z",
+      },
+    };
+    assert.equal(isMeetingsV3Workspace(settings), true);
+    assert.equal(meetingsV3PackageStage(settings), "failed");
+    assert.equal(meetingsV3PackageError(settings), "Docling sidecar is down");
+  });
+});
 
 describe("quote ledger page window", () => {
   const pages = Array.from({ length: 20 }, (_, index) => index + 1);

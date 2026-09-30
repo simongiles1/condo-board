@@ -9,6 +9,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { meetings, meetingsV2 } from "@/lib/db/schema";
 import { inngest } from "@/lib/inngest/client";
+import { meetingsV3CreatedSettings } from "@/lib/meeting-v3/package-status";
 import { getPdfPageCount } from "@/lib/pdf/pdf-page-count";
 import { revalidateMeetingsWorkspaceList } from "@/lib/meeting-v2/revalidate-workspace-list";
 import { parseAgendaContentEndsAtPage } from "@/lib/meeting-v2/upcoming-meeting";
@@ -25,6 +26,7 @@ export async function POST(req: Request) {
   const boardPackageFile = formData.get("boardPackage");
   const purpose = formData.get("purpose");
   const upcoming = purpose === "upcoming";
+  const v3 = formData.get("pipeline") === "v3";
 
   if (
     typeof titleRaw !== "string" ||
@@ -135,17 +137,26 @@ export async function POST(req: Request) {
       title: titleRaw.trim(),
       meetingDate: meetingDateRaw,
       pipelineState: "created",
-      currentStep: upcoming ? "Preparing the board package" : "Ready to start",
+      currentStep: v3
+        ? "Ready to extract the board package"
+        : upcoming
+          ? "Preparing the board package"
+          : "Ready to start",
       progressPercent: 0,
       lastError: null,
-      settings: upcoming
-        ? { upcomingMeeting: { agendaContentEndsAtPage: agendaContentEndsAtPage! } }
-        : {},
+      settings: v3
+        ? meetingsV3CreatedSettings(
+            createdAt,
+            upcoming ? { agendaContentEndsAtPage: agendaContentEndsAtPage! } : null,
+          )
+        : upcoming
+          ? { upcomingMeeting: { agendaContentEndsAtPage: agendaContentEndsAtPage! } }
+          : {},
       createdAt,
       updatedAt: createdAt,
     });
 
-    if (upcoming) {
+    if (upcoming && !v3) {
       try {
         await inngest.send({
           name: "meeting-v2/pipeline.start",

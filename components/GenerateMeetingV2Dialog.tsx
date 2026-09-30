@@ -55,12 +55,15 @@ type Props = {
   open: boolean;
   onClose: () => void;
   mode?: CreateMode;
+  /** V3 creates the same workspace and opens the package comparison instead of the V2 pipeline. */
+  pipeline?: "v2" | "v3";
 };
 
 export function GenerateMeetingV2Dialog({
   open,
   onClose,
   mode = "historical",
+  pipeline = "v2",
 }: Props) {
   const router = useRouter();
   const [stage, setStage] = useState<Stage>(1);
@@ -407,6 +410,7 @@ export function GenerateMeetingV2Dialog({
       formData.append("purpose", "upcoming");
       formData.append("agendaContentEndsAtPage", String(splitIndex));
     }
+    if (pipeline === "v3") formData.append("pipeline", "v3");
 
     try {
       const trimmed = await buildTrimmedBoardPackage(packageSelection);
@@ -430,14 +434,22 @@ export function GenerateMeetingV2Dialog({
         throw new Error(
           typeof payload?.error === "string"
             ? payload.error
-            : "Could not start the V2 meeting pipeline.",
+            : pipeline === "v3"
+              ? "Could not create the meeting."
+              : "Could not start the V2 meeting pipeline.",
         );
       }
 
       const payload = (await response.json()) as { id: string };
-      sessionStorage.setItem(`meeting-v2-fresh:${payload.id}`, "1");
+      if (pipeline !== "v3") {
+        sessionStorage.setItem(`meeting-v2-fresh:${payload.id}`, "1");
+      }
       onClose();
-      router.push(`/operations/meetings/v2/${payload.id}`);
+      router.push(
+        pipeline === "v3"
+          ? `/operations/meetings/v3/${payload.id}`
+          : `/operations/meetings/v2/${payload.id}`,
+      );
       router.refresh();
       resetForm();
     } catch (e) {

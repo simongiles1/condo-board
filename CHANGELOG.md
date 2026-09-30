@@ -10,6 +10,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V3 quote ledger** — Agenda pages of a board package can be read into one bid row per money cell (vendor, product, base or alternative, amount). The page PDF is the source when the extracted table has shifted columns. Each vendor is checked by whether the base plus optional items equals the stated total. A cell that contains more than one amount is kept out. Run it with `POST /api/v3/meetings/{id}/quote-ledger`. Pages after a recorded agenda split are skipped; without a split, reading stops at page 15.
 
+- **Meetings V3 package test** — The meetings strip has a V3 Pipeline tab. Creating a meeting there uses the same board-package steps as V2 and does not start the minutes pipeline. Extract meeting package reads the PDF with Docling, then builds the quote ledger. The meeting page shows that page's PDF, the Docling text, and the quote rows together.
+
 - **Project scope: Common area** — Projects registry scope filter, legend, and list badges include **Common area** (teal badge), distinct from building-wide. Harvest prompts and location inference assign `common_area` for shared interior spaces such as lobby, corridors, and amenity areas.
 
 - **Attachment map before the live room** — After an upcoming meeting package is analyzed, Review attachments shows each attachment page as a thumbnail colored to match its agenda item. A vertical map between the thumbnails and the agenda uses the same colors, leaves unlinked pages blank, and frames the part of the package currently in view. Choosing an agenda item opens that part of the package PDF, and Back returns to the thumbnails. Start meeting opens the live room from that screen.

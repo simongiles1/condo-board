@@ -66,3 +66,30 @@ export function readAgendaVendors(json: string | null): string[] {
     return [];
   }
 }
+
+/**
+ * A short label for the page numbers stored on an agenda item.
+ * A gap stays visible, so pages 4 and 13–14 are not printed as 4–14.
+ * Returns null when the item has no pages.
+ */
+export function formatSourcePages(pages: number[]): string | null {
+  const sorted = [...new Set(pages.filter((page) => Number.isInteger(page) && page > 0))].sort(
+    (left, right) => left - right,
+  );
+  if (sorted.length === 0) return null;
+  const ranges: string[] = [];
+  let start = sorted[0] ?? 0;
+  let end = start;
+  for (const page of sorted.slice(1)) {
+    if (page === end + 1) {
+      end = page;
+      continue;
+    }
+    ranges.push(start === end ? String(start) : `${start}–${end}`);
+    start = page;
+    end = page;
+  }
+  ranges.push(start === end ? String(start) : `${start}–${end}`);
+  const body = ranges.join(", ");
+  return sorted.length === 1 ? `page ${body}` : `pages ${body}`;
+}

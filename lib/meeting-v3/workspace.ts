@@ -15,12 +15,20 @@ export const MEETINGS_V3_PACKAGE_STAGES = [
 /** Package-extraction progress stored on the meeting. */
 export type MeetingsV3PackageStage = (typeof MEETINGS_V3_PACKAGE_STAGES)[number];
 
+/** A finished pass that linked attachment pages onto the V3 agenda. */
+export type MeetingsV3AttachmentLink = {
+  completedAt: string;
+  assignedPageCount: number;
+  unassignedPages: number[];
+};
+
 /** Settings written when a meeting is created from the V3 strip. */
 export type MeetingsV3PackageSettings = {
   workspace: true;
   stage: MeetingsV3PackageStage;
   error: string | null;
   updatedAt: string;
+  attachmentLink?: MeetingsV3AttachmentLink | null;
 };
 
 /**
@@ -45,6 +53,35 @@ export function meetingsV3PackageStage(
     return stage as MeetingsV3PackageStage;
   }
   return "created";
+}
+
+/**
+ * The stored attachment link, when that stage has been run for the current agenda.
+ * Returns null when the flag is missing or not a completed link.
+ */
+export function meetingsV3AttachmentLink(
+  settings: { v3Package?: { attachmentLink?: unknown } | null } | null | undefined,
+): MeetingsV3AttachmentLink | null {
+  const link = settings?.v3Package?.attachmentLink;
+  if (!link || typeof link !== "object") return null;
+  const record = link as {
+    completedAt?: unknown;
+    assignedPageCount?: unknown;
+    unassignedPages?: unknown;
+  };
+  if (typeof record.completedAt !== "string" || !record.completedAt.trim()) return null;
+  if (typeof record.assignedPageCount !== "number" || !Number.isInteger(record.assignedPageCount)) {
+    return null;
+  }
+  if (!Array.isArray(record.unassignedPages)) return null;
+  const unassignedPages = record.unassignedPages.filter(
+    (page): page is number => typeof page === "number" && Number.isInteger(page) && page > 0,
+  );
+  return {
+    completedAt: record.completedAt,
+    assignedPageCount: record.assignedPageCount,
+    unassignedPages,
+  };
 }
 
 /**

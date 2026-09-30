@@ -19,6 +19,7 @@ import { generatePageVision } from "@/lib/gemini/client";
 import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { loadMeetingBoardPackage } from "@/lib/meeting-v2/board-package";
 import { extractPdfPages } from "@/lib/pdf/extract-pages";
+import { meetingsV3SettingsWithAttachmentLink } from "@/lib/meeting-v3/package-status";
 import { isMeetingsV3Workspace } from "@/lib/meeting-v3/workspace";
 import { PAGE_REWRITE_SYSTEM_PROMPT, readPageRewriteMarkdown } from "@/lib/meeting-v3/page-rewrite";
 
@@ -131,6 +132,17 @@ export async function buildMeetingPageRewrites(meetingId: string): Promise<PageR
         createdAt,
       })),
     );
+    const [stored] = await tx
+      .select({ settings: meetingsV2.settings })
+      .from(meetingsV2)
+      .where(eq(meetingsV2.id, meetingId));
+    await tx
+      .update(meetingsV2)
+      .set({
+        settings: meetingsV3SettingsWithAttachmentLink(readMeetingV2Settings(stored?.settings), null),
+        updatedAt: createdAt,
+      })
+      .where(eq(meetingsV2.id, meetingId));
   });
 
   return { meetingId, pageCount: rewritten.length, pages: rewritten };

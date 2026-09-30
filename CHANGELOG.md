@@ -8,6 +8,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Meetings V3 create crossover** — The V3 upload modal keeps the full selected board package and uses the last-agenda control to mark where the agenda ends (for example, agenda through page 12 and attachments from page 13). It no longer trims the PDF to agenda pages only. V2 historical upload is unchanged.
+
+- **Meetings V3 attachment links** — After the agenda is built, Link attachments reads the corrected pages that follow the agenda split and stores those pages on the matching topic. A page the agenda already names is linked before the rest are read. Pages that match no topic stay listed as not linked. The V2 agenda is left unchanged. Building the agenda again, or correcting the pages again, clears that link.
+
 - **Meetings V3 agenda** — After the corrected pages are stored, Build agenda reads those pages (stopping at the agenda/attachment split) and lists each topic with its pages, amount, and vendors. The original Docling text and the V2 agenda are left unchanged. Correcting the pages again clears that agenda.
 
 - **Meetings V3 Docling correction** — After a board package is read, every stored page is rewritten from that page's PDF in the same markdown style. Table cells go back to the column on the page, and a page number pulled out of a sentence is put back. The original extract stays visible beside the corrected page.

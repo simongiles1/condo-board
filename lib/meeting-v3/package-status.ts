@@ -12,10 +12,13 @@ import {
   meetingsV3PageRewrites,
 } from "@/lib/db/schema-v2";
 import { readMeetingV2Settings, type MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
+import { upcomingAgendaSplit } from "@/lib/meeting-v2/upcoming-meeting";
 import {
   isMeetingsV3Workspace,
+  meetingsV3AttachmentLink,
   meetingsV3PackageError,
   meetingsV3PackageStage,
+  type MeetingsV3AttachmentLink,
   type MeetingsV3PackageSettings,
   type MeetingsV3PackageStage,
 } from "@/lib/meeting-v3/workspace";
@@ -31,6 +34,7 @@ export type MeetingsV3WorkspaceCard = {
   pageCount: number;
   correctedPageCount: number;
   agendaItemCount: number;
+  attachmentsLinked: boolean;
 };
 
 /** Package progress for one V3 meeting. */
@@ -44,6 +48,9 @@ export type MeetingsV3PackageStatus = {
   pageCount: number;
   correctedPageCount: number;
   agendaItemCount: number;
+  agendaContentEndsAtPage: number | null;
+  attachmentsLinked: boolean;
+  unassignedAttachmentPages: number[];
 };
 
 /**
@@ -109,6 +116,7 @@ export async function listMeetingsV3Workspaces(): Promise<MeetingsV3WorkspaceCar
     pageCount: pagesByMeeting.get(row.id) ?? 0,
     correctedPageCount: correctedByMeeting.get(row.id) ?? 0,
     agendaItemCount: agendaByMeeting.get(row.id) ?? 0,
+    attachmentsLinked: meetingsV3AttachmentLink(row.settings) != null,
   }));
 }
 
@@ -131,6 +139,8 @@ export async function loadMeetingsV3PackageStatus(
     .from(meetingsV2)
     .where(eq(meetingsV2.id, meetingId));
   if (!meeting || !isMeetingsV3Workspace(meeting.settings)) return null;
+  const settings = readMeetingV2Settings(meeting.settings);
+  const attachmentLink = meetingsV3AttachmentLink(settings);
 
   const [pageRows, correctedCountRows, agendaCountRows] = await Promise.all([
     db
@@ -156,6 +166,9 @@ export async function loadMeetingsV3PackageStatus(
     pageCount: pageRows.length,
     correctedPageCount: Number(correctedCountRows[0]?.correctedPageCount ?? 0),
     agendaItemCount: Number(agendaCountRows[0]?.agendaItemCount ?? 0),
+    agendaContentEndsAtPage: upcomingAgendaSplit(settings),
+    attachmentsLinked: attachmentLink != null,
+    unassignedAttachmentPages: attachmentLink?.unassignedPages ?? [],
   };
 }
 
@@ -197,11 +210,53 @@ export async function writeMeetingsV3PackageStage(
     stage,
     error,
     updatedAt,
+    attachmentLink: meetingsV3AttachmentLink(settings),
   };
   await db
     .update(meetingsV2)
     .set({
       settings: { ...settings, v3Package: next },
+      updatedAt,
+    })
+    .where(eq(meetingsV2.id, meetingId));
+}
+
+/**
+ * Settings with the attachment-link flag replaced.
+ * Other V3 package fields stay as they are.
+ */
+export function meetingsV3SettingsWithAttachmentLink(
+  settings: MeetingV2Settings,
+  attachmentLink: MeetingsV3AttachmentLink | null,
+): MeetingV2Settings {
+  const next: MeetingsV3PackageSettings = {
+    workspace: true,
+    stage: meetingsV3PackageStage(settings),
+    error: meetingsV3PackageError(settings),
+    updatedAt: settings.v3Package?.updatedAt ?? new Date().toISOString(),
+    attachmentLink,
+  };
+  return { ...settings, v3Package: next };
+}
+
+/**
+ * Stores or clears the attachment link without changing the package stage.
+ */
+export async function writeMeetingsV3AttachmentLink(
+  meetingId: string,
+  attachmentLink: MeetingsV3AttachmentLink | null,
+): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select({ settings: meetingsV2.settings })
+    .from(meetingsV2)
+    .where(eq(meetingsV2.id, meetingId));
+  const settings = readMeetingV2Settings(row?.settings);
+  const updatedAt = new Date().toISOString();
+  await db
+    .update(meetingsV2)
+    .set({
+      settings: meetingsV3SettingsWithAttachmentLink(settings, attachmentLink),
       updatedAt,
     })
     .where(eq(meetingsV2.id, meetingId));

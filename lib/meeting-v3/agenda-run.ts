@@ -21,6 +21,7 @@ import {
   selectCorrectedAgendaPages,
 } from "@/lib/meeting-v3/agenda-pages";
 import { listMeetingPageRewrites } from "@/lib/meeting-v3/page-rewrite-run";
+import { meetingsV3SettingsWithAttachmentLink } from "@/lib/meeting-v3/package-status";
 import { isMeetingsV3Workspace } from "@/lib/meeting-v3/workspace";
 
 /** An agenda build the route can return with an HTTP status. */
@@ -135,6 +136,17 @@ export async function buildMeetingV3Agenda(meetingId: string): Promise<AgendaBui
     if (rows.length > 0) {
       await tx.insert(meetingsV3AgendaItems).values(rows);
     }
+    const [stored] = await tx
+      .select({ settings: meetingsV2.settings })
+      .from(meetingsV2)
+      .where(eq(meetingsV2.id, meetingId));
+    await tx
+      .update(meetingsV2)
+      .set({
+        settings: meetingsV3SettingsWithAttachmentLink(readMeetingV2Settings(stored?.settings), null),
+        updatedAt: createdAt,
+      })
+      .where(eq(meetingsV2.id, meetingId));
   });
   await setAgendaStep(meetingId, "Agenda built from corrected pages");
 

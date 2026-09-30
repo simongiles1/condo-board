@@ -26,6 +26,10 @@ export type { BoardPackageSelection };
 
 const PREVIEW_CANVAS_MAX_HEIGHT_PX = 200;
 
+function usesAgendaAttachmentSplit(variant: "minutes" | "upcoming" | "v3"): boolean {
+  return variant === "upcoming" || variant === "v3";
+}
+
 function limitCanvasDisplaySize(
   canvas: HTMLCanvasElement,
   options: { maxHeightPx?: number; fitWidth?: boolean } = {},
@@ -65,8 +69,8 @@ type Props = {
   showFilePicker?: boolean;
   /** Scale preview to the panel width (scroll vertically if needed). */
   previewFitWidth?: boolean;
-  /** Live-meeting create: one picker for agenda + attachments with a boundary page. */
-  variant?: "minutes" | "upcoming";
+  /** Minutes trims to selected pages only. Upcoming and V3 keep attachments and mark the agenda end. */
+  variant?: "minutes" | "upcoming" | "v3";
   /** PDF page number where the agenda ends; later selected pages are attachments. */
   agendaEndsAtPage?: number | null;
   onAgendaEndsAtPage?: (page: number) => void;
@@ -99,8 +103,8 @@ export function BoardPackagePageSelector({
 
   const selectedSorted = [...selected].sort((a, b) => a - b);
   const selectedKey = selectedSorted.join(",");
-  const leftOutRanges =
-    variant === "upcoming" ? omittedPageRanges(pageCount, selectedSorted) : [];
+  const splitPicker = usesAgendaAttachmentSplit(variant);
+  const leftOutRanges = splitPicker ? omittedPageRanges(pageCount, selectedSorted) : [];
   const loadedExternalRef = useRef<File | null>(null);
 
   useEffect(() => {
@@ -125,18 +129,15 @@ export function BoardPackagePageSelector({
       const buffer = await file.arrayBuffer();
       const count = await getPdfPageCount(buffer);
 
-      const initial =
-        variant === "upcoming"
-          ? Array.from({ length: count }, (_, index) => index + 1)
-          : defaultInitialPageSelection(count);
+      const initial = splitPicker
+        ? Array.from({ length: count }, (_, index) => index + 1)
+        : defaultInitialPageSelection(count);
       setSourceFile(file);
       setPdfBytes(buffer);
       setPageCount(count);
       setSelected(new Set(initial));
       setPreviewPage(1);
-      setRangeInput(
-        variant === "upcoming" ? `1-${count}` : `1-${Math.min(20, count)}`,
-      );
+      setRangeInput(splitPicker ? `1-${count}` : `1-${Math.min(20, count)}`);
       setRangeError(null);
     } catch (e) {
       setSourceFile(null);
@@ -148,7 +149,7 @@ export function BoardPackagePageSelector({
     } finally {
       setLoading(false);
     }
-  }, [onSelectionChange, variant]);
+  }, [onSelectionChange, splitPicker]);
 
   const onPick = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
@@ -275,9 +276,11 @@ export function BoardPackagePageSelector({
           <span className="font-medium text-teal-900">Drop PDF here</span>
           <span className="mt-1 text-slate-600">or click to browse</span>
           <span className="mt-2 text-xs text-slate-500">
-            {variant === "upcoming"
-              ? "Include every page you need for the live meeting—agenda and attachments."
-              : "Large packages often include attachments—select only the management report pages (typically the first 15–20)."}
+            {variant === "v3"
+              ? "Include the full board package—agenda pages and attachments."
+              : variant === "upcoming"
+                ? "Include every page you need for the live meeting—agenda and attachments."
+                : "Large packages often include attachments—select only the management report pages (typically the first 15–20)."}
           </span>
           {loading ? (
             <span className="mt-3 text-xs text-slate-600">Reading PDF…</span>
@@ -291,13 +294,15 @@ export function BoardPackagePageSelector({
               <p className="mt-1 text-xs text-slate-600">
                 {pageCount} pages total · including{" "}
                 <strong>{selectedSorted.length}</strong>
-                {variant === "upcoming" ? " for this meeting" : " for Gemini"} (
+                {splitPicker ? " in this meeting" : " for Gemini"} (
                 {formatPageList(selectedSorted)})
               </p>
               {leftOutRanges.length > 0 ? (
                 <p className="mt-2 text-xs text-amber-800">
-                  Pages {formatOmittedPageRanges(leftOutRanges)} are left out. The live room cannot
-                  open them. Select them if the agenda cites them.
+                  Pages {formatOmittedPageRanges(leftOutRanges)} are left out.
+                  {variant === "v3"
+                    ? " The V3 pipeline cannot read them. Select them if the agenda cites them."
+                    : " The live room cannot open them. Select them if the agenda cites them."}
                 </p>
               ) : null}
             </div>
@@ -323,7 +328,7 @@ export function BoardPackagePageSelector({
                 }
                 className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50"
               >
-                {variant === "upcoming" ? "First 20 only" : "First 20 pages"}
+                {splitPicker ? "First 20 only" : "First 20 pages"}
               </button>
               <button
                 type="button"
@@ -388,7 +393,7 @@ export function BoardPackagePageSelector({
           <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
             <div className="flex h-72 flex-col rounded-xl border border-slate-200 bg-white">
               <div className="border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {variant === "upcoming" ? "Meeting pages" : "Pages to include"}
+                {splitPicker ? "Meeting pages" : "Pages to include"}
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
                 <ul className="grid grid-cols-4 gap-1 sm:grid-cols-6 md:grid-cols-8">
@@ -410,7 +415,7 @@ export function BoardPackagePageSelector({
                             onClick={(event) =>
                               togglePage(page, {
                                 setAgendaBoundary:
-                                  variant === "upcoming" &&
+                                  splitPicker &&
                                   (event.shiftKey || event.altKey) &&
                                   on,
                               })
@@ -432,8 +437,8 @@ export function BoardPackagePageSelector({
                 </ul>
               </div>
               <p className="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
-                {variant === "upcoming"
-                  ? "Teal = agenda. Amber = attachments. Unselected pages are removed from the meeting."
+                {splitPicker
+                  ? "Teal = agenda. Amber = attachments. Shift+click a selected page to set the last agenda page."
                   : "Checked = sent to Gemini. Unchecked pages are stripped out."}
               </p>
             </div>
@@ -475,12 +480,13 @@ export function BoardPackagePageSelector({
             </div>
           </div>
 
-          {variant === "upcoming" && selectedSorted.length >= 2 ? (
+          {splitPicker && selectedSorted.length >= 2 ? (
             <label className="flex flex-col gap-1 text-sm font-medium text-slate-800">
               Last agenda page
               <span className="text-xs font-normal text-slate-600">
-                Marks where the written agenda stops. Later selected pages stay in the meeting as
-                attachments.
+                {variant === "v3"
+                  ? "The agenda ends at the end of this page. The next selected page starts the attachments."
+                  : "Marks where the written agenda stops. Later selected pages stay in the meeting as attachments."}
               </span>
               <select
                 value={
@@ -505,6 +511,24 @@ export function BoardPackagePageSelector({
                   </option>
                 ))}
               </select>
+              {agendaEndsAtPage != null ? (
+                <span
+                  className="mt-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-950"
+                  role="status"
+                >
+                  {selectedSorted.some((page) => page > agendaEndsAtPage) ? (
+                    <>
+                      Agenda ends at the end of page{" "}
+                      <span className="font-mono font-semibold">{agendaEndsAtPage}</span>. Attachments
+                      start on page{" "}
+                      <span className="font-mono font-semibold">{agendaEndsAtPage + 1}</span>
+                      {selectedSorted.includes(agendaEndsAtPage + 1) ? "" : " (not selected yet)."}
+                    </>
+                  ) : (
+                    "Pick a last agenda page that still leaves at least one attachment page selected."
+                  )}
+                </span>
+              ) : null}
             </label>
           ) : null}
         </div>

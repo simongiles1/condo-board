@@ -10,7 +10,7 @@ export function MeetingsV3Dashboard({ meetings }: { meetings: MeetingsV3Workspac
   if (meetings.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
-        No V3 meetings yet. Create one with a board package. The meeting then walks through extract and correct, then the agenda.
+        No V3 meetings yet. Create one with a board package. The meeting then walks through extract and correct, the agenda, then attachment pages.
       </div>
     );
   }

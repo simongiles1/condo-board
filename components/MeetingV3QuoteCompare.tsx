@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { MarkdownPreview } from "@/components/MarkdownPreview";
+import { formatSourcePages } from "@/lib/meeting-v3/agenda-pages";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
 import {
   meetingsV3WizardProgress,
@@ -217,7 +218,7 @@ function WizardBar({ steps, shownId, completedCount, busy, onShow }: WizardBarPr
 }
 
 /**
- * Walks a V3 meeting through extract-and-correct, then the agenda.
+ * Walks a V3 meeting through extract and correct, the agenda, then attachment pages.
  * Finished stages stay open. The next stage is another entry on the same bar.
  */
 export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageStatus }) {
@@ -232,9 +233,10 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [rewrites, setRewrites] = useState<PageRewrite[]>([]);
   const [agendaItems, setAgendaItems] = useState<AgendaItem[]>([]);
   const [buildingAgenda, setBuildingAgenda] = useState(false);
+  const [linking, setLinking] = useState(false);
   const [pickedStep, setPickedStep] = useState<MeetingsV3WizardStep["id"] | null>(null);
 
-  const busy = running || buildingAgenda || status.stage === "extracting" || status.stage === "correcting";
+  const busy = running || buildingAgenda || linking || status.stage === "extracting" || status.stage === "correcting";
 
   useEffect(() => {
     if (!expanded) return;
@@ -374,6 +376,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         ...current,
         currentStep: "Agenda built from corrected pages",
         agendaItemCount: payload?.items?.length ?? 0,
+        attachmentsLinked: false,
+        unassignedAttachmentPages: [],
       }));
       setPickedStep(null);
     } catch (agendaError) {
@@ -384,10 +388,39 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     }
   }
 
+  async function linkAttachments() {
+    setLinking(true);
+    setError(null);
+    setStatus((current) => ({ ...current, currentStep: "Linking attachment pages to agenda topics" }));
+    try {
+      const response = await fetch(`/api/v3/meetings/${status.id}/attachments`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | { items?: AgendaItem[]; unassignedPages?: number[]; error?: string }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Attachment linking failed.");
+      }
+      setAgendaItems(payload?.items ?? []);
+      setStatus((current) => ({
+        ...current,
+        attachmentsLinked: true,
+        unassignedAttachmentPages: payload?.unassignedPages ?? [],
+        agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
+        currentStep: "Attachment pages linked to agenda topics",
+      }));
+    } catch (linkError) {
+      const message = linkError instanceof Error ? linkError.message : "Attachment linking failed.";
+      setError(message);
+    } finally {
+      setLinking(false);
+    }
+  }
+
   const wizard = meetingsV3WizardProgress({
     pageCount: Math.max(status.pageCount, pages.length),
     correctedPageCount: Math.max(status.correctedPageCount, rewrites.length),
     agendaItemCount: Math.max(status.agendaItemCount, agendaItems.length),
+    attachmentsLinked: status.attachmentsLinked,
   });
   const shownStep = wizard.steps.find((step) => step.id === pickedStep && step.state !== "upcoming")
     ?? wizard.steps.find((step) => step.id === wizard.activeId)
@@ -399,6 +432,13 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     : shownStep?.state === "complete"
       ? "Run again"
       : "Extract and correct";
+  const split = status.agendaContentEndsAtPage;
+  const attachmentRows = agendaItems.flatMap((item) => {
+    const attachmentPages = split == null
+      ? []
+      : item.sourcePages.filter((page) => page > split).sort((left, right) => left - right);
+    return attachmentPages.length > 0 ? [{ item, attachmentPages }] : [];
+  });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
@@ -479,14 +519,27 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
-            <button
-              type="button"
-              onClick={() => void buildAgenda()}
-              disabled={busy}
-              className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {buildingAgenda ? "Building agenda…" : agendaItems.length > 0 ? "Run again" : "Build agenda"}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              {agendaItems.length > 0 && !buildingAgenda ? (
+                <button
+                  type="button"
+                  onClick={() => setPickedStep("attachments")}
+                  className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
+                >
+                  Continue to attachments
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void buildAgenda()}
+                disabled={busy}
+                className={agendaItems.length > 0 && !buildingAgenda
+                  ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                  : "rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"}
+              >
+                {buildingAgenda ? "Building agenda…" : agendaItems.length > 0 ? "Run again" : "Build agenda"}
+              </button>
+            </div>
           </div>
           {agendaItems.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
@@ -503,6 +556,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                 {agendaItems.map((item) => {
                   const sourcePages = [...item.sourcePages].sort((left, right) => left - right);
                   const firstPage = sourcePages[0];
+                  const pageLabel = formatSourcePages(sourcePages);
                   return (
                     <li key={`${item.itemNumber}-${item.title}`}>
                       <button
@@ -517,12 +571,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                       >
                         <span className="font-semibold tabular-nums text-slate-900">{item.itemNumber}</span>
                         <span className="font-medium text-slate-800">{item.title}</span>
-                        {sourcePages.length > 0 ? (
-                          <span className="text-xs text-slate-500">
-                            {sourcePages.length === 1
-                              ? `page ${sourcePages[0]}`
-                              : `pages ${sourcePages[0]}–${sourcePages[sourcePages.length - 1]}`}
-                          </span>
+                        {pageLabel ? (
+                          <span className="text-xs text-slate-500">{pageLabel}</span>
                         ) : null}
                         {item.amount ? <span className="text-xs font-medium text-slate-700">{item.amount}</span> : null}
                         {item.vendors.length > 0 ? (
@@ -537,6 +587,88 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                 <p className="border-t border-slate-200 px-3 py-2 text-xs text-slate-600">
                   Open a topic to compare that page.
                 </p>
+              ) : null}
+            </section>
+          )}
+        </>
+      ) : null}
+
+      {shownStep?.id === "attachments" ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
+            <button
+              type="button"
+              onClick={() => void linkAttachments()}
+              disabled={busy}
+              className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {linking ? "Linking attachments…" : status.attachmentsLinked ? "Run again" : "Link attachments"}
+            </button>
+          </div>
+          {!status.attachmentsLinked ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              {linking
+                ? "Reading corrected pages after the agenda and matching them to topics."
+                : "Link attachment pages once the agenda looks right."}
+            </div>
+          ) : agendaItems.length === 0 && status.agendaItemCount > 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              Loading linked pages.
+            </div>
+          ) : attachmentRows.length === 0 && status.unassignedAttachmentPages.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              No pages sit after the agenda split.
+            </div>
+          ) : (
+            <section className="rounded-xl border border-slate-200 bg-white">
+              <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+                Attachment pages
+              </h2>
+              <ul className="max-h-80 divide-y divide-slate-100 overflow-auto">
+                {attachmentRows.map(({ item, attachmentPages }) => (
+                  <li key={`${item.itemNumber}-${item.title}`} className="px-3 py-2 text-sm">
+                    <p>
+                      <span className="font-semibold tabular-nums text-slate-900">{item.itemNumber}</span>
+                      <span className="ml-3 font-medium text-slate-800">{item.title}</span>
+                    </p>
+                    <p className="mt-1 flex flex-wrap gap-1">
+                      {attachmentPages.map((page) => (
+                        <button
+                          key={page}
+                          type="button"
+                          onClick={() => {
+                            setPageNumber(page);
+                            setPickedStep("extract");
+                          }}
+                          className="rounded-md border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          Page {page}
+                        </button>
+                      ))}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              {status.unassignedAttachmentPages.length > 0 ? (
+                <div className="border-t border-slate-200 px-3 py-2 text-sm text-slate-700">
+                  <p className="font-medium text-slate-900">Not linked</p>
+                  <p className="mt-1 flex flex-wrap gap-1">
+                    {status.unassignedAttachmentPages.map((page) => (
+                      <button
+                        key={page}
+                        type="button"
+                        onClick={() => {
+                          setPageNumber(page);
+                          setPickedStep("extract");
+                        }}
+                        className="rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-900 hover:bg-amber-100"
+                      >
+                        Page {page}
+                      </button>
+                    ))}
+                  </p>
+                </div>
               ) : null}
             </section>
           )}

@@ -101,6 +101,8 @@ export function GenerateMeetingV2Dialog({
   >(null);
   const loadedPdfIdRef = useRef<string | null>(null);
   const upcoming = mode === "upcoming";
+  const packageUsesAgendaSplit = upcoming || pipeline === "v3";
+  const packagePickerVariant = upcoming ? "upcoming" : pipeline === "v3" ? "v3" : "minutes";
   const stages = upcoming ? UPCOMING_STAGES : HISTORICAL_STAGES;
   const packageStage: Stage = upcoming ? 2 : 3;
   const finalStage: Stage = upcoming ? 2 : 3;
@@ -256,7 +258,7 @@ export function GenerateMeetingV2Dialog({
   }, [packagePdfEnabled, selectedPackageId, selectedPackageName]);
 
   useEffect(() => {
-    if (!upcoming) return;
+    if (!packageUsesAgendaSplit) return;
     const selection = packageTab === "existing" ? existingSelection : uploadSelection;
     const pages = selection?.selectedPages ?? [];
     if (pages.length < 2) {
@@ -273,7 +275,7 @@ export function GenerateMeetingV2Dialog({
       }
       return defaultAgendaBoundaryPage(pages);
     });
-  }, [existingSelection, packageTab, upcoming, uploadSelection]);
+  }, [existingSelection, packageTab, packageUsesAgendaSplit, uploadSelection]);
 
   function resetForm() {
     setStage(1);
@@ -391,7 +393,10 @@ export function GenerateMeetingV2Dialog({
       setError("Upload a Teams transcript (.vtt).");
       return;
     }
-    if (upcoming && !upcomingAgendaSplitValid(packageSelection, agendaEndsAtSourcePage)) {
+    if (
+      packageUsesAgendaSplit &&
+      !upcomingAgendaSplitValid(packageSelection, agendaEndsAtSourcePage)
+    ) {
       setError(
         "Set the last agenda page. At least one selected page must be an attachment.",
       );
@@ -404,10 +409,10 @@ export function GenerateMeetingV2Dialog({
     formData.append("title", title.trim());
     formData.append("meetingDate", meetingDate);
     if (transcriptFile) formData.append("transcript", transcriptFile);
-    if (upcoming && agendaEndsAtSourcePage != null) {
+    if (packageUsesAgendaSplit && agendaEndsAtSourcePage != null) {
       const splitIndex =
         packageSelection.selectedPages.indexOf(agendaEndsAtSourcePage) + 1;
-      formData.append("purpose", "upcoming");
+      if (upcoming) formData.append("purpose", "upcoming");
       formData.append("agendaContentEndsAtPage", String(splitIndex));
     }
     if (pipeline === "v3") formData.append("pipeline", "v3");
@@ -500,13 +505,17 @@ export function GenerateMeetingV2Dialog({
       >
         <div className="shrink-0 border-b border-slate-100 px-6 py-5">
           <p className="text-xs uppercase tracking-wide text-slate-500">
-            {upcoming ? "New meeting" : "Meetings V2"}
+            {upcoming ? "New meeting" : pipeline === "v3" ? "Meetings V3" : "Meetings V2"}
           </p>
           <h2
             id="generate-meeting-v2-dialog-title"
             className="mt-1 text-xl font-semibold text-slate-900"
           >
-            {upcoming ? "Create a meeting" : "Create V2 workspace"}
+            {upcoming
+              ? "Create a meeting"
+              : pipeline === "v3"
+                ? "Create V3 meeting"
+                : "Create V2 workspace"}
           </h2>
           <ol
             className="mt-4 flex w-full list-none items-center p-0"
@@ -656,11 +665,11 @@ export function GenerateMeetingV2Dialog({
             </div>
 
             <div className={stage === packageStage ? "space-y-3" : "hidden"}>
-              {upcoming ? (
+              {packageUsesAgendaSplit ? (
                 <p className="text-sm text-slate-600">
-                  Select every page for the live meeting—agenda and attachments.
-                  The last-agenda dropdown only marks where the written agenda stops.
-                  Pages after it stay in the meeting. Unselected pages are removed.
+                  {pipeline === "v3"
+                    ? "Include the full board package. Teal pages are agenda; amber pages are attachments. Use the last-agenda control to mark where the agenda ends—for example, agenda through page 12 and attachments from page 13."
+                    : "Select every page for the live meeting—agenda and attachments. The last-agenda dropdown only marks where the written agenda stops. Pages after it stay in the meeting. Unselected pages are removed."}
                 </p>
               ) : null}
               <div className="flex flex-wrap items-start gap-3">
@@ -738,9 +747,9 @@ export function GenerateMeetingV2Dialog({
                 ) : null}
                 <BoardPackagePageSelector
                   label={
-                    upcoming ? "Board package pages *" : "Management report pages *"
+                    packageUsesAgendaSplit ? "Board package pages *" : "Management report pages *"
                   }
-                  variant={upcoming ? "upcoming" : "minutes"}
+                  variant={packagePickerVariant}
                   agendaEndsAtPage={agendaEndsAtSourcePage}
                   onAgendaEndsAtPage={setAgendaEndsAtSourcePage}
                   showFilePicker={false}
@@ -754,7 +763,7 @@ export function GenerateMeetingV2Dialog({
               <div className={packageTab === "upload" ? "space-y-3" : "hidden"}>
                 <BoardPackagePageSelector
                   label="Board package *"
-                  variant={upcoming ? "upcoming" : "minutes"}
+                  variant={packagePickerVariant}
                   agendaEndsAtPage={agendaEndsAtSourcePage}
                   onAgendaEndsAtPage={setAgendaEndsAtSourcePage}
                   previewFitWidth
@@ -809,7 +818,9 @@ export function GenerateMeetingV2Dialog({
                     ? "Starting..."
                     : upcoming
                       ? "Create meeting"
-                      : "Create V2 Workspace"}
+                      : pipeline === "v3"
+                        ? "Create V3 meeting"
+                        : "Create V2 Workspace"}
                 </button>
               )}
             </div>

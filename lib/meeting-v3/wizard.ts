@@ -5,7 +5,7 @@
 
 /** One stage on the V3 test wizard. */
 export type MeetingsV3WizardStep = {
-  id: "extract" | "agenda";
+  id: "extract" | "agenda" | "attachments";
   title: string;
   detail: string;
 };
@@ -21,6 +21,11 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
     id: "agenda",
     title: "Build agenda",
     detail: "Topics, page numbers, amounts, and vendors come from the corrected pages.",
+  },
+  {
+    id: "attachments",
+    title: "Link attachments",
+    detail: "Pages after the agenda split are linked to the topic they support.",
   },
 ];
 
@@ -42,16 +47,20 @@ export type MeetingsV3WizardProgress = {
 
 /**
  * The first unfinished V3 stage.
- * Extract is finished when every stored page has a correction. Agenda is finished after that list exists.
+ * Extract is finished when every stored page has a correction.
+ * Agenda is finished after that list exists.
+ * Attachments are finished after a link run is stored for that agenda.
  */
 export function meetingsV3WizardProgress(input: {
   pageCount: number;
   correctedPageCount: number;
   agendaItemCount: number;
+  attachmentsLinked: boolean;
 }): MeetingsV3WizardProgress {
   const extractDone = input.pageCount > 0 && input.correctedPageCount >= input.pageCount;
   const agendaDone = extractDone && input.agendaItemCount > 0;
-  const doneById = { extract: extractDone, agenda: agendaDone };
+  const attachmentsDone = agendaDone && input.attachmentsLinked;
+  const doneById = { extract: extractDone, agenda: agendaDone, attachments: attachmentsDone };
   const activeId = MEETINGS_V3_WIZARD_STEPS.find((step) => !doneById[step.id])?.id
     ?? MEETINGS_V3_WIZARD_STEPS[MEETINGS_V3_WIZARD_STEPS.length - 1].id;
   let passedActive = false;

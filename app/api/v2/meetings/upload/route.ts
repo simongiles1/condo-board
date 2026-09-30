@@ -91,10 +91,11 @@ export async function POST(req: Request) {
         boardPackageBuffer.byteOffset + boardPackageBuffer.byteLength,
       ),
     );
-    const agendaContentEndsAtPage = upcoming
+    const needsAgendaSplit = upcoming || v3;
+    const agendaContentEndsAtPage = needsAgendaSplit
       ? parseAgendaContentEndsAtPage(formData.get("agendaContentEndsAtPage"), packagePageCount)
       : null;
-    if (upcoming && agendaContentEndsAtPage == null) {
+    if (needsAgendaSplit && agendaContentEndsAtPage == null) {
       return NextResponse.json(
         { error: "Choose the last agenda page. At least one later page must be an attachment." },
         { status: 400 },
@@ -147,7 +148,9 @@ export async function POST(req: Request) {
       settings: v3
         ? meetingsV3CreatedSettings(
             createdAt,
-            upcoming ? { agendaContentEndsAtPage: agendaContentEndsAtPage! } : null,
+            agendaContentEndsAtPage != null
+              ? { agendaContentEndsAtPage: agendaContentEndsAtPage }
+              : null,
           )
         : upcoming
           ? { upcomingMeeting: { agendaContentEndsAtPage: agendaContentEndsAtPage! } }

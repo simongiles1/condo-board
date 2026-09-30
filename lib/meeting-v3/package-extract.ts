@@ -1,5 +1,5 @@
 /**
- * Extracts a V3 meeting's board package, then corrects every stored page.
+ * Extracts a V3 meeting's board package, then corrects agenda-side pages.
  */
 
 import { ingestMeetingV2Sources, updateMeetingV2Status } from "@/lib/meeting-v2/service";
@@ -22,7 +22,7 @@ export class MeetingsV3PackageError extends Error {
 }
 
 /**
- * Reads the board package into stored pages, then rewrites every page from its PDF.
+ * Reads the board package into stored pages, then rewrites each agenda page from its PDF.
  * Throws MeetingsV3PackageError when the meeting is missing or is not a V3 workspace.
  * A correction failure leaves the extracted pages in place and marks the run failed.
  */
@@ -50,13 +50,13 @@ export async function runMeetingsV3PackageExtraction(meetingId: string): Promise
     await updateMeetingV2Status(
       meetingId,
       "ingested",
-      "Correcting every extracted page",
+      "Correcting agenda pages",
       70,
       null,
     );
     await buildMeetingPageRewrites(meetingId);
     await writeMeetingsV3PackageStage(meetingId, "ready", null);
-    await updateMeetingV2Status(meetingId, "ingested", "Every extracted page is corrected", 100, null);
+    await updateMeetingV2Status(meetingId, "ingested", "Agenda pages are corrected", 100, null);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Package extraction failed.";
     await writeMeetingsV3PackageStage(meetingId, "failed", message);

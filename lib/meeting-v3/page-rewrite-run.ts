@@ -1,7 +1,6 @@
 /**
- * Rewrites every stored package page from that page's PDF.
- * The stored extraction is the style to keep. The page PDF is what the rewrite follows.
- * Docling text is left unchanged.
+ * Rewrites agenda-side package pages from each page's PDF.
+ * Attachment pages keep the Docling extract. The stored extraction is the style to keep.
  */
 
 import { randomUUID } from "crypto";
@@ -17,11 +16,18 @@ import {
 } from "@/lib/db/schema-v2";
 import { generatePageVision } from "@/lib/gemini/client";
 import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
+import { upcomingAgendaSplit } from "@/lib/meeting-v2/upcoming-meeting";
+import { isAgendaPageForCorrection } from "@/lib/meeting-v3/agenda-pages";
 import { loadMeetingBoardPackage } from "@/lib/meeting-v2/board-package";
 import { extractPdfPages } from "@/lib/pdf/extract-pages";
 import { meetingsV3SettingsWithAttachmentLink } from "@/lib/meeting-v3/package-status";
 import { isMeetingsV3Workspace } from "@/lib/meeting-v3/workspace";
+import {
+  buildMeetingsV3GeminiStageRow,
+  persistMeetingsV3AiUsageStage,
+} from "@/lib/meeting-v3/ai-usage";
 import { PAGE_REWRITE_SYSTEM_PROMPT, readPageRewriteMarkdown } from "@/lib/meeting-v3/page-rewrite";
+import type { GeminiUsageCall } from "@/lib/gemini/usage";
 
 /** A page-rewrite failure the route can return with an HTTP status. */
 export class PageRewriteError extends Error {
@@ -48,7 +54,7 @@ export type PageRewriteBuildResult = {
 };
 
 /**
- * Replaces the meeting's page rewrites with a fresh read of each extracted page.
+ * Replaces the meeting's page rewrites with a fresh read of each agenda page.
  * Throws PageRewriteError when the meeting, pages, or PDF are missing.
  * A page that does not return markdown leaves the previous rewrites in place.
  * A successful rewrite drops the stored V3 agenda, which was built from the previous correction.
@@ -59,9 +65,11 @@ export async function buildMeetingPageRewrites(meetingId: string): Promise<PageR
     .select({ id: meetingsV2.id, settings: meetingsV2.settings })
     .from(meetingsV2)
     .where(eq(meetingsV2.id, meetingId));
-  if (!meeting || !isMeetingsV3Workspace(readMeetingV2Settings(meeting.settings))) {
+  const settings = readMeetingV2Settings(meeting?.settings);
+  if (!meeting || !isMeetingsV3Workspace(settings)) {
     throw new PageRewriteError("Meeting not found.", 404);
   }
+  const agendaSplit = upcomingAgendaSplit(settings);
 
   const pages = await db
     .select({
@@ -80,8 +88,16 @@ export async function buildMeetingPageRewrites(meetingId: string): Promise<PageR
     throw new PageRewriteError(pdf.error, pdf.status);
   }
 
+  const agendaPages = pages.filter((page) =>
+    isAgendaPageForCorrection(page.pageNumber, agendaSplit),
+  );
+  if (agendaPages.length === 0) {
+    throw new PageRewriteError("No agenda pages are available to correct.", 409);
+  }
+
   const rewritten: PageRewrite[] = [];
-  for (const page of pages) {
+  const usageCalls: GeminiUsageCall[] = [];
+  for (const page of agendaPages) {
     let pagePdf: Uint8Array;
     try {
       pagePdf = await extractPdfPages(pdf.payload.buffer, [page.pageNumber]);
@@ -105,6 +121,7 @@ export async function buildMeetingPageRewrites(meetingId: string): Promise<PageR
         502,
       );
     }
+    usageCalls.push(...completion.usageCalls);
     try {
       rewritten.push({
         pageNumber: page.pageNumber,
@@ -144,6 +161,13 @@ export async function buildMeetingPageRewrites(meetingId: string): Promise<PageR
       })
       .where(eq(meetingsV2.id, meetingId));
   });
+
+  if (usageCalls.length > 0) {
+    await persistMeetingsV3AiUsageStage(
+      meetingId,
+      buildMeetingsV3GeminiStageRow("v3_correct", usageCalls),
+    );
+  }
 
   return { meetingId, pageCount: rewritten.length, pages: rewritten };
 }

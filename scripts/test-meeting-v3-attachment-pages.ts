@@ -14,14 +14,14 @@ import {
 import { formatSourcePages } from "../lib/meeting-v3/agenda-pages";
 
 const pages = [
-  { pageNumber: 4, heading: "Booster pump" },
-  { pageNumber: 13, heading: "Quote" },
-  { pageNumber: 14, heading: "Quote continued" },
-  { pageNumber: 15, heading: "Other" },
+  { pageNumber: 4, heading: "Booster pump", extractedText: "agenda body" },
+  { pageNumber: 13, heading: "Quote", extractedText: "quote from docling" },
+  { pageNumber: 14, heading: "Quote continued", extractedText: "more docling" },
+  { pageNumber: 15, heading: "Other", extractedText: "other docling" },
 ];
 
 describe("corrected attachment pages", () => {
-  it("keeps pages after the split and requires a correction", () => {
+  it("keeps pages after the split and prefers a correction over Docling", () => {
     const selected = selectCorrectedAttachmentPages({
       pages,
       agendaContentEndsAtPage: 12,
@@ -48,15 +48,24 @@ describe("corrected attachment pages", () => {
     assert.deepEqual(selected, []);
   });
 
-  it("rejects an attachment page that has not been corrected", () => {
+  it("uses Docling extract when an attachment page was not corrected", () => {
+    const selected = selectCorrectedAttachmentPages({
+      pages,
+      agendaContentEndsAtPage: 12,
+      rewrites: [{ pageNumber: 13, correctedText: "quote" }],
+    });
+    assert.equal(selected.find((page) => page.pageNumber === 14)?.text, "more docling");
+  });
+
+  it("rejects an attachment page with no correction and no extract", () => {
     assert.throws(
       () =>
         selectCorrectedAttachmentPages({
-          pages,
+          pages: [{ pageNumber: 13, heading: null, extractedText: "   " }],
           agendaContentEndsAtPage: 12,
-          rewrites: [{ pageNumber: 13, correctedText: "quote" }],
+          rewrites: [],
         }),
-      /Page 14 has not been corrected/,
+      /Page 13 has no extracted text/,
     );
   });
 });

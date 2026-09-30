@@ -22,6 +22,31 @@ export type MeetingsV3AttachmentLink = {
   unassignedPages: number[];
 };
 
+/** One V3 pipeline stage in the stored AI cost log. */
+export type MeetingsV3AiUsageStageRecord = {
+  id: string;
+  label: string;
+  modelName: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  notApplicable?: boolean;
+  usageDetail?: string;
+  cacheHitTokens?: number;
+  cacheMissTokens?: number;
+  billedAtMs?: number;
+  inputCostUsd?: number;
+  outputCostUsd?: number;
+  totalCostUsd?: number;
+  pricingTier?: "peak" | "off_peak" | "mixed";
+  recordedAt: string;
+};
+
+/** AI token and cost totals grouped by V3 wizard stage. */
+export type MeetingsV3AiUsageSettings = {
+  stages: MeetingsV3AiUsageStageRecord[];
+};
+
 /** Settings written when a meeting is created from the V3 strip. */
 export type MeetingsV3PackageSettings = {
   workspace: true;
@@ -29,6 +54,7 @@ export type MeetingsV3PackageSettings = {
   error: string | null;
   updatedAt: string;
   attachmentLink?: MeetingsV3AttachmentLink | null;
+  aiUsage?: MeetingsV3AiUsageSettings | null;
 };
 
 /**

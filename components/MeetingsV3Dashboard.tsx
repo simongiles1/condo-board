@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { countAgendaPages } from "@/lib/meeting-v3/agenda-pages";
 import type { MeetingsV3WorkspaceCard } from "@/lib/meeting-v3/package-status";
 import { meetingsV3WizardProgress } from "@/lib/meeting-v3/wizard";
 
@@ -48,7 +49,22 @@ export function MeetingsV3Dashboard({ meetings }: { meetings: MeetingsV3Workspac
               <td className="px-3 py-2.5 text-slate-700">
                 <Link href={`/operations/meetings/v3/${meeting.id}`} className="block">
                   {meeting.correctedPageCount > 0
-                    ? `${meeting.correctedPageCount} of ${meeting.pageCount} ${meeting.pageCount === 1 ? "page" : "pages"}`
+                    ? (() => {
+                        const agendaPages = countAgendaPages(
+                          meeting.pageCount,
+                          meeting.agendaContentEndsAtPage,
+                        );
+                        const total =
+                          meeting.agendaContentEndsAtPage != null && agendaPages < meeting.pageCount
+                            ? agendaPages
+                            : meeting.pageCount;
+                        const label = total === 1 ? "page" : "pages";
+                        const scope =
+                          meeting.agendaContentEndsAtPage != null && agendaPages < meeting.pageCount
+                            ? "agenda "
+                            : "";
+                        return `${meeting.correctedPageCount} of ${total} ${scope}${label}`;
+                      })()
                     : "None yet"}
                 </Link>
               </td>

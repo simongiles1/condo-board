@@ -19,6 +19,12 @@ import { listMeetingV3Agenda, type MeetingsV3AgendaItem } from "@/lib/meeting-v3
 import { listMeetingPageRewrites } from "@/lib/meeting-v3/page-rewrite-run";
 import { writeMeetingsV3AttachmentLink } from "@/lib/meeting-v3/package-status";
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
+import type { DeepSeekGenerationResult } from "@/lib/deepseek/client";
+import {
+  buildMeetingsV3DeepSeekStageRow,
+  buildMeetingsV3NotApplicableStageRow,
+  persistMeetingsV3AiUsageStage,
+} from "@/lib/meeting-v3/ai-usage";
 import { isMeetingsV3Workspace } from "@/lib/meeting-v3/workspace";
 
 /** An attachment link the route can return with an HTTP status. */
@@ -84,6 +90,7 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
     .select({
       pageNumber: meetingsV2DocumentPages.pageNumber,
       heading: meetingsV2DocumentPages.pageHeading,
+      extractedText: meetingsV2DocumentPages.extractedText,
     })
     .from(meetingsV2DocumentPages)
     .where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId))
@@ -134,6 +141,7 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
   }
   const remaining = attachmentPages.filter((page) => !claimed.has(page.pageNumber));
   const modelAssignments: Array<{ agendaItemId: string; pages: number[] }> = [];
+  const deepSeekUsage: DeepSeekGenerationResult[] = [];
   if (remaining.length > 0) {
     if (!isDeepSeekKeyConfigured()) {
       throw new AttachmentLinkError(
@@ -163,6 +171,7 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
           temperature: 0,
           thinking: false,
         });
+        deepSeekUsage.push(response);
         modelAssignments.push(...readAttachmentAssignments(response.text));
       }
     } catch (error) {
@@ -199,6 +208,24 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
       ? "No attachment pages after the agenda split"
       : "Attachment pages linked to agenda topics",
   );
+
+  if (deepSeekUsage.length > 0) {
+    await persistMeetingsV3AiUsageStage(
+      meetingId,
+      buildMeetingsV3DeepSeekStageRow("v3_attachments", deepSeekUsage),
+    );
+  } else {
+    await persistMeetingsV3AiUsageStage(
+      meetingId,
+      buildMeetingsV3NotApplicableStageRow("v3_attachments", {
+        modelName: "N/A",
+        usageDetail:
+          remaining.length === 0
+            ? "Agenda citations linked every attachment page; no model call."
+            : "No attachment pages after the agenda split.",
+      }),
+    );
+  }
 
   return {
     meetingId,

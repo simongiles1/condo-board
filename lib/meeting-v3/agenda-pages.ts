@@ -3,6 +3,30 @@
  * Attachment pages after the agenda split are left out. A missing correction is an error.
  */
 
+/**
+ * Stored pages that belong to the agenda side of the crossover.
+ * When no split is recorded, every stored page is treated as agenda.
+ */
+export function countAgendaPages(
+  pageCount: number,
+  agendaContentEndsAtPage: number | null,
+): number {
+  if (pageCount <= 0) return 0;
+  if (agendaContentEndsAtPage == null) return pageCount;
+  return Math.min(agendaContentEndsAtPage, pageCount);
+}
+
+/**
+ * True when a stored page should receive the Gemini correction pass.
+ */
+export function isAgendaPageForCorrection(
+  pageNumber: number,
+  agendaContentEndsAtPage: number | null,
+): boolean {
+  if (agendaContentEndsAtPage == null) return true;
+  return pageNumber <= agendaContentEndsAtPage;
+}
+
 /** One page the agenda extractor can read. */
 export type AgendaPageText = {
   pageNumber: number;

@@ -161,6 +161,54 @@ export const PIPELINE_STAGE_TOOLTIPS: Record<string, PipelineStageTooltip> = {
       },
     ],
   },
+  v3_ingest: {
+    title: "Docling extract",
+    summary: "Reads the board package PDF into stored pages before agenda correction.",
+    sections: [
+      {
+        items: [
+          "IBM Docling extracts markdown per page; pdf.js fills any pages Docling skips.",
+          "This step has no LLM token meter — page counts are shown instead.",
+        ],
+      },
+    ],
+  },
+  v3_correct: {
+    title: "Agenda page correction",
+    summary: "Gemini rewrites each agenda-side page from its PDF slice.",
+    sections: [
+      {
+        items: [
+          "Runs only through the last-agenda crossover; attachment pages stay on the Docling extract.",
+          "Input and output tokens are summed across every corrected page.",
+        ],
+      },
+    ],
+  },
+  v3_agenda: {
+    title: "Build agenda",
+    summary: "DeepSeek reads corrected agenda pages into structured topics.",
+    sections: [
+      {
+        items: [
+          "One discovery call on the first pages, then one extract call per agenda page.",
+          "Costs use DeepSeek peak/off-peak pricing when cache stats are present.",
+        ],
+      },
+    ],
+  },
+  v3_attachments: {
+    title: "Link attachments",
+    summary: "Assigns post-agenda pages to agenda items.",
+    sections: [
+      {
+        items: [
+          "Pages already named in the agenda are linked without a model call.",
+          "Remaining pages are batched to DeepSeek when DEEPSEEK_API_KEY is set.",
+        ],
+      },
+    ],
+  },
 };
 
 export function getPipelineStageTooltip(stageId: string): PipelineStageTooltip | null {

@@ -16,12 +16,12 @@ export type AttachmentPageText = {
 };
 
 /**
- * Corrected text for pages after the agenda split.
+ * Text for pages after the agenda split used when linking attachments.
  * Returns an empty list when the meeting has no split.
- * Throws when an attachment page has no correction.
+ * Uses the Docling extract when that page was not corrected.
  */
 export function selectCorrectedAttachmentPages(input: {
-  pages: Array<{ pageNumber: number; heading: string | null }>;
+  pages: Array<{ pageNumber: number; heading: string | null; extractedText: string | null }>;
   rewrites: Array<{ pageNumber: number; correctedText: string }>;
   agendaContentEndsAtPage: number | null;
 }): AttachmentPageText[] {
@@ -34,9 +34,9 @@ export function selectCorrectedAttachmentPages(input: {
     input.rewrites.map((row) => [row.pageNumber, row.correctedText.trim()]),
   );
   return selected.map((page) => {
-    const text = byPage.get(page.pageNumber);
+    const text = byPage.get(page.pageNumber) ?? page.extractedText?.trim() ?? "";
     if (!text) {
-      throw new Error(`Page ${page.pageNumber} has not been corrected yet.`);
+      throw new Error(`Page ${page.pageNumber} has no extracted text.`);
     }
     return { pageNumber: page.pageNumber, heading: page.heading, text };
   });

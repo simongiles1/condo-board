@@ -3,6 +3,8 @@
  * Append the next stage here. The meeting page walks them in this order.
  */
 
+import { countAgendaPages } from "@/lib/meeting-v3/agenda-pages";
+
 /** One stage on the V3 test wizard. */
 export type MeetingsV3WizardStep = {
   id: "extract" | "agenda" | "attachments";
@@ -15,7 +17,7 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
   {
     id: "extract",
     title: "Extract and correct",
-    detail: "Docling reads the board package, then every page is corrected from the PDF.",
+    detail: "Docling reads the board package, then each agenda page is corrected from the PDF.",
   },
   {
     id: "agenda",
@@ -47,7 +49,7 @@ export type MeetingsV3WizardProgress = {
 
 /**
  * The first unfinished V3 stage.
- * Extract is finished when every stored page has a correction.
+ * Extract is finished when every agenda page has a correction.
  * Agenda is finished after that list exists.
  * Attachments are finished after a link run is stored for that agenda.
  */
@@ -56,8 +58,10 @@ export function meetingsV3WizardProgress(input: {
   correctedPageCount: number;
   agendaItemCount: number;
   attachmentsLinked: boolean;
+  agendaContentEndsAtPage: number | null;
 }): MeetingsV3WizardProgress {
-  const extractDone = input.pageCount > 0 && input.correctedPageCount >= input.pageCount;
+  const agendaPageCount = countAgendaPages(input.pageCount, input.agendaContentEndsAtPage);
+  const extractDone = agendaPageCount > 0 && input.correctedPageCount >= agendaPageCount;
   const agendaDone = extractDone && input.agendaItemCount > 0;
   const attachmentsDone = agendaDone && input.attachmentsLinked;
   const doneById = { extract: extractDone, agenda: agendaDone, attachments: attachmentsDone };

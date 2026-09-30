@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { AiUsageDialog, AiUsageIconButton } from "@/components/AiUsageDialog";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
-import { formatSourcePages } from "@/lib/meeting-v3/agenda-pages";
+import type { AiUsageStageRow } from "@/lib/gemini/usage";
+import { countAgendaPages, formatSourcePages, isAgendaPageForCorrection } from "@/lib/meeting-v3/agenda-pages";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
 import {
   meetingsV3WizardProgress,
@@ -37,11 +39,20 @@ type PageNavProps = {
   pageIndex: number;
   pageNumber: number | null;
   correctedCount: number;
+  agendaPageCount: number;
   onPageChange: (pageNumber: number) => void;
   onExpand?: () => void;
 };
 
-function PageNavBar({ pages, pageIndex, pageNumber, correctedCount, onPageChange, onExpand }: PageNavProps) {
+function PageNavBar({
+  pages,
+  pageIndex,
+  pageNumber,
+  correctedCount,
+  agendaPageCount,
+  onPageChange,
+  onExpand,
+}: PageNavProps) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <button
@@ -82,7 +93,9 @@ function PageNavBar({ pages, pageIndex, pageNumber, correctedCount, onPageChange
         Next page
       </button>
       <span className="text-sm text-slate-500">
-        {correctedCount} corrected {correctedCount === 1 ? "page" : "pages"}
+        {agendaPageCount > 0 && agendaPageCount < pages.length
+          ? `${correctedCount} of ${agendaPageCount} agenda pages corrected`
+          : `${correctedCount} corrected ${correctedCount === 1 ? "page" : "pages"}`}
       </span>
       {onExpand ? (
         <button
@@ -103,6 +116,7 @@ type CompareColumnsProps = {
   selectedPage: ExtractedPage | null;
   busy: boolean;
   correctedText: string | null;
+  agendaContentEndsAtPage: number | null;
   panelMinHeightClass: string;
 };
 
@@ -112,11 +126,20 @@ function CompareColumns({
   selectedPage,
   busy,
   correctedText,
+  agendaContentEndsAtPage,
   panelMinHeightClass,
 }: CompareColumnsProps) {
   const doclingText = selectedPage?.extractedText?.trim() || "No extracted text on this page.";
+  const agendaPage =
+    pageNumber != null && isAgendaPageForCorrection(pageNumber, agendaContentEndsAtPage);
   const corrected = correctedText?.trim()
-    || (busy ? "Correcting this page." : "This page has not been corrected yet.");
+    || (busy
+      ? agendaPage
+        ? "Correcting this agenda page."
+        : "Agenda pages are being corrected."
+      : agendaPage
+        ? "This agenda page has not been corrected yet."
+        : "Attachment pages use the Docling extract. Correction runs on agenda pages only.");
 
   return (
     <div className={`grid min-h-0 flex-1 gap-3 lg:grid-cols-3 ${panelMinHeightClass}`}>
@@ -235,8 +258,28 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [buildingAgenda, setBuildingAgenda] = useState(false);
   const [linking, setLinking] = useState(false);
   const [pickedStep, setPickedStep] = useState<MeetingsV3WizardStep["id"] | null>(null);
+  const [aiUsageOpen, setAiUsageOpen] = useState(false);
+  const [aiUsageStages, setAiUsageStages] = useState<AiUsageStageRow[] | null>(null);
+  const [aiUsageLoading, setAiUsageLoading] = useState(false);
 
   const busy = running || buildingAgenda || linking || status.stage === "extracting" || status.stage === "correcting";
+
+  function refreshAiUsage() {
+    setAiUsageLoading(true);
+    void fetch(`/api/v3/meetings/${status.id}/ai-usage`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const payload = (await response.json()) as { stages?: AiUsageStageRow[] };
+        setAiUsageStages(payload.stages ?? []);
+      })
+      .catch(() => undefined)
+      .finally(() => setAiUsageLoading(false));
+  }
+
+  useEffect(() => {
+    if (!aiUsageOpen) return;
+    refreshAiUsage();
+  }, [aiUsageOpen, status.id]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -324,12 +367,18 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const selectedPage = pageIndex >= 0 ? pages[pageIndex] : null;
   const correctedText = rewrites.find((page) => page.pageNumber === pageNumber)?.correctedText ?? null;
 
+  const agendaPageCount = countAgendaPages(
+    Math.max(status.pageCount, pages.length),
+    status.agendaContentEndsAtPage,
+  );
+
   const compareProps: CompareColumnsProps = {
     meetingId: status.id,
     pageNumber,
     selectedPage,
     busy,
     correctedText,
+    agendaContentEndsAtPage: status.agendaContentEndsAtPage,
     panelMinHeightClass: "min-h-[28rem]",
   };
 
@@ -421,6 +470,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     correctedPageCount: Math.max(status.correctedPageCount, rewrites.length),
     agendaItemCount: Math.max(status.agendaItemCount, agendaItems.length),
     attachmentsLinked: status.attachmentsLinked,
+    agendaContentEndsAtPage: status.agendaContentEndsAtPage,
   });
   const shownStep = wizard.steps.find((step) => step.id === pickedStep && step.state !== "upcoming")
     ?? wizard.steps.find((step) => step.id === wizard.activeId)
@@ -428,7 +478,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const pageAgenda = agendaItems.filter((item) => item.sourcePages.includes(pageNumber ?? -1));
   const extractRunning = running || status.stage === "extracting" || status.stage === "correcting";
   const extractLabel = extractRunning
-    ? (status.stage === "correcting" ? "Correcting every page…" : "Extracting the package…")
+    ? (status.stage === "correcting" ? "Correcting agenda pages…" : "Extracting the package…")
     : shownStep?.state === "complete"
       ? "Run again"
       : "Extract and correct";
@@ -442,15 +492,18 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div>
-        <Link href="/operations/meetings?v=3" className="text-xs font-semibold uppercase tracking-wide text-teal-700 hover:text-teal-900">
-          Meetings V3
-        </Link>
-        <h1 className="text-2xl font-semibold text-slate-900">{status.title}</h1>
-        <p className="text-sm text-slate-600">
-          {status.meetingDate}
-          {busy && status.currentStep ? ` · ${status.currentStep}` : ""}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <Link href="/operations/meetings?v=3" className="text-xs font-semibold uppercase tracking-wide text-teal-700 hover:text-teal-900">
+            Meetings V3
+          </Link>
+          <h1 className="text-2xl font-semibold text-slate-900">{status.title}</h1>
+          <p className="text-sm text-slate-600">
+            {status.meetingDate}
+            {busy && status.currentStep ? ` · ${status.currentStep}` : ""}
+          </p>
+        </div>
+        <AiUsageIconButton onClick={() => setAiUsageOpen(true)} title="View V3 AI usage and cost" />
       </div>
 
       {shownStep ? (
@@ -496,8 +549,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           {status.pageCount === 0 && pages.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
               {extractRunning
-                ? "Docling is reading the board package. Every stored page is then corrected."
-                : "This step reads the package, then corrects every page."}
+                ? "Docling is reading the board package. Agenda pages are then corrected from the PDF."
+                : "This step reads the package, then corrects agenda pages only."}
             </div>
           ) : (
             <>
@@ -506,6 +559,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                 pageIndex={pageIndex}
                 pageNumber={pageNumber}
                 correctedCount={rewrites.length}
+                agendaPageCount={agendaPageCount}
                 onPageChange={setPageNumber}
                 onExpand={() => setExpanded(true)}
               />
@@ -704,6 +758,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                 pageIndex={pageIndex}
                 pageNumber={pageNumber}
                 correctedCount={rewrites.length}
+                agendaPageCount={agendaPageCount}
                 onPageChange={setPageNumber}
               />
               <CompareColumns {...compareProps} panelMinHeightClass="min-h-0 flex-1" />
@@ -711,6 +766,13 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           </div>
         </div>
       ) : null}
+
+      <AiUsageDialog
+        open={aiUsageOpen}
+        stages={aiUsageStages}
+        loading={aiUsageLoading}
+        onClose={() => setAiUsageOpen(false)}
+      />
     </div>
   );
 }

@@ -22,6 +22,11 @@ import {
 } from "@/lib/meeting-v3/agenda-pages";
 import { listMeetingPageRewrites } from "@/lib/meeting-v3/page-rewrite-run";
 import { meetingsV3SettingsWithAttachmentLink } from "@/lib/meeting-v3/package-status";
+import type { DeepSeekGenerationResult } from "@/lib/deepseek/client";
+import {
+  buildMeetingsV3DeepSeekStageRow,
+  persistMeetingsV3AiUsageStage,
+} from "@/lib/meeting-v3/ai-usage";
 import { isMeetingsV3Workspace } from "@/lib/meeting-v3/workspace";
 
 /** An agenda build the route can return with an HTTP status. */
@@ -97,6 +102,7 @@ export async function buildMeetingV3Agenda(meetingId: string): Promise<AgendaBui
   }
 
   await setAgendaStep(meetingId, "Building the agenda from corrected pages");
+  const deepSeekUsage: DeepSeekGenerationResult[] = [];
   let agenda;
   try {
     agenda = await extractBoardPackageAgendaJson({
@@ -105,6 +111,9 @@ export async function buildMeetingV3Agenda(meetingId: string): Promise<AgendaBui
       pages,
       onProgress: async (progress) => {
         await setAgendaStep(meetingId, progress.label);
+      },
+      onDeepSeekUsage: (result) => {
+        deepSeekUsage.push(result);
       },
     });
   } catch (error) {
@@ -149,6 +158,13 @@ export async function buildMeetingV3Agenda(meetingId: string): Promise<AgendaBui
       .where(eq(meetingsV2.id, meetingId));
   });
   await setAgendaStep(meetingId, "Agenda built from corrected pages");
+
+  if (deepSeekUsage.length > 0) {
+    await persistMeetingsV3AiUsageStage(
+      meetingId,
+      buildMeetingsV3DeepSeekStageRow("v3_agenda", deepSeekUsage),
+    );
+  }
 
   return {
     meetingId,

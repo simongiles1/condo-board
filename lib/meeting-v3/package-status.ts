@@ -34,6 +34,7 @@ export type MeetingsV3WorkspaceCard = {
   pageCount: number;
   correctedPageCount: number;
   agendaItemCount: number;
+  agendaContentEndsAtPage: number | null;
   attachmentsLinked: boolean;
 };
 
@@ -116,6 +117,7 @@ export async function listMeetingsV3Workspaces(): Promise<MeetingsV3WorkspaceCar
     pageCount: pagesByMeeting.get(row.id) ?? 0,
     correctedPageCount: correctedByMeeting.get(row.id) ?? 0,
     agendaItemCount: agendaByMeeting.get(row.id) ?? 0,
+    agendaContentEndsAtPage: upcomingAgendaSplit(readMeetingV2Settings(row.settings)),
     attachmentsLinked: meetingsV3AttachmentLink(row.settings) != null,
   }));
 }
@@ -211,6 +213,7 @@ export async function writeMeetingsV3PackageStage(
     error,
     updatedAt,
     attachmentLink: meetingsV3AttachmentLink(settings),
+    aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   await db
     .update(meetingsV2)
@@ -235,6 +238,7 @@ export function meetingsV3SettingsWithAttachmentLink(
     error: meetingsV3PackageError(settings),
     updatedAt: settings.v3Package?.updatedAt ?? new Date().toISOString(),
     attachmentLink,
+    aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
 }

@@ -2,7 +2,7 @@ import { asc, eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { meetingsV2DocumentPages } from "@/lib/db/schema-v2";
-import { generateDeepSeekJson } from "@/lib/deepseek/client";
+import { generateDeepSeekJson, type DeepSeekGenerationResult } from "@/lib/deepseek/client";
 import { canonicalLeafItemCode } from "@/lib/meeting-v2/agenda-outline";
 
 export type BoardPackageAgendaSkeleton = {
@@ -364,6 +364,8 @@ export async function extractBoardPackageAgendaJson(options: {
    */
   pages?: Array<{ pageNumber: number; heading: string | null; text: string }>;
   onProgress?: (progress: { current: number; total: number; label: string }) => Promise<void> | void;
+  /** Fires after each DeepSeek call when building the agenda outline and page extracts. */
+  onDeepSeekUsage?: (result: DeepSeekGenerationResult) => void;
 }): Promise<FullBoardPackageAgenda> {
   const db = getDb();
   const pages = options.pages ?? await db
@@ -412,6 +414,7 @@ export async function extractBoardPackageAgendaJson(options: {
     temperature: 0,
     thinking: false,
   });
+  options.onDeepSeekUsage?.(skeletonResponse);
 
   const skeleton = normalizeBoardPackageAgendaSkeleton(
     JSON.parse(skeletonResponse.text) as BoardPackageAgendaSkeleton,
@@ -468,6 +471,7 @@ export async function extractBoardPackageAgendaJson(options: {
       temperature: 0,
       thinking: false,
     });
+    options.onDeepSeekUsage?.(pageExtractResponse);
 
     try {
       const parsed = JSON.parse(pageExtractResponse.text) as { items: PageExtractedItem[] };

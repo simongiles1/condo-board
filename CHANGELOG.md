@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changes
 
+- **Meetings V3 correction retry** — When Docling extraction is already stored but agenda correction failed or is incomplete, **Retry correction only** runs Gemini on agenda pages without re-running Docling. **Re-extract package** still runs the full pipeline.
+
 - **Meetings V3 agenda-only correction** — Gemini page correction runs on agenda pages only (through the last-agenda crossover). Attachment pages stay on the Docling extract for linking. The wizard, dashboard, and compare view count corrected agenda pages instead of every stored page.
 
 ### Added

@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 
 import {
-  buildMeetingPageRewrites,
-  listMeetingPageRewrites,
-  PageRewriteError,
-} from "@/lib/meeting-v3/page-rewrite-run";
+  MeetingsV3PackageError,
+  runMeetingsV3AgendaCorrectionOnly,
+} from "@/lib/meeting-v3/package-extract";
+import { listMeetingPageRewrites, PageRewriteError } from "@/lib/meeting-v3/page-rewrite-run";
 
 export const maxDuration = 900;
 
@@ -25,7 +25,7 @@ export async function GET(
 }
 
 /**
- * Rewrites each extracted page as Docling-style markdown and replaces the stored rewrites.
+ * Corrects agenda pages from the stored extract without re-running Docling.
  */
 export async function POST(
   _request: Request,
@@ -33,13 +33,13 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-    const result = await buildMeetingPageRewrites(id);
-    return NextResponse.json(result);
+    const status = await runMeetingsV3AgendaCorrectionOnly(id);
+    return NextResponse.json(status);
   } catch (error) {
-    if (error instanceof PageRewriteError) {
+    if (error instanceof MeetingsV3PackageError || error instanceof PageRewriteError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
-    const detail = error instanceof Error ? error.message : "Page rewrite failed.";
+    const detail = error instanceof Error ? error.message : "Page correction failed.";
     return NextResponse.json({ error: detail }, { status: 500 });
   }
 }

@@ -408,6 +408,37 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     }
   }
 
+  async function retryCorrectionOnly() {
+    setRunning(true);
+    setError(null);
+    setStatus((current) => ({
+      ...current,
+      stage: "correcting",
+      error: null,
+      currentStep: "Correcting agenda pages",
+    }));
+    try {
+      const response = await fetch(`/api/v3/meetings/${status.id}/page-rewrite`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | (MeetingsV3PackageStatus & { error?: string })
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Page correction failed.");
+      }
+      if (payload && "stage" in payload) {
+        setStatus(payload);
+        setAgendaItems([]);
+        if (payload.stage === "ready") setPickedStep("extract");
+      }
+    } catch (correctionError) {
+      const message = correctionError instanceof Error ? correctionError.message : "Page correction failed.";
+      setError(message);
+      setStatus((current) => ({ ...current, stage: "failed", error: message }));
+    } finally {
+      setRunning(false);
+    }
+  }
+
   async function buildAgenda() {
     setBuildingAgenda(true);
     setError(null);
@@ -477,11 +508,20 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     ?? wizard.steps[0];
   const pageAgenda = agendaItems.filter((item) => item.sourcePages.includes(pageNumber ?? -1));
   const extractRunning = running || status.stage === "extracting" || status.stage === "correcting";
+  const hasExtractedPages = status.pageCount > 0 || pages.length > 0;
+  const extractStepDone = agendaPageCount > 0 && Math.max(status.correctedPageCount, rewrites.length) >= agendaPageCount;
+  const canRetryCorrectionOnly =
+    hasExtractedPages && !extractStepDone && !extractRunning && status.stage !== "extracting";
   const extractLabel = extractRunning
     ? (status.stage === "correcting" ? "Correcting agenda pages…" : "Extracting the package…")
     : shownStep?.state === "complete"
       ? "Run again"
-      : "Extract and correct";
+      : canRetryCorrectionOnly
+        ? "Re-extract package"
+        : "Extract and correct";
+  const retryCorrectionLabel = extractRunning && status.stage === "correcting"
+    ? "Correcting agenda pages…"
+    : "Retry correction only";
   const split = status.agendaContentEndsAtPage;
   const attachmentRows = agendaItems.flatMap((item) => {
     const attachmentPages = split == null
@@ -534,11 +574,21 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                   Continue to agenda
                 </button>
               ) : null}
+              {canRetryCorrectionOnly ? (
+                <button
+                  type="button"
+                  onClick={() => void retryCorrectionOnly()}
+                  disabled={busy}
+                  className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {retryCorrectionLabel}
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void extractPackage()}
                 disabled={busy}
-                className={shownStep.state === "complete" && !extractRunning
+                className={canRetryCorrectionOnly || (shownStep.state === "complete" && !extractRunning)
                   ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
                   : "rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"}
               >

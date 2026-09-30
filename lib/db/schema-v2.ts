@@ -584,6 +584,26 @@ export const meetingsV3QuoteRows = pgTable(
   }),
 );
 
+/** Docling-style markdown for one page, rewritten from the page PDF. */
+export const meetingsV3PageRewrites = pgTable(
+  "meetings_v3_page_rewrites",
+  {
+    id: text("id").primaryKey(),
+    meetingV2Id: text("meeting_v2_id")
+      .notNull()
+      .references(() => meetingsV2.id, { onDelete: "cascade" }),
+    pageNumber: integer("page_number").notNull(),
+    correctedText: text("corrected_text").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    meetingPageUnique: uniqueIndex("meetings_v3_page_rewrites_meeting_page_unique").on(
+      table.meetingV2Id,
+      table.pageNumber,
+    ),
+  }),
+);
+
 export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   sourceArtifacts: many(meetingsV2SourceArtifacts),
   transcriptSegments: many(meetingsV2TranscriptSegments),
@@ -605,6 +625,7 @@ export const meetingsV2Relations = relations(meetingsV2, ({ many }) => ({
   liveRecognitionCues: many(meetingsV2LiveRecognitionCues),
   liveRecognitionCorrections: many(meetingsV2LiveRecognitionCorrections),
   quoteRows: many(meetingsV3QuoteRows),
+  pageRewrites: many(meetingsV3PageRewrites),
 }));
 
 export const meetingsV2SourceArtifactsRelations = relations(

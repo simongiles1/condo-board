@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
@@ -13,6 +13,13 @@ type ExtractedPage = {
   pageHeading: string | null;
   extractedText: string;
 };
+
+type PageRewrite = {
+  pageNumber: number;
+  correctedText: string;
+};
+
+type ExtractView = "docling" | "corrected";
 
 const STAGE_LABEL: Record<MeetingsV3PackageStage, string> = {
   created: "Ready to extract",
@@ -105,6 +112,10 @@ type CompareColumnsProps = {
   busy: boolean;
   totalRowCount: number;
   panelMinHeightClass: string;
+  correctedText: string | null;
+  extractView: ExtractView;
+  showCorrected: boolean;
+  onExtractViewChange: (view: ExtractView) => void;
 };
 
 function CompareColumns({
@@ -116,8 +127,16 @@ function CompareColumns({
   busy,
   totalRowCount,
   panelMinHeightClass,
+  correctedText,
+  extractView,
+  showCorrected,
+  onExtractViewChange,
 }: CompareColumnsProps) {
-  const extractText = selectedPage?.extractedText?.trim() || "No extracted text on this page.";
+  const doclingText = selectedPage?.extractedText?.trim() || "No extracted text on this page.";
+  const showingCorrected = showCorrected && extractView === "corrected";
+  const extractText = showingCorrected
+    ? (correctedText?.trim() || "This page has not been rewritten.")
+    : doclingText;
 
   return (
     <div className={`grid min-h-0 flex-1 gap-3 lg:grid-cols-3 ${panelMinHeightClass}`}>
@@ -136,9 +155,29 @@ function CompareColumns({
       </section>
 
       <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
-          Docling extract
-        </h2>
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
+          <h2 className="text-sm font-semibold text-slate-900">
+            {showingCorrected ? "Corrected extract" : "Docling extract"}
+          </h2>
+          {showCorrected ? (
+            <div className="flex rounded-md border border-slate-300 p-0.5 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => onExtractViewChange("docling")}
+                className={`rounded px-2 py-1 ${extractView === "docling" ? "bg-slate-800 text-white" : "text-slate-700 hover:bg-slate-50"}`}
+              >
+                Docling
+              </button>
+              <button
+                type="button"
+                onClick={() => onExtractViewChange("corrected")}
+                className={`rounded px-2 py-1 ${extractView === "corrected" ? "bg-teal-700 text-white" : "text-slate-700 hover:bg-slate-50"}`}
+              >
+                Corrected
+              </button>
+            </div>
+          ) : null}
+        </div>
         <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
           <MarkdownPreview>{extractText}</MarkdownPreview>
         </div>
@@ -200,7 +239,7 @@ function CompareColumns({
 }
 
 /**
- * Board-package PDF, Docling text, and quote ledger for one page at a time.
+ * Board-package PDF, Docling text or its corrected rewrite, and quote ledger for one page at a time.
  */
 export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageStatus }) {
   const [status, setStatus] = useState(initial);
@@ -212,8 +251,12 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [rows, setRows] = useState<AnnotatedQuoteRow[]>([]);
   const [pageNumber, setPageNumber] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [rewrites, setRewrites] = useState<PageRewrite[]>([]);
+  const [extractView, setExtractView] = useState<ExtractView>("docling");
+  const [rewriting, setRewriting] = useState(false);
+  const extractViewChosen = useRef(false);
 
-  const busy = running || status.stage === "extracting" || status.stage === "reading_quotes";
+  const busy = running || rewriting || status.stage === "extracting" || status.stage === "reading_quotes";
 
   useEffect(() => {
     if (!expanded) return;
@@ -280,6 +323,24 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     };
   }, [status.id, status.quoteRowCount, status.stage]);
 
+  useEffect(() => {
+    if (status.pageCount === 0) return;
+    let cancelled = false;
+    void fetch(`/api/v3/meetings/${status.id}/page-rewrite`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok || cancelled) return;
+        const payload = (await response.json()) as { pages?: PageRewrite[] };
+        if (cancelled) return;
+        const next = payload.pages ?? [];
+        setRewrites(next);
+        if (!extractViewChosen.current && next.length > 0) setExtractView("corrected");
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [status.id, status.pageCount]);
+
   const pageIndex = pages.findIndex((page) => page.pageNumber === pageNumber);
   const selectedPage = pageIndex >= 0 ? pages[pageIndex] : null;
   const pageRows = useMemo(
@@ -287,6 +348,12 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     [rows, pageNumber],
   );
   const inLedgerWindow = pageNumber != null && status.ledgerPageNumbers.includes(pageNumber);
+  const correctedText = rewrites.find((page) => page.pageNumber === pageNumber)?.correctedText ?? null;
+
+  function chooseExtractView(view: ExtractView) {
+    extractViewChosen.current = true;
+    setExtractView(view);
+  }
 
   const compareProps: CompareColumnsProps = {
     meetingId: status.id,
@@ -297,7 +364,35 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     busy,
     totalRowCount: rows.length,
     panelMinHeightClass: "min-h-[28rem]",
+    correctedText,
+    extractView,
+    showCorrected: rewrites.length > 0,
+    onExtractViewChange: chooseExtractView,
   };
+
+  async function rewritePages() {
+    setRewriting(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/v3/meetings/${status.id}/page-rewrite`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | { pages?: PageRewrite[]; error?: string }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Page rewrite failed.");
+      }
+      const next = payload?.pages ?? [];
+      setRewrites(next);
+      extractViewChosen.current = true;
+      setExtractView("corrected");
+      setExpanded(true);
+    } catch (rewriteError) {
+      const message = rewriteError instanceof Error ? rewriteError.message : "Page rewrite failed.";
+      setError(message);
+    } finally {
+      setRewriting(false);
+    }
+  }
 
   async function extractPackage() {
     setRunning(true);
@@ -335,14 +430,30 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
             {status.currentStep || STAGE_LABEL[status.stage]}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void extractPackage()}
-          disabled={busy}
-          className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-        >
-          {busy ? "Working…" : status.pageCount > 0 ? "Re-run extraction" : "Extract meeting package"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          {status.pageCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => void rewritePages()}
+              disabled={busy}
+              className="rounded-lg border border-teal-700 bg-white px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+            >
+              {rewriting ? "Rewriting pages…" : "Correct Docling extract"}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void extractPackage()}
+            disabled={busy}
+            className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {running || status.stage === "extracting" || status.stage === "reading_quotes"
+              ? "Working…"
+              : status.pageCount > 0
+                ? "Re-run extraction"
+                : "Extract meeting package"}
+          </button>
+        </div>
       </div>
 
       {error ? (

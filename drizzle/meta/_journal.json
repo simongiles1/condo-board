@@ -652,6 +652,13 @@
       "when": 1791150000000,
       "tag": "0092_meetings_v3_quote_rows",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1791200000000,
+      "tag": "0093_meetings_v3_page_rewrites",
+      "breakpoints": true
     }
   ]
 }

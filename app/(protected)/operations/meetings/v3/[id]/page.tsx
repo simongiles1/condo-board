@@ -16,7 +16,7 @@ export default async function MeetingV3Page(props: PageProps) {
   if (!status) notFound();
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-0 py-4 md:px-6 md:py-6">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-0 py-4 md:px-6 md:py-6">
       <MeetingV3QuoteCompare initial={status} />
     </div>
   );

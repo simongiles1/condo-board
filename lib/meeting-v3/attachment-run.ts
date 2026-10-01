@@ -12,6 +12,7 @@ import { isDeepSeekKeyConfigured, readMeetingV2Settings } from "@/lib/meeting-v2
 import { upcomingAgendaSplit } from "@/lib/meeting-v2/upcoming-meeting";
 import {
   linkCorrectedAttachmentPages,
+  attachmentPageNumbersToLink,
   readAttachmentAssignments,
   selectCorrectedAttachmentPages,
 } from "@/lib/meeting-v3/attachment-pages";
@@ -58,10 +59,10 @@ Rules:
 
 /**
  * Replaces attachment pages on the V3 agenda using corrected text.
- * A page the agenda already names is linked before any model call.
+ * A page the agenda already names is linked before any model call, including a page with no extracted text.
  * Throws AttachmentLinkError when the meeting or agenda is not ready.
  * A model failure leaves the previous pages in place.
- * A page with no text and no heading is left unlinked instead of failing the run.
+ * A page with no text that the agenda does not name stays unlinked instead of failing the run.
  */
 export async function linkMeetingV3Attachments(meetingId: string): Promise<AttachmentLinkResult> {
   const db = getDb();
@@ -106,6 +107,7 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
   });
   const attachmentPages = selected.pages;
   const pagesWithoutText = selected.pagesWithoutText;
+  const attachmentPageNumbers = attachmentPageNumbersToLink(selected);
 
   const correctedByPage = new Map(attachmentPages.map((page) => [page.pageNumber, page.text]));
   const agendaText = new Map(
@@ -128,7 +130,7 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
   const cited = linkCorrectedAttachmentPages({
     agendaContentEndsAtPage: split,
     items,
-    attachmentPageNumbers: attachmentPages.map((page) => page.pageNumber),
+    attachmentPageNumbers,
     modelAssignments: [],
   });
   const claimed = new Set<number>();
@@ -182,12 +184,11 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
   const linked = linkCorrectedAttachmentPages({
     agendaContentEndsAtPage: split,
     items,
-    attachmentPageNumbers: attachmentPages.map((page) => page.pageNumber),
+    attachmentPageNumbers,
     modelAssignments,
   });
-  const unassignedPages = [...new Set([...linked.unassignedPages, ...pagesWithoutText])].sort(
-    (left, right) => left - right,
-  );
+  const unassignedPages = linked.unassignedPages;
+  const unlinkedBlankPages = pagesWithoutText.filter((page) => unassignedPages.includes(page));
   const completedAt = new Date().toISOString();
   await db.transaction(async (tx) => {
     for (const item of items) {
@@ -202,15 +203,17 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
     completedAt,
     assignedPageCount: linked.assignedPageCount,
     unassignedPages,
-    pagesWithoutText,
+    pagesWithoutText: unlinkedBlankPages,
   });
   await setAttachmentStep(
     meetingId,
-    attachmentPages.length === 0 && pagesWithoutText.length > 0
-      ? "Attachment pages had no extracted text"
-      : linked.assignedPageCount === 0 && linked.unassignedPages.length === 0
-        ? "No attachment pages after the agenda split"
-        : "Attachment pages linked to agenda topics",
+    linked.assignedPageCount > 0
+      ? "Attachment pages linked to agenda topics"
+      : attachmentPages.length === 0 && pagesWithoutText.length > 0
+        ? "Attachment pages had no extracted text"
+        : linked.unassignedPages.length === 0
+          ? "No attachment pages after the agenda split"
+          : "Attachment pages linked to agenda topics",
   );
 
   if (deepSeekUsage.length > 0) {
@@ -237,7 +240,7 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
     meetingId,
     assignedPageCount: linked.assignedPageCount,
     unassignedPages,
-    pagesWithoutText,
+    pagesWithoutText: unlinkedBlankPages,
     items: await listMeetingV3Agenda(meetingId),
   };
 }

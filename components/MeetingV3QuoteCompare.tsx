@@ -8,6 +8,7 @@ import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { agendaItemIndentDepth, displayAgendaSegment } from "@/lib/meeting-v2/agenda-outline";
 import { countAgendaPages, formatSourcePages, isAgendaPageForCorrection } from "@/lib/meeting-v3/agenda-pages";
+import { cancelPdfCanvasRender, renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
 import {
   meetingsV3WizardProgress,
@@ -198,8 +199,104 @@ type CompareColumnsProps = {
   busy: boolean;
   correctedText: string | null;
   agendaContentEndsAtPage: number | null;
-  panelMinHeightClass: string;
 };
+
+/**
+ * One board-package page drawn to the width of its column.
+ * The browser PDF viewer was fitting the whole file into the pane, so the page was a thumbnail strip.
+ */
+function FitWidthPackagePage({
+  meetingId,
+  pageNumber,
+}: {
+  meetingId: string;
+  pageNumber: number;
+}) {
+  const frameRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [frameWidth, setFrameWidth] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPdfData(null);
+    setErrorMessage(null);
+    void fetch(`/api/meetings/${meetingId}/board-package`)
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(payload?.error ?? "Could not load the board package.");
+        }
+        return response.arrayBuffer();
+      })
+      .then((buffer) => {
+        if (!cancelled) setPdfData(buffer);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : "Could not load the board package.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [meetingId]);
+
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const observer = new ResizeObserver(() => {
+      const next = frame.clientWidth;
+      setFrameWidth((current) => (current === next ? current : next));
+    });
+    observer.observe(frame);
+    setFrameWidth(frame.clientWidth);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!pdfData || !canvas || frameWidth < 40) return;
+    let cancelled = false;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.style.width = "100%";
+    canvas.style.height = "auto";
+
+    void (async () => {
+      const probe = await renderPdfPageToCanvas(pdfData, pageNumber, canvas, 1);
+      if (cancelled || !probe?.pageWidthPt || probe.pageWidthPt <= 0) return;
+      await renderPdfPageToCanvas(
+        pdfData,
+        pageNumber,
+        canvas,
+        (frameWidth / probe.pageWidthPt) * dpr,
+      );
+      if (cancelled) return;
+      canvas.style.width = "100%";
+      canvas.style.height = "auto";
+    })().catch(() => {
+      if (!cancelled) setErrorMessage("Could not render this page.");
+    });
+
+    return () => {
+      cancelled = true;
+      cancelPdfCanvasRender(canvas);
+    };
+  }, [frameWidth, pageNumber, pdfData]);
+
+  return (
+    <div ref={frameRef} className="min-w-0 bg-slate-100 p-3">
+      {errorMessage ? <p className="text-sm text-red-800">{errorMessage}</p> : null}
+      {!errorMessage && !pdfData ? <p className="text-sm text-slate-600">Loading page…</p> : null}
+      <canvas
+        ref={canvasRef}
+        aria-label={`Board package page ${pageNumber}`}
+        className={`block h-auto w-full bg-white shadow-sm ${pdfData && !errorMessage ? "" : "hidden"}`}
+      />
+    </div>
+  );
+}
 
 function CompareColumns({
   meetingId,
@@ -208,7 +305,6 @@ function CompareColumns({
   busy,
   correctedText,
   agendaContentEndsAtPage,
-  panelMinHeightClass,
 }: CompareColumnsProps) {
   const doclingText = selectedPage?.extractedText?.trim() || "No extracted text on this page.";
   const agendaPage =
@@ -223,35 +319,30 @@ function CompareColumns({
         : "Attachment pages use the Docling extract. Correction runs on agenda pages only.");
 
   return (
-    <div className={`grid min-h-0 flex-1 gap-3 lg:grid-cols-3 ${panelMinHeightClass}`}>
-      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+    <div className="grid items-start gap-3 lg:grid-cols-3">
+      <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
           Board package
         </h2>
         {pageNumber != null ? (
-          <iframe
-            key={pageNumber}
-            title={`Board package page ${pageNumber}`}
-            src={`/api/meetings/${meetingId}/board-package#page=${pageNumber}`}
-            className="min-h-0 w-full flex-1"
-          />
+          <FitWidthPackagePage meetingId={meetingId} pageNumber={pageNumber} />
         ) : null}
       </section>
 
-      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+      <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
           Docling extract
         </h2>
-        <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+        <div className="px-4 py-3">
           <MarkdownPreview>{doclingText}</MarkdownPreview>
         </div>
       </section>
 
-      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+      <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
           Corrected extract
         </h2>
-        <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+        <div className="px-4 py-3">
           <MarkdownPreview>{corrected}</MarkdownPreview>
         </div>
       </section>
@@ -270,7 +361,7 @@ type WizardBarProps = {
 function WizardBar({ steps, shownId, completedCount, busy, onShow }: WizardBarProps) {
   const width = steps.length === 0 ? 0 : Math.round((completedCount / steps.length) * 100);
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+    <div className="shrink-0 rounded-xl border border-slate-200 bg-white px-4 py-3">
       <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-slate-200" aria-hidden="true">
         <div className="h-full rounded-full bg-teal-700" style={{ width: `${width}%` }} />
       </div>
@@ -460,7 +551,6 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     busy,
     correctedText,
     agendaContentEndsAtPage: status.agendaContentEndsAtPage,
-    panelMinHeightClass: "min-h-[28rem]",
   };
 
   async function extractPackage() {
@@ -606,16 +696,16 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     ? "Correcting agenda pages…"
     : "Retry correction only";
   const split = status.agendaContentEndsAtPage;
-  const attachmentRows = agendaItems.flatMap((item) => {
+  const attachmentRows = agendaItems.map((item) => {
     const attachmentPages = split == null
       ? []
       : item.sourcePages.filter((page) => page > split).sort((left, right) => left - right);
-    return attachmentPages.length > 0 ? [{ item, attachmentPages }] : [];
+    return { item, attachmentPages };
   });
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
         <div>
           <Link href="/operations/meetings?v=3" className="text-xs font-semibold uppercase tracking-wide text-teal-700 hover:text-teal-900">
             Meetings V3
@@ -640,9 +730,10 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       ) : null}
 
       {error ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
+        <p className="shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
       ) : null}
 
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
       {shownStep?.id === "extract" ? (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -739,7 +830,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
                 Agenda from corrected pages
               </h2>
-              <ul className="max-h-80 divide-y divide-slate-100 overflow-auto">
+              <ul className="divide-y divide-slate-100">
                 {agendaItems.map((item) => {
                   const sourcePages = [...item.sourcePages].sort((left, right) => left - right);
                   const firstPage = sourcePages[0];
@@ -823,7 +914,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                   {pagesWithoutTextNotice(status.attachmentPagesWithoutText)}
                 </p>
               ) : null}
-              <ul className="max-h-80 divide-y divide-slate-100 overflow-auto">
+              <ul className="divide-y divide-slate-100">
                 {attachmentRows.map(({ item, attachmentPages }) => (
                   <li
                     key={`${item.itemNumber}-${item.title}`}
@@ -839,21 +930,23 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                       </span>
                       <span className="font-medium text-slate-800">{item.title}</span>
                     </p>
-                    <p className="mt-1 flex flex-wrap gap-1">
-                      {attachmentPages.map((page) => (
-                        <button
-                          key={page}
-                          type="button"
-                          onClick={() => {
-                            setPageNumber(page);
-                            setPickedStep("extract");
-                          }}
-                          className="rounded-md border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                        >
-                          Page {page}
-                        </button>
-                      ))}
-                    </p>
+                    {attachmentPages.length > 0 ? (
+                      <p className="mt-1 flex flex-wrap gap-1">
+                        {attachmentPages.map((page) => (
+                          <button
+                            key={page}
+                            type="button"
+                            onClick={() => {
+                              setPageNumber(page);
+                              setPickedStep("extract");
+                            }}
+                            className="rounded-md border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Page {page}
+                          </button>
+                        ))}
+                      </p>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -881,6 +974,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           )}
         </>
       ) : null}
+      </div>
 
       {expanded && status.pageCount > 0 ? (
         <div
@@ -905,7 +999,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                 Close
               </button>
             </div>
-            <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4">
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 sm:p-4">
               <PageNavBar
                 pages={pages}
                 pageIndex={pageIndex}
@@ -914,7 +1008,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                 agendaPageCount={agendaPageCount}
                 onPageChange={setPageNumber}
               />
-              <CompareColumns {...compareProps} panelMinHeightClass="min-h-0 flex-1" />
+              <CompareColumns {...compareProps} />
             </div>
           </div>
         </div>

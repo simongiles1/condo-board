@@ -8,9 +8,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V3 attachment outline** — Link attachments lists every agenda topic with the same number and indent as the agenda, including topics that have no pages yet.
+- **Meetings V3 attachment page ranges** — A page range the agenda names, such as pages 13–26, stays on that topic even when some of those pages have no extracted text. Re-run Link attachments to apply it to a meeting that was linked before.
+- **Meetings V3 wizard scroll** — The title and progress bar stay put. Each step scrolls once, in the area under the progress bar.
+- **Meetings V3 package page** — Extract and correct draws the board-package page to the width of its column instead of the browser PDF viewer’s thumbnail strip.
 - **Meetings V3 page menu** — The page picker truncates a long heading and wraps the open list instead of stretching across the screen.
 - **Meetings V3 agenda outline** — Agenda rows indent by level and show only the local number, so 4.A reads as A under 4.
-- **Meetings V3 blank attachment pages** — A page with no extracted text no longer stops attachment linking. It stays listed as not linked, and a page that still has a heading is linked from that heading.
+- **Meetings V3 blank attachment pages** — A page with no extracted text no longer stops attachment linking. When the agenda names that page, it is linked. Otherwise it stays listed as not linked. A page that still has a heading is linked from that heading.
 
 ### Changes
 

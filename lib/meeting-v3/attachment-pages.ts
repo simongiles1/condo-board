@@ -1,6 +1,7 @@
 /**
  * Links board-package pages after the agenda split onto V3 agenda items.
  * Citations in the corrected agenda text claim a page before a model assignment does.
+ * A cited page is claimed even when that page has no extracted text.
  */
 
 import {
@@ -53,6 +54,17 @@ export function selectCorrectedAttachmentPages(input: {
     pages.push({ pageNumber: page.pageNumber, heading: page.heading, text: text || heading });
   }
   return { pages, pagesWithoutText };
+}
+
+/**
+ * Page numbers after the split that linking may assign.
+ * Includes pages with no extracted text so a citation such as 13–26 still claims them.
+ */
+export function attachmentPageNumbersToLink(selected: SelectedAttachmentPages): number[] {
+  return uniqueSorted([
+    ...selected.pages.map((page) => page.pageNumber),
+    ...selected.pagesWithoutText,
+  ]);
 }
 
 /**

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  attachmentPageNumbersToLink,
   linkCorrectedAttachmentPages,
   readAttachmentAssignments,
   selectCorrectedAttachmentPages,
@@ -80,6 +81,40 @@ describe("corrected attachment pages", () => {
 });
 
 describe("link corrected attachment pages", () => {
+  it("claims a cited range through pages that have no extracted text", () => {
+    const stored = Array.from({ length: 14 }, (_, index) => {
+      const pageNumber = 13 + index;
+      const hasText = pageNumber <= 20;
+      return {
+        pageNumber,
+        heading: hasText ? "Quote" : null,
+        extractedText: hasText ? "quote" : "   ",
+      };
+    });
+    const selected = selectCorrectedAttachmentPages({
+      pages: stored,
+      agendaContentEndsAtPage: 12,
+      rewrites: [],
+    });
+    assert.deepEqual(selected.pagesWithoutText, [21, 22, 23, 24, 25, 26]);
+    const linked = linkCorrectedAttachmentPages({
+      agendaContentEndsAtPage: 12,
+      items: [
+        {
+          id: "steam",
+          sourcePages: [3],
+          citationText: "(Page 13 - 26)",
+        },
+      ],
+      attachmentPageNumbers: attachmentPageNumbersToLink(selected),
+      modelAssignments: [],
+    });
+    assert.deepEqual(linked.pagesByItemId.get("steam"), [
+      3, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+    ]);
+    assert.deepEqual(linked.unassignedPages, []);
+  });
+
   it("keeps agenda pages and claims a cited range before the model", () => {
     const linked = linkCorrectedAttachmentPages({
       agendaContentEndsAtPage: 12,

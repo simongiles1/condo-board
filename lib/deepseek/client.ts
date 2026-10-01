@@ -216,6 +216,25 @@ export async function generateDeepSeekJson(options: {
   };
 }
 
+/** Request id from a DeepSeek or Cloudflare response, when one is present. */
+function deepSeekRequestId(headers: Headers): string | null {
+  return headers.get("x-request-id") || headers.get("x-ds-trace-id") || headers.get("cf-ray") || null;
+}
+
+/**
+ * Error text when DeepSeek opens the stream and then sends only keep-alives.
+ * Includes the timings so the meeting screen can show them.
+ */
+function silentStreamMessage(
+  headersAtMs: number,
+  keepAlives: number,
+  requestId: string | null,
+  modelName: string,
+): string {
+  const id = requestId ? `, request ${requestId}` : "";
+  return `DeepSeek accepted the request in ${headersAtMs}ms and sent no text (${keepAlives} keep-alives, model ${modelName}${id}).`;
+}
+
 /**
  * Reads a chat completion as SSE so a keep-alive with no tokens can be aborted
  * before the whole-request ceiling.
@@ -261,6 +280,12 @@ async function generateDeepSeekJsonStream(options: {
   let cacheHitTokens = 0;
   let cacheMissTokens = 0;
   let lastTokenAt = Date.now();
+  let keepAlives = 0;
+  const headersAt = Date.now() - started;
+  const requestId = deepSeekRequestId(response.headers);
+  console.info(
+    `[deepseek] stream open in ${headersAt}ms status=${response.status} model=${options.modelName} request=${requestId ?? "none"}`,
+  );
 
   try {
     while (true) {
@@ -268,17 +293,22 @@ async function generateDeepSeekJsonStream(options: {
       const silentFor = Date.now() - lastTokenAt;
       const waitMs = Math.min(options.requestTimeoutMs - elapsed, options.stallTimeoutMs - silentFor);
       if (waitMs <= 0) {
-        throw content ? new Error("The operation was aborted due to timeout") : new Error("DeepSeek sent no text.");
+        throw content
+          ? new Error("The operation was aborted due to timeout")
+          : new Error(silentStreamMessage(headersAt, keepAlives, requestId, options.modelName));
       }
       const outcome = await readStreamChunk(reader, waitMs);
       if (outcome === "stall") {
-        throw content ? new Error("The operation was aborted due to timeout") : new Error("DeepSeek sent no text.");
+        throw content
+          ? new Error("The operation was aborted due to timeout")
+          : new Error(silentStreamMessage(headersAt, keepAlives, requestId, options.modelName));
       }
       if (outcome.done) break;
       buffer += decoder.decode(outcome.value, { stream: true });
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() ?? "";
       for (const line of lines) {
+        if (line.trim().startsWith(":")) keepAlives += 1;
         const delta = readDeepSeekStreamLine(line);
         if (!delta) continue;
         if (delta.content) {

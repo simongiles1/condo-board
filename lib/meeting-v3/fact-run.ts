@@ -190,10 +190,7 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
         } catch (error) {
           if (isDeepSeekSilentStall(error)) {
             await setFactStep(meetingId, "Fact resolution stopped because DeepSeek sent no text");
-            throw new FactResolutionError(
-              "DeepSeek accepted the request and sent no text, so this run stopped instead of waiting on an empty reply.",
-              502,
-            );
+            throw new FactResolutionError(silentFactMessage(error), 502);
           }
           lastFailure = error instanceof Error ? error.message : lastFailure;
           skipped.push(`${item.itemNumber} ${item.title}`);
@@ -248,10 +245,7 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
     } catch (error) {
       if (!isDeepSeekSilentStall(error)) throw error;
       await setFactStep(meetingId, "Fact resolution stopped because DeepSeek sent no text");
-      throw new FactResolutionError(
-        "DeepSeek accepted the request and sent no text, so this run stopped instead of waiting on an empty reply.",
-        502,
-      );
+      throw new FactResolutionError(silentFactMessage(error), 502);
     }
     const proposed = recovered
       ? mergeProposedFacts(proposedByItem.get(item.id) ?? [], recovered)
@@ -337,6 +331,11 @@ async function requestItemFacts(
   deepSeekUsage: DeepSeekGenerationResult[],
 ): Promise<MeetingsV3ProposedFact[]> {
   if (pages.length === 0) return [];
+  const pageNumbers = pages.map((page) => page.pageNumber);
+  const promptChars = pages.reduce((sum, page) => sum + page.text.length, 0);
+  console.info(
+    `[v3-facts] ${item.itemNumber} pages ${pageNumbers.join(",")} (${promptChars} chars) model=deepseek-v4-flash thinking=off`,
+  );
   try {
     const response = await generateDeepSeekJson({
       systemInstruction: FACT_RESOLUTION_PROMPT,
@@ -430,6 +429,13 @@ async function recoverItemFacts(
 /** A fact call that DeepSeek accepted and then left empty. Splitting the page will not help. */
 function isDeepSeekSilentStall(error: unknown): boolean {
   return error instanceof Error && error.message.includes("sent no text");
+}
+
+/** The stall detail for the meeting screen, with a fallback when the client message is short. */
+function silentFactMessage(error: unknown): string {
+  const detail = error instanceof Error ? error.message : "";
+  if (detail.includes("accepted the request in")) return detail;
+  return "DeepSeek accepted the request and sent no text, so this run stopped instead of waiting on an empty reply.";
 }
 
 function siblingTitlesFor(item: FactSourceItem, items: readonly FactSourceItem[]): string[] {

@@ -331,6 +331,27 @@ export const FACT_RESOLUTION_PAGE_BATCH = 4;
 export const FACT_RESOLUTION_MAX_OUTPUT_TOKENS = 12288;
 
 /**
+ * Ceiling for one fact-resolution HTTP call.
+ * A fee table can spend the output budget, and the 120s default aborts that reply.
+ */
+export const FACT_RESOLUTION_REQUEST_TIMEOUT_MS = 300_000;
+
+/**
+ * Recovery is one extra call. More open issues than this are left on the item
+ * rather than asking the model to rewrite an entire table in one reply.
+ */
+export const FACT_RECOVERY_MAX_ISSUES = 12;
+
+/**
+ * Whether a failed fact call should be retried on smaller page slices.
+ * Truncation and the DeepSeek abort both mean the batch was too large.
+ */
+export function factRequestShouldSplit(error: unknown, pageCount: number): boolean {
+  if (pageCount < 2 || !(error instanceof Error)) return false;
+  return error.message.includes("finish_reason=length") || /aborted due to timeout/i.test(error.message);
+}
+
+/**
  * Splits one topic's pages so a single reply can list every quote.
  * An empty list stays empty.
  */

@@ -16,6 +16,8 @@ import {
   FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
   FACT_RESOLUTION_PAGE_BATCH,
   FACT_RESOLUTION_PAGE_CHAR_BUDGET,
+  FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
+  factRequestShouldSplit,
   mergeProposedFacts,
   readProposedFacts,
   readStoredItemFacts,
@@ -415,5 +417,14 @@ describe("v3 quoted facts", () => {
     assert.equal(merged[0]?.quote, "Design fee $500");
     const dropped = mergeProposedFacts(merged, [{ field: "amount", value: "$500", page: 4, omit: true }]);
     assert.equal(dropped.length, 0);
+  });
+
+  it("retries a timed-out fact call when the batch still has more than one page", () => {
+    assert.ok(FACT_RESOLUTION_REQUEST_TIMEOUT_MS > 120_000);
+    const timeout = new Error("The operation was aborted due to timeout");
+    assert.equal(factRequestShouldSplit(timeout, 4), true);
+    assert.equal(factRequestShouldSplit(timeout, 1), false);
+    assert.equal(factRequestShouldSplit(new Error("finish_reason=length"), 2), true);
+    assert.equal(factRequestShouldSplit(new Error("DeepSeek request failed (500)."), 4), false);
   });
 });

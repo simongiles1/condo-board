@@ -8,6 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V3 resolve facts** — A large fee table no longer fails the whole run when DeepSeek is still writing at two minutes. That call can run for five minutes, and a batch that still times out is split and tried again. A topic with more than a handful of open fees skips the extra repair call. Re-run Resolve facts.
 - **Meetings V3 meeting conclusions** — Reconcile meeting no longer treats “so moved,” a negated ratification, or a past approval as a decision of this meeting. A later sentence in the same stretch replaces an earlier one. When the talk points at a recommendation, the package quote is stored beside the decision and does not become the decision.
 - **Meetings V3 transcript re-run** — Segment transcript clears stored meeting conclusions on every agenda row, including topics that keep the same number.
 - **Meetings V3 quoted facts** — Reading saved facts no longer drops a second quote from the same page. Two equal amounts on one page both stay when their quotes differ. Fact extraction reads the whole page instead of the first 2,500 characters.

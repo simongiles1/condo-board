@@ -17,6 +17,9 @@ import {
   chunkFactPages,
   expandFactPagesForPrompt,
   FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
+  FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
+  FACT_RECOVERY_MAX_ISSUES,
+  factRequestShouldSplit,
   mergeProposedFacts,
   readProposedFacts,
   type MeetingsV3ItemFacts,
@@ -295,13 +298,14 @@ async function requestItemFacts(
       temperature: 0,
       thinking: false,
       maxOutputTokens: FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
+      requestTimeoutMs: FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
     });
     deepSeekUsage.push(response);
     return readProposedFacts(response.text).flatMap((entry) =>
       entry.agendaItemId === item.id ? entry.facts : [],
     );
   } catch (error) {
-    if (!isTruncatedDeepSeekOutput(error) || pages.length < 2) throw error;
+    if (!factRequestShouldSplit(error, pages.length)) throw error;
     const mid = Math.ceil(pages.length / 2);
     const left = await requestItemFacts(item, pages.slice(0, mid), items, deepSeekUsage);
     const right = await requestItemFacts(item, pages.slice(mid), items, deepSeekUsage);
@@ -315,7 +319,8 @@ async function recoverItemFacts(
   accepted: MeetingsV3ItemFacts,
   deepSeekUsage: DeepSeekGenerationResult[],
 ): Promise<MeetingsV3ProposedFact[] | null> {
-  if (accepted.reviewIssues.length === 0 || item.pages.length === 0) return null;
+  if (accepted.reviewIssues.length === 0 || accepted.reviewIssues.length > FACT_RECOVERY_MAX_ISSUES) return null;
+  if (item.pages.length === 0) return null;
   if (!isDeepSeekKeyConfigured()) return null;
   try {
     const response = await generateDeepSeekJson({
@@ -337,6 +342,7 @@ async function recoverItemFacts(
       temperature: 0,
       thinking: false,
       maxOutputTokens: FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
+      requestTimeoutMs: FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
     });
     deepSeekUsage.push(response);
     return readProposedFacts(response.text).flatMap((entry) =>
@@ -352,10 +358,6 @@ function siblingTitlesFor(item: FactSourceItem, items: readonly FactSourceItem[]
   return items
     .filter((other) => other.id !== item.id && other.pages.some((page) => pages.has(page.pageNumber)))
     .map((other) => `${other.itemNumber} ${other.title}`);
-}
-
-function isTruncatedDeepSeekOutput(error: unknown): boolean {
-  return error instanceof Error && error.message.includes("finish_reason=length");
 }
 
 async function setFactStep(meetingId: string, currentStep: string): Promise<void> {

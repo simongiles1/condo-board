@@ -8,7 +8,9 @@ import { describe, it } from "node:test";
 
 import {
   ADDITIONAL_BUSINESS_TITLE,
+  agendaItemsForWizardStep,
   cuesFromVtt,
+  packageAgendaItems,
   planAdditionalBusinessItem,
   readStoredItemTranscript,
   rowsFromSegmentedTopics,
@@ -176,6 +178,46 @@ describe("v3 transcript spans", () => {
     assert.deepEqual(
       plan.items.map((item) => item.itemNumber),
       ["4", "4.E", "5"],
+    );
+  });
+});
+
+describe("transcript-only agenda rows", () => {
+  const items = [
+    { id: "4", itemNumber: "4", title: "Property Management Report" },
+    { id: "4d", itemNumber: "4.D", title: "Items for discussion" },
+    { id: "e", itemNumber: "4.E", title: "Ad-hoc items" },
+    { id: "ea", itemNumber: "4.E.a", title: "Toilet hose" },
+    { id: "5", itemNumber: "5", title: "Date of next meeting" },
+  ];
+
+  it("drops the additional-business heading and its leaves from the printed package", () => {
+    assert.deepEqual(
+      packageAgendaItems(items).map((item) => item.itemNumber),
+      ["4", "4.D", "5"],
+    );
+  });
+
+  it("hides extras on earlier wizard steps and keeps them after segmentation", () => {
+    assert.deepEqual(
+      agendaItemsForWizardStep(items, "agenda").map((item) => item.itemNumber),
+      ["4", "4.D", "5"],
+    );
+    assert.deepEqual(
+      agendaItemsForWizardStep(items, "attachments").map((item) => item.itemNumber),
+      ["4", "4.D", "5"],
+    );
+    assert.deepEqual(
+      agendaItemsForWizardStep(items, "facts").map((item) => item.itemNumber),
+      ["4", "4.D", "5"],
+    );
+    assert.deepEqual(
+      agendaItemsForWizardStep(items, "transcript").map((item) => item.itemNumber),
+      ["4", "4.D", "4.E", "4.E.a", "5"],
+    );
+    assert.deepEqual(
+      agendaItemsForWizardStep(items, "sources").map((item) => item.itemNumber),
+      ["4", "4.D", "4.E", "4.E.a", "5"],
     );
   });
 });

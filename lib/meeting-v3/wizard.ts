@@ -47,6 +47,22 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
   },
 ];
 
+/** Query-string key for the wizard step on the V3 meeting page. */
+export const MEETINGS_V3_WIZARD_STEP_QUERY_PARAM = "step";
+
+/**
+ * Parses a wizard step id from the meeting page URL.
+ * Returns null when the value is missing or not a known step.
+ */
+export function parseMeetingsV3WizardStepId(
+  value: string | null | undefined,
+): MeetingsV3WizardStep["id"] | null {
+  if (!value) return null;
+  return MEETINGS_V3_WIZARD_STEPS.some((step) => step.id === value)
+    ? (value as MeetingsV3WizardStep["id"])
+    : null;
+}
+
 /** Where one wizard stage sits relative to the meeting. */
 export type MeetingsV3WizardStepState = "complete" | "current" | "upcoming";
 

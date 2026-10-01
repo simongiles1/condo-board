@@ -7,7 +7,7 @@ import { randomUUID } from "crypto";
 import { access, readFile } from "fs/promises";
 import path from "path";
 
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { meetings, meetingsV2, meetingsV3AgendaItems } from "@/lib/db/schema";
@@ -25,6 +25,7 @@ import {
 import { writeMeetingsV3TranscriptSegmentation } from "@/lib/meeting-v3/package-status";
 import {
   cuesFromVtt,
+  packageAgendaItems,
   rowsFromSegmentedTopics,
   type MeetingsV3TranscriptCue,
   type SegmentedTopicSpanRow,
@@ -53,6 +54,7 @@ export type TranscriptSpanResult = {
 /**
  * Replaces transcript spans on the V3 agenda.
  * Talk that is not on the printed agenda is stored as the additional-business rows the V2 walk creates.
+ * A previous extra under 4.E is dropped first so a re-run cannot double those leaves.
  * Throws TranscriptSpanError when the meeting, facts, or transcript are not ready.
  * A model failure leaves the previous spans in place.
  */
@@ -84,7 +86,8 @@ export async function segmentMeetingV3Transcript(meetingId: string): Promise<Tra
     .from(meetingsV3AgendaItems)
     .where(eq(meetingsV3AgendaItems.meetingV2Id, meetingId))
     .orderBy(asc(meetingsV3AgendaItems.sortOrder));
-  if (storedRows.length === 0) {
+  const seedRows = packageAgendaItems(storedRows);
+  if (seedRows.length === 0) {
     throw new TranscriptSpanError("Build the agenda before segmenting the transcript.", 409);
   }
 
@@ -99,7 +102,7 @@ export async function segmentMeetingV3Transcript(meetingId: string): Promise<Tra
   try {
     const topics = await segmentAgendaTopics({
       meetingId,
-      items: storedRows.map((item) => ({
+      items: seedRows.map((item) => ({
         title: item.title,
         sectionLabel: item.sectionLabel,
         itemType: item.itemType,
@@ -118,10 +121,13 @@ export async function segmentMeetingV3Transcript(meetingId: string): Promise<Tra
     throw new TranscriptSpanError(message, 502);
   }
 
-  const storedByNumber = new Map(storedRows.map((item) => [item.itemNumber.trim().toLowerCase(), item]));
+  const storedByNumber = new Map(seedRows.map((item) => [item.itemNumber.trim().toLowerCase(), item]));
   const ordered = [...segmented].sort((left, right) => compareAgendaItemCodes(left.itemNumber, right.itemNumber));
   const knownNumbers = new Set(ordered.map((row) => row.itemNumber.trim().toLowerCase()));
-  const untouched = storedRows.filter((item) => !knownNumbers.has(item.itemNumber.trim().toLowerCase()));
+  const untouched = seedRows.filter((item) => !knownNumbers.has(item.itemNumber.trim().toLowerCase()));
+  const extraIds = storedRows
+    .filter((item) => !seedRows.some((row) => row.id === item.id))
+    .map((item) => item.id);
   let spanCount = 0;
   let overlapItemCount = 0;
   for (const row of ordered) {
@@ -131,6 +137,9 @@ export async function segmentMeetingV3Transcript(meetingId: string): Promise<Tra
 
   const completedAt = new Date().toISOString();
   await db.transaction(async (tx) => {
+    if (extraIds.length > 0) {
+      await tx.delete(meetingsV3AgendaItems).where(inArray(meetingsV3AgendaItems.id, extraIds));
+    }
     let index = 0;
     for (const row of ordered) {
       const existing = storedByNumber.get(row.itemNumber.trim().toLowerCase());

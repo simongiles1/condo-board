@@ -8,6 +8,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V3 link attachments** — The agenda list scrolls inside the attachment table while the heading and unlinked-page warning stay visible. Unlinked pages are summarized once in that warning. Linked pages show one badge per contiguous range; opening a badge jumps to the first page in that range. Page range badges sit on the right of each row while long titles wrap.
+- **Meetings V3 resolve facts** — The quoted-facts list scrolls inside the table while the heading and unresolved warning stay visible, matching link attachments.
+- **Meetings V3 additional-business outline** — Ad-hoc items (4.E) stay off Build agenda, Link attachments, and Resolve facts. They appear from Segment transcript onward. A re-run of Segment transcript replaces those extras instead of doubling them.
+
+- **Meetings V3 agenda list keys** — Duplicate agenda codes (for example several **4.E** topics) no longer reuse the same React key. Each row uses its stored agenda id, so the meeting page loads without console key warnings.
+
 - **Meetings V3 transcript segments** — Segment transcript no longer keeps a topic only when a verbatim quote sits inside a short cue window. It uses the Meetings V2 walk, span edges, and gap fill, on separate cues. A topic no longer shows as overlapping itself. Re-run Segment transcript to replace the short stretches.
 - **Meetings V3 additional business** — Segment transcript keeps talk that is not on the printed agenda as additional business, item 4.E (the E slot under the property management report). Re-run Segment transcript to add it to a meeting that was segmented before.
 - **Meetings V3 quoted facts** — A section heading with no facts of its own no longer says "No quoted fact on the linked pages." That line stays on a topic that has no children.
@@ -22,6 +28,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V3 blank attachment pages** — A page with no extracted text no longer stops attachment linking. When the agenda names that page, it is linked. Otherwise it stays listed as not linked. A page that still has a heading is linked from that heading.
 
 ### Changes
+
+- **Meetings V3 meeting page URL** — The wizard step you are on is stored in the `step` query parameter (for example `?step=attachments`). Refreshing or sharing the link returns you to that same step when it is still available.
+
+- **Meetings V3 meeting page layout** — The back control, title, and date sit on one row with a clearer **Back to meetings** link. The wizard drops the top progress strip and the **Done** label on finished steps. Top padding is tighter.
 
 - **Meetings V3 extract comparison** — Docling and corrected extract share one column with tabs. Corrected extract is selected by default. Expand comparison uses the same layout.
 

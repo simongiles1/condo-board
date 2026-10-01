@@ -45,6 +45,7 @@ export class AgendaExtractError extends Error {
 
 /** One agenda topic stored for a V3 meeting. */
 export type MeetingsV3AgendaItem = {
+  id: string;
   itemNumber: string;
   title: string;
   sectionLabel: string;
@@ -189,6 +190,7 @@ export async function listMeetingV3Agenda(meetingId: string): Promise<MeetingsV3
   const db = getDb();
   const rows = await db
     .select({
+      id: meetingsV3AgendaItems.id,
       itemNumber: meetingsV3AgendaItems.itemNumber,
       title: meetingsV3AgendaItems.title,
       sectionLabel: meetingsV3AgendaItems.sectionLabel,
@@ -222,6 +224,7 @@ function vendorNames(values: unknown): string | null {
 }
 
 function toAgendaItem(row: {
+  id: string;
   itemNumber: string;
   title: string;
   sectionLabel: string;
@@ -237,6 +240,7 @@ function toAgendaItem(row: {
 }): MeetingsV3AgendaItem {
   const facts = readStoredItemFacts(row.factsJson);
   return {
+    id: row.id,
     itemNumber: row.itemNumber,
     title: row.title,
     sectionLabel: row.sectionLabel,

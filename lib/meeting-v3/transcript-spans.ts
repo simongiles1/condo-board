@@ -8,6 +8,7 @@ import {
   compareAgendaItemCodes,
   inferPropertyManagementReportNumber,
   isAgendaItemLeaf,
+  occupiesAdHocSection,
   parseDiscussionTimestampRanges,
 } from "@/lib/meeting-v2/agenda-outline";
 import { parseVttCues, parseVttTimestampMs } from "@/lib/parsers/vtt";
@@ -203,6 +204,47 @@ export function isAdditionalBusinessTitle(title: string | null | undefined): boo
     normalized === "any other business" ||
     normalized === "other business"
   );
+}
+
+/** Outline code for transcript-only extra business, such as 4.E. */
+export function additionalBusinessSectionCode(
+  items: Array<{ itemNumber?: string | null; title?: string | null }>,
+): string {
+  return `${inferPropertyManagementReportNumber(items) || "4"}.E`;
+}
+
+/**
+ * True when the row was added from the transcript, not the printed package.
+ * The property-management E slot and an additional-business heading both count.
+ */
+export function isTranscriptOnlyAgendaItem<T extends { itemNumber: string; title: string }>(
+  item: T,
+  items: readonly T[],
+): boolean {
+  if (isAdditionalBusinessTitle(item.title)) return true;
+  return occupiesAdHocSection(item.itemNumber, additionalBusinessSectionCode(items));
+}
+
+/** Printed-package rows only. Transcript extras under 4.E are left out. */
+export function packageAgendaItems<T extends { itemNumber: string; title: string }>(
+  items: readonly T[],
+): T[] {
+  return items.filter((item) => !isTranscriptOnlyAgendaItem(item, items));
+}
+
+const WIZARD_STEPS_WITH_TRANSCRIPT_EXTRAS = new Set(["transcript", "sources"]);
+
+/**
+ * Agenda rows for a V3 wizard step.
+ * Extract, agenda, attachments, and facts hide transcript-only extras.
+ * Segment transcript and group sources keep them.
+ */
+export function agendaItemsForWizardStep<T extends { itemNumber: string; title: string }>(
+  items: readonly T[],
+  stepId: string | null | undefined,
+): T[] {
+  if (stepId && WIZARD_STEPS_WITH_TRANSCRIPT_EXTRAS.has(stepId)) return [...items];
+  return packageAgendaItems(items);
 }
 
 /**

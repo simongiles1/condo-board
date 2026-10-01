@@ -91,17 +91,15 @@ export function readAgendaVendors(json: string | null): string[] {
   }
 }
 
-/**
- * A short label for the page numbers stored on an agenda item.
- * A gap stays visible, so pages 4 and 13–14 are not printed as 4–14.
- * Returns null when the item has no pages.
- */
-export function formatSourcePages(pages: number[]): string | null {
+/** Inclusive contiguous page ranges; gaps in the input start a new range. */
+export function sourcePageContiguousRanges(
+  pages: number[],
+): Array<{ start: number; end: number }> {
   const sorted = [...new Set(pages.filter((page) => Number.isInteger(page) && page > 0))].sort(
     (left, right) => left - right,
   );
-  if (sorted.length === 0) return null;
-  const ranges: string[] = [];
+  if (sorted.length === 0) return [];
+  const ranges: Array<{ start: number; end: number }> = [];
   let start = sorted[0] ?? 0;
   let end = start;
   for (const page of sorted.slice(1)) {
@@ -109,11 +107,30 @@ export function formatSourcePages(pages: number[]): string | null {
       end = page;
       continue;
     }
-    ranges.push(start === end ? String(start) : `${start}–${end}`);
+    ranges.push({ start, end });
     start = page;
     end = page;
   }
-  ranges.push(start === end ? String(start) : `${start}–${end}`);
-  const body = ranges.join(", ");
-  return sorted.length === 1 ? `page ${body}` : `pages ${body}`;
+  ranges.push({ start, end });
+  return ranges;
+}
+
+/**
+ * A short label for the page numbers stored on an agenda item.
+ * A gap stays visible, so pages 4 and 13–14 are not printed as 4–14.
+ * Returns null when the item has no pages.
+ */
+export function formatSourcePages(pages: number[]): string | null {
+  const ranges = sourcePageContiguousRanges(pages);
+  if (ranges.length === 0) return null;
+  const body = ranges
+    .map(({ start, end }) => (start === end ? String(start) : `${start}–${end}`))
+    .join(", ");
+  const pageCount = new Set(pages.filter((page) => Number.isInteger(page) && page > 0)).size;
+  return pageCount === 1 ? `page ${body}` : `pages ${body}`;
+}
+
+/** Button label for one inclusive page range in the attachment linker. */
+export function formatAttachmentPageRangeLabel(start: number, end: number): string {
+  return start === end ? `Page ${start}` : `Pages ${start}–${end}`;
 }

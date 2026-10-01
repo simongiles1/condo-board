@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { MEETINGS_V3_WIZARD_STEPS, meetingsV3WizardProgress } from "../lib/meeting-v3/wizard";
+import { MEETINGS_V3_WIZARD_STEPS, meetingsV3WizardProgress, parseMeetingsV3WizardStepId } from "../lib/meeting-v3/wizard";
 
 const base = {
   agendaItemCount: 0,
@@ -163,5 +163,15 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.steps[3]?.state, "upcoming");
     assert.equal(progress.steps[4]?.state, "upcoming");
     assert.equal(progress.steps[5]?.state, "upcoming");
+  });
+});
+
+describe("v3 wizard step query param", () => {
+  it("parses known step ids and rejects unknown values", () => {
+    assert.equal(parseMeetingsV3WizardStepId("attachments"), "attachments");
+    assert.equal(parseMeetingsV3WizardStepId("sources"), "sources");
+    assert.equal(parseMeetingsV3WizardStepId(""), null);
+    assert.equal(parseMeetingsV3WizardStepId("agenda-extra"), null);
+    assert.equal(parseMeetingsV3WizardStepId(null), null);
   });
 });

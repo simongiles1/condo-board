@@ -13,7 +13,7 @@ import {
   readAttachmentAssignments,
   selectCorrectedAttachmentPages,
 } from "../lib/meeting-v3/attachment-pages";
-import { formatSourcePages } from "../lib/meeting-v3/agenda-pages";
+import { formatAttachmentPageRangeLabel, formatSourcePages, sourcePageContiguousRanges } from "../lib/meeting-v3/agenda-pages";
 
 const pages = [
   { pageNumber: 4, heading: "Booster pump", extractedText: "agenda body" },
@@ -254,5 +254,14 @@ describe("source page labels", () => {
     assert.equal(formatSourcePages([4, 5, 6]), "pages 4–6");
     assert.equal(formatSourcePages([13, 4, 14]), "pages 4, 13–14");
     assert.equal(formatSourcePages([]), null);
+  });
+
+  it("builds contiguous ranges for attachment badges", () => {
+    assert.deepEqual(sourcePageContiguousRanges([13, 14, 15, 16, 26]), [
+      { start: 13, end: 16 },
+      { start: 26, end: 26 },
+    ]);
+    assert.equal(formatAttachmentPageRangeLabel(27, 27), "Page 27");
+    assert.equal(formatAttachmentPageRangeLabel(28, 82), "Pages 28–82");
   });
 });

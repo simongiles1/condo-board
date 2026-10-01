@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ReadableTranscriptView } from "@/components/ReadableTranscriptView";
 import type { MergedVttCue } from "@/lib/parsers/vtt";
@@ -12,14 +13,21 @@ import { DeepSeekActionConfirmDialog } from "@/components/DeepSeekActionConfirmD
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { agendaItemIndentDepth, displayAgendaSegment, isAgendaItemLeaf } from "@/lib/meeting-v2/agenda-outline";
-import { countAgendaPages, formatSourcePages, isAgendaPageForCorrection } from "@/lib/meeting-v3/agenda-pages";
+import {
+  countAgendaPages,
+  formatAttachmentPageRangeLabel,
+  formatSourcePages,
+  isAgendaPageForCorrection,
+  sourcePageContiguousRanges,
+} from "@/lib/meeting-v3/agenda-pages";
 import type { MeetingsV3FactField, MeetingsV3ItemFacts } from "@/lib/meeting-v3/facts";
 import type { MeetingsV3ItemFactGroups } from "@/lib/meeting-v3/fact-groups";
-import { formatSpanClock, type MeetingsV3ItemTranscript } from "@/lib/meeting-v3/transcript-spans";
+import { formatSpanClock, type MeetingsV3ItemTranscript, agendaItemsForWizardStep } from "@/lib/meeting-v3/transcript-spans";
 import { cancelPdfCanvasRender, renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
 import {
   meetingsV3WizardProgress,
+  parseMeetingsV3WizardStepId,
   type MeetingsV3WizardStep,
 } from "@/lib/meeting-v3/wizard";
 
@@ -35,6 +43,7 @@ type PageRewrite = {
 };
 
 type AgendaItem = {
+  id: string;
   itemNumber: string;
   title: string;
   sourcePages: number[];
@@ -75,6 +84,52 @@ function pagesWithoutTextNotice(pageNumbers: number[] | undefined): string | nul
     return `Page ${pageNumbers[0]} has no extracted text, so it was left unlinked.`;
   }
   return `Pages ${pageNumbers.join(", ")} have no extracted text, so they were left unlinked.`;
+}
+
+function unassignedAttachmentNotice(
+  unassignedPages: number[] | undefined,
+  pagesWithoutText: number[] | undefined,
+): string | null {
+  const unassigned = [...(unassignedPages ?? [])].sort((left, right) => left - right);
+  if (unassigned.length === 0) return null;
+  const withoutTextSet = new Set(pagesWithoutText ?? []);
+  const rangeText = sourcePageContiguousRanges(unassigned)
+    .map(({ start, end }) => (start === end ? String(start) : `${start}–${end}`))
+    .join(", ");
+  const linkPart =
+    unassigned.length === 1
+      ? `Page ${unassigned[0]} is not linked to an agenda topic.`
+      : `Pages ${rangeText} are not linked to an agenda topic.`;
+  const blankUnassigned = unassigned.filter((page) => withoutTextSet.has(page));
+  if (blankUnassigned.length === 0) return linkPart;
+  const blankPart = pagesWithoutTextNotice(blankUnassigned);
+  if (blankUnassigned.length === unassigned.length) return blankPart;
+  return `${linkPart} ${blankPart}`;
+}
+
+function AttachmentPageRangeBadges({
+  pages,
+  onOpenPage,
+}: {
+  pages: number[];
+  onOpenPage: (pageNumber: number) => void;
+}) {
+  const ranges = sourcePageContiguousRanges(pages);
+  if (ranges.length === 0) return null;
+  return (
+    <>
+      {ranges.map(({ start, end }) => (
+        <button
+          key={`${start}-${end}`}
+          type="button"
+          onClick={() => onOpenPage(start)}
+          className="whitespace-nowrap rounded-md border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+        >
+          {formatAttachmentPageRangeLabel(start, end)}
+        </button>
+      ))}
+    </>
+  );
 }
 
 function PageMenu({
@@ -396,18 +451,13 @@ function CompareColumns({
 type WizardBarProps = {
   steps: Array<MeetingsV3WizardStep & { state: "complete" | "current" | "upcoming" }>;
   shownId: MeetingsV3WizardStep["id"];
-  completedCount: number;
   busy: boolean;
   onShow: (id: MeetingsV3WizardStep["id"]) => void;
 };
 
-function WizardBar({ steps, shownId, completedCount, busy, onShow }: WizardBarProps) {
-  const width = steps.length === 0 ? 0 : Math.round((completedCount / steps.length) * 100);
+function WizardBar({ steps, shownId, busy, onShow }: WizardBarProps) {
   return (
-    <div className="shrink-0 rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-slate-200" aria-hidden="true">
-        <div className="h-full rounded-full bg-teal-700" style={{ width: `${width}%` }} />
-      </div>
+    <div className="shrink-0 rounded-xl border border-slate-200 bg-white px-4 py-2">
       <ol className="flex flex-col gap-2 sm:flex-row sm:items-stretch sm:gap-0">
         {steps.map((step, index) => {
           const open = step.state !== "upcoming";
@@ -442,9 +492,11 @@ function WizardBar({ steps, shownId, completedCount, busy, onShow }: WizardBarPr
                   <span className={`block text-sm font-semibold ${step.state === "upcoming" ? "text-slate-400" : "text-slate-900"}`}>
                     {step.title}
                   </span>
-                  <span className="block text-xs text-slate-500">
-                    {step.state === "complete" ? "Done" : step.state === "current" ? "Current" : "Later"}
-                  </span>
+                  {step.state === "current" ? (
+                    <span className="block text-xs text-slate-500">Current</span>
+                  ) : step.state === "upcoming" ? (
+                    <span className="block text-xs text-slate-500">Later</span>
+                  ) : null}
                 </span>
               </button>
             </li>
@@ -477,13 +529,20 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [grouping, setGrouping] = useState(false);
   const [deepSeekConfirm, setDeepSeekConfirm] = useState<"attachments" | "facts" | "transcript" | "sources" | null>(null);
   const deepSeekRun = useRef(false);
-  const [pickedStep, setPickedStep] = useState<MeetingsV3WizardStep["id"] | null>(null);
+  const [pickedStep, setPickedStep] = useState<MeetingsV3WizardStep["id"] | null>(() =>
+    parseMeetingsV3WizardStepId(
+      typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("step"),
+    ),
+  );
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [aiUsageOpen, setAiUsageOpen] = useState(false);
   const [aiUsageStages, setAiUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [aiUsageLoading, setAiUsageLoading] = useState(false);
   const [transcriptCues, setTranscriptCues] = useState<MergedVttCue[] | null>(null);
   const [transcriptLoadError, setTranscriptLoadError] = useState<string | null>(null);
-  const [selectedAgendaCode, setSelectedAgendaCode] = useState<string | null>(null);
+  const [selectedAgendaItemId, setSelectedAgendaItemId] = useState<string | null>(null);
   const transcriptScrollRef = useRef<HTMLDivElement>(null);
 
   const busy = running || buildingAgenda || linking || resolving || segmenting || grouping || status.stage === "extracting" || status.stage === "correcting";
@@ -621,6 +680,64 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     status.agendaContentEndsAtPage,
   );
 
+  const wizard = useMemo(
+    () =>
+      meetingsV3WizardProgress({
+        pageCount: Math.max(status.pageCount, pages.length),
+        correctedPageCount: Math.max(status.correctedPageCount, rewrites.length),
+        agendaItemCount: Math.max(status.agendaItemCount, agendaItems.length),
+        attachmentsLinked: status.attachmentsLinked,
+        factsResolved: status.factsResolved,
+        transcriptSegmented: status.transcriptSegmented,
+        factsGrouped: status.factsGrouped,
+        agendaContentEndsAtPage: status.agendaContentEndsAtPage,
+      }),
+    [
+      status.pageCount,
+      pages.length,
+      status.correctedPageCount,
+      rewrites.length,
+      status.agendaItemCount,
+      agendaItems.length,
+      status.attachmentsLinked,
+      status.factsResolved,
+      status.transcriptSegmented,
+      status.factsGrouped,
+      status.agendaContentEndsAtPage,
+    ],
+  );
+
+  const accessibleWizardStepIds = useMemo(
+    () => wizard.steps.filter((step) => step.state !== "upcoming").map((step) => step.id),
+    [wizard.steps],
+  );
+
+  const showWizardStep = useCallback(
+    (stepId: MeetingsV3WizardStep["id"]) => {
+      setPickedStep(stepId);
+      const params = new URLSearchParams(searchParams.toString());
+      if (params.get("step") === stepId) return;
+      params.set("step", stepId);
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  useEffect(() => {
+    const urlStep = parseMeetingsV3WizardStepId(searchParams.get("step"));
+    if (urlStep && accessibleWizardStepIds.includes(urlStep)) {
+      setPickedStep((current) => (current === urlStep ? current : urlStep));
+      return;
+    }
+    const fallback = wizard.activeId;
+    setPickedStep((current) => (current === fallback ? current : fallback));
+    const params = new URLSearchParams(searchParams.toString());
+    if (params.get("step") !== fallback) {
+      params.set("step", fallback);
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    }
+  }, [accessibleWizardStepIds, pathname, router, searchParams, wizard.activeId]);
+
   const compareProps: CompareColumnsProps = {
     meetingId: status.id,
     pageNumber,
@@ -645,7 +762,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       if (payload && "stage" in payload) {
         setStatus(payload);
         setAgendaItems([]);
-        if (payload.stage === "ready") setPickedStep("extract");
+        if (payload.stage === "ready") showWizardStep("extract");
       }
     } catch (extractError) {
       const message = extractError instanceof Error ? extractError.message : "Package extraction failed.";
@@ -676,7 +793,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       if (payload && "stage" in payload) {
         setStatus(payload);
         setAgendaItems([]);
-        if (payload.stage === "ready") setPickedStep("extract");
+        if (payload.stage === "ready") showWizardStep("extract");
       }
     } catch (correctionError) {
       const message = correctionError instanceof Error ? correctionError.message : "Page correction failed.";
@@ -717,7 +834,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         unassignedAttachmentPages: [],
         attachmentPagesWithoutText: [],
       }));
-      setPickedStep(null);
+      showWizardStep("attachments");
     } catch (agendaError) {
       const message = agendaError instanceof Error ? agendaError.message : "Agenda extraction failed.";
       setError(message);
@@ -893,19 +1010,13 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     }
   }
 
-  const wizard = meetingsV3WizardProgress({
-    pageCount: Math.max(status.pageCount, pages.length),
-    correctedPageCount: Math.max(status.correctedPageCount, rewrites.length),
-    agendaItemCount: Math.max(status.agendaItemCount, agendaItems.length),
-    attachmentsLinked: status.attachmentsLinked,
-    factsResolved: status.factsResolved,
-    transcriptSegmented: status.transcriptSegmented,
-    factsGrouped: status.factsGrouped,
-    agendaContentEndsAtPage: status.agendaContentEndsAtPage,
-  });
   const shownStep = wizard.steps.find((step) => step.id === pickedStep && step.state !== "upcoming")
     ?? wizard.steps.find((step) => step.id === wizard.activeId)
     ?? wizard.steps[0];
+  const shownAgendaItems = useMemo(
+    () => agendaItemsForWizardStep(agendaItems, shownStep?.id),
+    [agendaItems, shownStep?.id],
+  );
   const pageAgenda = agendaItems.filter((item) => item.sourcePages.includes(pageNumber ?? -1));
   const extractRunning = running || status.stage === "extracting" || status.stage === "correcting";
   const hasExtractedPages = status.pageCount > 0 || pages.length > 0;
@@ -927,7 +1038,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     () =>
       agendaItems.flatMap((item) =>
         (item.transcript?.spans ?? []).map((span) => ({
-          id: `${item.itemNumber}:${span.startMs}`,
+          id: `${item.id}:${span.startMs}`,
           code: item.itemNumber,
           title: item.title,
           startSeconds: span.startMs / 1000,
@@ -937,35 +1048,64 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     [agendaItems],
   );
 
-  function focusAgendaItem(itemNumber: string) {
-    setSelectedAgendaCode(itemNumber);
-    const span = agendaItems.find((item) => item.itemNumber === itemNumber)?.transcript?.spans[0];
-    if (!span || !transcriptScrollRef.current) return;
+  function focusAgendaItem(agendaItemId: string) {
+    setSelectedAgendaItemId(agendaItemId);
+    const item = agendaItems.find((row) => row.id === agendaItemId);
+    const span = item?.transcript?.spans[0];
+    if (!span || !item || !transcriptScrollRef.current) return;
     const target = transcriptScrollRef.current.querySelector(
-      `[data-transcript-span="${CSS.escape(`${itemNumber}:${span.startMs}`)}"]`,
+      `[data-transcript-span="${CSS.escape(`${item.id}:${span.startMs}`)}"]`,
     );
     target?.scrollIntoView({ block: "nearest" });
   }
 
-  const attachmentRows = agendaItems.map((item) => {
+  const attachmentRows = shownAgendaItems.map((item) => {
     const attachmentPages = split == null
       ? []
       : item.sourcePages.filter((page) => page > split).sort((left, right) => left - right);
     return { item, attachmentPages };
   });
 
+  const attachmentsTableOpen =
+    shownStep?.id === "attachments" &&
+    status.attachmentsLinked &&
+    !(agendaItems.length === 0 && status.agendaItemCount > 0) &&
+    !(attachmentRows.length === 0 && status.unassignedAttachmentPages.length === 0);
+
+  const factsTableOpen =
+    shownStep?.id === "facts" &&
+    status.factsResolved &&
+    !(agendaItems.length === 0 && status.agendaItemCount > 0);
+
+  const unassignedAttachmentBanner = unassignedAttachmentNotice(
+    status.unassignedAttachmentPages,
+    status.attachmentPagesWithoutText,
+  );
+
+  function openAttachmentPage(pageNumber: number) {
+    setPageNumber(pageNumber);
+    showWizardStep("extract");
+  }
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
-        <div>
-          <Link href="/operations/meetings?v=3" className="text-xs font-semibold uppercase tracking-wide text-teal-700 hover:text-teal-900">
-            Meetings V3
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+          <Link
+            href="/operations/meetings?v=3"
+            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900"
+          >
+            <span aria-hidden="true">←</span>
+            Back to meetings
           </Link>
-          <h1 className="text-2xl font-semibold text-slate-900">{status.title}</h1>
-          <p className="text-sm text-slate-600">
+          <h1 className="min-w-0 truncate text-lg font-semibold text-slate-900 sm:text-xl">{status.title}</h1>
+          <span className="hidden shrink-0 text-sm text-slate-400 sm:inline" aria-hidden="true">
+            ·
+          </span>
+          <span className="shrink-0 text-sm text-slate-600">
             {status.meetingDate}
             {busy && status.currentStep ? ` · ${status.currentStep}` : ""}
-          </p>
+          </span>
         </div>
         <AiUsageIconButton onClick={() => setAiUsageOpen(true)} title="View V3 AI usage and cost" />
       </div>
@@ -974,9 +1114,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         <WizardBar
           steps={wizard.steps}
           shownId={shownStep.id}
-          completedCount={wizard.completedCount}
           busy={busy}
-          onShow={setPickedStep}
+          onShow={showWizardStep}
         />
       ) : null}
 
@@ -986,7 +1125,11 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
 
       <div
         className={`flex min-h-0 flex-1 flex-col gap-4 ${
-          shownStep?.id === "transcript" && status.transcriptSegmented ? "overflow-hidden" : "overflow-y-auto"
+          (shownStep?.id === "transcript" && status.transcriptSegmented) ||
+          attachmentsTableOpen ||
+          factsTableOpen
+            ? "overflow-hidden"
+            : "overflow-y-auto"
         }`}
       >
       {shownStep?.id === "extract" ? (
@@ -997,7 +1140,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               {shownStep.state === "complete" && !extractRunning ? (
                 <button
                   type="button"
-                  onClick={() => setPickedStep("agenda")}
+                  onClick={() => showWizardStep("agenda")}
                   className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
                 >
                   Continue to agenda
@@ -1056,7 +1199,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               {agendaItems.length > 0 && !buildingAgenda ? (
                 <button
                   type="button"
-                  onClick={() => setPickedStep("attachments")}
+                  onClick={() => showWizardStep("attachments")}
                   className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
                 >
                   Continue to attachments
@@ -1086,19 +1229,19 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                 Agenda from corrected pages
               </h2>
               <ul className="divide-y divide-slate-100">
-                {agendaItems.map((item) => {
+                {shownAgendaItems.map((item) => {
                   const sourcePages = [...item.sourcePages].sort((left, right) => left - right);
                   const firstPage = sourcePages[0];
                   const pageLabel = formatSourcePages(sourcePages);
                   return (
-                    <li key={`${item.itemNumber}-${item.title}`}>
+                    <li key={item.id}>
                       <button
                         type="button"
                         disabled={firstPage == null}
                         onClick={() => {
                           if (firstPage == null) return;
                           setPageNumber(firstPage);
-                          setPickedStep("extract");
+                          showWizardStep("extract");
                         }}
                         className="flex w-full flex-wrap items-baseline gap-x-3 gap-y-1 py-2 pr-3 text-left text-sm hover:bg-slate-50 disabled:cursor-default"
                         style={{ paddingLeft: `${12 + agendaItemIndentDepth(item.itemNumber) * 20}px` }}
@@ -1140,7 +1283,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               {status.attachmentsLinked && !linking ? (
                 <button
                   type="button"
-                  onClick={() => setPickedStep("facts")}
+                  onClick={() => showWizardStep("facts")}
                   className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
                 >
                   Continue to facts
@@ -1173,71 +1316,44 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               No pages sit after the agenda split.
             </div>
           ) : (
-            <section className="rounded-xl border border-slate-200 bg-white">
-              <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+            <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
                 Attachment pages
               </h2>
-              {pagesWithoutTextNotice(status.attachmentPagesWithoutText) ? (
-                <p className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                  {pagesWithoutTextNotice(status.attachmentPagesWithoutText)}
+              {unassignedAttachmentBanner ? (
+                <p className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {unassignedAttachmentBanner}
                 </p>
               ) : null}
-              <ul className="divide-y divide-slate-100">
+              <ul className="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto">
                 {attachmentRows.map(({ item, attachmentPages }) => (
                   <li
-                    key={`${item.itemNumber}-${item.title}`}
+                    key={item.id}
                     className="py-2 pr-3 text-sm"
                     style={{ paddingLeft: `${12 + agendaItemIndentDepth(item.itemNumber) * 20}px` }}
                   >
-                    <p>
-                      <span
-                        className="inline-block w-8 font-semibold tabular-nums text-slate-900"
-                        title={item.itemNumber}
-                      >
-                        {displayAgendaSegment(item.itemNumber)}
-                      </span>
-                      <span className="font-medium text-slate-800">{item.title}</span>
-                    </p>
-                    {attachmentPages.length > 0 ? (
-                      <p className="mt-1 flex flex-wrap gap-1">
-                        {attachmentPages.map((page) => (
-                          <button
-                            key={page}
-                            type="button"
-                            onClick={() => {
-                              setPageNumber(page);
-                              setPickedStep("extract");
-                            }}
-                            className="rounded-md border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                          >
-                            Page {page}
-                          </button>
-                        ))}
+                    <div className="flex items-start gap-2">
+                      <p className="min-w-0 flex-1">
+                        <span
+                          className="inline-block w-8 shrink-0 font-semibold tabular-nums text-slate-900"
+                          title={item.itemNumber}
+                        >
+                          {displayAgendaSegment(item.itemNumber)}
+                        </span>
+                        <span className="font-medium text-slate-800">{item.title}</span>
                       </p>
-                    ) : null}
+                      {attachmentPages.length > 0 ? (
+                        <div className="flex shrink-0 flex-wrap justify-end gap-1 self-start">
+                          <AttachmentPageRangeBadges
+                            pages={attachmentPages}
+                            onOpenPage={openAttachmentPage}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
                   </li>
                 ))}
               </ul>
-              {status.unassignedAttachmentPages.length > 0 ? (
-                <div className="border-t border-slate-200 px-3 py-2 text-sm text-slate-700">
-                  <p className="font-medium text-slate-900">Not linked</p>
-                  <p className="mt-1 flex flex-wrap gap-1">
-                    {status.unassignedAttachmentPages.map((page) => (
-                      <button
-                        key={page}
-                        type="button"
-                        onClick={() => {
-                          setPageNumber(page);
-                          setPickedStep("extract");
-                        }}
-                        className="rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-900 hover:bg-amber-100"
-                      >
-                        Page {page}
-                      </button>
-                    ))}
-                  </p>
-                </div>
-              ) : null}
             </section>
           )}
         </>
@@ -1267,21 +1383,21 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               Loading quoted facts.
             </div>
           ) : (
-            <section className="rounded-xl border border-slate-200 bg-white">
-              <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+            <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
                 Quoted facts
               </h2>
               {status.unresolvedFactItemCount > 0 ? (
-                <p className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <p className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                   {status.unresolvedFactItemCount === 1
                     ? "1 topic has more than one value. Neither was chosen."
                     : `${status.unresolvedFactItemCount} topics have more than one value. Neither was chosen.`}
                 </p>
               ) : null}
-              <ul className="divide-y divide-slate-100">
-                {agendaItems.map((item) => (
+              <ul className="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto">
+                {shownAgendaItems.map((item) => (
                   <li
-                    key={`${item.itemNumber}-${item.title}`}
+                    key={item.id}
                     className="py-2 pr-3 text-sm"
                     style={{ paddingLeft: `${12 + agendaItemIndentDepth(item.itemNumber) * 20}px` }}
                   >
@@ -1312,7 +1428,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                                   type="button"
                                   onClick={() => {
                                     setPageNumber(fact.page);
-                                    setPickedStep("extract");
+                                    showWizardStep("extract");
                                   }}
                                   className="ml-2 rounded-md border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
                                 >
@@ -1326,7 +1442,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                       </ul>
                     ) : isAgendaItemLeaf(
                         item.itemNumber,
-                        agendaItems.map((row) => row.itemNumber),
+                        shownAgendaItems.map((row) => row.itemNumber),
                       ) ? (
                       <p className="mt-1 text-xs text-slate-500">No quoted fact on the linked pages.</p>
                     ) : null}
@@ -1346,7 +1462,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               {status.transcriptSegmented && !segmenting ? (
                 <button
                   type="button"
-                  onClick={() => setPickedStep("sources")}
+                  onClick={() => showWizardStep("sources")}
                   className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
                 >
                   Continue to sources
@@ -1403,7 +1519,10 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                       cues={transcriptCues}
                       sectionOverlays={transcriptOverlays}
                       showSectionOverlay={transcriptOverlays.length > 0}
-                      onSectionClick={(section) => setSelectedAgendaCode(section.code)}
+                      onSectionClick={(section) => {
+                        const agendaId = agendaItems.find((row) => section.id.startsWith(`${row.id}:`))?.id;
+                        if (agendaId) focusAgendaItem(agendaId);
+                      }}
                     />
                   )}
                 </div>
@@ -1413,13 +1532,13 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                   </p>
                   <ul className="p-2">
                     {agendaItems.map((item) => {
-                      const selected = selectedAgendaCode === item.itemNumber;
+                      const selected = selectedAgendaItemId === item.id;
                       const spans = item.transcript?.spans ?? [];
                       return (
-                        <li key={`${item.itemNumber}-${item.title}`}>
+                        <li key={item.id}>
                           <button
                             type="button"
-                            onClick={() => focusAgendaItem(item.itemNumber)}
+                            onClick={() => focusAgendaItem(item.id)}
                             className={`w-full rounded-md px-2 py-1.5 text-left text-sm ${
                               selected ? "bg-white shadow-sm ring-1 ring-teal-600" : "hover:bg-white"
                             }`}
@@ -1495,7 +1614,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               <ul className="divide-y divide-slate-100">
                 {agendaItems.map((item) => (
                   <li
-                    key={`${item.itemNumber}-${item.title}`}
+                    key={item.id}
                     className="py-2 pr-3 text-sm"
                     style={{ paddingLeft: `${12 + agendaItemIndentDepth(item.itemNumber) * 20}px` }}
                   >
@@ -1528,7 +1647,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                                 type="button"
                                 onClick={() => {
                                   setPageNumber(group.page);
-                                  setPickedStep("extract");
+                                  showWizardStep("extract");
                                 }}
                                 className="rounded-md border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
                               >

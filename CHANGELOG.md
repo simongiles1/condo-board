@@ -23,6 +23,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changes
 
+- **Meetings V3 extract comparison** — Docling and corrected extract share one column with tabs. Corrected extract is selected by default. Expand comparison uses the same layout.
+
 - **Meetings V3 transcript review** — After segmentation, the transcript shows a colored box around each topic, and the agenda is listed on the right. Choosing an agenda row scrolls to that box.
 - **Meetings V3 DeepSeek confirmation** — Link attachments and Resolve facts ask you to continue and show whether the current hour is DeepSeek peak pricing before the call starts.
 - **Meetings V3 correction retry** — When Docling extraction is already stored but agenda correction failed or is incomplete, **Retry correction only** runs Gemini on agenda pages without re-running Docling. **Re-extract package** still runs the full pipeline.

@@ -210,6 +210,8 @@ function PageNavBar({
   );
 }
 
+type ExtractCompareTab = "corrected" | "docling";
+
 type CompareColumnsProps = {
   meetingId: string;
   pageNumber: number | null;
@@ -218,6 +220,39 @@ type CompareColumnsProps = {
   correctedText: string | null;
   agendaContentEndsAtPage: number | null;
 };
+
+function ExtractCompareTabBar({
+  active,
+  onChange,
+}: {
+  active: ExtractCompareTab;
+  onChange: (tab: ExtractCompareTab) => void;
+}) {
+  const tabs: Array<{ id: ExtractCompareTab; label: string }> = [
+    { id: "corrected", label: "Corrected extract" },
+    { id: "docling", label: "Docling extract" },
+  ];
+  return (
+    <div className="flex border-b border-slate-200" role="tablist" aria-label="Extract comparison">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          aria-selected={active === tab.id}
+          onClick={() => onChange(tab.id)}
+          className={`px-3 py-2 text-sm font-semibold ${
+            active === tab.id
+              ? "border-b-2 border-teal-700 text-teal-900"
+              : "text-slate-600 hover:bg-slate-50"
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /**
  * One board-package page drawn to the width of its column.
@@ -324,6 +359,7 @@ function CompareColumns({
   correctedText,
   agendaContentEndsAtPage,
 }: CompareColumnsProps) {
+  const [extractTab, setExtractTab] = useState<ExtractCompareTab>("corrected");
   const doclingText = selectedPage?.extractedText?.trim() || "No extracted text on this page.";
   const agendaPage =
     pageNumber != null && isAgendaPageForCorrection(pageNumber, agendaContentEndsAtPage);
@@ -337,7 +373,7 @@ function CompareColumns({
         : "Attachment pages use the Docling extract. Correction runs on agenda pages only.");
 
   return (
-    <div className="grid items-start gap-3 lg:grid-cols-3">
+    <div className="grid items-start gap-3 lg:grid-cols-2">
       <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white">
         <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
           Board package
@@ -348,20 +384,9 @@ function CompareColumns({
       </section>
 
       <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
-          Docling extract
-        </h2>
-        <div className="px-4 py-3">
-          <MarkdownPreview>{doclingText}</MarkdownPreview>
-        </div>
-      </section>
-
-      <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
-          Corrected extract
-        </h2>
-        <div className="px-4 py-3">
-          <MarkdownPreview>{corrected}</MarkdownPreview>
+        <ExtractCompareTabBar active={extractTab} onChange={setExtractTab} />
+        <div className="px-4 py-3" role="tabpanel">
+          <MarkdownPreview>{extractTab === "corrected" ? corrected : doclingText}</MarkdownPreview>
         </div>
       </section>
     </div>

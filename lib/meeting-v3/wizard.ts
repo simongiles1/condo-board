@@ -37,7 +37,8 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
   {
     id: "transcript",
     title: "Segment transcript",
-    detail: "Each topic keeps the stretches of talk whose quote is inside that time range.",
+    detail:
+      "Each topic keeps the stretches of talk whose quote is inside that time range. Talk that is not on the agenda is additional business, item 4.E.",
   },
 ];
 

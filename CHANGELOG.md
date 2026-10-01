@@ -8,6 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V3 additional business** — Segment transcript keeps talk that is not on the printed agenda as additional business, item 4.E (the E slot under the property management report). Re-run Segment transcript to add it to a meeting that was segmented before.
 - **Meetings V3 quoted facts** — A section heading with no facts of its own no longer says "No quoted fact on the linked pages." That line stays on a topic that has no children.
 - **Meetings V3 fact resolution** — Resolve facts no longer stops when DeepSeek cuts the reply off at 4,096 tokens. Each topic is read a few pages at a time, and a reply that is still cut short is split and tried again.
 - **Meetings V3 attachment citations** — A page citation stays with the agenda topic it follows. Two topics on one page no longer give every cited page to the first topic, and a citation printed at the top of the next page (before the next heading) stays with the topic it closes. Re-run Link attachments to apply it.
@@ -21,6 +22,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changes
 
+- **Meetings V3 transcript review** — After segmentation, the transcript shows a colored box around each topic, and the agenda is listed on the right. Choosing an agenda row scrolls to that box.
 - **Meetings V3 DeepSeek confirmation** — Link attachments and Resolve facts ask you to continue and show whether the current hour is DeepSeek peak pricing before the call starts.
 - **Meetings V3 correction retry** — When Docling extraction is already stored but agenda correction failed or is incomplete, **Retry correction only** runs Gemini on agenda pages without re-running Docling. **Re-extract package** still runs the full pipeline.
 

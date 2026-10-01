@@ -175,9 +175,12 @@ export function ReadableTranscriptView({
   const colorBySectionId = new Map<string, string>();
   let colorCursor = 0;
   for (const overlay of sectionOverlays) {
-    if (colorBySectionId.has(overlay.id)) continue;
+    // Same outline code keeps one border color across separate visits, while each
+    // span keeps its own id so a gap between visits stays outside the box.
+    const colorKey = overlay.code.trim().toLowerCase() || overlay.id;
+    if (colorBySectionId.has(colorKey)) continue;
     colorBySectionId.set(
-      overlay.id,
+      colorKey,
       SECTION_BORDER_COLORS[colorCursor % SECTION_BORDER_COLORS.length],
     );
     colorCursor += 1;
@@ -196,12 +199,15 @@ export function ReadableTranscriptView({
         }
 
         const primary = group.sections[0];
-        const borderColor = colorBySectionId.get(primary.id) ?? SECTION_BORDER_COLORS[0];
+        const borderColor =
+          colorBySectionId.get(primary.code.trim().toLowerCase() || primary.id) ??
+          SECTION_BORDER_COLORS[0];
         const isOverlap = group.sections.length > 1;
 
         return (
           <section
             key={`${group.sections.map((section) => section.id).join("+")}-${groupIndex}`}
+            data-transcript-span={primary.id}
             className="relative rounded-lg border-2 pb-1"
             style={{ borderColor }}
           >
@@ -213,7 +219,9 @@ export function ReadableTranscriptView({
                   </span>
                 ) : null}
                 {group.sections.map((section) => {
-                  const color = colorBySectionId.get(section.id) ?? borderColor;
+                  const color =
+                    colorBySectionId.get(section.code.trim().toLowerCase() || section.id) ??
+                    borderColor;
                   const label = sectionLabel(section);
                   const overlapTitle = isOverlap
                     ? `Overlap: ${group.sections.map(sectionLabel).join(" · ")}`

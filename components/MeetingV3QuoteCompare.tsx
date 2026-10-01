@@ -1,7 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import { ReadableTranscriptView } from "@/components/ReadableTranscriptView";
+import type { MergedVttCue } from "@/lib/parsers/vtt";
+import type { TranscriptSectionOverlay } from "@/lib/transcript/section-overlay";
 
 import { AiUsageDialog, AiUsageIconButton } from "@/components/AiUsageDialog";
 import { DeepSeekActionConfirmDialog } from "@/components/DeepSeekActionConfirmDialog";
@@ -449,6 +453,10 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [aiUsageOpen, setAiUsageOpen] = useState(false);
   const [aiUsageStages, setAiUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [aiUsageLoading, setAiUsageLoading] = useState(false);
+  const [transcriptCues, setTranscriptCues] = useState<MergedVttCue[] | null>(null);
+  const [transcriptLoadError, setTranscriptLoadError] = useState<string | null>(null);
+  const [selectedAgendaCode, setSelectedAgendaCode] = useState<string | null>(null);
+  const transcriptScrollRef = useRef<HTMLDivElement>(null);
 
   const busy = running || buildingAgenda || linking || resolving || segmenting || status.stage === "extracting" || status.stage === "correcting";
 
@@ -468,6 +476,31 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     if (!aiUsageOpen) return;
     refreshAiUsage();
   }, [aiUsageOpen, status.id]);
+
+  useEffect(() => {
+    if (!status.transcriptSegmented) return;
+    let cancelled = false;
+    setTranscriptLoadError(null);
+    void fetch(`/api/meetings/${status.id}/transcript`, { cache: "no-store" })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => null)) as {
+          cues?: MergedVttCue[];
+          error?: string;
+        } | null;
+        if (!response.ok) throw new Error(payload?.error || "Could not load transcript.");
+        if (!cancelled) setTranscriptCues(payload?.cues ?? []);
+      })
+      .catch((loadError: unknown) => {
+        if (cancelled) return;
+        setTranscriptCues([]);
+        setTranscriptLoadError(
+          loadError instanceof Error ? loadError.message : "Could not load transcript.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [status.id, status.transcriptSegmented, status.transcriptSpanCount]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -766,6 +799,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         transcriptSegmented: true,
         transcriptSpanCount: payload?.spanCount ?? 0,
         transcriptOverlapItemCount: payload?.overlapItemCount ?? 0,
+        agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
         currentStep:
           (payload?.overlapItemCount ?? 0) > 0
             ? "Transcript spans stored; some topics share a stretch"
@@ -810,6 +844,30 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     ? "Correcting agenda pages…"
     : "Retry correction only";
   const split = status.agendaContentEndsAtPage;
+  const transcriptOverlays = useMemo<TranscriptSectionOverlay[]>(
+    () =>
+      agendaItems.flatMap((item) =>
+        (item.transcript?.spans ?? []).map((span) => ({
+          id: `${item.itemNumber}:${span.startMs}`,
+          code: item.itemNumber,
+          title: item.title,
+          startSeconds: span.startMs / 1000,
+          endSeconds: span.endMs / 1000,
+        })),
+      ),
+    [agendaItems],
+  );
+
+  function focusAgendaItem(itemNumber: string) {
+    setSelectedAgendaCode(itemNumber);
+    const span = agendaItems.find((item) => item.itemNumber === itemNumber)?.transcript?.spans[0];
+    if (!span || !transcriptScrollRef.current) return;
+    const target = transcriptScrollRef.current.querySelector(
+      `[data-transcript-span="${CSS.escape(`${itemNumber}:${span.startMs}`)}"]`,
+    );
+    target?.scrollIntoView({ block: "nearest" });
+  }
+
   const attachmentRows = agendaItems.map((item) => {
     const attachmentPages = split == null
       ? []
@@ -847,7 +905,11 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         <p className="shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+      <div
+        className={`flex min-h-0 flex-1 flex-col gap-4 ${
+          shownStep?.id === "transcript" && status.transcriptSegmented ? "overflow-hidden" : "overflow-y-auto"
+        }`}
+      >
       {shownStep?.id === "extract" ? (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1225,55 +1287,77 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               Loading transcript spans.
             </div>
           ) : (
-            <section className="rounded-xl border border-slate-200 bg-white">
-              <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
-                Transcript spans
-              </h2>
+            <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
               {status.transcriptOverlapItemCount > 0 ? (
-                <p className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <p className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                   {status.transcriptOverlapItemCount === 1
                     ? "1 topic shares a stretch with another topic. Neither was dropped."
                     : `${status.transcriptOverlapItemCount} topics share a stretch with another topic. Neither was dropped.`}
                 </p>
               ) : null}
-              <ul className="divide-y divide-slate-100">
-                {agendaItems.map((item) => (
-                  <li
-                    key={`${item.itemNumber}-${item.title}`}
-                    className="py-2 pr-3 text-sm"
-                    style={{ paddingLeft: `${12 + agendaItemIndentDepth(item.itemNumber) * 20}px` }}
-                  >
-                    <p>
-                      <span
-                        className="inline-block w-8 font-semibold tabular-nums text-slate-900"
-                        title={item.itemNumber}
-                      >
-                        {displayAgendaSegment(item.itemNumber)}
-                      </span>
-                      <span className="font-medium text-slate-800">{item.title}</span>
-                    </p>
-                    {item.transcript && item.transcript.spans.length > 0 ? (
-                      <ul className="mt-1 space-y-2">
-                        {item.transcript.spans.map((span) => (
-                          <li key={`${span.startMs}-${span.endMs}-${span.quote}`}>
-                            <p>
-                              <span className="font-medium tabular-nums text-slate-800">
-                                {formatSpanClock(span.startMs)}–{formatSpanClock(span.endMs)}
+              {transcriptLoadError ? (
+                <p className="shrink-0 border-b border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                  {transcriptLoadError}
+                </p>
+              ) : null}
+              <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(0,1fr)_18rem]">
+                <div ref={transcriptScrollRef} className="min-h-0 overflow-y-auto">
+                  {transcriptCues == null ? (
+                    <p className="px-4 py-6 text-sm text-slate-600">Loading transcript…</p>
+                  ) : transcriptCues.length === 0 ? (
+                    <p className="px-4 py-6 text-sm text-slate-600">No transcript cues found.</p>
+                  ) : (
+                    <ReadableTranscriptView
+                      cues={transcriptCues}
+                      sectionOverlays={transcriptOverlays}
+                      showSectionOverlay={transcriptOverlays.length > 0}
+                      onSectionClick={(section) => setSelectedAgendaCode(section.code)}
+                    />
+                  )}
+                </div>
+                <aside className="min-h-0 overflow-y-auto border-t border-slate-200 bg-slate-50 md:border-l md:border-t-0">
+                  <p className="sticky top-0 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Agenda
+                  </p>
+                  <ul className="p-2">
+                    {agendaItems.map((item) => {
+                      const selected = selectedAgendaCode === item.itemNumber;
+                      const spans = item.transcript?.spans ?? [];
+                      return (
+                        <li key={`${item.itemNumber}-${item.title}`}>
+                          <button
+                            type="button"
+                            onClick={() => focusAgendaItem(item.itemNumber)}
+                            className={`w-full rounded-md px-2 py-1.5 text-left text-sm ${
+                              selected ? "bg-white shadow-sm ring-1 ring-teal-600" : "hover:bg-white"
+                            }`}
+                            style={{ paddingLeft: `${8 + agendaItemIndentDepth(item.itemNumber) * 14}px` }}
+                          >
+                            <span className="font-mono text-[11px] text-slate-500" title={item.itemNumber}>
+                              {displayAgendaSegment(item.itemNumber)}
+                            </span>{" "}
+                            <span className={selected ? "font-semibold text-slate-900" : "text-slate-800"}>
+                              {item.title}
+                            </span>
+                            {spans.length > 0 ? (
+                              <span className="mt-0.5 block font-mono text-[11px] tabular-nums text-slate-500">
+                                {spans
+                                  .map((span) => `${formatSpanClock(span.startMs)}–${formatSpanClock(span.endMs)}`)
+                                  .join(", ")}
                               </span>
-                              {span.overlaps ? (
-                                <span className="ml-2 text-xs font-medium text-amber-800">Shared</span>
-                              ) : null}
-                            </p>
-                            <p className="mt-0.5 text-xs text-slate-600">{span.quote}</p>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="mt-1 text-xs text-slate-500">No transcript span for this topic.</p>
-                    )}
-                  </li>
-                ))}
-              </ul>
+                            ) : isAgendaItemLeaf(
+                                item.itemNumber,
+                                agendaItems.map((row) => row.itemNumber),
+                              ) ? (
+                              <span className="mt-0.5 block text-[11px] text-slate-400">No span</span>
+                            ) : null}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </aside>
+              </div>
             </section>
           )}
         </>
@@ -1329,7 +1413,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         }
         description={
           deepSeekConfirm === "transcript"
-            ? "This reads the transcript with DeepSeek and keeps a stretch only when its quote is inside that time range."
+            ? "This reads the transcript with DeepSeek and keeps a stretch only when its quote is inside that time range. Talk that is not on the agenda is stored as additional business (4.E)."
             : deepSeekConfirm === "facts"
               ? "This reads each topic's pages with DeepSeek and keeps a figure only when its quote is on that page."
               : "Pages the agenda does not already name are matched to topics with DeepSeek."

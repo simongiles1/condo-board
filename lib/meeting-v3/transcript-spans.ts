@@ -3,6 +3,10 @@
  * Cues are not merged by speaker. Two topics that claim the same stretch both stay.
  */
 
+import {
+  compareAgendaItemCodes,
+  inferPropertyManagementReportNumber,
+} from "@/lib/meeting-v2/agenda-outline";
 import { parseVttCues, parseVttTimestampMs } from "@/lib/parsers/vtt";
 
 import { normalizeFactText } from "@/lib/meeting-v3/facts";
@@ -195,6 +199,77 @@ export function readStoredItemTranscript(value: string | null | undefined): Meet
     });
   }
   return { spans };
+}
+
+/** Title stored on the transcript-only additional-business heading. */
+export const ADDITIONAL_BUSINESS_TITLE = "Additional business";
+
+/** An agenda row the segmenter can assign, including a 4.E slot the package did not print. */
+export type AdditionalBusinessPlan<T extends { id: string; itemNumber: string; title: string }> = {
+  items: T[];
+  /** Outline code for additional business, such as 4.E. */
+  code: string;
+  /** A row that is not stored yet. Persist it when it receives a span. */
+  injected: T | null;
+  /** An existing row whose number was moved onto `code`. */
+  renumberedId: string | null;
+};
+
+/**
+ * True when a title is the meeting's additional-business heading.
+ */
+export function isAdditionalBusinessTitle(title: string | null | undefined): boolean {
+  const normalized = (title || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[-–—_]/g, " ")
+    .replace(/\s+/g, " ");
+  return (
+    normalized === "additional business" ||
+    normalized === "ad hoc items" ||
+    normalized === "any other business" ||
+    normalized === "other business"
+  );
+}
+
+/**
+ * Puts additional business on the property-management E slot (4.E when that report is item 4).
+ * A printed heading that already uses that code is kept. A heading titled additional business
+ * under another number is moved there. Otherwise `create` supplies a new row, ordered before
+ * the next meeting date.
+ */
+export function planAdditionalBusinessItem<T extends { id: string; itemNumber: string; title: string }>(
+  items: T[],
+  create: (code: string) => T,
+): AdditionalBusinessPlan<T> {
+  const pm = inferPropertyManagementReportNumber(items) || "4";
+  const code = `${pm}.E`;
+  const heading = items.find((item) => item.itemNumber.trim().toLowerCase() === code.toLowerCase());
+  if (heading) {
+    return { items, code, injected: null, renumberedId: null };
+  }
+  const titled = items.find((item) => isAdditionalBusinessTitle(item.title));
+  if (titled) {
+    const moved = { ...titled, itemNumber: code };
+    const rest = items.filter((item) => item.id !== titled.id);
+    return {
+      items: orderByOutlineCode([...rest, moved]),
+      code,
+      injected: null,
+      renumberedId: titled.id,
+    };
+  }
+  const injected = create(code);
+  return {
+    items: orderByOutlineCode([...items, injected]),
+    code,
+    injected,
+    renumberedId: null,
+  };
+}
+
+function orderByOutlineCode<T extends { itemNumber: string }>(items: T[]): T[] {
+  return [...items].sort((left, right) => compareAgendaItemCodes(left.itemNumber, right.itemNumber));
 }
 
 /**

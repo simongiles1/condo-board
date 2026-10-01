@@ -8,8 +8,10 @@ import { describe, it } from "node:test";
 
 import {
   acceptQuotedSpans,
+  ADDITIONAL_BUSINESS_TITLE,
   chunkTranscriptCues,
   cuesFromVtt,
+  planAdditionalBusinessItem,
   readProposedSpans,
   readStoredItemTranscript,
   TRANSCRIPT_CUE_BATCH,
@@ -207,5 +209,54 @@ describe("v3 transcript spans", () => {
     assert.equal(chunkTranscriptCues(cues, 2).length, 2);
     assert.equal(TRANSCRIPT_CUE_BATCH, 40);
     assert.ok(TRANSCRIPT_SEGMENT_MAX_OUTPUT_TOKENS > 4096);
+  });
+
+  it("adds additional business as 4.E before the next meeting", () => {
+    const plan = planAdditionalBusinessItem(
+      [
+        { id: "4", itemNumber: "4", title: "Property Management Report" },
+        { id: "4d", itemNumber: "4.D", title: "Items for discussion" },
+        { id: "5", itemNumber: "5", title: "Date of next meeting" },
+      ],
+      (code) => ({ id: "new", itemNumber: code, title: ADDITIONAL_BUSINESS_TITLE }),
+    );
+    assert.equal(plan.code, "4.E");
+    assert.equal(plan.injected?.id, "new");
+    assert.equal(plan.renumberedId, null);
+    assert.deepEqual(
+      plan.items.map((item) => item.itemNumber),
+      ["4", "4.D", "4.E", "5"],
+    );
+  });
+
+  it("keeps an existing 4.E heading", () => {
+    const plan = planAdditionalBusinessItem(
+      [{ id: "e", itemNumber: "4.E", title: "Ad-hoc items" }],
+      () => {
+        throw new Error("should not create");
+      },
+    );
+    assert.equal(plan.injected, null);
+    assert.equal(plan.renumberedId, null);
+    assert.equal(plan.items[0]?.itemNumber, "4.E");
+  });
+
+  it("moves a misnumbered additional-business heading onto 4.E", () => {
+    const plan = planAdditionalBusinessItem(
+      [
+        { id: "4", itemNumber: "4", title: "Property Management Report" },
+        { id: "extra", itemNumber: "7", title: "Additional Business" },
+        { id: "5", itemNumber: "5", title: "Date" },
+      ],
+      () => {
+        throw new Error("should not create");
+      },
+    );
+    assert.equal(plan.renumberedId, "extra");
+    assert.equal(plan.items.find((item) => item.id === "extra")?.itemNumber, "4.E");
+    assert.deepEqual(
+      plan.items.map((item) => item.itemNumber),
+      ["4", "4.E", "5"],
+    );
   });
 });

@@ -75,6 +75,7 @@ describe("v3 ai usage stages", () => {
       "v3_correct",
       "v3_agenda",
       "v3_attachments",
+      "v3_facts",
     ]);
   });
 });

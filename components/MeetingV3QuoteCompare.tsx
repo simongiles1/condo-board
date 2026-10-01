@@ -8,6 +8,7 @@ import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { agendaItemIndentDepth, displayAgendaSegment } from "@/lib/meeting-v2/agenda-outline";
 import { countAgendaPages, formatSourcePages, isAgendaPageForCorrection } from "@/lib/meeting-v3/agenda-pages";
+import type { MeetingsV3FactField, MeetingsV3ItemFacts } from "@/lib/meeting-v3/facts";
 import { cancelPdfCanvasRender, renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
 import {
@@ -34,6 +35,7 @@ type AgendaItem = {
   amount: string | null;
   vendors: string[];
   recommendation: string | null;
+  facts: MeetingsV3ItemFacts | null;
 };
 
 type PageNavProps = {
@@ -50,6 +52,13 @@ function pageMenuLabel(page: ExtractedPage): string {
   const heading = page.pageHeading?.replace(/\s+/g, " ").trim();
   return heading ? `${page.pageNumber} — ${heading}` : String(page.pageNumber);
 }
+
+const FACT_FIELD_LABEL: Record<MeetingsV3FactField, string> = {
+  amount: "Amount",
+  vendor: "Vendor",
+  recommendation: "Recommendation",
+  date: "Date",
+};
 
 function pagesWithoutTextNotice(pageNumbers: number[] | undefined): string | null {
   if (!pageNumbers || pageNumbers.length === 0) return null;
@@ -413,7 +422,7 @@ function WizardBar({ steps, shownId, completedCount, busy, onShow }: WizardBarPr
 }
 
 /**
- * Walks a V3 meeting through extract and correct, the agenda, then attachment pages.
+ * Walks a V3 meeting through extract and correct, the agenda, attachment pages, then quoted facts.
  * Finished stages stay open. The next stage is another entry on the same bar.
  */
 export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageStatus }) {
@@ -429,12 +438,13 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [agendaItems, setAgendaItems] = useState<AgendaItem[]>([]);
   const [buildingAgenda, setBuildingAgenda] = useState(false);
   const [linking, setLinking] = useState(false);
+  const [resolving, setResolving] = useState(false);
   const [pickedStep, setPickedStep] = useState<MeetingsV3WizardStep["id"] | null>(null);
   const [aiUsageOpen, setAiUsageOpen] = useState(false);
   const [aiUsageStages, setAiUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [aiUsageLoading, setAiUsageLoading] = useState(false);
 
-  const busy = running || buildingAgenda || linking || status.stage === "extracting" || status.stage === "correcting";
+  const busy = running || buildingAgenda || linking || resolving || status.stage === "extracting" || status.stage === "correcting";
 
   function refreshAiUsage() {
     setAiUsageLoading(true);
@@ -628,6 +638,9 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         currentStep: "Agenda built from corrected pages",
         agendaItemCount: payload?.items?.length ?? 0,
         attachmentsLinked: false,
+        factsResolved: false,
+        factCount: 0,
+        unresolvedFactItemCount: 0,
         unassignedAttachmentPages: [],
         attachmentPagesWithoutText: [],
       }));
@@ -656,6 +669,9 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       setStatus((current) => ({
         ...current,
         attachmentsLinked: true,
+        factsResolved: false,
+        factCount: 0,
+        unresolvedFactItemCount: 0,
         unassignedAttachmentPages: payload?.unassignedPages ?? [],
         attachmentPagesWithoutText: payload?.pagesWithoutText ?? [],
         agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
@@ -669,11 +685,48 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     }
   }
 
+  async function resolveFacts() {
+    setResolving(true);
+    setError(null);
+    setStatus((current) => ({ ...current, currentStep: "Resolving quoted facts from package pages" }));
+    try {
+      const response = await fetch(`/api/v3/meetings/${status.id}/facts`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            items?: AgendaItem[];
+            factCount?: number;
+            unresolvedItemCount?: number;
+            error?: string;
+          }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Fact resolution failed.");
+      }
+      setAgendaItems(payload?.items ?? []);
+      setStatus((current) => ({
+        ...current,
+        factsResolved: true,
+        factCount: payload?.factCount ?? 0,
+        unresolvedFactItemCount: payload?.unresolvedItemCount ?? 0,
+        currentStep:
+          (payload?.unresolvedItemCount ?? 0) > 0
+            ? "Quoted facts stored; some items have more than one value"
+            : "Quoted facts stored from package pages",
+      }));
+    } catch (factError) {
+      const message = factError instanceof Error ? factError.message : "Fact resolution failed.";
+      setError(message);
+    } finally {
+      setResolving(false);
+    }
+  }
+
   const wizard = meetingsV3WizardProgress({
     pageCount: Math.max(status.pageCount, pages.length),
     correctedPageCount: Math.max(status.correctedPageCount, rewrites.length),
     agendaItemCount: Math.max(status.agendaItemCount, agendaItems.length),
     attachmentsLinked: status.attachmentsLinked,
+    factsResolved: status.factsResolved,
     agendaContentEndsAtPage: status.agendaContentEndsAtPage,
   });
   const shownStep = wizard.steps.find((step) => step.id === pickedStep && step.state !== "upcoming")
@@ -881,14 +934,27 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
-            <button
-              type="button"
-              onClick={() => void linkAttachments()}
-              disabled={busy}
-              className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {linking ? "Linking attachments…" : status.attachmentsLinked ? "Run again" : "Link attachments"}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              {status.attachmentsLinked && !linking ? (
+                <button
+                  type="button"
+                  onClick={() => setPickedStep("facts")}
+                  className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
+                >
+                  Continue to facts
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void linkAttachments()}
+                disabled={busy}
+                className={status.attachmentsLinked && !linking
+                  ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                  : "rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"}
+              >
+                {linking ? "Linking attachments…" : status.attachmentsLinked ? "Run again" : "Link attachments"}
+              </button>
+            </div>
           </div>
           {!status.attachmentsLinked ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
@@ -970,6 +1036,98 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                   </p>
                 </div>
               ) : null}
+            </section>
+          )}
+        </>
+      ) : null}
+
+      {shownStep?.id === "facts" ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
+            <button
+              type="button"
+              onClick={() => void resolveFacts()}
+              disabled={busy}
+              className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {resolving ? "Resolving facts…" : status.factsResolved ? "Run again" : "Resolve facts"}
+            </button>
+          </div>
+          {!status.factsResolved ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              {resolving
+                ? "Reading each topic's pages and keeping only figures that appear in a quote."
+                : "Resolve facts once the attachment pages look right."}
+            </div>
+          ) : agendaItems.length === 0 && status.agendaItemCount > 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              Loading quoted facts.
+            </div>
+          ) : (
+            <section className="rounded-xl border border-slate-200 bg-white">
+              <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+                Quoted facts
+              </h2>
+              {status.unresolvedFactItemCount > 0 ? (
+                <p className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {status.unresolvedFactItemCount === 1
+                    ? "1 topic has more than one value. Neither was chosen."
+                    : `${status.unresolvedFactItemCount} topics have more than one value. Neither was chosen.`}
+                </p>
+              ) : null}
+              <ul className="divide-y divide-slate-100">
+                {agendaItems.map((item) => (
+                  <li
+                    key={`${item.itemNumber}-${item.title}`}
+                    className="py-2 pr-3 text-sm"
+                    style={{ paddingLeft: `${12 + agendaItemIndentDepth(item.itemNumber) * 20}px` }}
+                  >
+                    <p>
+                      <span
+                        className="inline-block w-8 font-semibold tabular-nums text-slate-900"
+                        title={item.itemNumber}
+                      >
+                        {displayAgendaSegment(item.itemNumber)}
+                      </span>
+                      <span className="font-medium text-slate-800">{item.title}</span>
+                    </p>
+                    {item.facts && item.facts.candidates.length > 0 ? (
+                      <ul className="mt-1 space-y-2">
+                        {item.facts.candidates.map((fact) => {
+                          const unresolved = item.facts?.unresolvedFields.includes(fact.field);
+                          return (
+                            <li key={`${fact.field}-${fact.page}-${fact.value}`}>
+                              <p>
+                                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                  {FACT_FIELD_LABEL[fact.field]}
+                                </span>
+                                <span className="ml-2 font-medium text-slate-800">{fact.value}</span>
+                                {unresolved ? (
+                                  <span className="ml-2 text-xs font-medium text-amber-800">Unresolved</span>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPageNumber(fact.page);
+                                    setPickedStep("extract");
+                                  }}
+                                  className="ml-2 rounded-md border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                >
+                                  Page {fact.page}
+                                </button>
+                              </p>
+                              <p className="mt-0.5 text-xs text-slate-600">{fact.quote}</p>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : (
+                      <p className="mt-1 text-xs text-slate-500">No quoted fact on the linked pages.</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </section>
           )}
         </>

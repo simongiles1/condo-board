@@ -7,7 +7,7 @@ import { countAgendaPages } from "@/lib/meeting-v3/agenda-pages";
 
 /** One stage on the V3 test wizard. */
 export type MeetingsV3WizardStep = {
-  id: "extract" | "agenda" | "attachments";
+  id: "extract" | "agenda" | "attachments" | "facts";
   title: string;
   detail: string;
 };
@@ -28,6 +28,11 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
     id: "attachments",
     title: "Link attachments",
     detail: "Pages after the agenda split are linked to the topic they support.",
+  },
+  {
+    id: "facts",
+    title: "Resolve facts",
+    detail: "Amounts, vendors, dates, and recommendations are kept only when the quote is on that page.",
   },
 ];
 
@@ -52,19 +57,27 @@ export type MeetingsV3WizardProgress = {
  * Extract is finished when every agenda page has a correction.
  * Agenda is finished after that list exists.
  * Attachments are finished after a link run is stored for that agenda.
+ * Facts are finished after a resolution run is stored for that link.
  */
 export function meetingsV3WizardProgress(input: {
   pageCount: number;
   correctedPageCount: number;
   agendaItemCount: number;
   attachmentsLinked: boolean;
+  factsResolved: boolean;
   agendaContentEndsAtPage: number | null;
 }): MeetingsV3WizardProgress {
   const agendaPageCount = countAgendaPages(input.pageCount, input.agendaContentEndsAtPage);
   const extractDone = agendaPageCount > 0 && input.correctedPageCount >= agendaPageCount;
   const agendaDone = extractDone && input.agendaItemCount > 0;
   const attachmentsDone = agendaDone && input.attachmentsLinked;
-  const doneById = { extract: extractDone, agenda: agendaDone, attachments: attachmentsDone };
+  const factsDone = attachmentsDone && input.factsResolved;
+  const doneById = {
+    extract: extractDone,
+    agenda: agendaDone,
+    attachments: attachmentsDone,
+    facts: factsDone,
+  };
   const activeId = MEETINGS_V3_WIZARD_STEPS.find((step) => !doneById[step.id])?.id
     ?? MEETINGS_V3_WIZARD_STEPS[MEETINGS_V3_WIZARD_STEPS.length - 1].id;
   let passedActive = false;

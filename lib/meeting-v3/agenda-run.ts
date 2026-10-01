@@ -20,6 +20,7 @@ import {
   readAgendaVendors,
   selectCorrectedAgendaPages,
 } from "@/lib/meeting-v3/agenda-pages";
+import { readStoredItemFacts, type MeetingsV3ItemFacts } from "@/lib/meeting-v3/facts";
 import { listMeetingPageRewrites } from "@/lib/meeting-v3/page-rewrite-run";
 import { meetingsV3SettingsWithAttachmentLink } from "@/lib/meeting-v3/package-status";
 import type { DeepSeekGenerationResult } from "@/lib/deepseek/client";
@@ -51,6 +52,7 @@ export type MeetingsV3AgendaItem = {
   amount: string | null;
   vendors: string[];
   recommendation: string | null;
+  facts: MeetingsV3ItemFacts | null;
 };
 
 /** The agenda stored for one meeting after a build. */
@@ -137,6 +139,7 @@ export async function buildMeetingV3Agenda(meetingId: string): Promise<AgendaBui
     amount: textOrNull(topic.financials?.amount),
     vendorsJson: vendorNames(topic.contractorsOrVendors),
     recommendation: textOrNull(topic.managementRecommendation),
+    factsJson: null,
     createdAt,
   }));
 
@@ -189,6 +192,7 @@ export async function listMeetingV3Agenda(meetingId: string): Promise<MeetingsV3
       amount: meetingsV3AgendaItems.amount,
       vendorsJson: meetingsV3AgendaItems.vendorsJson,
       recommendation: meetingsV3AgendaItems.recommendation,
+      factsJson: meetingsV3AgendaItems.factsJson,
     })
     .from(meetingsV3AgendaItems)
     .where(eq(meetingsV3AgendaItems.meetingV2Id, meetingId))
@@ -219,6 +223,7 @@ function toAgendaItem(row: {
   amount: string | null;
   vendorsJson: string | null;
   recommendation: string | null;
+  factsJson?: string | null;
 }): MeetingsV3AgendaItem {
   return {
     itemNumber: row.itemNumber,
@@ -230,6 +235,7 @@ function toAgendaItem(row: {
     amount: row.amount,
     vendors: readAgendaVendors(row.vendorsJson),
     recommendation: row.recommendation,
+    facts: readStoredItemFacts(row.factsJson),
   };
 }
 

@@ -24,6 +24,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Meetings V3 fact resolution** — After attachment pages are linked, Resolve facts reads each topic's corrected pages and linked attachment text. An amount, vendor, date, or recommendation is kept only when its quote is on that page and the value is inside the quote. Two different values stay listed, and neither is chosen. The agenda summary is not used. Re-linking attachments, rebuilding the agenda, or correcting pages clears those facts. The V2 fact ledger is left unchanged.
+
 - **Meetings V3 AI cost tracking** — The V3 meeting page opens an AI usage breakdown by pipeline stage (Docling extract, agenda page correction, build agenda, link attachments). Each stage shows input and output tokens, model name, and estimated USD cost where the step calls an LLM.
 
 - **Meetings V3 create crossover** — The V3 upload modal keeps the full selected board package and uses the last-agenda control to mark where the agenda ends (for example, agenda through page 12 and attachments from page 13). It no longer trims the PDF to agenda pages only. V2 historical upload is unchanged.

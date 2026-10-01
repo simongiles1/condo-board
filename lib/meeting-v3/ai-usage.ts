@@ -1,5 +1,5 @@
 /**
- * V3 meeting AI cost by wizard stage (ingest, correction, agenda, attachments).
+ * V3 meeting AI cost by wizard stage (ingest, correction, agenda, attachments, facts).
  */
 
 import { eq } from "drizzle-orm";
@@ -33,6 +33,7 @@ export const MEETINGS_V3_AI_USAGE_STAGE_IDS = [
   "v3_correct",
   "v3_agenda",
   "v3_attachments",
+  "v3_facts",
 ] as const;
 
 /** One V3 pipeline stage in the AI usage breakdown. */
@@ -43,6 +44,7 @@ const STAGE_LABELS: Record<MeetingsV3AiUsageStageId, string> = {
   v3_correct: "Agenda page correction",
   v3_agenda: "Build agenda",
   v3_attachments: "Link attachments",
+  v3_facts: "Resolve facts",
 };
 
 function primaryGeminiModel(calls: GeminiUsageCall[]): string {
@@ -262,6 +264,7 @@ export async function persistMeetingsV3AiUsageStage(
     error: settings.v3Package?.error ?? null,
     updatedAt: recordedAt,
     attachmentLink: settings.v3Package?.attachmentLink ?? null,
+    factResolution: settings.v3Package?.factResolution ?? null,
     aiUsage: { stages },
   };
 

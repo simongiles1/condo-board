@@ -209,6 +209,19 @@ export const PIPELINE_STAGE_TOOLTIPS: Record<string, PipelineStageTooltip> = {
       },
     ],
   },
+  v3_facts: {
+    title: "Resolve facts",
+    summary: "Keeps amounts, vendors, dates, and recommendations only when the quote is on that page.",
+    sections: [
+      {
+        items: [
+          "Each agenda item is read from its corrected pages and linked attachment text.",
+          "A fact is dropped when the quote is not on the named page, or the value is not inside the quote.",
+          "Two different amounts stay listed. Neither is chosen.",
+        ],
+      },
+    ],
+  },
 };
 
 export function getPipelineStageTooltip(stageId: string): PipelineStageTooltip | null {

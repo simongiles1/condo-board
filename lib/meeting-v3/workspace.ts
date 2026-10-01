@@ -15,6 +15,13 @@ export const MEETINGS_V3_PACKAGE_STAGES = [
 /** Package-extraction progress stored on the meeting. */
 export type MeetingsV3PackageStage = (typeof MEETINGS_V3_PACKAGE_STAGES)[number];
 
+/** A finished pass that stored quoted package facts on the V3 agenda. */
+export type MeetingsV3FactResolution = {
+  completedAt: string;
+  factCount: number;
+  unresolvedItemCount: number;
+};
+
 /** A finished pass that linked attachment pages onto the V3 agenda. */
 export type MeetingsV3AttachmentLink = {
   completedAt: string;
@@ -55,6 +62,7 @@ export type MeetingsV3PackageSettings = {
   error: string | null;
   updatedAt: string;
   attachmentLink?: MeetingsV3AttachmentLink | null;
+  factResolution?: MeetingsV3FactResolution | null;
   aiUsage?: MeetingsV3AiUsageSettings | null;
 };
 
@@ -115,6 +123,38 @@ export function meetingsV3AttachmentLink(
     assignedPageCount: record.assignedPageCount,
     unassignedPages,
     pagesWithoutText,
+  };
+}
+
+/**
+ * The stored fact resolution, when that stage has been run for the current attachment link.
+ * Returns null when the flag is missing or not a completed resolution.
+ */
+export function meetingsV3FactResolution(
+  settings: { v3Package?: { factResolution?: unknown } | null } | null | undefined,
+): MeetingsV3FactResolution | null {
+  const resolution = settings?.v3Package?.factResolution;
+  if (!resolution || typeof resolution !== "object") return null;
+  const record = resolution as {
+    completedAt?: unknown;
+    factCount?: unknown;
+    unresolvedItemCount?: unknown;
+  };
+  if (typeof record.completedAt !== "string" || !record.completedAt.trim()) return null;
+  if (typeof record.factCount !== "number" || !Number.isInteger(record.factCount) || record.factCount < 0) {
+    return null;
+  }
+  if (
+    typeof record.unresolvedItemCount !== "number"
+    || !Number.isInteger(record.unresolvedItemCount)
+    || record.unresolvedItemCount < 0
+  ) {
+    return null;
+  }
+  return {
+    completedAt: record.completedAt,
+    factCount: record.factCount,
+    unresolvedItemCount: record.unresolvedItemCount,
   };
 }
 

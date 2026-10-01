@@ -8,6 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V3 quoted facts** — A section heading with no facts of its own no longer says "No quoted fact on the linked pages." That line stays on a topic that has no children.
 - **Meetings V3 fact resolution** — Resolve facts no longer stops when DeepSeek cuts the reply off at 4,096 tokens. Each topic is read a few pages at a time, and a reply that is still cut short is split and tried again.
 - **Meetings V3 attachment citations** — A page citation stays with the agenda topic it follows. Two topics on one page no longer give every cited page to the first topic, and a citation printed at the top of the next page (before the next heading) stays with the topic it closes. Re-run Link attachments to apply it.
 - **Meetings V3 attachment outline** — Link attachments lists every agenda topic with the same number and indent as the agenda, including topics that have no pages yet.

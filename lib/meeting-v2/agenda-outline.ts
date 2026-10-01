@@ -105,6 +105,19 @@ export function parentAgendaItemCode(value: string | null | undefined): string |
     .join(".");
 }
 
+/**
+ * True when no other code is nested directly under this one.
+ * `4` is a heading when `4.B` is in the list. A code with no child is a leaf.
+ */
+export function isAgendaItemLeaf(
+  itemNumber: string | null | undefined,
+  itemNumbers: readonly (string | null | undefined)[],
+): boolean {
+  const code = (itemNumber || "").trim();
+  if (!code) return true;
+  return !itemNumbers.some((other) => parentAgendaItemCode(other) === code);
+}
+
 export function alphaLabel(index: number, uppercase = false): string {
   if (index < 0) return uppercase ? "A" : "a";
   if (index < 26) {

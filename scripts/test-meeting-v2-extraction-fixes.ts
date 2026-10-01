@@ -35,6 +35,7 @@ import {
   applyAgendaHierarchyCorrections,
   buildAgendaOutlineTree,
   compareAgendaItemCodes,
+  isAgendaItemLeaf,
   decorateAgendaOutlineTree,
   filterAgendaItemsPreservingAncestors,
   insertItemsByDiscussionPosition,
@@ -757,6 +758,12 @@ describe("Hierarchical board-package agenda outline", () => {
     assert.equal(placement.sectionMissing, true);
     assert.deepEqual(placement.nextItemCodes, ["4.E.a", "4.E.b"]);
     assert.ok(compareAgendaItemCodes("4.E.a", "5") < 0);
+    const codes = ["1", "4", "4.D", "4.D.l", "4.E", "4.E.a", "5"];
+    assert.equal(isAgendaItemLeaf("4", codes), false);
+    assert.equal(isAgendaItemLeaf("4.D", codes), false);
+    assert.equal(isAgendaItemLeaf("4.D.l", codes), true);
+    assert.equal(isAgendaItemLeaf("1", codes), true);
+    assert.equal(isAgendaItemLeaf("5", codes), true);
 
     const occupied = planAdHocPlacement(
       [

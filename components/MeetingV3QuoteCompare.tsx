@@ -7,7 +7,7 @@ import { AiUsageDialog, AiUsageIconButton } from "@/components/AiUsageDialog";
 import { DeepSeekActionConfirmDialog } from "@/components/DeepSeekActionConfirmDialog";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
-import { agendaItemIndentDepth, displayAgendaSegment } from "@/lib/meeting-v2/agenda-outline";
+import { agendaItemIndentDepth, displayAgendaSegment, isAgendaItemLeaf } from "@/lib/meeting-v2/agenda-outline";
 import { countAgendaPages, formatSourcePages, isAgendaPageForCorrection } from "@/lib/meeting-v3/agenda-pages";
 import type { MeetingsV3FactField, MeetingsV3ItemFacts } from "@/lib/meeting-v3/facts";
 import { formatSpanClock, type MeetingsV3ItemTranscript } from "@/lib/meeting-v3/transcript-spans";
@@ -1183,9 +1183,12 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                           );
                         })}
                       </ul>
-                    ) : (
+                    ) : isAgendaItemLeaf(
+                        item.itemNumber,
+                        agendaItems.map((row) => row.itemNumber),
+                      ) ? (
                       <p className="mt-1 text-xs text-slate-500">No quoted fact on the linked pages.</p>
-                    )}
+                    ) : null}
                   </li>
                 ))}
               </ul>

@@ -202,7 +202,11 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
       const pages = linked.pagesByItemId.get(item.id) ?? item.sourcePages;
       await tx
         .update(meetingsV3AgendaItems)
-        .set({ sourcePagesJson: JSON.stringify(pages), factsJson: null })
+        .set({
+          sourcePagesJson: JSON.stringify(pages),
+          factsJson: null,
+          transcriptSpansJson: null,
+        })
         .where(eq(meetingsV3AgendaItems.id, item.id));
     }
   });

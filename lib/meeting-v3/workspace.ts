@@ -22,6 +22,13 @@ export type MeetingsV3FactResolution = {
   unresolvedItemCount: number;
 };
 
+/** A finished pass that stored transcript spans on the V3 agenda. */
+export type MeetingsV3TranscriptSegmentation = {
+  completedAt: string;
+  spanCount: number;
+  overlapItemCount: number;
+};
+
 /** A finished pass that linked attachment pages onto the V3 agenda. */
 export type MeetingsV3AttachmentLink = {
   completedAt: string;
@@ -63,6 +70,7 @@ export type MeetingsV3PackageSettings = {
   updatedAt: string;
   attachmentLink?: MeetingsV3AttachmentLink | null;
   factResolution?: MeetingsV3FactResolution | null;
+  transcriptSegmentation?: MeetingsV3TranscriptSegmentation | null;
   aiUsage?: MeetingsV3AiUsageSettings | null;
 };
 
@@ -155,6 +163,38 @@ export function meetingsV3FactResolution(
     completedAt: record.completedAt,
     factCount: record.factCount,
     unresolvedItemCount: record.unresolvedItemCount,
+  };
+}
+
+/**
+ * The stored transcript segmentation, when that stage has been run for the current facts.
+ * Returns null when the flag is missing or not a completed segmentation.
+ */
+export function meetingsV3TranscriptSegmentation(
+  settings: { v3Package?: { transcriptSegmentation?: unknown } | null } | null | undefined,
+): MeetingsV3TranscriptSegmentation | null {
+  const segmentation = settings?.v3Package?.transcriptSegmentation;
+  if (!segmentation || typeof segmentation !== "object") return null;
+  const record = segmentation as {
+    completedAt?: unknown;
+    spanCount?: unknown;
+    overlapItemCount?: unknown;
+  };
+  if (typeof record.completedAt !== "string" || !record.completedAt.trim()) return null;
+  if (typeof record.spanCount !== "number" || !Number.isInteger(record.spanCount) || record.spanCount < 0) {
+    return null;
+  }
+  if (
+    typeof record.overlapItemCount !== "number"
+    || !Number.isInteger(record.overlapItemCount)
+    || record.overlapItemCount < 0
+  ) {
+    return null;
+  }
+  return {
+    completedAt: record.completedAt,
+    spanCount: record.spanCount,
+    overlapItemCount: record.overlapItemCount,
   };
 }
 

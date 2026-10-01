@@ -10,6 +10,7 @@ import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { agendaItemIndentDepth, displayAgendaSegment } from "@/lib/meeting-v2/agenda-outline";
 import { countAgendaPages, formatSourcePages, isAgendaPageForCorrection } from "@/lib/meeting-v3/agenda-pages";
 import type { MeetingsV3FactField, MeetingsV3ItemFacts } from "@/lib/meeting-v3/facts";
+import { formatSpanClock, type MeetingsV3ItemTranscript } from "@/lib/meeting-v3/transcript-spans";
 import { cancelPdfCanvasRender, renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
 import {
@@ -37,6 +38,7 @@ type AgendaItem = {
   vendors: string[];
   recommendation: string | null;
   facts: MeetingsV3ItemFacts | null;
+  transcript: MeetingsV3ItemTranscript | null;
 };
 
 type PageNavProps = {
@@ -423,7 +425,7 @@ function WizardBar({ steps, shownId, completedCount, busy, onShow }: WizardBarPr
 }
 
 /**
- * Walks a V3 meeting through extract and correct, the agenda, attachment pages, then quoted facts.
+ * Walks a V3 meeting through extract and correct, the agenda, attachment pages, quoted facts, then the transcript.
  * Finished stages stay open. The next stage is another entry on the same bar.
  */
 export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageStatus }) {
@@ -440,14 +442,15 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [buildingAgenda, setBuildingAgenda] = useState(false);
   const [linking, setLinking] = useState(false);
   const [resolving, setResolving] = useState(false);
-  const [deepSeekConfirm, setDeepSeekConfirm] = useState<"attachments" | "facts" | null>(null);
+  const [segmenting, setSegmenting] = useState(false);
+  const [deepSeekConfirm, setDeepSeekConfirm] = useState<"attachments" | "facts" | "transcript" | null>(null);
   const deepSeekRun = useRef(false);
   const [pickedStep, setPickedStep] = useState<MeetingsV3WizardStep["id"] | null>(null);
   const [aiUsageOpen, setAiUsageOpen] = useState(false);
   const [aiUsageStages, setAiUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [aiUsageLoading, setAiUsageLoading] = useState(false);
 
-  const busy = running || buildingAgenda || linking || resolving || status.stage === "extracting" || status.stage === "correcting";
+  const busy = running || buildingAgenda || linking || resolving || segmenting || status.stage === "extracting" || status.stage === "correcting";
 
   function refreshAiUsage() {
     setAiUsageLoading(true);
@@ -644,6 +647,9 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         factsResolved: false,
         factCount: 0,
         unresolvedFactItemCount: 0,
+        transcriptSegmented: false,
+        transcriptSpanCount: 0,
+        transcriptOverlapItemCount: 0,
         unassignedAttachmentPages: [],
         attachmentPagesWithoutText: [],
       }));
@@ -677,6 +683,9 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         factsResolved: false,
         factCount: 0,
         unresolvedFactItemCount: 0,
+        transcriptSegmented: false,
+        transcriptSpanCount: 0,
+        transcriptOverlapItemCount: 0,
         unassignedAttachmentPages: payload?.unassignedPages ?? [],
         attachmentPagesWithoutText: payload?.pagesWithoutText ?? [],
         agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
@@ -732,12 +741,53 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     }
   }
 
+  async function segmentTranscript() {
+    if (deepSeekRun.current) return;
+    deepSeekRun.current = true;
+    setSegmenting(true);
+    setError(null);
+    setStatus((current) => ({ ...current, currentStep: "Segmenting the transcript" }));
+    try {
+      const response = await fetch(`/api/v3/meetings/${status.id}/transcript`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            items?: AgendaItem[];
+            spanCount?: number;
+            overlapItemCount?: number;
+            error?: string;
+          }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Transcript segmentation failed.");
+      }
+      setAgendaItems(payload?.items ?? []);
+      setStatus((current) => ({
+        ...current,
+        transcriptSegmented: true,
+        transcriptSpanCount: payload?.spanCount ?? 0,
+        transcriptOverlapItemCount: payload?.overlapItemCount ?? 0,
+        currentStep:
+          (payload?.overlapItemCount ?? 0) > 0
+            ? "Transcript spans stored; some topics share a stretch"
+            : "Transcript spans stored from the cues",
+      }));
+    } catch (spanError) {
+      const message = spanError instanceof Error ? spanError.message : "Transcript segmentation failed.";
+      setError(message);
+    } finally {
+      deepSeekRun.current = false;
+      setSegmenting(false);
+      setDeepSeekConfirm(null);
+    }
+  }
+
   const wizard = meetingsV3WizardProgress({
     pageCount: Math.max(status.pageCount, pages.length),
     correctedPageCount: Math.max(status.correctedPageCount, rewrites.length),
     agendaItemCount: Math.max(status.agendaItemCount, agendaItems.length),
     attachmentsLinked: status.attachmentsLinked,
     factsResolved: status.factsResolved,
+    transcriptSegmented: status.transcriptSegmented,
     agendaContentEndsAtPage: status.agendaContentEndsAtPage,
   });
   const shownStep = wizard.steps.find((step) => step.id === pickedStep && step.state !== "upcoming")
@@ -1143,6 +1193,88 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           )}
         </>
       ) : null}
+
+      {shownStep?.id === "transcript" ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
+            <button
+              type="button"
+              onClick={() => setDeepSeekConfirm("transcript")}
+              disabled={busy || !status.hasTranscript}
+              className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {segmenting ? "Segmenting transcript…" : status.transcriptSegmented ? "Run again" : "Segment transcript"}
+            </button>
+          </div>
+          {!status.hasTranscript ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              This meeting has no transcript yet.
+            </div>
+          ) : !status.transcriptSegmented ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              {segmenting
+                ? "Reading the transcript and keeping a stretch only when its quote is inside that time range."
+                : "Segment the transcript once the quoted facts look right."}
+            </div>
+          ) : agendaItems.length === 0 && status.agendaItemCount > 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              Loading transcript spans.
+            </div>
+          ) : (
+            <section className="rounded-xl border border-slate-200 bg-white">
+              <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+                Transcript spans
+              </h2>
+              {status.transcriptOverlapItemCount > 0 ? (
+                <p className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {status.transcriptOverlapItemCount === 1
+                    ? "1 topic shares a stretch with another topic. Neither was dropped."
+                    : `${status.transcriptOverlapItemCount} topics share a stretch with another topic. Neither was dropped.`}
+                </p>
+              ) : null}
+              <ul className="divide-y divide-slate-100">
+                {agendaItems.map((item) => (
+                  <li
+                    key={`${item.itemNumber}-${item.title}`}
+                    className="py-2 pr-3 text-sm"
+                    style={{ paddingLeft: `${12 + agendaItemIndentDepth(item.itemNumber) * 20}px` }}
+                  >
+                    <p>
+                      <span
+                        className="inline-block w-8 font-semibold tabular-nums text-slate-900"
+                        title={item.itemNumber}
+                      >
+                        {displayAgendaSegment(item.itemNumber)}
+                      </span>
+                      <span className="font-medium text-slate-800">{item.title}</span>
+                    </p>
+                    {item.transcript && item.transcript.spans.length > 0 ? (
+                      <ul className="mt-1 space-y-2">
+                        {item.transcript.spans.map((span) => (
+                          <li key={`${span.startMs}-${span.endMs}-${span.quote}`}>
+                            <p>
+                              <span className="font-medium tabular-nums text-slate-800">
+                                {formatSpanClock(span.startMs)}–{formatSpanClock(span.endMs)}
+                              </span>
+                              {span.overlaps ? (
+                                <span className="ml-2 text-xs font-medium text-amber-800">Shared</span>
+                              ) : null}
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-600">{span.quote}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-1 text-xs text-slate-500">No transcript span for this topic.</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
+      ) : null}
       </div>
 
       {expanded && status.pageCount > 0 ? (
@@ -1185,18 +1317,39 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
 
       <DeepSeekActionConfirmDialog
         open={deepSeekConfirm != null}
-        title={deepSeekConfirm === "facts" ? "Resolve facts?" : "Link attachments?"}
-        description={
-          deepSeekConfirm === "facts"
-            ? "This reads each topic's pages with DeepSeek and keeps a figure only when its quote is on that page."
-            : "Pages the agenda does not already name are matched to topics with DeepSeek."
+        title={
+          deepSeekConfirm === "transcript"
+            ? "Segment transcript?"
+            : deepSeekConfirm === "facts"
+              ? "Resolve facts?"
+              : "Link attachments?"
         }
-        confirmLabel={deepSeekConfirm === "facts" ? "Resolve facts" : "Link attachments"}
-        busyLabel={deepSeekConfirm === "facts" ? "Resolving facts…" : "Linking attachments…"}
-        busy={linking || resolving}
+        description={
+          deepSeekConfirm === "transcript"
+            ? "This reads the transcript with DeepSeek and keeps a stretch only when its quote is inside that time range."
+            : deepSeekConfirm === "facts"
+              ? "This reads each topic's pages with DeepSeek and keeps a figure only when its quote is on that page."
+              : "Pages the agenda does not already name are matched to topics with DeepSeek."
+        }
+        confirmLabel={
+          deepSeekConfirm === "transcript"
+            ? "Segment transcript"
+            : deepSeekConfirm === "facts"
+              ? "Resolve facts"
+              : "Link attachments"
+        }
+        busyLabel={
+          deepSeekConfirm === "transcript"
+            ? "Segmenting transcript…"
+            : deepSeekConfirm === "facts"
+              ? "Resolving facts…"
+              : "Linking attachments…"
+        }
+        busy={linking || resolving || segmenting}
         onCancel={() => setDeepSeekConfirm(null)}
         onConfirm={() => {
-          if (deepSeekConfirm === "facts") void resolveFacts();
+          if (deepSeekConfirm === "transcript") void segmentTranscript();
+          else if (deepSeekConfirm === "facts") void resolveFacts();
           else void linkAttachments();
         }}
       />

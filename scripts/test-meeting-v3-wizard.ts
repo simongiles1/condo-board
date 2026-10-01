@@ -12,6 +12,7 @@ const base = {
   agendaItemCount: 0,
   attachmentsLinked: false,
   factsResolved: false,
+  transcriptSegmented: false,
   agendaContentEndsAtPage: null as number | null,
 };
 
@@ -24,7 +25,10 @@ describe("v3 wizard progress", () => {
     });
     assert.equal(progress.activeId, "extract");
     assert.equal(progress.finished, false);
-    assert.deepEqual(progress.steps.map((step) => step.state), ["current", "upcoming", "upcoming", "upcoming"]);
+    assert.deepEqual(
+      progress.steps.map((step) => step.state),
+      ["current", "upcoming", "upcoming", "upcoming", "upcoming"],
+    );
   });
 
   it("moves to the agenda only after every agenda page is corrected", () => {
@@ -41,7 +45,10 @@ describe("v3 wizard progress", () => {
       correctedPageCount: 4,
     });
     assert.equal(ready.activeId, "agenda");
-    assert.deepEqual(ready.steps.map((step) => step.state), ["complete", "current", "upcoming", "upcoming"]);
+    assert.deepEqual(
+      ready.steps.map((step) => step.state),
+      ["complete", "current", "upcoming", "upcoming", "upcoming"],
+    );
   });
 
   it("finishes extract when agenda pages are corrected even if attachment pages exist", () => {
@@ -52,7 +59,10 @@ describe("v3 wizard progress", () => {
       agendaContentEndsAtPage: 12,
     });
     assert.equal(progress.activeId, "agenda");
-    assert.deepEqual(progress.steps.map((step) => step.state), ["complete", "current", "upcoming", "upcoming"]);
+    assert.deepEqual(
+      progress.steps.map((step) => step.state),
+      ["complete", "current", "upcoming", "upcoming", "upcoming"],
+    );
   });
 
   it("moves to attachments once the agenda exists", () => {
@@ -64,7 +74,10 @@ describe("v3 wizard progress", () => {
     });
     assert.equal(progress.finished, false);
     assert.equal(progress.activeId, "attachments");
-    assert.deepEqual(progress.steps.map((step) => step.state), ["complete", "complete", "current", "upcoming"]);
+    assert.deepEqual(
+      progress.steps.map((step) => step.state),
+      ["complete", "complete", "current", "upcoming", "upcoming"],
+    );
   });
 
   it("moves to facts once attachment pages have been linked", () => {
@@ -77,10 +90,13 @@ describe("v3 wizard progress", () => {
     });
     assert.equal(progress.finished, false);
     assert.equal(progress.activeId, "facts");
-    assert.deepEqual(progress.steps.map((step) => step.state), ["complete", "complete", "complete", "current"]);
+    assert.deepEqual(
+      progress.steps.map((step) => step.state),
+      ["complete", "complete", "complete", "current", "upcoming"],
+    );
   });
 
-  it("finishes once quoted facts have been stored", () => {
+  it("moves to the transcript once quoted facts have been stored", () => {
     const progress = meetingsV3WizardProgress({
       ...base,
       pageCount: 4,
@@ -89,8 +105,26 @@ describe("v3 wizard progress", () => {
       attachmentsLinked: true,
       factsResolved: true,
     });
+    assert.equal(progress.finished, false);
+    assert.equal(progress.activeId, "transcript");
+    assert.deepEqual(
+      progress.steps.map((step) => step.state),
+      ["complete", "complete", "complete", "complete", "current"],
+    );
+  });
+
+  it("finishes once the transcript has been segmented", () => {
+    const progress = meetingsV3WizardProgress({
+      ...base,
+      pageCount: 4,
+      correctedPageCount: 4,
+      agendaItemCount: 12,
+      attachmentsLinked: true,
+      factsResolved: true,
+      transcriptSegmented: true,
+    });
     assert.equal(progress.finished, true);
-    assert.equal(progress.activeId, "facts");
+    assert.equal(progress.activeId, "transcript");
     assert.equal(progress.completedCount, MEETINGS_V3_WIZARD_STEPS.length);
   });
 
@@ -107,5 +141,6 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.steps[1]?.state, "upcoming");
     assert.equal(progress.steps[2]?.state, "upcoming");
     assert.equal(progress.steps[3]?.state, "upcoming");
+    assert.equal(progress.steps[4]?.state, "upcoming");
   });
 });

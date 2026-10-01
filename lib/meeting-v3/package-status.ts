@@ -6,11 +6,12 @@ import { count, desc, eq, inArray } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import {
+  meetings,
   meetingsV2,
   meetingsV2DocumentPages,
   meetingsV3AgendaItems,
   meetingsV3PageRewrites,
-} from "@/lib/db/schema-v2";
+} from "@/lib/db/schema";
 import { readMeetingV2Settings, type MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { upcomingAgendaSplit } from "@/lib/meeting-v2/upcoming-meeting";
 import {
@@ -19,9 +20,11 @@ import {
   meetingsV3FactResolution,
   meetingsV3PackageError,
   meetingsV3PackageStage,
+  meetingsV3TranscriptSegmentation,
   type MeetingsV3AttachmentLink,
   type MeetingsV3FactResolution,
   type MeetingsV3PackageSettings,
+  type MeetingsV3TranscriptSegmentation,
   type MeetingsV3PackageStage,
 } from "@/lib/meeting-v3/workspace";
 
@@ -39,6 +42,7 @@ export type MeetingsV3WorkspaceCard = {
   agendaContentEndsAtPage: number | null;
   attachmentsLinked: boolean;
   factsResolved: boolean;
+  transcriptSegmented: boolean;
 };
 
 /** Package progress for one V3 meeting. */
@@ -57,6 +61,10 @@ export type MeetingsV3PackageStatus = {
   factsResolved: boolean;
   factCount: number;
   unresolvedFactItemCount: number;
+  transcriptSegmented: boolean;
+  transcriptSpanCount: number;
+  transcriptOverlapItemCount: number;
+  hasTranscript: boolean;
   unassignedAttachmentPages: number[];
   attachmentPagesWithoutText: number[];
 };
@@ -127,6 +135,7 @@ export async function listMeetingsV3Workspaces(): Promise<MeetingsV3WorkspaceCar
     agendaContentEndsAtPage: upcomingAgendaSplit(readMeetingV2Settings(row.settings)),
     attachmentsLinked: meetingsV3AttachmentLink(row.settings) != null,
     factsResolved: meetingsV3FactResolution(row.settings) != null,
+    transcriptSegmented: meetingsV3TranscriptSegmentation(row.settings) != null,
   }));
 }
 
@@ -152,6 +161,11 @@ export async function loadMeetingsV3PackageStatus(
   const settings = readMeetingV2Settings(meeting.settings);
   const attachmentLink = meetingsV3AttachmentLink(settings);
   const factResolution = meetingsV3FactResolution(settings);
+  const transcriptSegmentation = meetingsV3TranscriptSegmentation(settings);
+  const [legacy] = await db
+    .select({ vttFilePath: meetings.vttFilePath })
+    .from(meetings)
+    .where(eq(meetings.id, meetingId));
 
   const [pageRows, correctedCountRows, agendaCountRows] = await Promise.all([
     db
@@ -182,6 +196,10 @@ export async function loadMeetingsV3PackageStatus(
     factsResolved: factResolution != null,
     factCount: factResolution?.factCount ?? 0,
     unresolvedFactItemCount: factResolution?.unresolvedItemCount ?? 0,
+    transcriptSegmented: transcriptSegmentation != null,
+    transcriptSpanCount: transcriptSegmentation?.spanCount ?? 0,
+    transcriptOverlapItemCount: transcriptSegmentation?.overlapItemCount ?? 0,
+    hasTranscript: Boolean(legacy?.vttFilePath?.trim()),
     unassignedAttachmentPages: attachmentLink?.unassignedPages ?? [],
     attachmentPagesWithoutText: attachmentLink?.pagesWithoutText ?? [],
   };
@@ -227,6 +245,7 @@ export async function writeMeetingsV3PackageStage(
     updatedAt,
     attachmentLink: meetingsV3AttachmentLink(settings),
     factResolution: meetingsV3FactResolution(settings),
+    transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   await db
@@ -240,7 +259,7 @@ export async function writeMeetingsV3PackageStage(
 
 /**
  * Settings with the attachment-link flag replaced.
- * Quoted facts are cleared because they belonged to the previous page link.
+ * Quoted facts and transcript spans are cleared because they belonged to the previous page link.
  */
 export function meetingsV3SettingsWithAttachmentLink(
   settings: MeetingV2Settings,
@@ -254,6 +273,7 @@ export function meetingsV3SettingsWithAttachmentLink(
     attachmentLink,
     // A new attachment link changes which pages a quote can come from.
     factResolution: null,
+    transcriptSegmentation: null,
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
@@ -274,6 +294,7 @@ export function meetingsV3SettingsWithFactResolution(
     updatedAt: settings.v3Package?.updatedAt ?? new Date().toISOString(),
     attachmentLink: meetingsV3AttachmentLink(settings),
     factResolution,
+    transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
@@ -320,6 +341,50 @@ export async function writeMeetingsV3AttachmentLink(
     .update(meetingsV2)
     .set({
       settings: meetingsV3SettingsWithAttachmentLink(settings, attachmentLink),
+      updatedAt,
+    })
+    .where(eq(meetingsV2.id, meetingId));
+}
+
+/**
+ * Settings with the transcript-segmentation flag replaced.
+ * Quoted facts stay as they are.
+ */
+export function meetingsV3SettingsWithTranscriptSegmentation(
+  settings: MeetingV2Settings,
+  transcriptSegmentation: MeetingsV3TranscriptSegmentation | null,
+): MeetingV2Settings {
+  const next: MeetingsV3PackageSettings = {
+    workspace: true,
+    stage: meetingsV3PackageStage(settings),
+    error: meetingsV3PackageError(settings),
+    updatedAt: settings.v3Package?.updatedAt ?? new Date().toISOString(),
+    attachmentLink: meetingsV3AttachmentLink(settings),
+    factResolution: meetingsV3FactResolution(settings),
+    transcriptSegmentation,
+    aiUsage: settings.v3Package?.aiUsage ?? null,
+  };
+  return { ...settings, v3Package: next };
+}
+
+/**
+ * Stores or clears the transcript segmentation without changing the package stage.
+ */
+export async function writeMeetingsV3TranscriptSegmentation(
+  meetingId: string,
+  transcriptSegmentation: MeetingsV3TranscriptSegmentation | null,
+): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select({ settings: meetingsV2.settings })
+    .from(meetingsV2)
+    .where(eq(meetingsV2.id, meetingId));
+  const settings = readMeetingV2Settings(row?.settings);
+  const updatedAt = new Date().toISOString();
+  await db
+    .update(meetingsV2)
+    .set({
+      settings: meetingsV3SettingsWithTranscriptSegmentation(settings, transcriptSegmentation),
       updatedAt,
     })
     .where(eq(meetingsV2.id, meetingId));

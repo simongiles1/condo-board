@@ -590,6 +590,7 @@ export const meetingsV3AgendaItems = pgTable(
     vendorsJson: text("vendors_json"),
     recommendation: text("recommendation"),
     factsJson: text("facts_json"),
+    transcriptSpansJson: text("transcript_spans_json"),
     createdAt: text("created_at").notNull(),
   },
   (table) => ({

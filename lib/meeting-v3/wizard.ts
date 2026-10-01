@@ -7,7 +7,7 @@ import { countAgendaPages } from "@/lib/meeting-v3/agenda-pages";
 
 /** One stage on the V3 test wizard. */
 export type MeetingsV3WizardStep = {
-  id: "extract" | "agenda" | "attachments" | "facts";
+  id: "extract" | "agenda" | "attachments" | "facts" | "transcript";
   title: string;
   detail: string;
 };
@@ -34,6 +34,11 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
     title: "Resolve facts",
     detail: "Amounts, vendors, dates, and recommendations are kept only when the quote is on that page.",
   },
+  {
+    id: "transcript",
+    title: "Segment transcript",
+    detail: "Each topic keeps the stretches of talk whose quote is inside that time range.",
+  },
 ];
 
 /** Where one wizard stage sits relative to the meeting. */
@@ -58,6 +63,7 @@ export type MeetingsV3WizardProgress = {
  * Agenda is finished after that list exists.
  * Attachments are finished after a link run is stored for that agenda.
  * Facts are finished after a resolution run is stored for that link.
+ * The transcript is finished after a segmentation run is stored for those facts.
  */
 export function meetingsV3WizardProgress(input: {
   pageCount: number;
@@ -65,6 +71,7 @@ export function meetingsV3WizardProgress(input: {
   agendaItemCount: number;
   attachmentsLinked: boolean;
   factsResolved: boolean;
+  transcriptSegmented: boolean;
   agendaContentEndsAtPage: number | null;
 }): MeetingsV3WizardProgress {
   const agendaPageCount = countAgendaPages(input.pageCount, input.agendaContentEndsAtPage);
@@ -72,11 +79,13 @@ export function meetingsV3WizardProgress(input: {
   const agendaDone = extractDone && input.agendaItemCount > 0;
   const attachmentsDone = agendaDone && input.attachmentsLinked;
   const factsDone = attachmentsDone && input.factsResolved;
+  const transcriptDone = factsDone && input.transcriptSegmented;
   const doneById = {
     extract: extractDone,
     agenda: agendaDone,
     attachments: attachmentsDone,
     facts: factsDone,
+    transcript: transcriptDone,
   };
   const activeId = MEETINGS_V3_WIZARD_STEPS.find((step) => !doneById[step.id])?.id
     ?? MEETINGS_V3_WIZARD_STEPS[MEETINGS_V3_WIZARD_STEPS.length - 1].id;

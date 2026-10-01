@@ -680,6 +680,13 @@
       "when": 1791350000000,
       "tag": "0096_meetings_v3_agenda_facts",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1791400000000,
+      "tag": "0097_meetings_v3_transcript_spans",
+      "breakpoints": true
     }
   ]
 }

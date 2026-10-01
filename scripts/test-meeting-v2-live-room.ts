@@ -32,6 +32,7 @@ import {
 import { clipStageTextToItem } from "../lib/meeting-v2/stage-item-text";
 import {
   linkPackagePageCitations,
+  packageCitationRanges,
   packagePdfViewRange,
   storedPackageCitationGap,
   packagePageFromHref,
@@ -329,6 +330,11 @@ describe("live room package citations", () => {
     assert.match(linked, /\[Pages 13–26\]\(#pkg\/13-26\)/);
     assert.match(linked, /\[Page 27\]\(#pkg\/27\)/);
     assert.match(linked, /Bell & Gossett/);
+    assert.deepEqual(packageCitationRanges("(Page 13 - 26)"), [{ start: 13, end: 26 }]);
+    assert.deepEqual(packageCitationRanges("(Page ….13-26….)"), [{ start: 13, end: 26 }]);
+    assert.deepEqual(packageCitationRanges("(Page 27)"), [{ start: 27, end: 27 }]);
+    assert.deepEqual(packageCitationRanges("(Page 28 - 82 ...)"), [{ start: 28, end: 82 }]);
+    assert.deepEqual(packageCitationRanges("(*Page 98 - 102*)"), [{ start: 98, end: 102 }]);
     assert.deepEqual(packagePageFromHref("#pkg/13-26"), { start: 13, end: 26 });
     assert.equal(packagePageFromHref("https://example.com"), null);
     assert.match(

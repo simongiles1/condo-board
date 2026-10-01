@@ -67,6 +67,72 @@ export function attachmentPageNumbersToLink(selected: SelectedAttachmentPages): 
   ]);
 }
 
+type AgendaWord = { text: string; index: number; end: number };
+
+function agendaWords(text: string): AgendaWord[] {
+  const words: AgendaWord[] = [];
+  for (const match of text.matchAll(/[\p{L}\p{N}]+/gu)) {
+    if (match[0].length < 2) continue;
+    const index = match.index ?? 0;
+    words.push({ text: match[0].toLowerCase(), index, end: index + match[0].length });
+  }
+  return words;
+}
+
+function titleWords(title: string): string[] {
+  return title
+    .replace(/[*_#]/g, " ")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((word) => word.length > 1)
+    .slice(0, 8)
+    .map((word) => word.toLowerCase());
+}
+
+function findTitle(
+  words: AgendaWord[],
+  title: string,
+  fromWord: number,
+): { index: number; wordEnd: number } | null {
+  const needles = titleWords(title);
+  if (needles.length < 3) return null;
+  for (let index = fromWord; index <= words.length - needles.length; index += 1) {
+    const same = needles.every((needle, offset) => words[index + offset]?.text === needle);
+    if (!same) continue;
+    return { index: words[index].index, wordEnd: index + needles.length };
+  }
+  return null;
+}
+
+/**
+ * Agenda text that belongs to each topic, from that topic's heading up to the next one.
+ * A citation that sits on a shared page, or at the top of the next page before the next heading, stays with the topic it follows.
+ * A topic whose heading is not in the agenda text gets an empty string.
+ */
+export function citationTextByAgendaItem(input: {
+  items: Array<{ id: string; title: string }>;
+  agendaText: string;
+}): Map<string, string> {
+  const words = agendaWords(input.agendaText);
+  const hits: Array<{ id: string; index: number }> = [];
+  let cursor = 0;
+  for (const item of input.items) {
+    const found = findTitle(words, item.title, cursor);
+    if (!found) continue;
+    hits.push({ id: item.id, index: found.index });
+    cursor = found.wordEnd;
+  }
+  const texts = new Map<string, string>();
+  for (let index = 0; index < hits.length; index += 1) {
+    const hit = hits[index];
+    const end = hits[index + 1]?.index ?? input.agendaText.length;
+    texts.set(hit.id, input.agendaText.slice(hit.index, end));
+  }
+  for (const item of input.items) {
+    if (!texts.has(item.id)) texts.set(item.id, "");
+  }
+  return texts;
+}
+
 /**
  * Puts attachment pages on agenda items.
  * Agenda-body pages stay. A cited page is not given to a later model assignment.

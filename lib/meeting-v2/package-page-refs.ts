@@ -28,14 +28,14 @@ function pageLink(start: number, end: number | null): string {
 
 /**
  * Replaces package page citations with markdown links.
- * Covers a Docling page icon such as `(Page ... ... ...) 13 - 26` and `(Page 27)`.
+ * Covers a Docling page icon such as `(Page ... ... ...) 13 - 26`, and a rewritten citation such as `(Page 13 - 26)` or `(Page ….13-26….)`.
  */
 export function linkPackagePageCitations(text: string): string {
   const decoded = decodeExtractedText(text);
   const iconThenNumber =
     /\(Page\b[^)\n]{0,80}\)\s*(\d{1,4})(?:\s*[-–—]\s*(\d{1,4}))?/gi;
   const numberInside =
-    /\(\s*Pages?\s+(\d{1,4})(?:\s*[-–—]\s*(\d{1,4}))?\s*\)/gi;
+    /\(\s*[*_]*\s*Pages?\s*[*_]*[^)\d\n]{0,24}(\d{1,4})(?:\s*[-–—]\s*(\d{1,4}))?[^)\n]{0,24}\)/gi;
   return decoded
     .replace(iconThenNumber, (_match, start: string, end?: string) =>
       pageLink(Number(start), end == null ? null : Number(end)),
@@ -121,7 +121,7 @@ export function packageCitationRanges(text: string): Array<{ start: number; end:
   const ranges: Array<{ start: number; end: number }> = [];
   const patterns = [
     /\(Page\b[^)\n]{0,80}\)\s*(\d{1,4})(?:\s*[-–—]\s*(\d{1,4}))?/gi,
-    /\(\s*Pages?\s+(\d{1,4})(?:\s*[-–—]\s*(\d{1,4}))?\s*\)/gi,
+    /\(\s*[*_]*\s*Pages?\s*[*_]*[^)\d\n]{0,24}(\d{1,4})(?:\s*[-–—]\s*(\d{1,4}))?[^)\n]{0,24}\)/gi,
   ];
   for (const pattern of patterns) {
     for (const match of decoded.matchAll(pattern)) {

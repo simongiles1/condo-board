@@ -11,6 +11,7 @@ import { generateDeepSeekJson } from "@/lib/deepseek/client";
 import { isDeepSeekKeyConfigured, readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { upcomingAgendaSplit } from "@/lib/meeting-v2/upcoming-meeting";
 import {
+  citationTextByAgendaItem,
   linkCorrectedAttachmentPages,
   attachmentPageNumbersToLink,
   readAttachmentAssignments,
@@ -78,7 +79,6 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
     .select({
       id: meetingsV3AgendaItems.id,
       sourcePagesJson: meetingsV3AgendaItems.sourcePagesJson,
-      summary: meetingsV3AgendaItems.summary,
       itemNumber: meetingsV3AgendaItems.itemNumber,
       title: meetingsV3AgendaItems.title,
     })
@@ -115,15 +115,22 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
       .filter((page) => split != null && page.pageNumber <= split)
       .map((page) => [page.pageNumber, page.correctedText]),
   );
+  const agendaCorpus = [...agendaText.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([, text]) => text)
+    .join("\n");
+  const citationByItem = citationTextByAgendaItem({
+    items: itemRows.map((item) => ({ id: item.id, title: item.title })),
+    agendaText: agendaCorpus,
+  });
   const items = itemRows.map((item) => {
     const sourcePages = readAgendaSourcePages(item.sourcePagesJson);
-    const agendaPages = sourcePages.filter((page) => split == null || page <= split);
     return {
       id: item.id,
       itemNumber: item.itemNumber,
       title: item.title,
       sourcePages,
-      citationText: [item.summary ?? "", ...agendaPages.map((page) => agendaText.get(page) ?? "")].join("\n"),
+      citationText: citationByItem.get(item.id) ?? "",
     };
   });
 

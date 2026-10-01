@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 
 import {
   attachmentPageNumbersToLink,
+  citationTextByAgendaItem,
   linkCorrectedAttachmentPages,
   readAttachmentAssignments,
   selectCorrectedAttachmentPages,
@@ -77,6 +78,76 @@ describe("corrected attachment pages", () => {
         { pageNumber: 15, text: "more docling" },
       ],
     );
+  });
+});
+
+describe("agenda citation text", () => {
+  const agenda = [
+    "## 1. Steam Room Heat Pump Design, Tender and Construction Review",
+    "Please find attached a copy of minutes. (Page 13 - 26)",
+    "## 2. Main Lobby / Elevator Lobby Restoration Work – Certificate of Completion",
+    "Please find a copy of the sign-off. (Page 27)",
+    "## 1. Booster Pump Replacement – Base Specification and Alternative Options",
+    "Please find the tender analysis report attached.",
+    "(Page 28 - 82)",
+    "## 2. Heat Exchanger Plate Pack Replacement / Rebuild",
+    "(Page 83 - 97)",
+  ].join("\n");
+
+  it("keeps a citation with the topic it follows, including one that starts the next page", () => {
+    const texts = citationTextByAgendaItem({
+      items: [
+        { id: "steam", title: "Steam Room Heat Pump Design, Tender and Construction Review" },
+        { id: "lobby", title: "Main Lobby / Elevator Lobby Restoration Work – Certificate of Completion" },
+        { id: "pump", title: "Booster Pump Replacement – Base Specification and Alternative Options" },
+        { id: "exchanger", title: "Heat Exchanger Plate Pack Replacement / Rebuild" },
+      ],
+      agendaText: agenda,
+    });
+    const linked = linkCorrectedAttachmentPages({
+      agendaContentEndsAtPage: 12,
+      items: [
+        { id: "steam", sourcePages: [3], citationText: texts.get("steam") ?? "" },
+        { id: "lobby", sourcePages: [3], citationText: texts.get("lobby") ?? "" },
+        { id: "pump", sourcePages: [4], citationText: texts.get("pump") ?? "" },
+        { id: "exchanger", sourcePages: [5, 6], citationText: texts.get("exchanger") ?? "" },
+      ],
+      attachmentPageNumbers: Array.from({ length: 85 }, (_, index) => 13 + index),
+      modelAssignments: [],
+    });
+    assert.match(texts.get("steam") ?? "", /13 - 26/);
+    assert.doesNotMatch(texts.get("steam") ?? "", /Page 27/);
+    assert.deepEqual(
+      linked.pagesByItemId.get("steam")?.filter((page) => page > 12),
+      Array.from({ length: 14 }, (_, index) => 13 + index),
+    );
+    assert.deepEqual(linked.pagesByItemId.get("lobby")?.filter((page) => page > 12), [27]);
+    assert.deepEqual(
+      linked.pagesByItemId.get("pump")?.filter((page) => page > 12),
+      Array.from({ length: 55 }, (_, index) => 28 + index),
+    );
+    assert.deepEqual(
+      linked.pagesByItemId.get("exchanger")?.filter((page) => page > 12),
+      Array.from({ length: 15 }, (_, index) => 83 + index),
+    );
+  });
+
+  it("matches a heading that inserts a one-letter token the title also has", () => {
+    const texts = citationTextByAgendaItem({
+      items: [
+        { id: "leak", title: "PH Mechanical Room Make-Up Air Unit Leak Repair" },
+        { id: "seal", title: "Heating Pump P-10A Seal Replacement" },
+      ],
+      agendaText: [
+        "## 3. PH Mechanical Room Make-Up Air Unit Leak Repair:",
+        "(*Page 98 - 102*)",
+        "## 4. *Heating Pump P-10A Seal Replacement:*",
+        "(Page 103 - 105)",
+      ].join("\n"),
+    });
+    assert.match(texts.get("leak") ?? "", /98 - 102/);
+    assert.doesNotMatch(texts.get("leak") ?? "", /103 - 105/);
+    assert.match(texts.get("seal") ?? "", /103 - 105/);
   });
 });
 

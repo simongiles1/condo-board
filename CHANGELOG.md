@@ -8,6 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V3 attachment citations** — A page citation stays with the agenda topic it follows. Two topics on one page no longer give every cited page to the first topic, and a citation printed at the top of the next page (before the next heading) stays with the topic it closes. Re-run Link attachments to apply it.
 - **Meetings V3 attachment outline** — Link attachments lists every agenda topic with the same number and indent as the agenda, including topics that have no pages yet.
 - **Meetings V3 attachment page ranges** — A page range the agenda names, such as pages 13–26, stays on that topic even when some of those pages have no extracted text. Re-run Link attachments to apply it to a meeting that was linked before.
 - **Meetings V3 wizard scroll** — The title and progress bar stay put. Each step scrolls once, in the area under the progress bar.

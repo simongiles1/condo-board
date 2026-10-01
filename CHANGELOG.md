@@ -28,6 +28,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Meetings V3 agenda outline** — Agenda rows indent by level and show only the local number, so 4.A reads as A under 4.
 - **Meetings V3 blank attachment pages** — A page with no extracted text no longer stops attachment linking. When the agenda names that page, it is linked. Otherwise it stays listed as not linked. A page that still has a heading is linked from that heading.
 
+### Features
+
+- **Meetings V3 meeting documents** — Open the same transcript and board package dialog as Meetings V2 from a document icon beside AI usage on the meeting header.
+
 ### Changes
 
 - **Meetings V3 facts and sources** — Resolve facts keeps what the package quote explicitly reports (a proposal, a recommendation, a prior approval, or a past event) and matches a printed vendor to one organization when the registry match is unambiguous. Several fees or several spellings of one company are no longer treated as a conflict. Group sources links facts that name the same project across pages. Reconcile meeting reads the full transcript stretch and records only what that talk supports. The wizard can finish while a fee row or a real conflict still needs a look before a draft. Re-run Extract and correct to repair attachment fee tables, then Resolve facts, Group sources, and Reconcile meeting.

@@ -3,8 +3,10 @@
  */
 
 import { count, desc, eq, inArray } from "drizzle-orm";
+import path from "path";
 
 import { getDb } from "@/lib/db";
+import { loadMeetingBoardPackageMeta } from "@/lib/meeting-v2/board-package";
 import {
   meetings,
   meetingsV2,
@@ -74,6 +76,8 @@ export type MeetingsV3PackageStatus = {
   ungroupedFactCount: number;
   conclusionsRecorded: boolean;
   hasTranscript: boolean;
+  hasBoardPackage: boolean;
+  transcriptFileName: string | null;
   unassignedAttachmentPages: number[];
   attachmentPagesWithoutText: number[];
 };
@@ -178,7 +182,7 @@ export async function loadMeetingsV3PackageStatus(
     .from(meetings)
     .where(eq(meetings.id, meetingId));
 
-  const [pageRows, correctedCountRows, agendaCountRows] = await Promise.all([
+  const [pageRows, correctedCountRows, agendaCountRows, boardPackageMeta] = await Promise.all([
     db
       .select({ pageNumber: meetingsV2DocumentPages.pageNumber })
       .from(meetingsV2DocumentPages)
@@ -191,7 +195,10 @@ export async function loadMeetingsV3PackageStatus(
       .select({ agendaItemCount: count() })
       .from(meetingsV3AgendaItems)
       .where(eq(meetingsV3AgendaItems.meetingV2Id, meetingId)),
+    loadMeetingBoardPackageMeta(meetingId),
   ]);
+  const transcriptPath = legacy?.vttFilePath?.trim() || null;
+  const hasBoardPackage = boardPackageMeta.ok && boardPackageMeta.payload.available;
   return {
     id: meeting.id,
     title: meeting.title,
@@ -214,7 +221,9 @@ export async function loadMeetingsV3PackageStatus(
     factGroupCount: factGrouping?.groupCount ?? 0,
     ungroupedFactCount: factGrouping?.ungroupedCount ?? 0,
     conclusionsRecorded: meetingsV3MeetingReconciliation(settings) != null,
-    hasTranscript: Boolean(legacy?.vttFilePath?.trim()),
+    hasTranscript: Boolean(transcriptPath),
+    hasBoardPackage,
+    transcriptFileName: transcriptPath ? path.basename(transcriptPath) : null,
     unassignedAttachmentPages: attachmentLink?.unassignedPages ?? [],
     attachmentPagesWithoutText: attachmentLink?.pagesWithoutText ?? [],
   };

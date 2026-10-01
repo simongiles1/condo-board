@@ -25,6 +25,44 @@ type Props = {
   onClose: () => void;
 };
 
+/** Opens the meeting documents dialog from a compact header control. */
+export function MeetingDocumentsIconButton({
+  onClick,
+  disabled,
+  title = "Meeting documents",
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={title}
+      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      <svg
+        aria-hidden
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        className="h-4 w-4"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M8 4.5h8l3 3v12a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1v-14a1 1 0 0 1 1-1Z"
+        />
+        <path strokeLinecap="round" d="M16 4.5v3h3M9 12h6M9 15.5h4.5" />
+      </svg>
+    </button>
+  );
+}
+
 export function MeetingDocumentsDialog({
   open,
   meetingId,

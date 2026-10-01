@@ -9,6 +9,7 @@ import type { MergedVttCue } from "@/lib/parsers/vtt";
 import type { TranscriptSectionOverlay } from "@/lib/transcript/section-overlay";
 
 import { AiUsageDialog, AiUsageIconButton } from "@/components/AiUsageDialog";
+import { MeetingDocumentsDialog, MeetingDocumentsIconButton } from "@/components/MeetingDocumentsDialog";
 import { DeepSeekActionConfirmDialog } from "@/components/DeepSeekActionConfirmDialog";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
@@ -548,6 +549,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [aiUsageOpen, setAiUsageOpen] = useState(false);
+  const [documentsDialogOpen, setDocumentsDialogOpen] = useState(false);
   const [aiUsageStages, setAiUsageStages] = useState<AiUsageStageRow[] | null>(null);
   const [aiUsageLoading, setAiUsageLoading] = useState(false);
   const [transcriptCues, setTranscriptCues] = useState<MergedVttCue[] | null>(null);
@@ -1151,6 +1153,16 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const factContextMessages = [...new Set(
     agendaItems.flatMap((item) => (item.facts ? factContextNotes(item.facts) : [])),
   )];
+  const hasMeetingDocuments = status.hasTranscript || status.hasBoardPackage;
+  const documentsAgendaOverlay = useMemo(
+    () =>
+      agendaItems.map((item) => ({
+        id: item.id,
+        title: item.title,
+        itemNumber: item.itemNumber,
+      })),
+    [agendaItems],
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
@@ -1172,7 +1184,15 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
             {busy && status.currentStep ? ` · ${status.currentStep}` : ""}
           </span>
         </div>
-        <AiUsageIconButton onClick={() => setAiUsageOpen(true)} title="View V3 AI usage and cost" />
+        <div className="flex shrink-0 items-center gap-2">
+          {hasMeetingDocuments ? (
+            <MeetingDocumentsIconButton
+              onClick={() => setDocumentsDialogOpen(true)}
+              title="Transcript and board package"
+            />
+          ) : null}
+          <AiUsageIconButton onClick={() => setAiUsageOpen(true)} title="View V3 AI usage and cost" />
+        </div>
       </div>
 
       {shownStep ? (
@@ -1960,6 +1980,15 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         stages={aiUsageStages}
         loading={aiUsageLoading}
         onClose={() => setAiUsageOpen(false)}
+      />
+      <MeetingDocumentsDialog
+        open={documentsDialogOpen}
+        meetingId={status.id}
+        transcriptFileName={status.transcriptFileName ?? undefined}
+        hasTranscript={status.hasTranscript}
+        hasBoardPackage={status.hasBoardPackage}
+        agendaItems={documentsAgendaOverlay}
+        onClose={() => setDocumentsDialogOpen(false)}
       />
     </div>
   );

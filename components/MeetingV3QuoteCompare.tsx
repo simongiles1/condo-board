@@ -1346,7 +1346,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           ) : !status.transcriptSegmented ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
               {segmenting
-                ? "Reading the transcript and keeping a stretch only when its quote is inside that time range."
+                ? "Walking the transcript, then checking span edges and gaps."
                 : "Segment the transcript once the quoted facts look right."}
             </div>
           ) : agendaItems.length === 0 && status.agendaItemCount > 0 ? (

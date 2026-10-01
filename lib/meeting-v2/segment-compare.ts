@@ -20,7 +20,6 @@ import {
   parseWithRepair,
   rehomeOverflowDiscussionTopics,
   sortTopics,
-  type WorkflowState,
   type WorkflowTopic,
 } from "@/lib/meeting-v2/agenda-ai";
 import { loadMeetingV2AiUsageStages } from "@/lib/meeting-v2/ai-usage";
@@ -69,6 +68,7 @@ import {
   type SpanReviewCue,
   type SpanReviewTopic,
 } from "@/lib/meeting-v2/span-edge-review";
+import { seedStateFromAgendaItems } from "@/lib/meeting-v2/transcript-segmentation";
 import type { MergedVttCue } from "@/lib/parsers/vtt";
 import {
   buildTranscriptSectionOverlays,
@@ -150,61 +150,6 @@ function safeParseObject<T>(value: string | null | undefined): T | null {
   } catch {
     return null;
   }
-}
-
-function stripSeededTiming(sourceText: string | null): string | null {
-  if (!sourceText) return null;
-  return sourceText
-    .split("\n")
-    .filter((line) => !/^\s*(discussion status|discussion timing):/i.test(line))
-    .join("\n")
-    .trim() || null;
-}
-
-function seedStateFromAgendaItems(
-  items: Array<{
-    title: string;
-    sectionLabel: string | null;
-    itemType: string;
-    itemNumber: string | null;
-    sourcePagesJson: string;
-    sourceText: string | null;
-  }>,
-): WorkflowState {
-  const documentTopics = items.map((item) => {
-    const pages = safeParseObject<number[]>(item.sourcePagesJson) ?? [];
-    return {
-      title: item.title,
-      sectionLabel: item.sectionLabel?.trim() || "Unknown",
-      itemType: item.itemType,
-      itemNumber: item.itemNumber?.trim() || undefined,
-      visibility: "PUBLIC" as const,
-      sourcePages: pages,
-      sourceChunkIds: [],
-      sourceTranscriptRanges: [],
-      discussionStatus: "not_discussed" as const,
-      discussionTimestampRange: null,
-      consolidationReason: null,
-      sourceText: stripSeededTiming(item.sourceText),
-      aliases: [],
-      notes: [],
-      confidence: 1,
-      confidenceReason: "Seeded from stored agenda outline",
-      evidenceStrength: "DIRECT" as const,
-      openQuestions: [],
-      needsHumanReview: false,
-      humanReviewReason: null,
-    } satisfies WorkflowTopic;
-  });
-  return {
-    documentTopics,
-    extraTopics: [],
-    uncertainties: [],
-    packageItemNumbers: documentTopics
-      .filter((topic) => topic.sourcePages.length > 0 || /items for discussion/i.test(topic.title))
-      .map((topic) => topic.itemNumber)
-      .filter((code): code is string => Boolean(code)),
-  };
 }
 
 export function overlaysFromTopics(topics: WorkflowTopic[]): TranscriptSectionOverlay[] {

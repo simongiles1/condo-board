@@ -38,7 +38,7 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
     id: "transcript",
     title: "Segment transcript",
     detail:
-      "Each topic keeps the stretches of talk whose quote is inside that time range. Talk that is not on the agenda is additional business, item 4.E.",
+      "Each topic keeps the stretches from the transcript walk, span edges, and gap fill. Cues stay separate so one speaker turn cannot cover two topics. Talk that is not on the agenda is additional business.",
   },
   {
     id: "sources",

@@ -8,6 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V3 transcript segments** — Segment transcript no longer keeps a topic only when a verbatim quote sits inside a short cue window. It uses the Meetings V2 walk, span edges, and gap fill, on separate cues. A topic no longer shows as overlapping itself. Re-run Segment transcript to replace the short stretches.
 - **Meetings V3 additional business** — Segment transcript keeps talk that is not on the printed agenda as additional business, item 4.E (the E slot under the property management report). Re-run Segment transcript to add it to a meeting that was segmented before.
 - **Meetings V3 quoted facts** — A section heading with no facts of its own no longer says "No quoted fact on the linked pages." That line stays on a topic that has no children.
 - **Meetings V3 fact resolution** — Resolve facts no longer stops when DeepSeek cuts the reply off at 4,096 tokens. Each topic is read a few pages at a time, and a reply that is still cut short is split and tried again.
@@ -32,7 +33,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Meetings V3 source groups** — After the transcript is segmented, Group sources keeps a vendor, amount, and date together when one quote on the page contains each of them. A second bid stays a second group. A figure that does not share a quote stays listed on its own. Re-resolving facts, linking attachments again, or rebuilding the agenda clears those groups.
 
-- **Meetings V3 transcript spans** — After quoted facts are stored, Segment transcript reads the meeting transcript one cue at a time. A topic keeps a stretch of talk only when the quoted words are inside that time range. Two topics that claim the same stretch both stay listed. Rebuilding the agenda, correcting pages, or linking attachments again clears those spans. The V2 transcript is left unchanged.
+- **Meetings V3 transcript spans** — After quoted facts are stored, Segment transcript runs the Meetings V2 walk, span-edge review, and gap fill. Cues are not merged by speaker, so one turn cannot glue two topics together. A heading does not take a span of its own. Two different topics that still claim the same stretch both stay listed. Rebuilding the agenda, correcting pages, or linking attachments again clears those spans. The V2 agenda is left unchanged.
 
 - **Meetings V3 fact resolution** — After attachment pages are linked, Resolve facts reads each topic's corrected pages and linked attachment text. An amount, vendor, date, or recommendation is kept only when its quote is on that page and the value is inside the quote. Two different values stay listed, and neither is chosen. The agenda summary is not used. Re-linking attachments, rebuilding the agenda, or correcting pages clears those facts. The V2 fact ledger is left unchanged.
 

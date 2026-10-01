@@ -1,6 +1,6 @@
 /**
- * Assigns transcript stretches to a V3 agenda.
- * V2 transcript segments are not written.
+ * Assigns transcript stretches to a V3 agenda with the V2 walk, edge review, and hole fill.
+ * Cues are not merged by speaker. V2 agenda rows and V2 transcript segments are not written.
  */
 
 import { randomUUID } from "crypto";
@@ -12,7 +12,11 @@ import { asc, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { meetings, meetingsV2, meetingsV3AgendaItems } from "@/lib/db/schema";
 import { generateDeepSeekJson, type DeepSeekGenerationResult } from "@/lib/deepseek/client";
+import { compareAgendaItemCodes } from "@/lib/meeting-v2/agenda-outline";
 import { isDeepSeekKeyConfigured, readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
+import type { SegmentationJsonFn } from "@/lib/meeting-v2/segment-json";
+import type { SpanReviewCue } from "@/lib/meeting-v2/span-edge-review";
+import { segmentAgendaTopics } from "@/lib/meeting-v2/transcript-segmentation";
 import { listMeetingV3Agenda, type MeetingsV3AgendaItem } from "@/lib/meeting-v3/agenda-run";
 import {
   buildMeetingsV3DeepSeekStageRow,
@@ -20,16 +24,10 @@ import {
 } from "@/lib/meeting-v3/ai-usage";
 import { writeMeetingsV3TranscriptSegmentation } from "@/lib/meeting-v3/package-status";
 import {
-  acceptQuotedSpans,
-  ADDITIONAL_BUSINESS_TITLE,
-  chunkTranscriptCues,
   cuesFromVtt,
-  planAdditionalBusinessItem,
-  readProposedSpans,
-  TRANSCRIPT_SEGMENT_MAX_OUTPUT_TOKENS,
-  type MeetingsV3ItemTranscript,
-  type MeetingsV3ProposedSpan,
+  rowsFromSegmentedTopics,
   type MeetingsV3TranscriptCue,
+  type SegmentedTopicSpanRow,
 } from "@/lib/meeting-v3/transcript-spans";
 import { isMeetingsV3Workspace, meetingsV3FactResolution } from "@/lib/meeting-v3/workspace";
 
@@ -52,23 +50,9 @@ export type TranscriptSpanResult = {
   items: MeetingsV3AgendaItem[];
 };
 
-function transcriptSpanPrompt(additionalBusinessCode: string): string {
-  return `You assign stretches of a condominium board meeting transcript to agenda items.
-Return JSON only: {"items":[{"agendaItemId":"<id>","spans":[{"startMs":0,"endMs":2000,"quote":"<verbatim words from one cue inside that stretch>"}]}]}.
-Rules:
-- Use only agendaItemId values from the input, and only startMs and endMs values copied from the cues.
-- A span starts at a cue's startMs and ends at a cue's endMs. It may cover several cues in a row.
-- quote is copied from one cue inside that span.
-- One stretch belongs to one item. If the same item is discussed again later, add another span. Do not cover the talk in between.
-- Assent and "any other questions" stay with the item being closed. They do not open the next item.
-- Talk that is not one of the other agenda items is additional business. Assign those stretches to the item whose itemNumber is ${additionalBusinessCode}. Do not attach that talk to the previous item, the next meeting date, or adjournment.
-- Omit an item that is not discussed in these cues.`;
-}
-
 /**
  * Replaces transcript spans on the V3 agenda.
- * Talk that is not on the printed agenda is stored as additional business on the property-management E slot (4.E when that report is item 4).
- * A quote that is not inside the named cue window is dropped.
+ * Talk that is not on the printed agenda is stored as the additional-business rows the V2 walk creates.
  * Throws TranscriptSpanError when the meeting, facts, or transcript are not ready.
  * A model failure leaves the previous spans in place.
  */
@@ -94,6 +78,8 @@ export async function segmentMeetingV3Transcript(meetingId: string): Promise<Tra
       title: meetingsV3AgendaItems.title,
       sectionLabel: meetingsV3AgendaItems.sectionLabel,
       itemType: meetingsV3AgendaItems.itemType,
+      sourcePagesJson: meetingsV3AgendaItems.sourcePagesJson,
+      summary: meetingsV3AgendaItems.summary,
     })
     .from(meetingsV3AgendaItems)
     .where(eq(meetingsV3AgendaItems.meetingV2Id, meetingId))
@@ -101,91 +87,90 @@ export async function segmentMeetingV3Transcript(meetingId: string): Promise<Tra
   if (storedRows.length === 0) {
     throw new TranscriptSpanError("Build the agenda before segmenting the transcript.", 409);
   }
-  const plan = planAdditionalBusinessItem(storedRows, (code) => ({
-    id: randomUUID(),
-    sortOrder: storedRows.length,
-    itemNumber: code,
-    title: ADDITIONAL_BUSINESS_TITLE,
-    sectionLabel: additionalBusinessSectionLabel(storedRows, code),
-    itemType: "ad_hoc_discussion",
-  }));
-  const itemRows = plan.items;
 
   const cues = await loadMeetingCues(meetingId);
   if (!isDeepSeekKeyConfigured()) {
     throw new TranscriptSpanError("DEEPSEEK_API_KEY is required to segment the transcript.", 409);
   }
 
-  const agendaItemIds = new Set(itemRows.map((item) => item.id));
-  const proposed: MeetingsV3ProposedSpan[] = [];
   const deepSeekUsage: DeepSeekGenerationResult[] = [];
   await setTranscriptStep(meetingId, "Segmenting the transcript");
+  let segmented: SegmentedTopicSpanRow[];
   try {
-    for (const batch of chunkTranscriptCues(cues)) {
-      const spans = await requestSpanBatch(itemRows, plan.code, batch, deepSeekUsage);
-      proposed.push(...spans);
-    }
+    const topics = await segmentAgendaTopics({
+      meetingId,
+      items: storedRows.map((item) => ({
+        title: item.title,
+        sectionLabel: item.sectionLabel,
+        itemType: item.itemType,
+        itemNumber: item.itemNumber,
+        sourcePagesJson: item.sourcePagesJson,
+        sourceText: item.summary,
+      })),
+      cues: reviewCuesFromTranscript(cues),
+      generate: meteringGenerate(deepSeekUsage),
+      onProgress: (label) => setTranscriptStep(meetingId, label),
+    });
+    segmented = rowsFromSegmentedTopics({ topics, cues });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Transcript segmentation failed.";
     await setTranscriptStep(meetingId, "Transcript segmentation failed");
     throw new TranscriptSpanError(message, 502);
   }
 
-  const accepted = acceptQuotedSpans({ cues, proposed, agendaItemIds });
-  const keepInjected = plan.injected != null && (accepted.get(plan.injected.id)?.spans.length ?? 0) > 0;
-  const savedRows = keepInjected || plan.injected == null
-    ? itemRows
-    : itemRows.filter((item) => item.id !== plan.injected?.id);
-  const byItem = new Map<string, MeetingsV3ItemTranscript>();
+  const storedByNumber = new Map(storedRows.map((item) => [item.itemNumber.trim().toLowerCase(), item]));
+  const ordered = [...segmented].sort((left, right) => compareAgendaItemCodes(left.itemNumber, right.itemNumber));
+  const knownNumbers = new Set(ordered.map((row) => row.itemNumber.trim().toLowerCase()));
+  const untouched = storedRows.filter((item) => !knownNumbers.has(item.itemNumber.trim().toLowerCase()));
   let spanCount = 0;
   let overlapItemCount = 0;
-  for (const item of savedRows) {
-    const transcript = accepted.get(item.id) ?? { spans: [] };
-    byItem.set(item.id, transcript);
-    spanCount += transcript.spans.length;
-    if (transcript.spans.some((span) => span.overlaps)) overlapItemCount += 1;
+  for (const row of ordered) {
+    spanCount += row.transcript.spans.length;
+    if (row.transcript.spans.some((span) => span.overlaps)) overlapItemCount += 1;
   }
 
   const completedAt = new Date().toISOString();
   await db.transaction(async (tx) => {
-    if (keepInjected && plan.injected) {
-      await tx.insert(meetingsV3AgendaItems).values({
-        id: plan.injected.id,
-        meetingV2Id: meetingId,
-        sortOrder: plan.injected.sortOrder,
-        itemNumber: plan.injected.itemNumber,
-        title: plan.injected.title,
-        sectionLabel: plan.injected.sectionLabel,
-        itemType: plan.injected.itemType,
-        sourcePagesJson: "[]",
-        summary: null,
-        amount: null,
-        vendorsJson: null,
-        recommendation: null,
-        factsJson: null,
-        factGroupsJson: null,
-        transcriptSpansJson: JSON.stringify(byItem.get(plan.injected.id)),
-        createdAt: completedAt,
-      });
-    }
-    for (const [index, item] of savedRows.entries()) {
-      if (plan.injected && item.id === plan.injected.id) {
-        if (item.sortOrder !== index) {
-          await tx
-            .update(meetingsV3AgendaItems)
-            .set({ sortOrder: index })
-            .where(eq(meetingsV3AgendaItems.id, item.id));
-        }
-        continue;
+    let index = 0;
+    for (const row of ordered) {
+      const existing = storedByNumber.get(row.itemNumber.trim().toLowerCase());
+      const transcriptSpansJson = JSON.stringify(row.transcript);
+      if (existing) {
+        await tx
+          .update(meetingsV3AgendaItems)
+          .set({ transcriptSpansJson, sortOrder: index })
+          .where(eq(meetingsV3AgendaItems.id, existing.id));
+      } else {
+        await tx.insert(meetingsV3AgendaItems).values({
+          id: randomUUID(),
+          meetingV2Id: meetingId,
+          sortOrder: index,
+          itemNumber: row.itemNumber,
+          title: row.title,
+          sectionLabel: row.sectionLabel,
+          itemType: row.itemType,
+          sourcePagesJson: "[]",
+          summary: null,
+          amount: null,
+          vendorsJson: null,
+          recommendation: null,
+          factsJson: null,
+          factGroupsJson: null,
+          transcriptSpansJson,
+          createdAt: completedAt,
+        });
       }
+      index += 1;
+    }
+    for (const item of untouched) {
       await tx
         .update(meetingsV3AgendaItems)
         .set({
-          transcriptSpansJson: JSON.stringify(byItem.get(item.id)),
+          transcriptSpansJson: JSON.stringify({ spans: [] }),
           sortOrder: index,
-          itemNumber: item.itemNumber,
         })
         .where(eq(meetingsV3AgendaItems.id, item.id));
+      index += 1;
     }
   });
   await writeMeetingsV3TranscriptSegmentation(meetingId, {
@@ -198,7 +183,7 @@ export async function segmentMeetingV3Transcript(meetingId: string): Promise<Tra
     overlapItemCount > 0
       ? "Transcript spans stored; some topics share a stretch"
       : spanCount > 0
-        ? "Transcript spans stored from the cues"
+        ? "Transcript spans stored"
         : "No transcript span matched the agenda",
   );
   await persistMeetingsV3AiUsageStage(
@@ -237,58 +222,45 @@ async function loadMeetingCues(meetingId: string): Promise<MeetingsV3TranscriptC
   return cues;
 }
 
-function additionalBusinessSectionLabel(
-  items: Array<{ itemNumber: string; title: string }>,
-  code: string,
-): string {
-  const parentNumber = code.split(".")[0] ?? "";
-  const parent = items.find((item) => item.itemNumber.trim() === parentNumber);
-  return parent ? `${parent.title}: ${ADDITIONAL_BUSINESS_TITLE}` : ADDITIONAL_BUSINESS_TITLE;
+function reviewCuesFromTranscript(cues: readonly MeetingsV3TranscriptCue[]): SpanReviewCue[] {
+  return cues.map((cue, sequence) => ({
+    sequence,
+    startSeconds: cue.startMs / 1000,
+    endSeconds: cue.endMs / 1000,
+    startTimestamp: clockFromMs(cue.startMs),
+    speaker: cue.speaker,
+    text: cue.text,
+  }));
 }
 
-async function requestSpanBatch(
-  items: Array<{ id: string; itemNumber: string; title: string }>,
-  additionalBusinessCode: string,
-  cues: MeetingsV3TranscriptCue[],
-  deepSeekUsage: DeepSeekGenerationResult[],
-): Promise<MeetingsV3ProposedSpan[]> {
-  if (cues.length === 0) return [];
-  try {
-    const response = await generateDeepSeekJson({
-      systemInstruction: transcriptSpanPrompt(additionalBusinessCode),
-      userText: JSON.stringify({
-        items: items.map((item) => ({
-          agendaItemId: item.id,
-          itemNumber: item.itemNumber,
-          title: item.title,
-        })),
-        cues: cues.map((cue) => ({
-          startMs: cue.startMs,
-          endMs: cue.endMs,
-          speaker: cue.speaker,
-          text: cue.text,
-        })),
-      }),
+function clockFromMs(ms: number): string {
+  const clamped = Math.max(0, Math.round(ms));
+  const hours = Math.floor(clamped / 3_600_000);
+  const minutes = Math.floor((clamped % 3_600_000) / 60_000);
+  const seconds = Math.floor((clamped % 60_000) / 1000);
+  const millis = clamped % 1000;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+}
+
+function meteringGenerate(usage: DeepSeekGenerationResult[]): SegmentationJsonFn {
+  return async (options) => {
+    const result = await generateDeepSeekJson({
+      systemInstruction: options.systemInstruction,
+      userText: options.userText,
       modelName: "deepseek-v4-flash",
-      temperature: 0,
+      maxOutputTokens: options.maxOutputTokens,
+      temperature: options.temperature,
       thinking: false,
-      maxOutputTokens: TRANSCRIPT_SEGMENT_MAX_OUTPUT_TOKENS,
+      allowTruncated: options.allowTruncated,
     });
-    deepSeekUsage.push(response);
-    return readProposedSpans(response.text).flatMap((entry) =>
-      entry.spans.map((span) => ({ ...span, agendaItemId: entry.agendaItemId })),
-    );
-  } catch (error) {
-    if (!isTruncatedDeepSeekOutput(error) || cues.length < 2) throw error;
-    const mid = Math.ceil(cues.length / 2);
-    const left = await requestSpanBatch(items, additionalBusinessCode, cues.slice(0, mid), deepSeekUsage);
-    const right = await requestSpanBatch(items, additionalBusinessCode, cues.slice(mid), deepSeekUsage);
-    return [...left, ...right];
-  }
-}
-
-function isTruncatedDeepSeekOutput(error: unknown): boolean {
-  return error instanceof Error && error.message.includes("finish_reason=length");
+    usage.push(result);
+    return {
+      text: result.text,
+      modelName: result.modelName,
+      usage: result.usage,
+      finishReason: result.finishReason,
+    };
+  };
 }
 
 async function setTranscriptStep(meetingId: string, currentStep: string): Promise<void> {

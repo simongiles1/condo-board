@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type {
-  meetingsV2DocumentPages,
-  meetingsV2TranscriptSegments,
-} from "@/lib/db/schema";
+import type { meetingsV2DocumentPages } from "@/lib/db/schema";
 import { formatChunkTextForDisplay } from "@/lib/meeting-v2/chunk-display";
 import { buildSemanticDocumentSections } from "@/lib/meeting-v2/pdf";
 import { formatReadableCueLine } from "@/lib/parsers/vtt";
@@ -11,7 +8,15 @@ import { formatReadableCueLine } from "@/lib/parsers/vtt";
 export { formatChunkTextForDisplay };
 
 type DocumentPageRow = typeof meetingsV2DocumentPages.$inferSelect;
-type TranscriptSegmentRow = typeof meetingsV2TranscriptSegments.$inferSelect;
+
+/** Fields the transcript chunker reads. Stored segment rows satisfy this. */
+export type TranscriptChunkSegment = {
+  sequence: number;
+  startTimestamp: string;
+  endTimestamp: string;
+  speakerLabel: string | null;
+  text: string;
+};
 
 export type DocumentChunk = {
   aiChunkId: string;
@@ -64,7 +69,7 @@ function formatChunkOrdinal(prefix: "document_chunk" | "transcript_chunk", index
 }
 
 function formatTranscriptSegmentLine(
-  segment: TranscriptSegmentRow,
+  segment: TranscriptChunkSegment,
   isOverlap: boolean,
 ): string {
   const prefix = isOverlap ? `[PREVIOUS TRANSCRIPT CONTEXT] ` : "";
@@ -180,7 +185,7 @@ export function chunkDocumentPages(
   });
 }
 
-export function chunkTranscriptSegments(segments: TranscriptSegmentRow[]): TranscriptChunk[] {
+export function chunkTranscriptSegments(segments: readonly TranscriptChunkSegment[]): TranscriptChunk[] {
   const ordered = [...segments].sort((a, b) => a.sequence - b.sequence);
   const rawChunks: Array<
     Omit<TranscriptChunk, "aiChunkId" | "metadata">
@@ -188,10 +193,10 @@ export function chunkTranscriptSegments(segments: TranscriptSegmentRow[]): Trans
   const maxSegmentsPerChunk = 80;
   const minSegmentsPerChunk = 40;
   const maxChunkChars = 35000;
-  let currentSegments: TranscriptSegmentRow[] = [];
+  let currentSegments: TranscriptChunkSegment[] = [];
   let currentLength = 0;
 
-  function pushChunk(slice: TranscriptSegmentRow[]) {
+  function pushChunk(slice: TranscriptChunkSegment[]) {
     if (slice.length === 0) return;
     const overlapBoundary = rawChunks.length > 0 ? 15 : 0;
     const text = slice

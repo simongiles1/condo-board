@@ -202,7 +202,15 @@ export function ReadableTranscriptView({
         const borderColor =
           colorBySectionId.get(primary.code.trim().toLowerCase() || primary.id) ??
           SECTION_BORDER_COLORS[0];
-        const isOverlap = group.sections.length > 1;
+        const distinctSections: TranscriptSectionOverlay[] = [];
+        const seenCodes = new Set<string>();
+        for (const section of group.sections) {
+          const codeKey = section.code.trim().toLowerCase();
+          if (seenCodes.has(codeKey)) continue;
+          seenCodes.add(codeKey);
+          distinctSections.push(section);
+        }
+        const isOverlap = distinctSections.length > 1;
 
         return (
           <section
@@ -218,13 +226,13 @@ export function ReadableTranscriptView({
                     Overlap
                   </span>
                 ) : null}
-                {group.sections.map((section) => {
+                {distinctSections.map((section) => {
                   const color =
                     colorBySectionId.get(section.code.trim().toLowerCase() || section.id) ??
                     borderColor;
                   const label = sectionLabel(section);
                   const overlapTitle = isOverlap
-                    ? `Overlap: ${group.sections.map(sectionLabel).join(" · ")}`
+                    ? `Overlap: ${distinctSections.map(sectionLabel).join(" · ")}`
                     : label;
                   const className =
                     "max-w-[90%] truncate rounded-full border bg-white px-2.5 py-0.5 text-xs font-semibold shadow-sm";

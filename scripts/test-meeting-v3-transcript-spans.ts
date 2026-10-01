@@ -1,5 +1,5 @@
 /**
- * V3 transcript spans must quote the cues inside that window.
+ * V3 transcript spans come from the segmented topic clock ranges.
  * Run: npx tsx --test scripts/test-meeting-v3-transcript-spans.ts
  */
 
@@ -7,15 +7,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  acceptQuotedSpans,
   ADDITIONAL_BUSINESS_TITLE,
-  chunkTranscriptCues,
   cuesFromVtt,
   planAdditionalBusinessItem,
-  readProposedSpans,
   readStoredItemTranscript,
-  TRANSCRIPT_CUE_BATCH,
-  TRANSCRIPT_SEGMENT_MAX_OUTPUT_TOKENS,
+  rowsFromSegmentedTopics,
   type MeetingsV3TranscriptCue,
 } from "../lib/meeting-v3/transcript-spans";
 
@@ -43,135 +39,72 @@ const cues: MeetingsV3TranscriptCue[] = [
   },
 ];
 
-const ids = new Set(["pump", "roof"]);
-
 describe("v3 transcript spans", () => {
-  it("keeps a span whose quote is inside cue boundaries", () => {
-    const accepted = acceptQuotedSpans({
+  it("keeps a leaf stretch and quotes the first cue inside it", () => {
+    const rows = rowsFromSegmentedTopics({
       cues,
-      agendaItemIds: ids,
-      proposed: [
+      topics: [
         {
-          agendaItemId: "pump",
-          startMs: 0,
-          endMs: 2000,
-          quote: "I move we approve NWP.",
+          itemNumber: "4",
+          title: "Property Management Report",
+          discussionTimestampRange: "00:00:00 - 00:00:03",
+        },
+        {
+          itemNumber: "4.A",
+          title: "Booster pump",
+          discussionTimestampRange: "00:00:00 - 00:00:02",
         },
       ],
     });
-    const spans = accepted.get("pump")?.spans ?? [];
-    assert.equal(spans.length, 1);
-    assert.equal(spans[0]?.overlaps, false);
-    assert.equal(spans[0]?.quote, "I move we approve NWP.");
+    const pump = rows.find((row) => row.itemNumber === "4.A");
+    const parent = rows.find((row) => row.itemNumber === "4");
+    assert.equal(parent?.transcript.spans.length, 0);
+    assert.equal(pump?.transcript.spans.length, 1);
+    assert.equal(pump?.transcript.spans[0]?.overlaps, false);
+    assert.equal(pump?.transcript.spans[0]?.startMs, 0);
+    assert.equal(pump?.transcript.spans[0]?.endMs, 2000);
+    assert.equal(pump?.transcript.spans[0]?.quote, "The booster pump quote is forty eight thousand.");
   });
 
-  it("drops a quote that is outside the named window", () => {
-    const accepted = acceptQuotedSpans({
+  it("marks two topics that claim the same stretch and does not mark one topic against itself", () => {
+    const rows = rowsFromSegmentedTopics({
       cues,
-      agendaItemIds: ids,
-      proposed: [
+      topics: [
         {
-          agendaItemId: "pump",
-          startMs: 0,
-          endMs: 2000,
-          quote: "Next is the roof.",
+          itemNumber: "4.A",
+          title: "Booster pump",
+          discussionTimestampRange: "00:00:00 - 00:00:02; 00:00:02 - 00:00:03",
+        },
+        {
+          itemNumber: "4.B",
+          title: "Roof",
+          discussionTimestampRange: "00:00:01 - 00:00:03",
         },
       ],
     });
-    assert.equal(accepted.get("pump"), undefined);
-  });
-
-  it("drops a window that does not start and end on cue boundaries", () => {
-    const accepted = acceptQuotedSpans({
-      cues,
-      agendaItemIds: ids,
-      proposed: [
-        {
-          agendaItemId: "pump",
-          startMs: 500,
-          endMs: 2000,
-          quote: "I move we approve NWP.",
-        },
-      ],
-    });
-    assert.equal(accepted.size, 0);
-  });
-
-  it("marks two topics that claim the same stretch", () => {
-    const accepted = acceptQuotedSpans({
-      cues,
-      agendaItemIds: ids,
-      proposed: [
-        {
-          agendaItemId: "pump",
-          startMs: 0,
-          endMs: 2000,
-          quote: "The booster pump quote is forty eight thousand.",
-        },
-        {
-          agendaItemId: "roof",
-          startMs: 1000,
-          endMs: 3000,
-          quote: "Next is the roof.",
-        },
-      ],
-    });
-    assert.equal(accepted.get("pump")?.spans[0]?.overlaps, true);
-    assert.equal(accepted.get("roof")?.spans[0]?.overlaps, true);
-  });
-
-  it("joins abutting spans of the same topic", () => {
-    const accepted = acceptQuotedSpans({
-      cues,
-      agendaItemIds: ids,
-      proposed: [
-        {
-          agendaItemId: "pump",
-          startMs: 0,
-          endMs: 1000,
-          quote: "The booster pump quote is forty eight thousand.",
-        },
-        {
-          agendaItemId: "pump",
-          startMs: 1000,
-          endMs: 2000,
-          quote: "I move we approve NWP.",
-        },
-      ],
-    });
-    const spans = accepted.get("pump")?.spans ?? [];
-    assert.equal(spans.length, 1);
-    assert.equal(spans[0]?.startMs, 0);
-    assert.equal(spans[0]?.endMs, 2000);
-    assert.equal(spans[0]?.quote, "The booster pump quote is forty eight thousand.");
+    const pump = rows.find((row) => row.itemNumber === "4.A");
+    const roof = rows.find((row) => row.itemNumber === "4.B");
+    assert.equal(pump?.transcript.spans.length, 1);
+    assert.equal(pump?.transcript.spans[0]?.startMs, 0);
+    assert.equal(pump?.transcript.spans[0]?.endMs, 3000);
+    assert.equal(pump?.transcript.spans[0]?.overlaps, true);
+    assert.equal(roof?.transcript.spans[0]?.overlaps, true);
   });
 
   it("leaves a later visit as its own span", () => {
-    const accepted = acceptQuotedSpans({
+    const rows = rowsFromSegmentedTopics({
       cues,
-      agendaItemIds: ids,
-      proposed: [
+      topics: [
         {
-          agendaItemId: "pump",
-          startMs: 0,
-          endMs: 1000,
-          quote: "The booster pump quote is forty eight thousand.",
-        },
-        {
-          agendaItemId: "roof",
-          startMs: 1000,
-          endMs: 2000,
-          quote: "I move we approve NWP.",
-        },
-        {
-          agendaItemId: "pump",
-          startMs: 2000,
-          endMs: 3000,
-          quote: "Next is the roof.",
+          itemNumber: "4.A",
+          title: "Booster pump",
+          discussionTimestampRange: "00:00:00 - 00:00:01; 00:00:02.500 - 00:00:03",
         },
       ],
     });
-    assert.equal(accepted.get("pump")?.spans.length, 2);
+    assert.equal(rows[0]?.transcript.spans.length, 2);
+    assert.equal(rows[0]?.transcript.spans[0]?.overlaps, false);
+    assert.equal(rows[0]?.transcript.spans[1]?.overlaps, false);
   });
 
   it("reads cues without merging the same speaker", () => {
@@ -188,27 +121,13 @@ describe("v3 transcript spans", () => {
     assert.equal(parsed[1]?.startMs, 1000);
   });
 
-  it("reads proposed spans and a stored item", () => {
-    const proposed = readProposedSpans(
-      JSON.stringify({
-        items: [
-          {
-            agendaItemId: "pump",
-            spans: [{ startMs: 0, endMs: 1000, quote: "The booster pump quote is forty eight thousand." }],
-          },
-        ],
-      }),
-    );
-    assert.equal(proposed[0]?.agendaItemId, "pump");
+  it("reads a stored item", () => {
     const stored = readStoredItemTranscript(
       JSON.stringify({
         spans: [{ startMs: 0, endMs: 1000, quote: "The booster pump quote is forty eight thousand.", overlaps: false }],
       }),
     );
     assert.equal(stored?.spans.length, 1);
-    assert.equal(chunkTranscriptCues(cues, 2).length, 2);
-    assert.equal(TRANSCRIPT_CUE_BATCH, 40);
-    assert.ok(TRANSCRIPT_SEGMENT_MAX_OUTPUT_TOKENS > 4096);
   });
 
   it("adds additional business as 4.E before the next meeting", () => {

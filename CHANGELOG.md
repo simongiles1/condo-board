@@ -8,6 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V3 fact resolution** — Resolve facts no longer stops when DeepSeek cuts the reply off at 4,096 tokens. Each topic is read a few pages at a time, and a reply that is still cut short is split and tried again.
 - **Meetings V3 attachment citations** — A page citation stays with the agenda topic it follows. Two topics on one page no longer give every cited page to the first topic, and a citation printed at the top of the next page (before the next heading) stays with the topic it closes. Re-run Link attachments to apply it.
 - **Meetings V3 attachment outline** — Link attachments lists every agenda topic with the same number and indent as the agenda, including topics that have no pages yet.
 - **Meetings V3 attachment page ranges** — A page range the agenda names, such as pages 13–26, stays on that topic even when some of those pages have no extracted text. Re-run Link attachments to apply it to a meeting that was linked before.
@@ -19,6 +20,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changes
 
+- **Meetings V3 DeepSeek confirmation** — Link attachments and Resolve facts ask you to continue and show whether the current hour is DeepSeek peak pricing before the call starts.
 - **Meetings V3 correction retry** — When Docling extraction is already stored but agenda correction failed or is incomplete, **Retry correction only** runs Gemini on agenda pages without re-running Docling. **Re-extract package** still runs the full pipeline.
 
 - **Meetings V3 agenda-only correction** — Gemini page correction runs on agenda pages only (through the last-agenda crossover). Attachment pages stay on the Docling extract for linking. The wizard, dashboard, and compare view count corrected agenda pages instead of every stored page.

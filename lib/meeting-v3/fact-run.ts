@@ -13,6 +13,8 @@ import { listMeetingV3Agenda, type MeetingsV3AgendaItem } from "@/lib/meeting-v3
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
 import {
   acceptQuotedFacts,
+  chunkFactPages,
+  FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
   readProposedFacts,
   type MeetingsV3ItemFacts,
   type MeetingsV3ProposedFact,
@@ -55,6 +57,7 @@ Rules:
 - recommendation is management's recommended action, only when the page states one.
 - date is a date the page states for that item.
 - Return every distinct amount or vendor on the item's pages. Do not pick one when they differ.
+- quote is the shortest sentence on that page that contains the value.
 - Omit a field the pages do not state. Do not use a summary that is not in the page text.`;
 
 /**
@@ -133,29 +136,11 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
     }
     await setFactStep(meetingId, "Resolving quoted facts from package pages");
     try {
-      for (let offset = 0; offset < withText.length; offset += 4) {
-        const batch = withText.slice(offset, offset + 4);
-        const response = await generateDeepSeekJson({
-          systemInstruction: FACT_RESOLUTION_PROMPT,
-          userText: JSON.stringify({
-            items: batch.map((item) => ({
-              agendaItemId: item.id,
-              itemNumber: item.itemNumber,
-              title: item.title,
-              pages: item.pages.map((page) => ({
-                pageNumber: page.pageNumber,
-                text: page.text.slice(0, 2500),
-              })),
-            })),
-          }),
-          modelName: "deepseek-v4-flash",
-          temperature: 0,
-          thinking: false,
-        });
-        deepSeekUsage.push(response);
-        for (const entry of readProposedFacts(response.text)) {
-          const prior = proposedByItem.get(entry.agendaItemId) ?? [];
-          proposedByItem.set(entry.agendaItemId, [...prior, ...entry.facts]);
+      for (const item of withText) {
+        for (const pages of chunkFactPages(item.pages)) {
+          const facts = await requestItemFacts(item, pages, deepSeekUsage);
+          const prior = proposedByItem.get(item.id) ?? [];
+          proposedByItem.set(item.id, [...prior, ...facts]);
         }
       }
     } catch (error) {
@@ -222,6 +207,57 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
     unresolvedItemCount,
     items: await listMeetingV3Agenda(meetingId),
   };
+}
+
+type FactSourceItem = {
+  id: string;
+  itemNumber: string;
+  title: string;
+  pages: Array<{ pageNumber: number; text: string }>;
+};
+
+async function requestItemFacts(
+  item: FactSourceItem,
+  pages: FactSourceItem["pages"],
+  deepSeekUsage: DeepSeekGenerationResult[],
+): Promise<MeetingsV3ProposedFact[]> {
+  if (pages.length === 0) return [];
+  try {
+    const response = await generateDeepSeekJson({
+      systemInstruction: FACT_RESOLUTION_PROMPT,
+      userText: JSON.stringify({
+        items: [
+          {
+            agendaItemId: item.id,
+            itemNumber: item.itemNumber,
+            title: item.title,
+            pages: pages.map((page) => ({
+              pageNumber: page.pageNumber,
+              text: page.text.slice(0, 2500),
+            })),
+          },
+        ],
+      }),
+      modelName: "deepseek-v4-flash",
+      temperature: 0,
+      thinking: false,
+      maxOutputTokens: FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
+    });
+    deepSeekUsage.push(response);
+    return readProposedFacts(response.text).flatMap((entry) =>
+      entry.agendaItemId === item.id ? entry.facts : [],
+    );
+  } catch (error) {
+    if (!isTruncatedDeepSeekOutput(error) || pages.length < 2) throw error;
+    const mid = Math.ceil(pages.length / 2);
+    const left = await requestItemFacts(item, pages.slice(0, mid), deepSeekUsage);
+    const right = await requestItemFacts(item, pages.slice(mid), deepSeekUsage);
+    return [...left, ...right];
+  }
+}
+
+function isTruncatedDeepSeekOutput(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("finish_reason=length");
 }
 
 async function setFactStep(meetingId: string, currentStep: string): Promise<void> {

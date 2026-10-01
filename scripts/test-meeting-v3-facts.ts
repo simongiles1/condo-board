@@ -6,7 +6,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { acceptQuotedFacts, readProposedFacts, readStoredItemFacts } from "../lib/meeting-v3/facts";
+import {
+  acceptQuotedFacts,
+  chunkFactPages,
+  FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
+  FACT_RESOLUTION_PAGE_BATCH,
+  readProposedFacts,
+  readStoredItemFacts,
+} from "../lib/meeting-v3/facts";
 
 const pages = [
   {
@@ -123,6 +130,15 @@ describe("v3 quoted facts", () => {
     assert.equal(items.length, 1);
     assert.equal(items[0]?.agendaItemId, "item-1");
     assert.equal(items[0]?.facts.length, 1);
+  });
+
+  it("splits a long topic into page batches under the output budget", () => {
+    assert.ok(FACT_RESOLUTION_MAX_OUTPUT_TOKENS > 4096);
+    const pages = Array.from({ length: 10 }, (_, index) => index + 1);
+    const chunks = chunkFactPages(pages);
+    assert.equal(FACT_RESOLUTION_PAGE_BATCH, 4);
+    assert.deepEqual(chunks, [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]]);
+    assert.deepEqual(chunkFactPages([]), []);
   });
 
   it("reads a stored fact object back", () => {

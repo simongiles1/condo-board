@@ -88,6 +88,30 @@ export function acceptQuotedFacts(input: {
   return { candidates, unresolvedFields };
 }
 
+/** Pages included in one fact-resolution call. */
+export const FACT_RESOLUTION_PAGE_BATCH = 4;
+
+/**
+ * Output budget for one fact-resolution call.
+ * The client default of 4096 cuts off a topic that quotes many amounts and vendors.
+ */
+export const FACT_RESOLUTION_MAX_OUTPUT_TOKENS = 12288;
+
+/**
+ * Splits one topic's pages so a single reply can list every quote.
+ * An empty list stays empty.
+ */
+export function chunkFactPages<T>(pages: readonly T[], size = FACT_RESOLUTION_PAGE_BATCH): T[][] {
+  if (size < 1) {
+    throw new Error("Fact page batch size must be at least 1.");
+  }
+  const chunks: T[][] = [];
+  for (let offset = 0; offset < pages.length; offset += size) {
+    chunks.push(pages.slice(offset, offset + size));
+  }
+  return chunks;
+}
+
 /**
  * Reads the model reply into per-item proposed facts.
  * Throws when the reply is not the expected JSON object.

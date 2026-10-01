@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { AiUsageDialog, AiUsageIconButton } from "@/components/AiUsageDialog";
+import { DeepSeekActionConfirmDialog } from "@/components/DeepSeekActionConfirmDialog";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { agendaItemIndentDepth, displayAgendaSegment } from "@/lib/meeting-v2/agenda-outline";
@@ -439,6 +440,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [buildingAgenda, setBuildingAgenda] = useState(false);
   const [linking, setLinking] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [deepSeekConfirm, setDeepSeekConfirm] = useState<"attachments" | "facts" | null>(null);
+  const deepSeekRun = useRef(false);
   const [pickedStep, setPickedStep] = useState<MeetingsV3WizardStep["id"] | null>(null);
   const [aiUsageOpen, setAiUsageOpen] = useState(false);
   const [aiUsageStages, setAiUsageStages] = useState<AiUsageStageRow[] | null>(null);
@@ -654,6 +657,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   }
 
   async function linkAttachments() {
+    if (deepSeekRun.current) return;
+    deepSeekRun.current = true;
     setLinking(true);
     setError(null);
     setStatus((current) => ({ ...current, currentStep: "Linking attachment pages to agenda topics" }));
@@ -681,11 +686,15 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       const message = linkError instanceof Error ? linkError.message : "Attachment linking failed.";
       setError(message);
     } finally {
+      deepSeekRun.current = false;
       setLinking(false);
+      setDeepSeekConfirm(null);
     }
   }
 
   async function resolveFacts() {
+    if (deepSeekRun.current) return;
+    deepSeekRun.current = true;
     setResolving(true);
     setError(null);
     setStatus((current) => ({ ...current, currentStep: "Resolving quoted facts from package pages" }));
@@ -717,7 +726,9 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       const message = factError instanceof Error ? factError.message : "Fact resolution failed.";
       setError(message);
     } finally {
+      deepSeekRun.current = false;
       setResolving(false);
+      setDeepSeekConfirm(null);
     }
   }
 
@@ -946,7 +957,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               ) : null}
               <button
                 type="button"
-                onClick={() => void linkAttachments()}
+                onClick={() => setDeepSeekConfirm("attachments")}
                 disabled={busy}
                 className={status.attachmentsLinked && !linking
                   ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
@@ -1047,7 +1058,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
             <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
             <button
               type="button"
-              onClick={() => void resolveFacts()}
+              onClick={() => setDeepSeekConfirm("facts")}
               disabled={busy}
               className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
@@ -1172,6 +1183,23 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         </div>
       ) : null}
 
+      <DeepSeekActionConfirmDialog
+        open={deepSeekConfirm != null}
+        title={deepSeekConfirm === "facts" ? "Resolve facts?" : "Link attachments?"}
+        description={
+          deepSeekConfirm === "facts"
+            ? "This reads each topic's pages with DeepSeek and keeps a figure only when its quote is on that page."
+            : "Pages the agenda does not already name are matched to topics with DeepSeek."
+        }
+        confirmLabel={deepSeekConfirm === "facts" ? "Resolve facts" : "Link attachments"}
+        busyLabel={deepSeekConfirm === "facts" ? "Resolving facts…" : "Linking attachments…"}
+        busy={linking || resolving}
+        onCancel={() => setDeepSeekConfirm(null)}
+        onConfirm={() => {
+          if (deepSeekConfirm === "facts") void resolveFacts();
+          else void linkAttachments();
+        }}
+      />
       <AiUsageDialog
         open={aiUsageOpen}
         stages={aiUsageStages}

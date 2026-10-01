@@ -147,7 +147,7 @@ export async function segmentMeetingV3Transcript(meetingId: string): Promise<Tra
       if (existing) {
         await tx
           .update(meetingsV3AgendaItems)
-          .set({ transcriptSpansJson, sortOrder: index })
+          .set({ transcriptSpansJson, conclusionsJson: null, sortOrder: index })
           .where(eq(meetingsV3AgendaItems.id, existing.id));
       } else {
         await tx.insert(meetingsV3AgendaItems).values({

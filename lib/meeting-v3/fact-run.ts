@@ -17,6 +17,7 @@ import {
   chunkFactPages,
   expandFactPagesForPrompt,
   FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
+  mergeProposedFacts,
   readProposedFacts,
   type MeetingsV3ItemFacts,
   type MeetingsV3ProposedFact,
@@ -51,25 +52,36 @@ export type FactResolutionResult = {
 };
 
 const FACT_RESOLUTION_PROMPT = `You extract facts a condominium board package states for each agenda item.
-Return JSON only: {"items":[{"agendaItemId":"<id>","facts":[{"field":"amount"|"vendor"|"recommendation"|"date","value":"<as printed>","page":14,"quote":"<verbatim words from that page>","subject":"<project name copied from the quote, or omit>","service":"<what an amount pays for, copied from the quote, or omit>","basis":"fixed"|"per_visit","role":"proposal"|"recommendation"|"reported_prior_approval"|"historical_event","qualifications":"<tax, exclusion, or condition copied from the quote, or omit>"}]}]}.
+Return JSON only: {"items":[{"agendaItemId":"<id>","facts":[{"field":"amount"|"vendor"|"recommendation"|"date","value":"<as printed>","page":14,"quote":"<verbatim words from that page that contain the value>","headingQuote":"<verbatim heading on that page, or omit>","rowQuote":"<verbatim table row or fee line, or omit>","conditionQuote":"<verbatim nearby tax, exclusion, or per-visit sentence, or omit>","subject":"<project name copied from the quote or headingQuote, or omit>","service":"<what an amount pays for, copied from the quote or rowQuote, or omit>","bidder":"<company that offered this amount, copied from the quote or rowQuote, or omit>","option":"<option or alternate label copied from the quote or rowQuote, or omit>","basis":"fixed"|"per_visit","role":"proposal"|"recommendation"|"reported_prior_approval"|"historical_event","qualifications":"<tax, exclusion, or condition copied from the quote or conditionQuote, or omit>"}]}]}.
 Rules:
 - Use only agendaItemId and page values from the input.
 - quote must be copied from that page's text. value must appear inside quote.
-- subject, service, and qualifications must be copied from that same quote. Omit a field the quote does not state.
-- basis per_visit only when the quote states a per-visit rate. basis fixed only when the quote says the fee is fixed. Otherwise omit basis.
-- role proposal only when the quote says this is a proposal or bid.
-- role recommendation only when the quote states a recommendation.
-- role reported_prior_approval only when the quote says the board or management already approved it. That records what the package reports. It is not a decision of this meeting.
-- role historical_event only when the quote describes a past incident or event, such as an incident date.
+- headingQuote, rowQuote, and conditionQuote must be copied from that same page. Omit a span the page does not contain.
+- subject may come from the heading. service, bidder, and option may come from the row. qualifications may come from the condition. Omit a field none of those spans state.
+- basis per_visit only when the quote or conditionQuote states a per-visit rate. basis fixed only when one of them says the fee is fixed. Otherwise omit basis.
+- role proposal only when the value quote says this is a proposal or bid.
+- role recommendation only when the value quote states a recommendation.
+- role reported_prior_approval only when the value quote says the board or management already approved it. That records what the package reports. It is not a decision of this meeting.
+- role historical_event only when the value quote describes a past incident or event, such as an incident date.
 - Do not decide what this meeting ratified, deferred, or discussed.
 - amount is a dollar figure the page states as a cost, bid, or rate.
 - vendor is the company name as printed. Do not merge aliases.
 - recommendation is management's recommended action, only when the page states one.
 - date is a date the quote states. Do not relabel an incident date as an approval date.
 - Return every distinct amount, including two equal amounts for different services. Do not collapse them.
-- Two bidders both stay. Do not pick a winner.
-- quote is the shortest passage on that page that contains the value and, when present, the service it pays for.
+- Two bidders for the same work both stay, each with its own bidder. They are alternatives, not one conflicting price. Do not pick a winner.
+- otherTopicsOnThesePages are different items. Do not return their facts for this agendaItemId.
+- quote is the shortest passage that contains the value. Put the project, the row, and the condition in their own fields.
 - Omit a field the pages do not state. Do not use a summary that is not in the page text.`;
+
+const FACT_RECOVERY_PROMPT = `You repair package facts that failed validation for one agenda item.
+Return JSON only: {"items":[{"agendaItemId":"<id>","facts":[{"field":"amount"|"vendor"|"recommendation"|"date","value":"<as printed>","page":14,"quote":"<verbatim>","headingQuote":"<verbatim or omit>","rowQuote":"<verbatim or omit>","conditionQuote":"<verbatim or omit>","subject":"<or omit>","service":"<or omit>","bidder":"<or omit>","option":"<or omit>","basis":"fixed"|"per_visit","role":"proposal"|"recommendation"|"reported_prior_approval"|"historical_event","qualifications":"<or omit>","omit":true}]}]}.
+Rules:
+- Use only the page text supplied. Do not invent an amount, a company, or a decision.
+- Restate a fact that is missing its project, service, bidder, or condition, and cite the heading, row, or condition from that page.
+- Two bidders are alternatives. Give each fact its bidder. Do not drop either price.
+- If a fact belongs to otherTopicsOnThesePages, return it with omit true.
+- Leave a fact out of the reply when you cannot support a repair from the page.`;
 
 /**
  * Replaces quoted facts on the V3 agenda.
@@ -149,7 +161,7 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
     try {
       for (const item of withText) {
         for (const pages of chunkFactPages(expandFactPagesForPrompt(item.pages))) {
-          const facts = await requestItemFacts(item, pages, deepSeekUsage);
+          const facts = await requestItemFacts(item, pages, withText, deepSeekUsage);
           const prior = proposedByItem.get(item.id) ?? [];
           proposedByItem.set(item.id, [...prior, ...facts]);
         }
@@ -175,8 +187,24 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
     const accepted = acceptQuotedFacts({
       pages: item.pages,
       proposed: proposedByItem.get(item.id) ?? [],
+      title: item.title,
+      siblingTitles: siblingTitlesFor(item, items),
     });
-    const facts = applyOrganizationMatches(accepted, orgDocuments);
+    const recovered = await recoverItemFacts(item, items, accepted, deepSeekUsage);
+    const proposed = recovered
+      ? mergeProposedFacts(proposedByItem.get(item.id) ?? [], recovered)
+      : (proposedByItem.get(item.id) ?? []);
+    const facts = applyOrganizationMatches(
+      recovered
+        ? acceptQuotedFacts({
+            pages: item.pages,
+            proposed,
+            title: item.title,
+            siblingTitles: siblingTitlesFor(item, items),
+          })
+        : accepted,
+      orgDocuments,
+    );
     factsByItem.set(item.id, facts);
     factCount += facts.candidates.length;
     if (facts.reviewIssues.length > 0) unresolvedItemCount += 1;
@@ -242,6 +270,7 @@ type FactSourceItem = {
 async function requestItemFacts(
   item: FactSourceItem,
   pages: FactSourceItem["pages"],
+  items: readonly FactSourceItem[],
   deepSeekUsage: DeepSeekGenerationResult[],
 ): Promise<MeetingsV3ProposedFact[]> {
   if (pages.length === 0) return [];
@@ -254,6 +283,7 @@ async function requestItemFacts(
             agendaItemId: item.id,
             itemNumber: item.itemNumber,
             title: item.title,
+            otherTopicsOnThesePages: siblingTitlesFor(item, items),
             pages: pages.map((page) => ({
               pageNumber: page.pageNumber,
               text: page.text,
@@ -273,10 +303,55 @@ async function requestItemFacts(
   } catch (error) {
     if (!isTruncatedDeepSeekOutput(error) || pages.length < 2) throw error;
     const mid = Math.ceil(pages.length / 2);
-    const left = await requestItemFacts(item, pages.slice(0, mid), deepSeekUsage);
-    const right = await requestItemFacts(item, pages.slice(mid), deepSeekUsage);
+    const left = await requestItemFacts(item, pages.slice(0, mid), items, deepSeekUsage);
+    const right = await requestItemFacts(item, pages.slice(mid), items, deepSeekUsage);
     return [...left, ...right];
   }
+}
+
+async function recoverItemFacts(
+  item: FactSourceItem,
+  items: readonly FactSourceItem[],
+  accepted: MeetingsV3ItemFacts,
+  deepSeekUsage: DeepSeekGenerationResult[],
+): Promise<MeetingsV3ProposedFact[] | null> {
+  if (accepted.reviewIssues.length === 0 || item.pages.length === 0) return null;
+  if (!isDeepSeekKeyConfigured()) return null;
+  try {
+    const response = await generateDeepSeekJson({
+      systemInstruction: FACT_RECOVERY_PROMPT,
+      userText: JSON.stringify({
+        items: [
+          {
+            agendaItemId: item.id,
+            itemNumber: item.itemNumber,
+            title: item.title,
+            otherTopicsOnThesePages: siblingTitlesFor(item, items),
+            issues: accepted.reviewIssues,
+            facts: accepted.candidates,
+            pages: item.pages.map((page) => ({ pageNumber: page.pageNumber, text: page.text })),
+          },
+        ],
+      }),
+      modelName: "deepseek-v4-flash",
+      temperature: 0,
+      thinking: false,
+      maxOutputTokens: FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
+    });
+    deepSeekUsage.push(response);
+    return readProposedFacts(response.text).flatMap((entry) =>
+      entry.agendaItemId === item.id ? entry.facts : [],
+    );
+  } catch {
+    return null;
+  }
+}
+
+function siblingTitlesFor(item: FactSourceItem, items: readonly FactSourceItem[]): string[] {
+  const pages = new Set(item.pages.map((page) => page.pageNumber));
+  return items
+    .filter((other) => other.id !== item.id && other.pages.some((page) => pages.has(page.pageNumber)))
+    .map((other) => `${other.itemNumber} ${other.title}`);
 }
 
 function isTruncatedDeepSeekOutput(error: unknown): boolean {

@@ -60,4 +60,27 @@ describe("v3 fact statements", () => {
     assert.equal(linked.statements.length, 2);
     assert.equal(linked.unlinked.some((fact) => fact.value === "$2,800"), true);
   });
+
+  it("does not treat an incident date and a completion date as two revisions", () => {
+    const linked = linkFactStatements([
+      {
+        ...traceVendor,
+        field: "date",
+        value: "June 1, 2026",
+        role: "historical_event",
+        quote: "steam room incident on June 1, 2026",
+      },
+      {
+        ...traceVendor,
+        field: "date",
+        value: "July 1, 2026",
+        quote: "steam room completion on July 1, 2026",
+        page: 4,
+      },
+      traceFee,
+    ]);
+    assert.equal(linked.statements.length, 1);
+    assert.equal(linked.unlinked.length, 0);
+    assert.equal(linked.statements[0]?.members.some((fact) => fact.value === "$2,800"), true);
+  });
 });

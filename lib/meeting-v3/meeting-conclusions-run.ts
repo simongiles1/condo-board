@@ -10,10 +10,12 @@ import { meetingsV2, meetingsV3AgendaItems } from "@/lib/db/schema-v2";
 import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { listMeetingV3Agenda, type MeetingsV3AgendaItem } from "@/lib/meeting-v3/agenda-run";
 import {
+  applyPackageReference,
   concludeFromDiscussion,
   discussionTextForSpans,
   type MeetingsV3ItemConclusion,
 } from "@/lib/meeting-v3/meeting-conclusions";
+import { readStoredItemFacts } from "@/lib/meeting-v3/facts";
 import { writeMeetingsV3MeetingReconciliation } from "@/lib/meeting-v3/package-status";
 import { loadMeetingCues, TranscriptSpanError } from "@/lib/meeting-v3/transcript-span-run";
 import { readStoredItemTranscript } from "@/lib/meeting-v3/transcript-spans";
@@ -67,6 +69,7 @@ export async function reconcileMeetingV3Conclusions(meetingId: string): Promise<
     .select({
       id: meetingsV3AgendaItems.id,
       transcriptSpansJson: meetingsV3AgendaItems.transcriptSpansJson,
+      factsJson: meetingsV3AgendaItems.factsJson,
     })
     .from(meetingsV3AgendaItems)
     .where(eq(meetingsV3AgendaItems.meetingV2Id, meetingId))
@@ -90,7 +93,8 @@ export async function reconcileMeetingV3Conclusions(meetingId: string): Promise<
   for (const item of itemRows) {
     const transcript = readStoredItemTranscript(item.transcriptSpansJson);
     const discussion = discussionTextForSpans(transcript?.spans ?? [], cues);
-    const conclusion = concludeFromDiscussion(discussion);
+    const facts = readStoredItemFacts(item.factsJson);
+    const conclusion = applyPackageReference(concludeFromDiscussion(discussion), facts?.candidates ?? []);
     conclusionsByItem.set(item.id, conclusion);
     if (conclusion.status === "unclear") unclearCount += 1;
   }

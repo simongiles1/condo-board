@@ -33,7 +33,7 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
     id: "facts",
     title: "Resolve facts",
     detail:
-      "Amounts, vendors, dates, and recommendations are kept only when the quote is on that page. A fee keeps its service when the quote names it. A prior approval is what the package reports.",
+      "Amounts, vendors, dates, and recommendations stay only when the quote is on that page. A heading, a table row, or a nearby condition can name the project or the fee. Another topic on the same page is not this item.",
   },
   {
     id: "transcript",
@@ -49,7 +49,8 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
   {
     id: "conclusions",
     title: "Reconcile meeting",
-    detail: "Each topic's full transcript stretch is read for what this meeting ratified, deferred, or only discussed.",
+    detail:
+      "Each topic's transcript stretch is read in order. A motion is not a decision until the stretch adopts, defeats, or replaces it. The package can name what the talk pointed at. It cannot decide the meeting.",
   },
 ];
 
@@ -84,6 +85,10 @@ export type MeetingsV3WizardProgress = {
   completedCount: number;
   finished: boolean;
   readyToDraft: boolean;
+  /** Every stage has run, so a working draft may list open points. */
+  workingDraft: boolean;
+  /** Material open points and unsupported references are cleared. */
+  minutesComplete: boolean;
 };
 
 /**
@@ -95,7 +100,9 @@ export type MeetingsV3WizardProgress = {
  * The transcript is finished after a segmentation run is stored for those facts.
  * Sources are finished after a grouping run is stored.
  * Reconciliation is finished after meeting conclusions are stored for that transcript.
- * `finished` means every stage has been run. `readyToDraft` also requires no open fact review.
+ * `finished` means every stage has been run.
+ * `workingDraft` and `readyToDraft` match that: a draft may include marked open points.
+ * `minutesComplete` also requires no fact-review issues, no unclear conclusion, and no open package reference.
  */
 export function meetingsV3WizardProgress(input: {
   pageCount: number;
@@ -107,6 +114,8 @@ export function meetingsV3WizardProgress(input: {
   factsGrouped: boolean;
   conclusionsRecorded?: boolean;
   reviewIssueCount?: number;
+  unclearConclusionCount?: number;
+  openReferenceCount?: number;
   agendaContentEndsAtPage: number | null;
 }): MeetingsV3WizardProgress {
   const agendaPageCount = countAgendaPages(input.pageCount, input.agendaContentEndsAtPage);
@@ -139,11 +148,15 @@ export function meetingsV3WizardProgress(input: {
   });
   const completedCount = steps.filter((step) => step.state === "complete").length;
   const finished = completedCount === steps.length;
+  const materialOpen = (input.reviewIssueCount ?? 0) + (input.unclearConclusionCount ?? 0) + (input.openReferenceCount ?? 0);
+  const workingDraft = finished;
   return {
     steps,
     activeId,
     completedCount,
     finished,
-    readyToDraft: finished && (input.reviewIssueCount ?? 0) === 0,
+    readyToDraft: workingDraft,
+    workingDraft,
+    minutesComplete: finished && materialOpen === 0,
   };
 }

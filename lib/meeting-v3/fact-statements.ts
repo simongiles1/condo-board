@@ -46,7 +46,9 @@ export function linkFactStatements(candidates: readonly MeetingsV3FactCandidate[
   for (const bucket of bySubject.values()) {
     const dates = [
       ...new Set(
-        bucket.members.filter((member) => member.field === "date").map((member) => member.value),
+        bucket.members
+          .filter((member) => member.field === "date" && isRevisionDate(member))
+          .map((member) => member.value),
       ),
     ];
     if (dates.length <= 1) {
@@ -87,4 +89,9 @@ function makeStatement(
     uncertain: members.some((member) => member.field === "amount" && !member.service),
     members,
   };
+}
+
+function isRevisionDate(member: MeetingsV3FactCandidate): boolean {
+  if (member.role === "historical_event") return false;
+  return /\b(revis|dated|amend)/i.test(member.quote);
 }

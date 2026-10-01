@@ -21,7 +21,7 @@ import {
   isAgendaPageForCorrection,
   sourcePageContiguousRanges,
 } from "@/lib/meeting-v3/agenda-pages";
-import { factContextNotes, type MeetingsV3FactField, type MeetingsV3ItemFacts, type MeetingsV3PackageRole } from "@/lib/meeting-v3/facts";
+import { factContextNotes, summarizeItemFactReviews, type MeetingsV3FactField, type MeetingsV3ItemFacts, type MeetingsV3PackageRole } from "@/lib/meeting-v3/facts";
 import type { MeetingsV3ItemConclusion } from "@/lib/meeting-v3/meeting-conclusions";
 import type { MeetingsV3ItemFactGroups } from "@/lib/meeting-v3/fact-groups";
 import { formatSpanClock, type MeetingsV3ItemTranscript, agendaItemsForWizardStep } from "@/lib/meeting-v3/transcript-spans";
@@ -707,6 +707,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           (count, item) => count + (item.facts?.reviewIssues.length ?? 0),
           0,
         ),
+        unclearConclusionCount: agendaItems.filter((item) => item.conclusion?.status === "unclear").length,
+        openReferenceCount: agendaItems.filter((item) => item.conclusion?.openReference).length,
         agendaContentEndsAtPage: status.agendaContentEndsAtPage,
       }),
     [
@@ -975,6 +977,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         transcriptSegmented: true,
         transcriptSpanCount: payload?.spanCount ?? 0,
         transcriptOverlapItemCount: payload?.overlapItemCount ?? 0,
+        conclusionsRecorded: false,
         agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
         currentStep:
           (payload?.overlapItemCount ?? 0) > 0
@@ -1147,12 +1150,12 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     showWizardStep("extract");
   }
 
-  const factReviewMessages = [...new Set(
-    agendaItems.flatMap((item) => item.facts?.reviewIssues.map((issue) => issue.message) ?? []),
-  )];
-  const factContextMessages = [...new Set(
-    agendaItems.flatMap((item) => (item.facts ? factContextNotes(item.facts) : [])),
-  )];
+  const factReviewMessages = agendaItems.flatMap((item) => summarizeItemFactReviews(item));
+  const factContextMessages = agendaItems.flatMap((item) =>
+    item.facts
+      ? factContextNotes(item.facts).map((note) => `${item.itemNumber} ${item.title}: ${note}`)
+      : [],
+  );
   const hasMeetingDocuments = status.hasTranscript || status.hasBoardPackage;
   const documentsAgendaOverlay = useMemo(
     () =>
@@ -1203,9 +1206,9 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           onShow={showWizardStep}
         />
       ) : null}
-      {wizard.finished && !wizard.readyToDraft ? (
+      {wizard.finished && !wizard.minutesComplete ? (
         <p className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Every stage has run. Some package facts still need a look before a draft.
+          Processing is complete. A working draft can list open points. These minutes stay incomplete until each open decision or figure is supported.
         </p>
       ) : null}
 
@@ -1873,6 +1876,9 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                       {item.conclusion ? (
                         <span className="ml-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                           {item.conclusion.status}
+                          {item.conclusion.status === "discussed" || item.conclusion.status === "unclear"
+                            ? " — not a settled decision"
+                            : ""}
                         </span>
                       ) : null}
                     </p>
@@ -1880,6 +1886,12 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                       <p className="mt-1 text-xs text-slate-700">{item.conclusion.quote}</p>
                     ) : item.conclusion?.status === "unclear" ? (
                       <p className="mt-1 text-xs text-slate-500">No transcript stretch for this topic.</p>
+                    ) : null}
+                    {item.conclusion?.packageQuote ? (
+                      <p className="mt-1 text-xs text-slate-600">Package reference: {item.conclusion.packageQuote}</p>
+                    ) : null}
+                    {item.conclusion?.openReference ? (
+                      <p className="mt-1 text-xs text-amber-800">The discussion points at a package fact this topic does not have.</p>
                     ) : null}
                   </li>
                 ))}

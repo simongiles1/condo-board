@@ -12,11 +12,14 @@ import {
   chunkFactPageText,
   chunkFactPages,
   expandFactPagesForPrompt,
+  factContextNotes,
   FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
   FACT_RESOLUTION_PAGE_BATCH,
   FACT_RESOLUTION_PAGE_CHAR_BUDGET,
+  mergeProposedFacts,
   readProposedFacts,
   readStoredItemFacts,
+  summarizeItemFactReviews,
 } from "../lib/meeting-v3/facts";
 
 const pages = [
@@ -83,7 +86,7 @@ describe("v3 quoted facts", () => {
     assert.deepEqual(facts.candidates, []);
   });
 
-  it("keeps two different bids without calling them a conflict", () => {
+  it("keeps two different bids as separate amounts when they lack a shared service", () => {
     const facts = acceptQuotedFacts({
       pages,
       proposed: [
@@ -102,8 +105,7 @@ describe("v3 quoted facts", () => {
       ],
     });
     assert.equal(facts.candidates.length, 2);
-    assert.deepEqual(facts.unresolvedFields, []);
-    assert.deepEqual(facts.reviewIssues, []);
+    assert.equal(facts.reviewIssues.some((issue) => issue.code === "conflicting_prices"), false);
   });
 
   it("keeps two equal amounts on one page when the quotes differ", () => {
@@ -299,5 +301,119 @@ describe("v3 quoted facts", () => {
     );
     assert.equal(stored?.candidates[0]?.value, "NWP Mechanical");
     assert.equal(stored?.unresolvedFields.length, 0);
+  });
+
+  it("takes the project from the heading and the fee from the amount line", () => {
+    const facts = acceptQuotedFacts({
+      title: "Steam Room Heat Pump",
+      pages: [{
+        pageNumber: 20,
+        text: "Steam Room Heat Pump\nHeat Pump Design $10,500\nFees exclude HST.",
+      }],
+      proposed: [{
+        field: "amount",
+        value: "$10,500",
+        page: 20,
+        quote: "Heat Pump Design $10,500",
+      }],
+    });
+    assert.equal(facts.candidates[0]?.subject, "Steam Room Heat Pump");
+    assert.equal(facts.candidates[0]?.service, "Heat Pump Design");
+    assert.match(facts.candidates[0]?.qualifications ?? "", /HST/);
+    assert.equal(facts.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), false);
+  });
+
+  it("keeps a subject copied from a heading quote that is not inside the value quote", () => {
+    const facts = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 20,
+        text: "Steam Room Heat Pump\nHeat Pump Design is $10,500.",
+      }],
+      proposed: [{
+        field: "amount",
+        value: "$10,500",
+        page: 20,
+        quote: "Heat Pump Design is $10,500.",
+        headingQuote: "Steam Room Heat Pump",
+        subject: "Steam Room Heat Pump",
+        service: "Heat Pump Design",
+      }],
+    });
+    assert.equal(facts.candidates[0]?.subject, "Steam Room Heat Pump");
+    assert.equal(facts.candidates[0]?.service, "Heat Pump Design");
+  });
+
+  it("flags a bare fee and treats two bidders as alternatives", () => {
+    const bare = acceptQuotedFacts({
+      pages: [{ pageNumber: 4, text: "Fee: $500." }],
+      proposed: [{ field: "amount", value: "$500", page: 4, quote: "Fee: $500." }],
+    });
+    assert.equal(bare.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), true);
+
+    const bids = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 8,
+        text: "Acme offered $100 for pump replacement. Bravo offered $200 for pump replacement.",
+      }],
+      proposed: [
+        {
+          field: "amount",
+          value: "$100",
+          page: 8,
+          quote: "Acme offered $100 for pump replacement.",
+          subject: "pump replacement",
+          service: "pump replacement",
+          bidder: "Acme",
+        },
+        {
+          field: "amount",
+          value: "$200",
+          page: 8,
+          quote: "Bravo offered $200 for pump replacement.",
+          subject: "pump replacement",
+          service: "pump replacement",
+          bidder: "Bravo",
+        },
+      ],
+    });
+    assert.equal(bids.reviewIssues.some((issue) => issue.code === "conflicting_prices"), false);
+    assert.match(factContextNotes(bids).join(" "), /alternative prices/);
+  });
+
+  it("flags a quote that names a sibling topic", () => {
+    const facts = acceptQuotedFacts({
+      title: "Steam Room Heat Pump",
+      siblingTitles: ["Lobby restoration"],
+      pages: [{
+        pageNumber: 3,
+        text: "Absolute Ltd. was awarded the lobby restoration for $40,000.",
+      }],
+      proposed: [{
+        field: "amount",
+        value: "$40,000",
+        page: 3,
+        quote: "Absolute Ltd. was awarded the lobby restoration for $40,000.",
+        subject: "lobby restoration",
+        service: "lobby restoration",
+      }],
+    });
+    assert.equal(facts.reviewIssues.some((issue) => issue.code === "topic_ownership"), true);
+    const summary = summarizeItemFactReviews({
+      itemNumber: "4.A.1",
+      title: "Steam Room Heat Pump",
+      facts,
+    });
+    assert.match(summary.join(" "), /4\.A\.1 Steam Room Heat Pump/);
+  });
+
+  it("replaces a proposal when recovery returns the same amount", () => {
+    const merged = mergeProposedFacts(
+      [{ field: "amount", value: "$500", page: 4, quote: "Fee: $500" }],
+      [{ field: "amount", value: "$500", page: 4, quote: "Design fee $500", service: "Design fee" }],
+    );
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0]?.quote, "Design fee $500");
+    const dropped = mergeProposedFacts(merged, [{ field: "amount", value: "$500", page: 4, omit: true }]);
+    assert.equal(dropped.length, 0);
   });
 });

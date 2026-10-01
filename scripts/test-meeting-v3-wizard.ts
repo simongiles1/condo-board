@@ -145,6 +145,7 @@ describe("v3 wizard progress", () => {
     });
     assert.equal(progress.finished, false);
     assert.equal(progress.readyToDraft, false);
+    assert.equal(progress.minutesComplete, false);
     assert.equal(progress.activeId, "conclusions");
     assert.deepEqual(
       progress.steps.map((step) => step.state),
@@ -152,7 +153,7 @@ describe("v3 wizard progress", () => {
     );
   });
 
-  it("finishes when reconciliation is stored, and stays short of a draft while a review is open", () => {
+  it("allows a working draft when reconciliation is stored, and keeps minutes incomplete while a review is open", () => {
     const progress = meetingsV3WizardProgress({
       ...base,
       pageCount: 4,
@@ -166,7 +167,9 @@ describe("v3 wizard progress", () => {
       reviewIssueCount: 1,
     });
     assert.equal(progress.finished, true);
-    assert.equal(progress.readyToDraft, false);
+    assert.equal(progress.workingDraft, true);
+    assert.equal(progress.readyToDraft, true);
+    assert.equal(progress.minutesComplete, false);
     assert.equal(progress.activeId, "conclusions");
     assert.equal(progress.completedCount, MEETINGS_V3_WIZARD_STEPS.length);
 
@@ -182,6 +185,21 @@ describe("v3 wizard progress", () => {
       conclusionsRecorded: true,
     });
     assert.equal(clear.readyToDraft, true);
+    assert.equal(clear.minutesComplete, true);
+
+    const unclear = meetingsV3WizardProgress({
+      ...base,
+      pageCount: 4,
+      correctedPageCount: 4,
+      agendaItemCount: 12,
+      attachmentsLinked: true,
+      factsResolved: true,
+      transcriptSegmented: true,
+      factsGrouped: true,
+      conclusionsRecorded: true,
+      unclearConclusionCount: 1,
+    });
+    assert.equal(unclear.minutesComplete, false);
   });
 
   it("does not treat an agenda as done when the extract is incomplete", () => {

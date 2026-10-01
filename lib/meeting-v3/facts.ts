@@ -37,7 +37,7 @@ export const MEETINGS_V3_ORG_MATCHES = ["confirmed", "ambiguous", "unmatched"] a
 /** Result of matching a printed name to the organization registry. */
 export type MeetingsV3OrgMatch = (typeof MEETINGS_V3_ORG_MATCHES)[number];
 
-/** A figure or name copied from one package page, plus relationships the quote supports. */
+/** A figure or name copied from one package page, plus relationships the page supports. */
 export type MeetingsV3FactCandidate = {
   field: MeetingsV3FactField;
   value: string;
@@ -48,13 +48,28 @@ export type MeetingsV3FactCandidate = {
   basis?: MeetingsV3AmountBasis;
   role?: MeetingsV3PackageRole;
   qualifications?: string;
+  /** Verbatim heading that names the project, when it is not inside the value quote. */
+  headingQuote?: string;
+  /** Verbatim row or line that names the service or the bidder. */
+  rowQuote?: string;
+  /** Verbatim nearby sentence for tax, exclusion, or a per-visit condition. */
+  conditionQuote?: string;
+  bidder?: string;
+  option?: string;
+  /** Set when a sibling topic's title matches this quote more strongly than this item. */
+  topicMismatch?: boolean;
   organizationId?: string;
   organizationMatch?: MeetingsV3OrgMatch;
 };
 
 /** A review item a later draft should not treat as settled. */
 export type MeetingsV3FactReview = {
-  code: "ambiguous_organization" | "fee_needs_verification" | "conflicting_prices" | "conflicting_award";
+  code:
+    | "ambiguous_organization"
+    | "fee_needs_verification"
+    | "conflicting_prices"
+    | "conflicting_award"
+    | "topic_ownership";
   message: string;
 };
 
@@ -80,6 +95,13 @@ export type MeetingsV3ProposedFact = {
   basis?: unknown;
   role?: unknown;
   qualifications?: unknown;
+  headingQuote?: unknown;
+  rowQuote?: unknown;
+  conditionQuote?: unknown;
+  bidder?: unknown;
+  option?: unknown;
+  topicMismatch?: unknown;
+  omit?: unknown;
   organizationId?: unknown;
   organizationMatch?: unknown;
 };
@@ -158,11 +180,14 @@ export function expandFactPagesForPrompt(
 /**
  * Keeps proposed facts whose quote is on the named page and whose value is inside that quote.
  * Two equal amounts on one page both stay when their quotes differ.
- * Subject, service, basis, and role are kept only when that same quote states them.
+ * A heading, a row, or a condition may supply subject, service, bidder, or qualifications when that span is on the same page.
+ * A quote that names a sibling topic more strongly than this item is kept and flagged.
  */
 export function acceptQuotedFacts(input: {
   pages: Array<{ pageNumber: number; text: string }>;
   proposed: MeetingsV3ProposedFact[];
+  title?: string;
+  siblingTitles?: readonly string[];
 }): MeetingsV3ItemFacts {
   const pages = combinedPageText(input.pages);
   const candidates: MeetingsV3FactCandidate[] = [];
@@ -173,6 +198,7 @@ export function acceptQuotedFacts(input: {
     if (typeof proposed.value !== "string" || !proposed.value.trim()) continue;
     if (typeof proposed.quote !== "string" || !proposed.quote.trim()) continue;
     if (typeof proposed.page !== "number" || !Number.isInteger(proposed.page)) continue;
+    if (proposed.omit === true) continue;
     const pageText = pages.get(proposed.page);
     if (!pageText) continue;
     const quote = proposed.quote.replace(/\s+/g, " ").trim();
@@ -186,19 +212,37 @@ export function acceptQuotedFacts(input: {
     const key = `${field}\0${valueNorm}\0${proposed.page}\0${quoteNorm}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    const pageOriginal = input.pages.find((page) => page.pageNumber === proposed.page)?.text ?? "";
+    const headingQuote = citedSpan(proposed.headingQuote, pageText);
+    const rowQuote = citedSpan(proposed.rowQuote, pageText);
+    const conditionQuote = citedSpan(proposed.conditionQuote, pageText);
+    const supportNorm = [quoteNorm, headingQuote, rowQuote, conditionQuote]
+      .filter((span): span is string => Boolean(span))
+      .map((span) => normalizeFactText(span))
+      .join(" ");
     const candidate: MeetingsV3FactCandidate = { field, value, page: proposed.page, quote };
-    const subject = quotedPhrase(proposed.subject, quoteNorm);
-    const service = quotedPhrase(proposed.service, quoteNorm);
-    const qualifications = quotedPhrase(proposed.qualifications, quoteNorm);
+    if (headingQuote) candidate.headingQuote = headingQuote;
+    if (rowQuote) candidate.rowQuote = rowQuote;
+    if (conditionQuote) candidate.conditionQuote = conditionQuote;
+    const subject = quotedPhrase(proposed.subject, supportNorm);
+    const service = quotedPhrase(proposed.service, supportNorm);
+    const qualifications = quotedPhrase(proposed.qualifications, supportNorm);
+    const bidder = quotedPhrase(proposed.bidder, supportNorm);
+    const option = quotedPhrase(proposed.option, supportNorm);
     if (subject) candidate.subject = subject;
     if (service) candidate.service = service;
     if (qualifications) candidate.qualifications = qualifications;
-    if (typeof proposed.basis === "string" && BASIS_SET.has(proposed.basis) && basisSupported(proposed.basis, quoteNorm)) {
+    if (bidder) candidate.bidder = bidder;
+    if (option) candidate.option = option;
+    const basisNorm = [quoteNorm, conditionQuote ? normalizeFactText(conditionQuote) : ""].join(" ");
+    if (typeof proposed.basis === "string" && BASIS_SET.has(proposed.basis) && basisSupported(proposed.basis, basisNorm)) {
       candidate.basis = proposed.basis as MeetingsV3AmountBasis;
     }
     if (typeof proposed.role === "string" && ROLE_SET.has(proposed.role) && roleSupported(proposed.role, quoteNorm)) {
       candidate.role = proposed.role as MeetingsV3PackageRole;
     }
+    enrichFactContext(candidate, pageOriginal, input.title, input.siblingTitles ?? []);
+    if (proposed.topicMismatch === true) candidate.topicMismatch = true;
     if (typeof proposed.organizationId === "string" && proposed.organizationId.trim()) {
       candidate.organizationId = proposed.organizationId.trim();
     }
@@ -259,8 +303,20 @@ export function factContextNotes(facts: MeetingsV3ItemFacts): string[] {
     notes.push("One organization, several printed names.");
   }
   const serviced = facts.candidates.filter((candidate) => candidate.field === "amount" && candidate.service);
-  if (serviced.length > 1 && !facts.reviewIssues.some((issue) => issue.code === "conflicting_prices")) {
-    notes.push(`${serviced.length} separate service fees.`);
+  const serviceNames = new Set(serviced.map((candidate) => normalizeFactText(candidate.service ?? "")));
+  if (serviceNames.size > 1 && !facts.reviewIssues.some((issue) => issue.code === "conflicting_prices")) {
+    notes.push(`${serviceNames.size} services named.`);
+  }
+  const alternatives = new Map<string, Set<string>>();
+  for (const candidate of serviced) {
+    if (!candidate.bidder) continue;
+    const key = `${normalizeFactText(candidate.subject ?? "")}\0${normalizeFactText(candidate.service ?? "")}`;
+    const bidders = alternatives.get(key) ?? new Set<string>();
+    bidders.add(normalizeFactText(candidate.bidder));
+    alternatives.set(key, bidders);
+  }
+  for (const bidders of alternatives.values()) {
+    if (bidders.size > 1) notes.push(`${bidders.size} alternative prices.`);
   }
   return notes;
 }
@@ -331,7 +387,7 @@ export function readStoredItemFacts(value: string | null | undefined): MeetingsV
       if (!candidate || typeof candidate !== "object") return [];
       const row = candidate as MeetingsV3FactCandidate;
       if (typeof row.page !== "number" || typeof row.quote !== "string") return [];
-      return [{ pageNumber: row.page, text: row.quote }];
+      return [{ pageNumber: row.page, text: [row.quote, row.headingQuote, row.rowQuote, row.conditionQuote].filter((part) => typeof part === "string").join(" ") }];
     }),
     proposed: record.candidates.filter(
       (candidate): candidate is MeetingsV3ProposedFact => candidate != null && typeof candidate === "object",
@@ -359,10 +415,16 @@ function reviewFacts(candidates: MeetingsV3FactCandidate[]): MeetingsV3FactRevie
         message: `Organization match is ambiguous for "${candidate.value}".`,
       });
     }
-    if (candidate.field === "amount" && !candidate.service && dollarCount(candidate.quote) > 1) {
+    if (candidate.field === "amount" && amountNeedsContext(candidate)) {
       issues.push({
         code: "fee_needs_verification",
         message: `Fee description needs verification for ${candidate.value}.`,
+      });
+    }
+    if (candidate.topicMismatch) {
+      issues.push({
+        code: "topic_ownership",
+        message: `Quote may belong to another topic: ${candidate.value}.`,
       });
     }
   }
@@ -370,7 +432,13 @@ function reviewFacts(candidates: MeetingsV3FactCandidate[]): MeetingsV3FactRevie
   const prices = new Map<string, { service: string; values: Set<string> }>();
   for (const candidate of candidates) {
     if (candidate.field !== "amount" || !candidate.subject || !candidate.service) continue;
-    const key = `${normalizeFactText(candidate.subject)}\0${normalizeFactText(candidate.service)}\0${candidate.basis ?? ""}`;
+    const key = [
+      normalizeFactText(candidate.subject),
+      normalizeFactText(candidate.service),
+      candidate.basis ?? "",
+      normalizeFactText(candidate.bidder ?? ""),
+      normalizeFactText(candidate.option ?? ""),
+    ].join("\0");
     const row = prices.get(key) ?? { service: candidate.service, values: new Set<string>() };
     row.values.add(normalizeFactText(candidate.value));
     prices.set(key, row);
@@ -429,4 +497,160 @@ function roleSupported(role: string, quoteNorm: string): boolean {
 
 function dollarCount(quote: string): number {
   return quote.match(/\$\s?\d/g)?.length ?? 0;
+}
+
+const GENERIC_SERVICE = /^(fee|fees|cost|costs|amount|price|total|subtotal)$/i;
+
+function amountNeedsContext(candidate: MeetingsV3FactCandidate): boolean {
+  if (candidate.field !== "amount") return false;
+  const isolating = candidate.rowQuote && dollarCount(candidate.rowQuote) > 0 ? candidate.rowQuote : candidate.quote;
+  if (!candidate.service || GENERIC_SERVICE.test(candidate.service)) return true;
+  return dollarCount(isolating) > 1;
+}
+
+function citedSpan(value: unknown, pageNorm: string): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const phrase = value.replace(/\s+/g, " ").trim();
+  if (!pageNorm.includes(normalizeFactText(phrase))) return undefined;
+  return phrase;
+}
+
+/**
+ * Fills a missing project or service from the heading or the amount line on the same page.
+ * A heading that fits a sibling topic better is not copied onto this item.
+ */
+function enrichFactContext(
+  candidate: MeetingsV3FactCandidate,
+  pageText: string,
+  title: string | undefined,
+  siblingTitles: readonly string[],
+): void {
+  const lines = pageText.split(/\n/);
+  const quoteKey = normalizeFactText(candidate.quote).slice(0, 48);
+  const lineIndex = lines.findIndex((line) => normalizeFactText(line).includes(quoteKey));
+  if (!candidate.subject) {
+    const heading = lineIndex >= 0 ? precedingHeading(lines, lineIndex) : candidate.headingQuote;
+    if (heading && !siblingOwns(heading, title, siblingTitles)) candidate.subject = heading;
+  }
+  if (candidate.field === "amount" && !candidate.service) {
+    const fromLine = serviceFromAmountLine(candidate.quote, candidate.value);
+    if (fromLine) candidate.service = fromLine;
+  }
+  if (!candidate.qualifications && lineIndex >= 0) {
+    const condition = nearbyCondition(lines, lineIndex);
+    if (condition) {
+      candidate.conditionQuote = condition;
+      candidate.qualifications = condition;
+      if (!candidate.basis && /per visit|\/\s*visit/i.test(condition)) candidate.basis = "per_visit";
+    }
+  }
+  const ownershipText = [candidate.quote, candidate.headingQuote, candidate.subject].filter(Boolean).join(" ");
+  if (siblingOwns(ownershipText, title, siblingTitles)) candidate.topicMismatch = true;
+}
+
+function precedingHeading(lines: string[], index: number): string | undefined {
+  // CONCERN: a short line above the amount is treated as the project heading. A caption or a column label can be copied as the subject.
+  for (let cursor = index - 1; cursor >= 0 && index - cursor < 30; cursor -= 1) {
+    const line = lines[cursor].replace(/\s+/g, " ").trim();
+    if (!line || line.includes("$") || line.length > 90) continue;
+    if ((line.match(/\|/g) ?? []).length >= 2) continue;
+    return line;
+  }
+  return undefined;
+}
+
+function serviceFromAmountLine(quote: string, value: string): string | undefined {
+  const index = quote.indexOf(value);
+  if (index <= 0) return undefined;
+  const label = quote.slice(0, index).replace(/[|:—–:.\-]+\s*$/g, "").replace(/^[A-Z0-9][.)]\s+/, "").trim();
+  if (!label || label.includes("$") || label.length > 80 || label.length < 3) return undefined;
+  if (/\b(propos|is|are|from|for|of|bid)\b/i.test(label)) return undefined;
+  if (GENERIC_SERVICE.test(label)) return undefined;
+  return label;
+}
+
+function nearbyCondition(lines: string[], index: number): string | undefined {
+  for (let cursor = index + 1; cursor < Math.min(lines.length, index + 4); cursor += 1) {
+    const line = lines[cursor].replace(/\s+/g, " ").trim();
+    if (!line) continue;
+    if (line.includes("$")) return undefined;
+    if (/\b(exclud|tax|hst|gst|per visit|\/\s*visit)\b/i.test(line) && line.length < 180) return line;
+  }
+  return undefined;
+}
+
+function siblingOwns(text: string, title: string | undefined, siblingTitles: readonly string[]): boolean {
+  const own = titleTokenHits(text, title ?? "");
+  return siblingTitles.some((sibling) => {
+    const hits = titleTokenHits(text, sibling);
+    const tokenCount = titleTokens(sibling).length;
+    const strong = tokenCount <= 1 ? hits >= 1 : hits >= Math.min(2, tokenCount);
+    return strong && hits > own;
+  });
+}
+
+function titleTokenHits(text: string, title: string): number {
+  const haystack = normalizeFactText(text);
+  return titleTokens(title).filter((token) => haystack.includes(token)).length;
+}
+
+function titleTokens(title: string): string[] {
+  const stop = new Set(["the", "and", "for", "with", "from", "this", "that", "item", "report"]);
+  return normalizeFactText(title).split(" ").filter((word) => word.length > 3 && !stop.has(word));
+}
+
+/**
+ * One line per item for the facts screen.
+ * Fee warnings collapse to a count and the pages they sit on.
+ */
+export function summarizeItemFactReviews(item: {
+  itemNumber: string;
+  title: string;
+  facts: MeetingsV3ItemFacts | null;
+}): string[] {
+  const issues = item.facts?.reviewIssues ?? [];
+  if (issues.length === 0) return [];
+  const lines: string[] = [];
+  const fees = issues.filter((issue) => issue.code === "fee_needs_verification");
+  if (fees.length > 0) {
+    const pages = [...new Set(
+      (item.facts?.candidates ?? [])
+        .filter((candidate) => candidate.field === "amount" && amountNeedsContext(candidate))
+        .map((candidate) => candidate.page),
+    )].sort((left, right) => left - right);
+    const pageLabel = pages.length > 0 ? ` Pages ${pages.join(", ")}.` : "";
+    lines.push(`${item.itemNumber} ${item.title}: ${fees.length} amounts need context.${pageLabel}`);
+  }
+  for (const issue of issues) {
+    if (issue.code === "fee_needs_verification") continue;
+    lines.push(`${item.itemNumber} ${item.title}: ${issue.message}`);
+  }
+  return lines;
+}
+
+/**
+ * Replaces a stored proposal when recovery returns the same field, value, and page.
+ * `omit` drops that proposal. A new value is appended.
+ */
+export function mergeProposedFacts(
+  base: readonly MeetingsV3ProposedFact[],
+  recovered: readonly MeetingsV3ProposedFact[],
+): MeetingsV3ProposedFact[] {
+  const next = [...base];
+  for (const fact of recovered) {
+    const index = next.findIndex((row) => sameProposedIdentity(row, fact));
+    if (fact.omit === true) {
+      if (index >= 0) next.splice(index, 1);
+      continue;
+    }
+    if (index >= 0) next[index] = { ...next[index], ...fact };
+    else next.push(fact);
+  }
+  return next;
+}
+
+function sameProposedIdentity(left: MeetingsV3ProposedFact, right: MeetingsV3ProposedFact): boolean {
+  if (left.field !== right.field || left.page !== right.page) return false;
+  if (typeof left.value !== "string" || typeof right.value !== "string") return false;
+  return normalizeFactText(left.value) === normalizeFactText(right.value);
 }

@@ -7,7 +7,7 @@ import { asc, eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2DocumentPages, meetingsV3AgendaItems } from "@/lib/db/schema-v2";
-import { generateDeepSeekJson, type DeepSeekGenerationResult } from "@/lib/deepseek/client";
+import { DEEPSEEK_COMPLETION_MODEL, generateDeepSeekJson, type DeepSeekGenerationResult } from "@/lib/deepseek/client";
 import { isDeepSeekKeyConfigured, readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { listMeetingV3Agenda, type MeetingsV3AgendaItem } from "@/lib/meeting-v3/agenda-run";
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
@@ -334,7 +334,7 @@ async function requestItemFacts(
   const pageNumbers = pages.map((page) => page.pageNumber);
   const promptChars = pages.reduce((sum, page) => sum + page.text.length, 0);
   console.info(
-    `[v3-facts] ${item.itemNumber} pages ${pageNumbers.join(",")} (${promptChars} chars) model=deepseek-v4-flash thinking=off`,
+    `[v3-facts] ${item.itemNumber} pages ${pageNumbers.join(",")} (${promptChars} chars) model=${DEEPSEEK_COMPLETION_MODEL} thinking=off`,
   );
   try {
     const response = await generateDeepSeekJson({
@@ -353,7 +353,7 @@ async function requestItemFacts(
           },
         ],
       }),
-      modelName: "deepseek-v4-flash",
+      modelName: DEEPSEEK_COMPLETION_MODEL,
       temperature: 0,
       thinking: false,
       maxOutputTokens: FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
@@ -409,7 +409,7 @@ async function recoverItemFacts(
           },
         ],
       }),
-      modelName: "deepseek-v4-flash",
+      modelName: DEEPSEEK_COMPLETION_MODEL,
       temperature: 0,
       thinking: false,
       maxOutputTokens: FACT_RESOLUTION_MAX_OUTPUT_TOKENS,

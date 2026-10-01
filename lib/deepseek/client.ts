@@ -1,6 +1,12 @@
 import type { TokenUsage } from "@/lib/gemini/usage";
 
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+
+/**
+ * Chat model fact resolution calls.
+ * The API catalog lists this id. `deepseek-v4-flash` is no longer in that list.
+ */
+export const DEEPSEEK_COMPLETION_MODEL = "deepseek-flash";
 /** Per-request ceiling so a hung DeepSeek call cannot block the whole validation loop. */
 const DEFAULT_DEEPSEEK_REQUEST_TIMEOUT_MS = 120_000;
 
@@ -371,4 +377,71 @@ function readStreamChunk(
       },
     );
   });
+}
+
+/** Model ids from a `/v1/models` payload. An unexpected body returns an empty list. */
+export function readDeepSeekModelIds(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object") return [];
+  const data = (payload as { data?: unknown }).data;
+  if (!Array.isArray(data)) return [];
+  return data.flatMap((row) => {
+    if (!row || typeof row !== "object") return [];
+    const id = (row as { id?: unknown }).id;
+    return typeof id === "string" && id.trim() ? [id.trim()] : [];
+  });
+}
+
+/** What the DeepSeek test button shows. */
+export type DeepSeekPingResult = {
+  ok: boolean;
+  summary: string;
+};
+
+/**
+ * Sends a one-line completion on the same model fact resolution uses.
+ * The summary includes how fast the connection opened, or the stall detail, plus the catalog ids.
+ */
+export async function pingDeepSeekCompletion(): Promise<DeepSeekPingResult> {
+  const catalog = await listDeepSeekModelIds();
+  const catalogNote = catalogNoteFor(catalog, DEEPSEEK_COMPLETION_MODEL);
+  const started = Date.now();
+  try {
+    const result = await generateDeepSeekJson({
+      systemInstruction: "Return JSON only.",
+      userText: 'Reply with {"ok":true}',
+      modelName: DEEPSEEK_COMPLETION_MODEL,
+      temperature: 0,
+      thinking: false,
+      maxOutputTokens: 32,
+      requestTimeoutMs: 25_000,
+      stallTimeoutMs: 20_000,
+    });
+    const preview = result.text.replace(/\s+/g, " ").trim().slice(0, 120);
+    return {
+      ok: true,
+      summary: `${result.modelName} replied in ${Date.now() - started}ms: ${preview}.${catalogNote}`,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "DeepSeek test failed.";
+    return { ok: false, summary: `${message}${catalogNote}` };
+  }
+}
+
+function catalogNoteFor(catalog: readonly string[], modelName: string): string {
+  if (catalog.length === 0) return "";
+  if (catalog.includes(modelName)) return ` Catalog: ${catalog.join(", ")}.`;
+  return ` Catalog lists ${catalog.join(", ")}, not ${modelName}.`;
+}
+
+async function listDeepSeekModelIds(): Promise<string[]> {
+  try {
+    const response = await fetch(`${deepSeekBaseUrl()}/v1/models`, {
+      headers: { Authorization: `Bearer ${requireDeepSeekApiKey()}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return [];
+    return readDeepSeekModelIds(await response.json());
+  } catch {
+    return [];
+  }
 }

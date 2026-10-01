@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { readDeepSeekStreamLine } from "../lib/deepseek/client";
+import { readDeepSeekModelIds, readDeepSeekStreamLine } from "../lib/deepseek/client";
 import {
   acceptQuotedFacts,
   applyOrganizationMatches,
@@ -461,5 +461,13 @@ describe("v3 quoted facts", () => {
     );
     assert.equal(delta?.content, "{\"ok\":true}");
     assert.equal(readDeepSeekStreamLine("data: {") , null);
+  });
+
+  it("reads DeepSeek catalog model ids and ignores a bad payload", () => {
+    assert.deepEqual(
+      readDeepSeekModelIds({ data: [{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }, { id: "" }] }),
+      ["deepseek-flash", "deepseek-v4-pro"],
+    );
+    assert.deepEqual(readDeepSeekModelIds(null), []);
   });
 });

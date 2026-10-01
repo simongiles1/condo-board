@@ -570,6 +570,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [buildingAgenda, setBuildingAgenda] = useState(false);
   const [linking, setLinking] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [pingingDeepSeek, setPingingDeepSeek] = useState(false);
+  const [deepSeekPing, setDeepSeekPing] = useState<string | null>(null);
   const [segmenting, setSegmenting] = useState(false);
   const [grouping, setGrouping] = useState(false);
   const [reconciling, setReconciling] = useState(false);
@@ -592,7 +594,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [selectedAgendaItemId, setSelectedAgendaItemId] = useState<string | null>(null);
   const transcriptScrollRef = useRef<HTMLDivElement>(null);
 
-  const busy = running || buildingAgenda || linking || resolving || segmenting || grouping || reconciling || status.stage === "extracting" || status.stage === "correcting";
+  const busy = running || buildingAgenda || linking || resolving || pingingDeepSeek || segmenting || grouping || reconciling || status.stage === "extracting" || status.stage === "correcting";
 
   function refreshAiUsage() {
     setAiUsageLoading(true);
@@ -940,6 +942,20 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       deepSeekRun.current = false;
       setLinking(false);
       setDeepSeekConfirm(null);
+    }
+  }
+
+  async function testDeepSeek() {
+    setPingingDeepSeek(true);
+    setDeepSeekPing(null);
+    try {
+      const response = await fetch("/api/v3/deepseek-ping", { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as { summary?: string; error?: string } | null;
+      setDeepSeekPing(payload?.summary || payload?.error || "DeepSeek test failed.");
+    } catch (pingError) {
+      setDeepSeekPing(pingError instanceof Error ? pingError.message : "DeepSeek test failed.");
+    } finally {
+      setPingingDeepSeek(false);
     }
   }
 
@@ -1492,15 +1508,28 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
-            <button
-              type="button"
-              onClick={() => setDeepSeekConfirm("facts")}
-              disabled={busy}
-              className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {resolving ? "Resolving facts…" : status.factsResolved ? "Run again" : "Resolve facts"}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void testDeepSeek()}
+                disabled={busy}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+              >
+                {pingingDeepSeek ? "Testing DeepSeek…" : "Test DeepSeek"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeepSeekConfirm("facts")}
+                disabled={busy}
+                className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {resolving ? "Resolving facts…" : status.factsResolved ? "Run again" : "Resolve facts"}
+              </button>
+            </div>
           </div>
+          {deepSeekPing ? (
+            <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800">{deepSeekPing}</p>
+          ) : null}
           {resolving ? <FactResolutionProgressBar step={status.currentStep} /> : null}
           {!status.factsResolved ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">

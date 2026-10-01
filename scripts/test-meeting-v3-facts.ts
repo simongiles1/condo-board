@@ -18,7 +18,11 @@ import {
   FACT_RESOLUTION_PAGE_CHAR_BUDGET,
   FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
   factRequestShouldSplit,
+  factResolutionProgressFraction,
+  factSliceShouldDivide,
+  formatFactResolutionProgress,
   mergeProposedFacts,
+  readFactResolutionProgress,
   readProposedFacts,
   readStoredItemFacts,
   summarizeItemFactReviews,
@@ -426,5 +430,23 @@ describe("v3 quoted facts", () => {
     assert.equal(factRequestShouldSplit(timeout, 1), false);
     assert.equal(factRequestShouldSplit(new Error("finish_reason=length"), 2), true);
     assert.equal(factRequestShouldSplit(new Error("DeepSeek request failed (500)."), 4), false);
+  });
+
+  it("reads fact-resolution progress and divides a page that timed out", () => {
+    const step = formatFactResolutionProgress({
+      itemIndex: 3,
+      itemCount: 28,
+      batchIndex: 2,
+      batchCount: 4,
+      label: "4.B.1 Booster Pump",
+    });
+    const progress = readFactResolutionProgress(step);
+    assert.equal(progress?.label, "4.B.1 Booster Pump");
+    assert.equal(progress?.itemIndex, 3);
+    assert.ok(factResolutionProgressFraction(progress!) > 2 / 28);
+    assert.ok(factResolutionProgressFraction(progress!) < 3 / 28);
+    assert.equal(readFactResolutionProgress("Quoted facts stored"), null);
+    assert.equal(factSliceShouldDivide(new Error("The operation was aborted due to timeout"), 2500), true);
+    assert.equal(factSliceShouldDivide(new Error("The operation was aborted due to timeout"), 400), false);
   });
 });

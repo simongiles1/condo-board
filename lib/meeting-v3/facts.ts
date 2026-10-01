@@ -351,6 +351,56 @@ export function factRequestShouldSplit(error: unknown, pageCount: number): boole
   return error.message.includes("finish_reason=length") || /aborted due to timeout/i.test(error.message);
 }
 
+/** One topic's place in a fact-resolution run, including the page batch inside that topic. */
+export type FactResolutionProgress = {
+  itemIndex: number;
+  itemCount: number;
+  batchIndex: number;
+  batchCount: number;
+  label: string;
+};
+
+/**
+ * Progress line stored on the meeting while Resolve facts is running.
+ * The facts screen reads it back into a bar.
+ */
+export function formatFactResolutionProgress(progress: FactResolutionProgress): string {
+  return `Resolving facts · ${progress.itemIndex}/${progress.itemCount} · batch ${progress.batchIndex}/${progress.batchCount} · ${progress.label}`;
+}
+
+/**
+ * Reads a progress line written by formatFactResolutionProgress.
+ * Returns null when the step is some other message.
+ */
+export function readFactResolutionProgress(step: string | null | undefined): FactResolutionProgress | null {
+  const match = step?.match(/^Resolving facts · (\d+)\/(\d+) · batch (\d+)\/(\d+) · (.+)$/);
+  if (!match) return null;
+  const itemIndex = Number(match[1]);
+  const itemCount = Number(match[2]);
+  const batchIndex = Number(match[3]);
+  const batchCount = Number(match[4]);
+  if (itemCount < 1 || batchCount < 1 || itemIndex < 1 || batchIndex < 1) return null;
+  return { itemIndex, itemCount, batchIndex, batchCount, label: match[5] ?? "" };
+}
+
+/**
+ * How far through the run this progress line is, from 0 to 1.
+ * The current batch counts as started, not finished.
+ */
+export function factResolutionProgressFraction(progress: FactResolutionProgress): number {
+  const batch = Math.min(progress.batchIndex - 1, progress.batchCount) / progress.batchCount;
+  return Math.min(1, Math.max(0, (progress.itemIndex - 1 + batch) / progress.itemCount));
+}
+
+/**
+ * A single page slice should be cut in half and tried again.
+ * A short slice is not divided, so a timeout there can be skipped.
+ */
+export function factSliceShouldDivide(error: unknown, textLength: number): boolean {
+  if (textLength < 800 || !(error instanceof Error)) return false;
+  return error.message.includes("finish_reason=length") || /aborted due to timeout/i.test(error.message);
+}
+
 /**
  * Splits one topic's pages so a single reply can list every quote.
  * An empty list stays empty.

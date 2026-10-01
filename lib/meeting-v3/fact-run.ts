@@ -20,6 +20,8 @@ import {
   FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
   FACT_RECOVERY_MAX_ISSUES,
   factRequestShouldSplit,
+  factSliceShouldDivide,
+  formatFactResolutionProgress,
   mergeProposedFacts,
   readProposedFacts,
   type MeetingsV3ItemFacts,
@@ -155,24 +157,44 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
   const withText = items.filter((item) => item.pages.length > 0);
   const proposedByItem = new Map<string, MeetingsV3ProposedFact[]>();
   const deepSeekUsage: DeepSeekGenerationResult[] = [];
+  const skipped: string[] = [];
 
   if (withText.length > 0) {
     if (!isDeepSeekKeyConfigured()) {
       throw new FactResolutionError("DEEPSEEK_API_KEY is required to resolve facts from package pages.", 409);
     }
     await setFactStep(meetingId, "Resolving quoted facts from package pages");
-    try {
-      for (const item of withText) {
-        for (const pages of chunkFactPages(expandFactPagesForPrompt(item.pages))) {
-          const facts = await requestItemFacts(item, pages, withText, deepSeekUsage);
+    let completedBatches = 0;
+    let lastFailure = "Fact resolution failed.";
+    for (let index = 0; index < withText.length; index += 1) {
+      const item = withText[index];
+      if (!item) continue;
+      const batches = chunkFactPages(expandFactPagesForPrompt(item.pages));
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+        await setFactStep(
+          meetingId,
+          formatFactResolutionProgress({
+            itemIndex: index + 1,
+            itemCount: withText.length,
+            batchIndex: batchIndex + 1,
+            batchCount: Math.max(batches.length, 1),
+            label: `${item.itemNumber} ${item.title}`,
+          }),
+        );
+        try {
+          const facts = await requestItemFacts(item, batches[batchIndex] ?? [], withText, deepSeekUsage);
           const prior = proposedByItem.get(item.id) ?? [];
           proposedByItem.set(item.id, [...prior, ...facts]);
+          completedBatches += 1;
+        } catch (error) {
+          lastFailure = error instanceof Error ? error.message : lastFailure;
+          skipped.push(`${item.itemNumber} ${item.title}`);
         }
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Fact resolution failed.";
+    }
+    if (completedBatches === 0 && skipped.length > 0) {
       await setFactStep(meetingId, "Fact resolution failed");
-      throw new FactResolutionError(message, 502);
+      throw new FactResolutionError(lastFailure, 502);
     }
   }
 
@@ -186,13 +208,32 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
   const factsByItem = new Map<string, MeetingsV3ItemFacts>();
   let factCount = 0;
   let unresolvedItemCount = 0;
-  for (const item of items) {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (!item) continue;
     const accepted = acceptQuotedFacts({
       pages: item.pages,
       proposed: proposedByItem.get(item.id) ?? [],
       title: item.title,
       siblingTitles: siblingTitlesFor(item, items),
     });
+    if (
+      withText.length > 0
+      && accepted.reviewIssues.length > 0
+      && accepted.reviewIssues.length <= FACT_RECOVERY_MAX_ISSUES
+      && item.pages.length > 0
+    ) {
+      await setFactStep(
+        meetingId,
+        formatFactResolutionProgress({
+          itemIndex: index + 1,
+          itemCount: items.length,
+          batchIndex: 1,
+          batchCount: 1,
+          label: `Checking ${item.itemNumber} ${item.title}`,
+        }),
+      );
+    }
     const recovered = await recoverItemFacts(item, items, accepted, deepSeekUsage);
     const proposed = recovered
       ? mergeProposedFacts(proposedByItem.get(item.id) ?? [], recovered)
@@ -231,13 +272,14 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
     factCount,
     unresolvedItemCount,
   });
+  const skippedNote = skipped.length > 0 ? ` Some pages timed out: ${[...new Set(skipped)].join(", ")}.` : "";
   await setFactStep(
     meetingId,
-    unresolvedItemCount > 0
+    `${unresolvedItemCount > 0
       ? "Quoted facts stored; some items need a look"
       : factCount > 0
         ? "Quoted facts stored from package pages"
-        : "No quoted facts on the linked pages",
+        : "No quoted facts on the linked pages"}${skippedNote}`,
   );
 
   if (deepSeekUsage.length > 0) {
@@ -305,11 +347,22 @@ async function requestItemFacts(
       entry.agendaItemId === item.id ? entry.facts : [],
     );
   } catch (error) {
-    if (!factRequestShouldSplit(error, pages.length)) throw error;
-    const mid = Math.ceil(pages.length / 2);
-    const left = await requestItemFacts(item, pages.slice(0, mid), items, deepSeekUsage);
-    const right = await requestItemFacts(item, pages.slice(mid), items, deepSeekUsage);
-    return [...left, ...right];
+    if (factRequestShouldSplit(error, pages.length)) {
+      const mid = Math.ceil(pages.length / 2);
+      const left = await requestItemFacts(item, pages.slice(0, mid), items, deepSeekUsage);
+      const right = await requestItemFacts(item, pages.slice(mid), items, deepSeekUsage);
+      return [...left, ...right];
+    }
+    const only = pages[0];
+    if (pages.length === 1 && only && factSliceShouldDivide(error, only.text.length)) {
+      const mid = Math.floor(only.text.length / 2);
+      const breakAt = only.text.lastIndexOf(" ", mid);
+      const splitAt = breakAt > mid / 2 ? breakAt : mid;
+      const left = await requestItemFacts(item, [{ ...only, text: only.text.slice(0, splitAt) }], items, deepSeekUsage);
+      const right = await requestItemFacts(item, [{ ...only, text: only.text.slice(splitAt).trimStart() }], items, deepSeekUsage);
+      return [...left, ...right];
+    }
+    throw error;
   }
 }
 

@@ -21,7 +21,7 @@ import {
   isAgendaPageForCorrection,
   sourcePageContiguousRanges,
 } from "@/lib/meeting-v3/agenda-pages";
-import { factContextNotes, summarizeItemFactReviews, type MeetingsV3FactField, type MeetingsV3ItemFacts, type MeetingsV3PackageRole } from "@/lib/meeting-v3/facts";
+import { factContextNotes, factResolutionProgressFraction, readFactResolutionProgress, summarizeItemFactReviews, type MeetingsV3FactField, type MeetingsV3ItemFacts, type MeetingsV3PackageRole } from "@/lib/meeting-v3/facts";
 import type { MeetingsV3ItemConclusion } from "@/lib/meeting-v3/meeting-conclusions";
 import type { MeetingsV3ItemFactGroups } from "@/lib/meeting-v3/fact-groups";
 import { formatSpanClock, type MeetingsV3ItemTranscript, agendaItemsForWizardStep } from "@/lib/meeting-v3/transcript-spans";
@@ -521,6 +521,41 @@ function WizardBar({ steps, shownId, busy, onShow }: WizardBarProps) {
  * Walks a V3 meeting through extract and correct, the agenda, attachment pages, quoted facts, the transcript, then source groups.
  * Finished stages stay open. The next stage is another entry on the same bar.
  */
+function FactResolutionProgressBar({ step }: { step: string | null }) {
+  const progress = readFactResolutionProgress(step);
+  const pct = progress ? Math.round(factResolutionProgressFraction(progress) * 100) : null;
+  return (
+    <div className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-3">
+      <div className="mb-2 flex items-baseline justify-between gap-3 text-sm text-slate-700">
+        <span className="min-w-0 truncate font-medium text-slate-900">
+          {progress ? progress.label : "Starting fact resolution"}
+        </span>
+        <span className="shrink-0 tabular-nums">
+          {progress ? `${progress.itemIndex} of ${progress.itemCount}` : "Waiting for the first topic"}
+        </span>
+      </div>
+      <div
+        className="h-2 overflow-hidden rounded-full bg-slate-200"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct ?? 0}
+        aria-label={progress ? progress.label : "Starting fact resolution"}
+      >
+        <div
+          className={`h-full rounded-full bg-teal-700 ${pct == null ? "w-1/3 animate-pulse" : ""}`}
+          style={pct == null ? undefined : { width: `${Math.max(pct, 3)}%` }}
+        />
+      </div>
+      {progress && progress.batchCount > 1 ? (
+        <p className="mt-2 text-xs text-slate-500">
+          Page batch {progress.batchIndex} of {progress.batchCount} for this topic
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageStatus }) {
   const [status, setStatus] = useState(initial);
   const [running, setRunning] = useState(
@@ -910,6 +945,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
 
   async function resolveFacts() {
     if (deepSeekRun.current) return;
+    setDeepSeekConfirm(null);
     deepSeekRun.current = true;
     setResolving(true);
     setError(null);
@@ -1465,6 +1501,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               {resolving ? "Resolving facts…" : status.factsResolved ? "Run again" : "Resolve facts"}
             </button>
           </div>
+          {resolving ? <FactResolutionProgressBar step={status.currentStep} /> : null}
           {!status.factsResolved ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
               {resolving
@@ -1978,7 +2015,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                 ? "Resolving facts…"
                 : "Linking attachments…"
         }
-        busy={linking || resolving || segmenting || grouping}
+        busy={linking || segmenting || grouping}
         onCancel={() => setDeepSeekConfirm(null)}
         onConfirm={() => {
           if (deepSeekConfirm === "sources") void groupSources();

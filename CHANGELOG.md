@@ -38,7 +38,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changes
 
-- **Meetings V3 fact resolution** — Fact calls use `deepseek-flash`, the id the DeepSeek catalog currently lists. `deepseek-v4-flash` stays accepted by the API and then returns an empty stream.
+- **Meetings V3 fact resolution** — Fact calls use `deepseek-v4-flash` again (same model as before the catalog-id experiment).
 - **Meetings V3 meeting documents** — Open the same transcript and board package dialog as Meetings V2 from a document icon beside AI usage on the meeting header.
 - **Meetings V3 fact context** — Resolve facts can cite a heading, a fee line, and a nearby tax or exclusion separately from the amount. Two bidders for the same work stay alternatives. A quote that matches another topic on the same page is flagged, and an amount with no service is flagged even when the line has only one dollar figure. Facts that still fail those checks get one recovery pass. A working draft can list the open points; the minutes stay incomplete until those points are supported. Re-run Resolve facts, then Group sources and Reconcile meeting.
 - **Meetings V3 facts and sources** — Resolve facts keeps what the package quote explicitly reports (a proposal, a recommendation, a prior approval, or a past event) and matches a printed vendor to one organization when the registry match is unambiguous. Several fees or several spellings of one company are no longer treated as a conflict. Group sources links facts that name the same project across pages. Reconcile meeting reads the full transcript stretch and records only what that talk supports. Re-run Extract and correct to repair attachment fee tables, then Resolve facts, Group sources, and Reconcile meeting.

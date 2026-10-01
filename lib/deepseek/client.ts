@@ -2,11 +2,8 @@ import type { TokenUsage } from "@/lib/gemini/usage";
 
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 
-/**
- * Chat model fact resolution calls.
- * The API catalog lists this id. `deepseek-v4-flash` is no longer in that list.
- */
-export const DEEPSEEK_COMPLETION_MODEL = "deepseek-flash";
+/** Chat model Meetings V3 fact resolution and the DeepSeek test button use. */
+export const DEEPSEEK_COMPLETION_MODEL = "deepseek-v4-flash";
 /** Per-request ceiling so a hung DeepSeek call cannot block the whole validation loop. */
 const DEFAULT_DEEPSEEK_REQUEST_TIMEOUT_MS = 120_000;
 

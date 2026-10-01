@@ -18,6 +18,7 @@ import {
   expandFactPagesForPrompt,
   FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
   FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
+  FACT_RESOLUTION_STALL_MS,
   FACT_RECOVERY_MAX_ISSUES,
   factRequestShouldSplit,
   factSliceShouldDivide,
@@ -187,6 +188,13 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
           proposedByItem.set(item.id, [...prior, ...facts]);
           completedBatches += 1;
         } catch (error) {
+          if (isDeepSeekSilentStall(error)) {
+            await setFactStep(meetingId, "Fact resolution stopped because DeepSeek sent no text");
+            throw new FactResolutionError(
+              "DeepSeek accepted the request and sent no text, so this run stopped instead of waiting on an empty reply.",
+              502,
+            );
+          }
           lastFailure = error instanceof Error ? error.message : lastFailure;
           skipped.push(`${item.itemNumber} ${item.title}`);
         }
@@ -234,7 +242,17 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
         }),
       );
     }
-    const recovered = await recoverItemFacts(item, items, accepted, deepSeekUsage);
+    let recovered: Awaited<ReturnType<typeof recoverItemFacts>>;
+    try {
+      recovered = await recoverItemFacts(item, items, accepted, deepSeekUsage);
+    } catch (error) {
+      if (!isDeepSeekSilentStall(error)) throw error;
+      await setFactStep(meetingId, "Fact resolution stopped because DeepSeek sent no text");
+      throw new FactResolutionError(
+        "DeepSeek accepted the request and sent no text, so this run stopped instead of waiting on an empty reply.",
+        502,
+      );
+    }
     const proposed = recovered
       ? mergeProposedFacts(proposedByItem.get(item.id) ?? [], recovered)
       : (proposedByItem.get(item.id) ?? []);
@@ -341,6 +359,7 @@ async function requestItemFacts(
       thinking: false,
       maxOutputTokens: FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
       requestTimeoutMs: FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
+      stallTimeoutMs: FACT_RESOLUTION_STALL_MS,
     });
     deepSeekUsage.push(response);
     return readProposedFacts(response.text).flatMap((entry) =>
@@ -396,14 +415,21 @@ async function recoverItemFacts(
       thinking: false,
       maxOutputTokens: FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
       requestTimeoutMs: FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
+      stallTimeoutMs: FACT_RESOLUTION_STALL_MS,
     });
     deepSeekUsage.push(response);
     return readProposedFacts(response.text).flatMap((entry) =>
       entry.agendaItemId === item.id ? entry.facts : [],
     );
-  } catch {
+  } catch (error) {
+    if (isDeepSeekSilentStall(error)) throw error;
     return null;
   }
+}
+
+/** A fact call that DeepSeek accepted and then left empty. Splitting the page will not help. */
+function isDeepSeekSilentStall(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("sent no text");
 }
 
 function siblingTitlesFor(item: FactSourceItem, items: readonly FactSourceItem[]): string[] {

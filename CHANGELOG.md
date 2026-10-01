@@ -8,6 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V3 resolve facts** — A DeepSeek reply that stays empty after the connection opens stops the run in about 45 seconds. The screen no longer sits on the first topic for the full five-minute limit while the status poll repeats the same step. Re-run Resolve facts once DeepSeek is answering again.
 - **Meetings V3 resolve facts** — The confirm dialog closes when you continue, and the facts step shows which topic and page batch are in progress. A page that times out is split and tried again. If one page still cannot be read, the other topics are saved instead of failing the whole run. Re-run Resolve facts.
 - **Meetings V3 meeting conclusions** — Reconcile meeting no longer treats “so moved,” a negated ratification, or a past approval as a decision of this meeting. A later sentence in the same stretch replaces an earlier one. When the talk points at a recommendation, the package quote is stored beside the decision and does not become the decision.
 - **Meetings V3 transcript re-run** — Segment transcript clears stored meeting conclusions on every agenda row, including topics that keep the same number.

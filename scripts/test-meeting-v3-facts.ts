@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { readDeepSeekStreamLine } from "../lib/deepseek/client";
 import {
   acceptQuotedFacts,
   applyOrganizationMatches,
@@ -430,6 +431,8 @@ describe("v3 quoted facts", () => {
     assert.equal(factRequestShouldSplit(timeout, 1), false);
     assert.equal(factRequestShouldSplit(new Error("finish_reason=length"), 2), true);
     assert.equal(factRequestShouldSplit(new Error("DeepSeek request failed (500)."), 4), false);
+    assert.equal(factRequestShouldSplit(new Error("DeepSeek sent no text."), 4), false);
+    assert.equal(factSliceShouldDivide(new Error("DeepSeek sent no text."), 2000), false);
   });
 
   it("reads fact-resolution progress and divides a page that timed out", () => {
@@ -448,5 +451,15 @@ describe("v3 quoted facts", () => {
     assert.equal(readFactResolutionProgress("Quoted facts stored"), null);
     assert.equal(factSliceShouldDivide(new Error("The operation was aborted due to timeout"), 2500), true);
     assert.equal(factSliceShouldDivide(new Error("The operation was aborted due to timeout"), 400), false);
+  });
+
+  it("treats a DeepSeek keep-alive as silence and a content line as text", () => {
+    assert.equal(readDeepSeekStreamLine(": keep-alive"), null);
+    assert.equal(readDeepSeekStreamLine("data: [DONE]"), null);
+    const delta = readDeepSeekStreamLine(
+      'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":null}]}',
+    );
+    assert.equal(delta?.content, "{\"ok\":true}");
+    assert.equal(readDeepSeekStreamLine("data: {") , null);
   });
 });

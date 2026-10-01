@@ -337,6 +337,13 @@ export const FACT_RESOLUTION_MAX_OUTPUT_TOKENS = 12288;
 export const FACT_RESOLUTION_REQUEST_TIMEOUT_MS = 300_000;
 
 /**
+ * How long a fact call may sit after DeepSeek accepts it with no text.
+ * The API sends comment keep-alives while a completion is queued, and the
+ * 300s ceiling would hold the topic on that silence.
+ */
+export const FACT_RESOLUTION_STALL_MS = 45_000;
+
+/**
  * Recovery is one extra call. More open issues than this are left on the item
  * rather than asking the model to rewrite an entire table in one reply.
  */
@@ -348,6 +355,7 @@ export const FACT_RECOVERY_MAX_ISSUES = 12;
  */
 export function factRequestShouldSplit(error: unknown, pageCount: number): boolean {
   if (pageCount < 2 || !(error instanceof Error)) return false;
+  if (error.message.includes("sent no text")) return false;
   return error.message.includes("finish_reason=length") || /aborted due to timeout/i.test(error.message);
 }
 
@@ -398,6 +406,7 @@ export function factResolutionProgressFraction(progress: FactResolutionProgress)
  */
 export function factSliceShouldDivide(error: unknown, textLength: number): boolean {
   if (textLength < 800 || !(error instanceof Error)) return false;
+  if (error.message.includes("sent no text")) return false;
   return error.message.includes("finish_reason=length") || /aborted due to timeout/i.test(error.message);
 }
 

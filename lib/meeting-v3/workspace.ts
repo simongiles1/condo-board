@@ -36,6 +36,13 @@ export type MeetingsV3FactGrouping = {
   ungroupedCount: number;
 };
 
+/** A finished pass that stored meeting conclusions from the transcript stretches. */
+export type MeetingsV3MeetingReconciliation = {
+  completedAt: string;
+  itemCount: number;
+  unclearCount: number;
+};
+
 /** A finished pass that linked attachment pages onto the V3 agenda. */
 export type MeetingsV3AttachmentLink = {
   completedAt: string;
@@ -79,6 +86,7 @@ export type MeetingsV3PackageSettings = {
   factResolution?: MeetingsV3FactResolution | null;
   transcriptSegmentation?: MeetingsV3TranscriptSegmentation | null;
   factGrouping?: MeetingsV3FactGrouping | null;
+  meetingReconciliation?: MeetingsV3MeetingReconciliation | null;
   aiUsage?: MeetingsV3AiUsageSettings | null;
 };
 
@@ -235,6 +243,38 @@ export function meetingsV3FactGrouping(
     completedAt: record.completedAt,
     groupCount: record.groupCount,
     ungroupedCount: record.ungroupedCount,
+  };
+}
+
+/**
+ * The stored meeting reconciliation, when that stage has been run for the current transcript.
+ * Returns null when the flag is missing or not a completed reconciliation.
+ */
+export function meetingsV3MeetingReconciliation(
+  settings: { v3Package?: { meetingReconciliation?: unknown } | null } | null | undefined,
+): MeetingsV3MeetingReconciliation | null {
+  const reconciliation = settings?.v3Package?.meetingReconciliation;
+  if (!reconciliation || typeof reconciliation !== "object") return null;
+  const record = reconciliation as {
+    completedAt?: unknown;
+    itemCount?: unknown;
+    unclearCount?: unknown;
+  };
+  if (typeof record.completedAt !== "string" || !record.completedAt.trim()) return null;
+  if (typeof record.itemCount !== "number" || !Number.isInteger(record.itemCount) || record.itemCount < 0) {
+    return null;
+  }
+  if (
+    typeof record.unclearCount !== "number"
+    || !Number.isInteger(record.unclearCount)
+    || record.unclearCount < 0
+  ) {
+    return null;
+  }
+  return {
+    completedAt: record.completedAt,
+    itemCount: record.itemCount,
+    unclearCount: record.unclearCount,
   };
 }
 

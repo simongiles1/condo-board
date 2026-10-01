@@ -1,6 +1,6 @@
 /**
- * Rewrites agenda-side package pages from each page's PDF.
- * Attachment pages keep the Docling extract. The stored extraction is the style to keep.
+ * Rewrites agenda pages, and attachment pages whose extract stacks several fees on one line, from each page's PDF.
+ * Other attachment pages keep the Docling extract. The stored extraction is the style to keep.
  */
 
 import { randomUUID } from "crypto";
@@ -17,7 +17,7 @@ import {
 import { generatePageVision } from "@/lib/gemini/client";
 import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { upcomingAgendaSplit } from "@/lib/meeting-v2/upcoming-meeting";
-import { isAgendaPageForCorrection } from "@/lib/meeting-v3/agenda-pages";
+import { isAgendaPageForCorrection, pageNeedsTableCorrection } from "@/lib/meeting-v3/agenda-pages";
 import { loadMeetingBoardPackage } from "@/lib/meeting-v2/board-package";
 import { extractPdfPages } from "@/lib/pdf/extract-pages";
 import { meetingsV3SettingsWithAttachmentLink } from "@/lib/meeting-v3/package-status";
@@ -89,7 +89,8 @@ export async function buildMeetingPageRewrites(meetingId: string): Promise<PageR
   }
 
   const agendaPages = pages.filter((page) =>
-    isAgendaPageForCorrection(page.pageNumber, agendaSplit),
+    isAgendaPageForCorrection(page.pageNumber, agendaSplit)
+    || pageNeedsTableCorrection(page.extractedText),
   );
   if (agendaPages.length === 0) {
     throw new PageRewriteError("No agenda pages are available to correct.", 409);

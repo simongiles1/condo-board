@@ -221,9 +221,36 @@ describe("v3 fact groups", () => {
           },
         ],
       }),
-      { candidates, unresolvedFields: ["amount", "vendor"] },
+      { candidates, unresolvedFields: ["amount", "vendor"], reviewIssues: [] },
     );
     assert.equal(stored?.groups.length, 1);
     assert.equal(stored?.ungrouped.length, 3);
+  });
+
+  it("reads two groups stored on the same page", () => {
+    const stored = readStoredItemFactGroups(
+      JSON.stringify({
+        groups: [
+          {
+            page: 14,
+            quote: "NWP Mechanical proposes $48,200 to replace the booster pump by June 1, 2026.",
+            members: [
+              { field: "vendor", value: "NWP Mechanical" },
+              { field: "amount", value: "$48,200" },
+            ],
+          },
+          {
+            page: 14,
+            quote: "Other Co. bids $51,000.",
+            members: [
+              { field: "vendor", value: "Other Co." },
+              { field: "amount", value: "$51,000" },
+            ],
+          },
+        ],
+      }),
+      { candidates, unresolvedFields: ["amount", "vendor"], reviewIssues: [] },
+    );
+    assert.equal(stored?.groups.length, 2);
   });
 });

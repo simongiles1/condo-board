@@ -8,9 +8,13 @@ import { describe, it } from "node:test";
 
 import {
   acceptQuotedFacts,
+  applyOrganizationMatches,
+  chunkFactPageText,
   chunkFactPages,
+  expandFactPagesForPrompt,
   FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
   FACT_RESOLUTION_PAGE_BATCH,
+  FACT_RESOLUTION_PAGE_CHAR_BUDGET,
   readProposedFacts,
   readStoredItemFacts,
 } from "../lib/meeting-v3/facts";
@@ -79,7 +83,7 @@ describe("v3 quoted facts", () => {
     assert.deepEqual(facts.candidates, []);
   });
 
-  it("leaves two different amounts unresolved", () => {
+  it("keeps two different bids without calling them a conflict", () => {
     const facts = acceptQuotedFacts({
       pages,
       proposed: [
@@ -98,7 +102,145 @@ describe("v3 quoted facts", () => {
       ],
     });
     assert.equal(facts.candidates.length, 2);
-    assert.deepEqual(facts.unresolvedFields, ["amount"]);
+    assert.deepEqual(facts.unresolvedFields, []);
+    assert.deepEqual(facts.reviewIssues, []);
+  });
+
+  it("keeps two equal amounts on one page when the quotes differ", () => {
+    const facts = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 20,
+        text: "Project management is $500. Construction review is $500.",
+      }],
+      proposed: [
+        { field: "amount", value: "$500", page: 20, quote: "Project management is $500." },
+        { field: "amount", value: "$500", page: 20, quote: "Construction review is $500." },
+      ],
+    });
+    assert.equal(facts.candidates.length, 2);
+  });
+
+  it("reads every quote stored for the same page", () => {
+    const stored = readStoredItemFacts(JSON.stringify({
+      candidates: [
+        { field: "vendor", value: "Trace Consulting Group", page: 3, quote: "approved Trace Consulting Group" },
+        { field: "vendor", value: "Trace Consulting Group Ltd.", page: 3, quote: "thank you Trace Consulting Group Ltd." },
+        { field: "amount", value: "$2,800", page: 3, quote: "fee is $2,800" },
+      ],
+    }));
+    assert.equal(stored?.candidates.length, 3);
+  });
+
+  it("keeps a reported prior approval only when the quote says so", () => {
+    const facts = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 3,
+        text: "The Board approved Trace Consulting Group's proposal for the steam room.",
+      }],
+      proposed: [
+        {
+          field: "vendor",
+          value: "Trace Consulting Group",
+          page: 3,
+          quote: "The Board approved Trace Consulting Group's proposal",
+          subject: "steam room",
+          role: "reported_prior_approval",
+        },
+        {
+          field: "vendor",
+          value: "Trace Consulting Group",
+          page: 3,
+          quote: "The Board approved Trace Consulting Group's proposal",
+          role: "proposal",
+        },
+      ],
+    });
+    assert.equal(facts.candidates.length, 1);
+    assert.equal(facts.candidates[0]?.role, "reported_prior_approval");
+    assert.equal(facts.candidates[0]?.subject, undefined);
+  });
+
+  it("flags conflicting prices for the same service and leaves a bare fee line unverified", () => {
+    const conflict = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 20,
+        text: "Steam room project management is $2,800. Steam room project management is $1,700.",
+      }],
+      proposed: [
+        {
+          field: "amount",
+          value: "$2,800",
+          page: 20,
+          quote: "Steam room project management is $2,800.",
+          subject: "Steam room",
+          service: "project management",
+        },
+        {
+          field: "amount",
+          value: "$1,700",
+          page: 20,
+          quote: "Steam room project management is $1,700.",
+          subject: "Steam room",
+          service: "project management",
+        },
+      ],
+    });
+    assert.equal(conflict.reviewIssues.some((issue) => issue.code === "conflicting_prices"), true);
+
+    const smashed = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 20,
+        text: "Phase 3 | $2,800 $1,700 $750/Visit",
+      }],
+      proposed: [
+        {
+          field: "amount",
+          value: "$2,800",
+          page: 20,
+          quote: "Phase 3 | $2,800 $1,700 $750/Visit",
+        },
+      ],
+    });
+    assert.equal(smashed.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), true);
+  });
+
+  it("matches one organization and leaves an ambiguous name unmatched to an id", () => {
+    const facts = acceptQuotedFacts({
+      pages: [{ pageNumber: 3, text: "Trace Consulting Group Ltd. (TCG) wrote the letter." }],
+      proposed: [{
+        field: "vendor",
+        value: "Trace Consulting Group Ltd. (TCG)",
+        page: 3,
+        quote: "Trace Consulting Group Ltd. (TCG) wrote the letter.",
+      }],
+    });
+    const matched = applyOrganizationMatches(facts, [{
+      id: "trace",
+      name: "Trace Consulting Group Ltd.",
+      aliases: ["Trace Consulting Group Ltd. (TCG)", "TCG"],
+      email: null,
+      website: null,
+    }]);
+    assert.equal(matched.candidates[0]?.organizationMatch, "confirmed");
+    assert.equal(matched.candidates[0]?.organizationId, "trace");
+    assert.equal(matched.candidates[0]?.value, "Trace Consulting Group Ltd. (TCG)");
+
+    const ambiguous = applyOrganizationMatches(facts, [
+      { id: "a", name: "Alpha Corp", aliases: ["Trace Consulting Group Ltd. (TCG)"], email: null, website: null },
+      { id: "b", name: "Beta Corp", aliases: ["Trace Consulting Group Ltd. (TCG)"], email: null, website: null },
+    ]);
+    assert.equal(ambiguous.candidates[0]?.organizationMatch, "ambiguous");
+    assert.equal(ambiguous.candidates[0]?.organizationId, undefined);
+  });
+
+  it("sends the rest of a page after the first character window", () => {
+    const text = `${"a".repeat(FACT_RESOLUTION_PAGE_CHAR_BUDGET)} tail`;
+    const chunks = chunkFactPageText(`hello ${text}`);
+    assert.ok(chunks.length > 1);
+    assert.equal(chunks.join(" ").replace(/\s+/g, ""), (`hello ${text}`).replace(/\s+/g, ""));
+    const expanded = expandFactPagesForPrompt([{ pageNumber: 20, text: `hello ${text}` }]);
+    assert.ok(expanded.every((page) => page.pageNumber === 20));
+    assert.ok(expanded.at(-1)?.text.includes("tail"));
   });
 
   it("matches a quote when the page breaks the line", () => {

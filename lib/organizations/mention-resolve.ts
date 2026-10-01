@@ -58,7 +58,8 @@ function headerDomainsFromAddresses(addresses: string[]): string[] {
   return [...domains];
 }
 
-async function loadDocuments(): Promise<OrgMentionSearchDocument[]> {
+/** Active organization cards used to match a printed vendor name. */
+export async function loadOrgMentionSearchDocuments(): Promise<OrgMentionSearchDocument[]> {
   const [entities, fingerprints] = await Promise.all([
     loadActiveOrganizationEntities(),
     loadOrgFingerprintSummaries().catch(() => ({ organizations: [] as Array<{
@@ -173,7 +174,7 @@ export async function resolveOrgMentions(params?: {
   };
   if (mentionRows.length === 0) return result;
 
-  const documents = await loadDocuments();
+  const documents = await loadOrgMentionSearchDocuments();
   const headerCache = new Map<string, string[]>();
   const affiliateCache = new Map<string, string[]>();
   const now = new Date().toISOString();

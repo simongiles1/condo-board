@@ -19,12 +19,14 @@ import {
   meetingsV3AttachmentLink,
   meetingsV3FactGrouping,
   meetingsV3FactResolution,
+  meetingsV3MeetingReconciliation,
   meetingsV3PackageError,
   meetingsV3PackageStage,
   meetingsV3TranscriptSegmentation,
   type MeetingsV3AttachmentLink,
   type MeetingsV3FactGrouping,
   type MeetingsV3FactResolution,
+  type MeetingsV3MeetingReconciliation,
   type MeetingsV3PackageSettings,
   type MeetingsV3TranscriptSegmentation,
   type MeetingsV3PackageStage,
@@ -70,6 +72,7 @@ export type MeetingsV3PackageStatus = {
   factsGrouped: boolean;
   factGroupCount: number;
   ungroupedFactCount: number;
+  conclusionsRecorded: boolean;
   hasTranscript: boolean;
   unassignedAttachmentPages: number[];
   attachmentPagesWithoutText: number[];
@@ -210,6 +213,7 @@ export async function loadMeetingsV3PackageStatus(
     factsGrouped: factGrouping != null,
     factGroupCount: factGrouping?.groupCount ?? 0,
     ungroupedFactCount: factGrouping?.ungroupedCount ?? 0,
+    conclusionsRecorded: meetingsV3MeetingReconciliation(settings) != null,
     hasTranscript: Boolean(legacy?.vttFilePath?.trim()),
     unassignedAttachmentPages: attachmentLink?.unassignedPages ?? [],
     attachmentPagesWithoutText: attachmentLink?.pagesWithoutText ?? [],
@@ -258,6 +262,7 @@ export async function writeMeetingsV3PackageStage(
     factResolution: meetingsV3FactResolution(settings),
     transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
     factGrouping: meetingsV3FactGrouping(settings),
+    meetingReconciliation: meetingsV3MeetingReconciliation(settings),
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   await db
@@ -287,6 +292,7 @@ export function meetingsV3SettingsWithAttachmentLink(
     factResolution: null,
     transcriptSegmentation: null,
     factGrouping: null,
+    meetingReconciliation: null,
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
@@ -309,6 +315,7 @@ export function meetingsV3SettingsWithFactResolution(
     factResolution,
     transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
     factGrouping: null,
+    meetingReconciliation: null,
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
@@ -362,7 +369,7 @@ export async function writeMeetingsV3AttachmentLink(
 
 /**
  * Settings with the transcript-segmentation flag replaced.
- * Quoted facts stay as they are.
+ * Quoted facts stay as they are. Meeting conclusions are cleared because they belonged to the previous stretches.
  */
 export function meetingsV3SettingsWithTranscriptSegmentation(
   settings: MeetingV2Settings,
@@ -377,6 +384,7 @@ export function meetingsV3SettingsWithTranscriptSegmentation(
     factResolution: meetingsV3FactResolution(settings),
     transcriptSegmentation,
     factGrouping: meetingsV3FactGrouping(settings),
+    meetingReconciliation: null,
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
@@ -422,6 +430,7 @@ export function meetingsV3SettingsWithFactGrouping(
     factResolution: meetingsV3FactResolution(settings),
     transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
     factGrouping,
+    meetingReconciliation: meetingsV3MeetingReconciliation(settings),
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
@@ -445,6 +454,52 @@ export async function writeMeetingsV3FactGrouping(
     .update(meetingsV2)
     .set({
       settings: meetingsV3SettingsWithFactGrouping(settings, factGrouping),
+      updatedAt,
+    })
+    .where(eq(meetingsV2.id, meetingId));
+}
+
+/**
+ * Settings with the meeting-reconciliation flag replaced.
+ * Quoted facts, transcript spans, and source links stay as they are.
+ */
+export function meetingsV3SettingsWithMeetingReconciliation(
+  settings: MeetingV2Settings,
+  meetingReconciliation: MeetingsV3MeetingReconciliation | null,
+): MeetingV2Settings {
+  const next: MeetingsV3PackageSettings = {
+    workspace: true,
+    stage: meetingsV3PackageStage(settings),
+    error: meetingsV3PackageError(settings),
+    updatedAt: settings.v3Package?.updatedAt ?? new Date().toISOString(),
+    attachmentLink: meetingsV3AttachmentLink(settings),
+    factResolution: meetingsV3FactResolution(settings),
+    transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
+    factGrouping: meetingsV3FactGrouping(settings),
+    meetingReconciliation,
+    aiUsage: settings.v3Package?.aiUsage ?? null,
+  };
+  return { ...settings, v3Package: next };
+}
+
+/**
+ * Stores or clears the meeting reconciliation without changing the package stage.
+ */
+export async function writeMeetingsV3MeetingReconciliation(
+  meetingId: string,
+  meetingReconciliation: MeetingsV3MeetingReconciliation | null,
+): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select({ settings: meetingsV2.settings })
+    .from(meetingsV2)
+    .where(eq(meetingsV2.id, meetingId));
+  const settings = readMeetingV2Settings(row?.settings);
+  const updatedAt = new Date().toISOString();
+  await db
+    .update(meetingsV2)
+    .set({
+      settings: meetingsV3SettingsWithMeetingReconciliation(settings, meetingReconciliation),
       updatedAt,
     })
     .where(eq(meetingsV2.id, meetingId));

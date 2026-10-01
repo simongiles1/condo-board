@@ -176,6 +176,7 @@ export async function segmentMeetingV3Transcript(meetingId: string): Promise<Tra
         .update(meetingsV3AgendaItems)
         .set({
           transcriptSpansJson: JSON.stringify({ spans: [] }),
+          conclusionsJson: null,
           sortOrder: index,
         })
         .where(eq(meetingsV3AgendaItems.id, item.id));
@@ -208,7 +209,7 @@ export async function segmentMeetingV3Transcript(meetingId: string): Promise<Tra
   };
 }
 
-async function loadMeetingCues(meetingId: string): Promise<MeetingsV3TranscriptCue[]> {
+export async function loadMeetingCues(meetingId: string): Promise<MeetingsV3TranscriptCue[]> {
   const db = getDb();
   const [legacy] = await db
     .select({ vttFilePath: meetings.vttFilePath })

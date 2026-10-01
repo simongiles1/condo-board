@@ -22,6 +22,7 @@ import {
 } from "@/lib/meeting-v3/agenda-pages";
 import { readStoredItemFacts, type MeetingsV3ItemFacts } from "@/lib/meeting-v3/facts";
 import { readStoredItemFactGroups, type MeetingsV3ItemFactGroups } from "@/lib/meeting-v3/fact-groups";
+import { readStoredItemConclusion, type MeetingsV3ItemConclusion } from "@/lib/meeting-v3/meeting-conclusions";
 import { readStoredItemTranscript, type MeetingsV3ItemTranscript } from "@/lib/meeting-v3/transcript-spans";
 import { listMeetingPageRewrites } from "@/lib/meeting-v3/page-rewrite-run";
 import { meetingsV3SettingsWithAttachmentLink } from "@/lib/meeting-v3/package-status";
@@ -58,6 +59,7 @@ export type MeetingsV3AgendaItem = {
   facts: MeetingsV3ItemFacts | null;
   transcript: MeetingsV3ItemTranscript | null;
   factGroups: MeetingsV3ItemFactGroups | null;
+  conclusion: MeetingsV3ItemConclusion | null;
 };
 
 /** The agenda stored for one meeting after a build. */
@@ -203,6 +205,7 @@ export async function listMeetingV3Agenda(meetingId: string): Promise<MeetingsV3
       factsJson: meetingsV3AgendaItems.factsJson,
       factGroupsJson: meetingsV3AgendaItems.factGroupsJson,
       transcriptSpansJson: meetingsV3AgendaItems.transcriptSpansJson,
+      conclusionsJson: meetingsV3AgendaItems.conclusionsJson,
     })
     .from(meetingsV3AgendaItems)
     .where(eq(meetingsV3AgendaItems.meetingV2Id, meetingId))
@@ -237,6 +240,7 @@ function toAgendaItem(row: {
   factsJson?: string | null;
   factGroupsJson?: string | null;
   transcriptSpansJson?: string | null;
+  conclusionsJson?: string | null;
 }): MeetingsV3AgendaItem {
   const facts = readStoredItemFacts(row.factsJson);
   return {
@@ -253,6 +257,7 @@ function toAgendaItem(row: {
     facts,
     transcript: readStoredItemTranscript(row.transcriptSpansJson),
     factGroups: readStoredItemFactGroups(row.factGroupsJson, facts),
+    conclusion: readStoredItemConclusion(row.conclusionsJson),
   };
 }
 

@@ -5,7 +5,7 @@ import { FactGroupingError, groupMeetingV3Facts } from "@/lib/meeting-v3/fact-gr
 export const maxDuration = 900;
 
 /**
- * Groups quoted facts on this meeting's V3 agenda by the package quote that contains them.
+ * Links quoted facts on this meeting's V3 agenda when they name the same project.
  */
 export async function POST(
   _request: Request,

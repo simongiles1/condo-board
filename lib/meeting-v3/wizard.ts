@@ -7,7 +7,7 @@ import { countAgendaPages } from "@/lib/meeting-v3/agenda-pages";
 
 /** One stage on the V3 test wizard. */
 export type MeetingsV3WizardStep = {
-  id: "extract" | "agenda" | "attachments" | "facts" | "transcript" | "sources";
+  id: "extract" | "agenda" | "attachments" | "facts" | "transcript" | "sources" | "conclusions";
   title: string;
   detail: string;
 };
@@ -32,7 +32,8 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
   {
     id: "facts",
     title: "Resolve facts",
-    detail: "Amounts, vendors, dates, and recommendations are kept only when the quote is on that page.",
+    detail:
+      "Amounts, vendors, dates, and recommendations are kept only when the quote is on that page. A fee keeps its service when the quote names it. A prior approval is what the package reports.",
   },
   {
     id: "transcript",
@@ -43,7 +44,12 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
   {
     id: "sources",
     title: "Group sources",
-    detail: "Vendor, amount, and date stay together when one quote on the page contains all of them.",
+    detail: "Facts that name the same project stay together, including when the company and the fees are on different pages.",
+  },
+  {
+    id: "conclusions",
+    title: "Reconcile meeting",
+    detail: "Each topic's full transcript stretch is read for what this meeting ratified, deferred, or only discussed.",
   },
 ];
 
@@ -77,6 +83,7 @@ export type MeetingsV3WizardProgress = {
   activeId: MeetingsV3WizardStep["id"];
   completedCount: number;
   finished: boolean;
+  readyToDraft: boolean;
 };
 
 /**
@@ -86,7 +93,9 @@ export type MeetingsV3WizardProgress = {
  * Attachments are finished after a link run is stored for that agenda.
  * Facts are finished after a resolution run is stored for that link.
  * The transcript is finished after a segmentation run is stored for those facts.
- * Sources are finished after a grouping run is stored for that transcript.
+ * Sources are finished after a grouping run is stored.
+ * Reconciliation is finished after meeting conclusions are stored for that transcript.
+ * `finished` means every stage has been run. `readyToDraft` also requires no open fact review.
  */
 export function meetingsV3WizardProgress(input: {
   pageCount: number;
@@ -96,6 +105,8 @@ export function meetingsV3WizardProgress(input: {
   factsResolved: boolean;
   transcriptSegmented: boolean;
   factsGrouped: boolean;
+  conclusionsRecorded?: boolean;
+  reviewIssueCount?: number;
   agendaContentEndsAtPage: number | null;
 }): MeetingsV3WizardProgress {
   const agendaPageCount = countAgendaPages(input.pageCount, input.agendaContentEndsAtPage);
@@ -105,6 +116,7 @@ export function meetingsV3WizardProgress(input: {
   const factsDone = attachmentsDone && input.factsResolved;
   const transcriptDone = factsDone && input.transcriptSegmented;
   const sourcesDone = transcriptDone && input.factsGrouped;
+  const conclusionsDone = sourcesDone && input.conclusionsRecorded === true;
   const doneById = {
     extract: extractDone,
     agenda: agendaDone,
@@ -112,6 +124,7 @@ export function meetingsV3WizardProgress(input: {
     facts: factsDone,
     transcript: transcriptDone,
     sources: sourcesDone,
+    conclusions: conclusionsDone,
   };
   const activeId = MEETINGS_V3_WIZARD_STEPS.find((step) => !doneById[step.id])?.id
     ?? MEETINGS_V3_WIZARD_STEPS[MEETINGS_V3_WIZARD_STEPS.length - 1].id;
@@ -125,10 +138,12 @@ export function meetingsV3WizardProgress(input: {
     return { ...step, state: "upcoming" as const };
   });
   const completedCount = steps.filter((step) => step.state === "complete").length;
+  const finished = completedCount === steps.length;
   return {
     steps,
     activeId,
     completedCount,
-    finished: completedCount === steps.length,
+    finished,
+    readyToDraft: finished && (input.reviewIssueCount ?? 0) === 0,
   };
 }

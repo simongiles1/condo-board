@@ -20,7 +20,8 @@ import {
   isAgendaPageForCorrection,
   sourcePageContiguousRanges,
 } from "@/lib/meeting-v3/agenda-pages";
-import type { MeetingsV3FactField, MeetingsV3ItemFacts } from "@/lib/meeting-v3/facts";
+import { factContextNotes, type MeetingsV3FactField, type MeetingsV3ItemFacts, type MeetingsV3PackageRole } from "@/lib/meeting-v3/facts";
+import type { MeetingsV3ItemConclusion } from "@/lib/meeting-v3/meeting-conclusions";
 import type { MeetingsV3ItemFactGroups } from "@/lib/meeting-v3/fact-groups";
 import { formatSpanClock, type MeetingsV3ItemTranscript, agendaItemsForWizardStep } from "@/lib/meeting-v3/transcript-spans";
 import { cancelPdfCanvasRender, renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
@@ -54,6 +55,7 @@ type AgendaItem = {
   facts: MeetingsV3ItemFacts | null;
   transcript: MeetingsV3ItemTranscript | null;
   factGroups: MeetingsV3ItemFactGroups | null;
+  conclusion: MeetingsV3ItemConclusion | null;
 };
 
 type PageNavProps = {
@@ -76,6 +78,13 @@ const FACT_FIELD_LABEL: Record<MeetingsV3FactField, string> = {
   vendor: "Vendor",
   recommendation: "Recommendation",
   date: "Date",
+};
+
+const FACT_ROLE_LABEL: Record<MeetingsV3PackageRole, string> = {
+  proposal: "Proposal",
+  recommendation: "Recommendation",
+  reported_prior_approval: "Package reports a prior approval",
+  historical_event: "Past event",
 };
 
 function pagesWithoutTextNotice(pageNumbers: number[] | undefined): string | null {
@@ -527,6 +536,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [resolving, setResolving] = useState(false);
   const [segmenting, setSegmenting] = useState(false);
   const [grouping, setGrouping] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const [deepSeekConfirm, setDeepSeekConfirm] = useState<"attachments" | "facts" | "transcript" | "sources" | null>(null);
   const deepSeekRun = useRef(false);
   const [pickedStep, setPickedStep] = useState<MeetingsV3WizardStep["id"] | null>(() =>
@@ -545,7 +555,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [selectedAgendaItemId, setSelectedAgendaItemId] = useState<string | null>(null);
   const transcriptScrollRef = useRef<HTMLDivElement>(null);
 
-  const busy = running || buildingAgenda || linking || resolving || segmenting || grouping || status.stage === "extracting" || status.stage === "correcting";
+  const busy = running || buildingAgenda || linking || resolving || segmenting || grouping || reconciling || status.stage === "extracting" || status.stage === "correcting";
 
   function refreshAiUsage() {
     setAiUsageLoading(true);
@@ -690,6 +700,11 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         factsResolved: status.factsResolved,
         transcriptSegmented: status.transcriptSegmented,
         factsGrouped: status.factsGrouped,
+        conclusionsRecorded: status.conclusionsRecorded,
+        reviewIssueCount: agendaItems.reduce(
+          (count, item) => count + (item.facts?.reviewIssues.length ?? 0),
+          0,
+        ),
         agendaContentEndsAtPage: status.agendaContentEndsAtPage,
       }),
     [
@@ -703,6 +718,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       status.factsResolved,
       status.transcriptSegmented,
       status.factsGrouped,
+      status.conclusionsRecorded,
+      agendaItems,
       status.agendaContentEndsAtPage,
     ],
   );
@@ -831,6 +848,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         factsGrouped: false,
         factGroupCount: 0,
         ungroupedFactCount: 0,
+        conclusionsRecorded: false,
         unassignedAttachmentPages: [],
         attachmentPagesWithoutText: [],
       }));
@@ -870,6 +888,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         factsGrouped: false,
         factGroupCount: 0,
         ungroupedFactCount: 0,
+        conclusionsRecorded: false,
         unassignedAttachmentPages: payload?.unassignedPages ?? [],
         attachmentPagesWithoutText: payload?.pagesWithoutText ?? [],
         agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
@@ -913,6 +932,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         factsGrouped: false,
         factGroupCount: 0,
         ungroupedFactCount: 0,
+        conclusionsRecorded: false,
         currentStep:
           (payload?.unresolvedItemCount ?? 0) > 0
             ? "Quoted facts stored; some items have more than one value"
@@ -997,8 +1017,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
         currentStep:
           (payload?.ungroupedCount ?? 0) > 0
-            ? "Sources grouped; some figures do not share a quote"
-            : "Quoted facts grouped by source",
+            ? "Sources linked; some figures do not name a project"
+            : "Quoted facts linked by project",
       }));
     } catch (groupError) {
       const message = groupError instanceof Error ? groupError.message : "Fact grouping failed.";
@@ -1007,6 +1027,44 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       deepSeekRun.current = false;
       setGrouping(false);
       setDeepSeekConfirm(null);
+    }
+  }
+
+  async function reconcileMeeting() {
+    if (deepSeekRun.current) return;
+    deepSeekRun.current = true;
+    setReconciling(true);
+    setError(null);
+    setStatus((current) => ({ ...current, currentStep: "Reading the transcript stretches" }));
+    try {
+      const response = await fetch(`/api/v3/meetings/${status.id}/conclusions`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            items?: AgendaItem[];
+            itemCount?: number;
+            unclearCount?: number;
+            error?: string;
+          }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Meeting reconciliation failed.");
+      }
+      setAgendaItems(payload?.items ?? []);
+      setStatus((current) => ({
+        ...current,
+        conclusionsRecorded: true,
+        agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
+        currentStep:
+          (payload?.unclearCount ?? 0) > 0
+            ? "Meeting reconciled; some topics have no decision in the transcript"
+            : "Meeting conclusions stored from the transcript",
+      }));
+    } catch (reconcileError) {
+      const message = reconcileError instanceof Error ? reconcileError.message : "Meeting reconciliation failed.";
+      setError(message);
+    } finally {
+      deepSeekRun.current = false;
+      setReconciling(false);
     }
   }
 
@@ -1087,6 +1145,13 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     showWizardStep("extract");
   }
 
+  const factReviewMessages = [...new Set(
+    agendaItems.flatMap((item) => item.facts?.reviewIssues.map((issue) => issue.message) ?? []),
+  )];
+  const factContextMessages = [...new Set(
+    agendaItems.flatMap((item) => (item.facts ? factContextNotes(item.facts) : [])),
+  )];
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2">
@@ -1117,6 +1182,11 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           busy={busy}
           onShow={showWizardStep}
         />
+      ) : null}
+      {wizard.finished && !wizard.readyToDraft ? (
+        <p className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Every stage has run. Some package facts still need a look before a draft.
+        </p>
       ) : null}
 
       {error ? (
@@ -1387,12 +1457,19 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
                 Quoted facts
               </h2>
-              {status.unresolvedFactItemCount > 0 ? (
-                <p className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                  {status.unresolvedFactItemCount === 1
-                    ? "1 topic has more than one value. Neither was chosen."
-                    : `${status.unresolvedFactItemCount} topics have more than one value. Neither was chosen.`}
-                </p>
+              {factReviewMessages.length > 0 ? (
+                <ul className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {factReviewMessages.map((message) => (
+                    <li key={message}>{message}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {factContextMessages.length > 0 ? (
+                <ul className="shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  {factContextMessages.map((message) => (
+                    <li key={message}>{message}</li>
+                  ))}
+                </ul>
               ) : null}
               <ul className="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto">
                 {shownAgendaItems.map((item) => (
@@ -1422,7 +1499,22 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                                 </span>
                                 <span className="ml-2 font-medium text-slate-800">{fact.value}</span>
                                 {unresolved ? (
-                                  <span className="ml-2 text-xs font-medium text-amber-800">Unresolved</span>
+                                  <span className="ml-2 text-xs font-medium text-amber-800">Conflict</span>
+                                ) : null}
+                                {fact.organizationMatch === "confirmed" ? (
+                                  <span className="ml-2 text-xs font-medium text-teal-800">Organization matched</span>
+                                ) : null}
+                                {fact.basis === "per_visit" ? (
+                                  <span className="ml-2 text-xs font-medium text-slate-600">Per visit</span>
+                                ) : null}
+                                {fact.basis === "fixed" ? (
+                                  <span className="ml-2 text-xs font-medium text-slate-600">Fixed fee</span>
+                                ) : null}
+                                {fact.role ? (
+                                  <span className="ml-2 text-xs font-medium text-slate-600">{FACT_ROLE_LABEL[fact.role]}</span>
+                                ) : null}
+                                {fact.service ? (
+                                  <span className="ml-2 text-xs text-slate-600">for {fact.service}</span>
                                 ) : null}
                                 <button
                                   type="button"
@@ -1580,7 +1672,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
             <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
             <button
               type="button"
-              onClick={() => setDeepSeekConfirm("sources")}
+              onClick={() => void groupSources()}
               disabled={busy}
               className={status.factsGrouped && !grouping
                 ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
@@ -1592,8 +1684,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           {!status.factsGrouped ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
               {grouping
-                ? "Reading each topic's quotes and keeping figures together only when one quote contains them."
-                : "Group sources once the transcript spans look right."}
+                ? "Linking figures that name the same project."
+                : "Group sources once the quoted facts look right."}
             </div>
           ) : agendaItems.length === 0 && status.agendaItemCount > 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
@@ -1607,8 +1699,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               {status.ungroupedFactCount > 0 ? (
                 <p className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                   {status.ungroupedFactCount === 1
-                    ? "1 figure does not share a quote with another figure."
-                    : `${status.ungroupedFactCount} figures do not share a quote with another figure.`}
+                    ? "1 figure does not name a project, so it stays unlinked."
+                    : `${status.ungroupedFactCount} figures do not name a project, so they stay unlinked.`}
                 </p>
               ) : null}
               <ul className="divide-y divide-slate-100">
@@ -1627,6 +1719,42 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                       </span>
                       <span className="font-medium text-slate-800">{item.title}</span>
                     </p>
+                    {item.factGroups && item.factGroups.statements.length > 0 ? (
+                      <ul className="mt-2 space-y-3">
+                        {item.factGroups.statements.map((statement) => (
+                          <li key={`${statement.subject}-${statement.revision ?? ""}-${statement.pages.join("-")}`}>
+                            <p className="font-medium text-slate-800">
+                              {statement.subject}
+                              {statement.revision ? <span className="ml-2 text-xs font-normal text-slate-600">{statement.revision}</span> : null}
+                              {statement.uncertain ? (
+                                <span className="ml-2 text-xs font-medium text-amber-800">Fee row needs a look</span>
+                              ) : null}
+                            </p>
+                            <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                              {statement.members.map((member) => (
+                                <span key={`${member.field}-${member.value}-${member.page}-${member.quote}`}>
+                                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    {FACT_FIELD_LABEL[member.field]}
+                                  </span>
+                                  <span className="ml-2 font-medium text-slate-800">{member.value}</span>
+                                  {member.service ? <span className="ml-2 text-xs text-slate-600">for {member.service}</span> : null}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setPageNumber(member.page);
+                                      showWizardStep("extract");
+                                    }}
+                                    className="ml-2 rounded-md border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                  >
+                                    Page {member.page}
+                                  </button>
+                                </span>
+                              ))}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                     {item.factGroups && item.factGroups.groups.length > 0 ? (
                       <ul className="mt-2 space-y-3">
                         {item.factGroups.groups.map((group) => (
@@ -1667,14 +1795,71 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                               {FACT_FIELD_LABEL[fact.field]}
                             </span>
                             <span className="ml-2 text-slate-800">{fact.value}</span>
-                            <span className="ml-2 text-slate-500">Not tied to another figure</span>
+                            <span className="ml-2 text-slate-500">Does not name a project</span>
                           </li>
                         ))}
                       </ul>
                     ) : null}
-                    {(!item.factGroups || (item.factGroups.groups.length === 0 && item.factGroups.ungrouped.length === 0))
+                    {(!item.factGroups || (item.factGroups.groups.length === 0 && item.factGroups.statements.length === 0 && item.factGroups.ungrouped.length === 0))
                       && isAgendaItemLeaf(item.itemNumber, agendaItems.map((row) => row.itemNumber)) ? (
                       <p className="mt-1 text-xs text-slate-500">No quoted fact on the linked pages.</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
+      ) : null}
+
+      {shownStep?.id === "conclusions" ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
+            <button
+              type="button"
+              onClick={() => void reconcileMeeting()}
+              disabled={busy}
+              className={status.conclusionsRecorded && !reconciling
+                ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                : "rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"}
+            >
+              {reconciling ? "Reconciling meeting…" : status.conclusionsRecorded ? "Run again" : "Reconcile meeting"}
+            </button>
+          </div>
+          {!status.conclusionsRecorded ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              {reconciling
+                ? "Reading the full transcript stretch for each topic."
+                : "Reconcile the meeting once the source links look right."}
+            </div>
+          ) : (
+            <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+                Meeting conclusions
+              </h2>
+              <ul className="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto">
+                {shownAgendaItems.map((item) => (
+                  <li
+                    key={item.id}
+                    className="py-2 pr-3 text-sm"
+                    style={{ paddingLeft: `${12 + agendaItemIndentDepth(item.itemNumber) * 20}px` }}
+                  >
+                    <p>
+                      <span className="inline-block w-8 font-semibold tabular-nums text-slate-900" title={item.itemNumber}>
+                        {displayAgendaSegment(item.itemNumber)}
+                      </span>
+                      <span className="font-medium text-slate-800">{item.title}</span>
+                      {item.conclusion ? (
+                        <span className="ml-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+                          {item.conclusion.status}
+                        </span>
+                      ) : null}
+                    </p>
+                    {item.conclusion?.quote ? (
+                      <p className="mt-1 text-xs text-slate-700">{item.conclusion.quote}</p>
+                    ) : item.conclusion?.status === "unclear" ? (
+                      <p className="mt-1 text-xs text-slate-500">No transcript stretch for this topic.</p>
                     ) : null}
                   </li>
                 ))}
@@ -1736,7 +1921,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         }
         description={
           deepSeekConfirm === "sources"
-            ? "This reads each topic's pages with DeepSeek and keeps a vendor, amount, and date together only when one quote contains all of them."
+            ? "This links figures that name the same project. It does not call DeepSeek."
             : deepSeekConfirm === "transcript"
               ? "This reads the transcript with DeepSeek and keeps a stretch only when its quote is inside that time range. Talk that is not on the agenda is stored as additional business (4.E)."
               : deepSeekConfirm === "facts"

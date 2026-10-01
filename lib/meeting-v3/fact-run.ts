@@ -13,12 +13,15 @@ import { listMeetingV3Agenda, type MeetingsV3AgendaItem } from "@/lib/meeting-v3
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
 import {
   acceptQuotedFacts,
+  applyOrganizationMatches,
   chunkFactPages,
+  expandFactPagesForPrompt,
   FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
   readProposedFacts,
   type MeetingsV3ItemFacts,
   type MeetingsV3ProposedFact,
 } from "@/lib/meeting-v3/facts";
+import { loadOrgMentionSearchDocuments } from "@/lib/organizations/mention-resolve";
 import {
   buildMeetingsV3DeepSeekStageRow,
   buildMeetingsV3NotApplicableStageRow,
@@ -48,16 +51,24 @@ export type FactResolutionResult = {
 };
 
 const FACT_RESOLUTION_PROMPT = `You extract facts a condominium board package states for each agenda item.
-Return JSON only: {"items":[{"agendaItemId":"<id>","facts":[{"field":"amount"|"vendor"|"recommendation"|"date","value":"<as printed>","page":14,"quote":"<verbatim words from that page>"}]}]}.
+Return JSON only: {"items":[{"agendaItemId":"<id>","facts":[{"field":"amount"|"vendor"|"recommendation"|"date","value":"<as printed>","page":14,"quote":"<verbatim words from that page>","subject":"<project name copied from the quote, or omit>","service":"<what an amount pays for, copied from the quote, or omit>","basis":"fixed"|"per_visit","role":"proposal"|"recommendation"|"reported_prior_approval"|"historical_event","qualifications":"<tax, exclusion, or condition copied from the quote, or omit>"}]}]}.
 Rules:
 - Use only agendaItemId and page values from the input.
 - quote must be copied from that page's text. value must appear inside quote.
-- amount is a dollar figure the page states as a cost or bid.
-- vendor is a company named as a bidder or contractor.
+- subject, service, and qualifications must be copied from that same quote. Omit a field the quote does not state.
+- basis per_visit only when the quote states a per-visit rate. basis fixed only when the quote says the fee is fixed. Otherwise omit basis.
+- role proposal only when the quote says this is a proposal or bid.
+- role recommendation only when the quote states a recommendation.
+- role reported_prior_approval only when the quote says the board or management already approved it. That records what the package reports. It is not a decision of this meeting.
+- role historical_event only when the quote describes a past incident or event, such as an incident date.
+- Do not decide what this meeting ratified, deferred, or discussed.
+- amount is a dollar figure the page states as a cost, bid, or rate.
+- vendor is the company name as printed. Do not merge aliases.
 - recommendation is management's recommended action, only when the page states one.
-- date is a date the page states for that item.
-- Return every distinct amount or vendor on the item's pages. Do not pick one when they differ.
-- quote is the shortest sentence on that page that contains the value.
+- date is a date the quote states. Do not relabel an incident date as an approval date.
+- Return every distinct amount, including two equal amounts for different services. Do not collapse them.
+- Two bidders both stay. Do not pick a winner.
+- quote is the shortest passage on that page that contains the value and, when present, the service it pays for.
 - Omit a field the pages do not state. Do not use a summary that is not in the page text.`;
 
 /**
@@ -137,7 +148,7 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
     await setFactStep(meetingId, "Resolving quoted facts from package pages");
     try {
       for (const item of withText) {
-        for (const pages of chunkFactPages(item.pages)) {
+        for (const pages of chunkFactPages(expandFactPagesForPrompt(item.pages))) {
           const facts = await requestItemFacts(item, pages, deepSeekUsage);
           const prior = proposedByItem.get(item.id) ?? [];
           proposedByItem.set(item.id, [...prior, ...facts]);
@@ -150,17 +161,25 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
     }
   }
 
+  let orgDocuments: Awaited<ReturnType<typeof loadOrgMentionSearchDocuments>> = [];
+  try {
+    orgDocuments = await loadOrgMentionSearchDocuments();
+  } catch {
+    orgDocuments = [];
+  }
+
   const factsByItem = new Map<string, MeetingsV3ItemFacts>();
   let factCount = 0;
   let unresolvedItemCount = 0;
   for (const item of items) {
-    const facts = acceptQuotedFacts({
+    const accepted = acceptQuotedFacts({
       pages: item.pages,
       proposed: proposedByItem.get(item.id) ?? [],
     });
+    const facts = applyOrganizationMatches(accepted, orgDocuments);
     factsByItem.set(item.id, facts);
     factCount += facts.candidates.length;
-    if (facts.unresolvedFields.length > 0) unresolvedItemCount += 1;
+    if (facts.reviewIssues.length > 0) unresolvedItemCount += 1;
   }
 
   const completedAt = new Date().toISOString();
@@ -168,7 +187,11 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
     for (const item of items) {
       await tx
         .update(meetingsV3AgendaItems)
-        .set({ factsJson: JSON.stringify(factsByItem.get(item.id)), factGroupsJson: null })
+        .set({
+          factsJson: JSON.stringify(factsByItem.get(item.id)),
+          factGroupsJson: null,
+          conclusionsJson: null,
+        })
         .where(eq(meetingsV3AgendaItems.id, item.id));
     }
   });
@@ -180,7 +203,7 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
   await setFactStep(
     meetingId,
     unresolvedItemCount > 0
-      ? "Quoted facts stored; some items have more than one value"
+      ? "Quoted facts stored; some items need a look"
       : factCount > 0
         ? "Quoted facts stored from package pages"
         : "No quoted facts on the linked pages",
@@ -233,7 +256,7 @@ async function requestItemFacts(
             title: item.title,
             pages: pages.map((page) => ({
               pageNumber: page.pageNumber,
-              text: page.text.slice(0, 2500),
+              text: page.text,
             })),
           },
         ],

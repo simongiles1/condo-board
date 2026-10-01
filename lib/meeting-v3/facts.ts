@@ -1,7 +1,12 @@
 /**
  * Accepts package facts only when the quote is on the named page.
- * The agenda summary is not a source. A second distinct value stays unresolved.
+ * A second fee or a second bidder stays. A conflict is two claims about the same service or the same award.
  */
+
+import {
+  decideOrgMentionResolution,
+  type OrgMentionSearchDocument,
+} from "@/lib/organizations/mention-resolve-shared";
 
 /** Fields a V3 fact can name. */
 export const MEETINGS_V3_FACT_FIELDS = ["amount", "vendor", "recommendation", "date"] as const;
@@ -9,21 +14,59 @@ export const MEETINGS_V3_FACT_FIELDS = ["amount", "vendor", "recommendation", "d
 /** One field a package page can state. */
 export type MeetingsV3FactField = (typeof MEETINGS_V3_FACT_FIELDS)[number];
 
-/** A figure or name copied from one package page. */
+/** What the package quote explicitly reports. Not a conclusion of this meeting. */
+export const MEETINGS_V3_PACKAGE_ROLES = [
+  "proposal",
+  "recommendation",
+  "reported_prior_approval",
+  "historical_event",
+] as const;
+
+/** A role the source states in the quote. */
+export type MeetingsV3PackageRole = (typeof MEETINGS_V3_PACKAGE_ROLES)[number];
+
+/** How an amount is charged, when the quote says so. */
+export const MEETINGS_V3_AMOUNT_BASES = ["fixed", "per_visit"] as const;
+
+/** Fixed fee or rate per visit. */
+export type MeetingsV3AmountBasis = (typeof MEETINGS_V3_AMOUNT_BASES)[number];
+
+/** Whether a printed vendor name matched one organization. */
+export const MEETINGS_V3_ORG_MATCHES = ["confirmed", "ambiguous", "unmatched"] as const;
+
+/** Result of matching a printed name to the organization registry. */
+export type MeetingsV3OrgMatch = (typeof MEETINGS_V3_ORG_MATCHES)[number];
+
+/** A figure or name copied from one package page, plus relationships the quote supports. */
 export type MeetingsV3FactCandidate = {
   field: MeetingsV3FactField;
   value: string;
   page: number;
   quote: string;
+  subject?: string;
+  service?: string;
+  basis?: MeetingsV3AmountBasis;
+  role?: MeetingsV3PackageRole;
+  qualifications?: string;
+  organizationId?: string;
+  organizationMatch?: MeetingsV3OrgMatch;
+};
+
+/** A review item a later draft should not treat as settled. */
+export type MeetingsV3FactReview = {
+  code: "ambiguous_organization" | "fee_needs_verification" | "conflicting_prices" | "conflicting_award";
+  message: string;
 };
 
 /**
  * Facts kept for one agenda item.
- * `unresolvedFields` lists fields that have more than one distinct value.
+ * `unresolvedFields` lists fields with a real conflict, not every repeated kind of value.
+ * `reviewIssues` are the specific reasons a topic is not ready to draft.
  */
 export type MeetingsV3ItemFacts = {
   candidates: MeetingsV3FactCandidate[];
   unresolvedFields: MeetingsV3FactField[];
+  reviewIssues: MeetingsV3FactReview[];
 };
 
 /** A model fact before it is checked against the page. */
@@ -32,9 +75,22 @@ export type MeetingsV3ProposedFact = {
   value?: unknown;
   page?: unknown;
   quote?: unknown;
+  subject?: unknown;
+  service?: unknown;
+  basis?: unknown;
+  role?: unknown;
+  qualifications?: unknown;
+  organizationId?: unknown;
+  organizationMatch?: unknown;
 };
 
 const FIELD_SET = new Set<string>(MEETINGS_V3_FACT_FIELDS);
+const ROLE_SET = new Set<string>(MEETINGS_V3_PACKAGE_ROLES);
+const BASIS_SET = new Set<string>(MEETINGS_V3_AMOUNT_BASES);
+const ORG_MATCH_SET = new Set<string>(MEETINGS_V3_ORG_MATCHES);
+
+/** Characters of one page sent in a single fact-resolution call. Later slices cover the rest of the page. */
+export const FACT_RESOLUTION_PAGE_CHAR_BUDGET = 2500;
 
 /**
  * Collapses whitespace so a quote still matches the page when line breaks differ.
@@ -44,16 +100,71 @@ export function normalizeFactText(text: string): string {
 }
 
 /**
+ * One text blob per page number.
+ * Several quotes stored for the same page are joined so a later read can still find each one.
+ */
+export function combinedPageText(
+  pages: Array<{ pageNumber: number; text: string }>,
+): Map<number, string> {
+  const map = new Map<number, string>();
+  for (const page of pages) {
+    const next = normalizeFactText(page.text);
+    if (!next) continue;
+    const prior = map.get(page.pageNumber);
+    map.set(page.pageNumber, prior ? `${prior} ${next}` : next);
+  }
+  return map;
+}
+
+/**
+ * Splits one page so every character is sent, without cutting the model input at the first budget window.
+ * A short page stays one piece. An empty string stays empty.
+ */
+export function chunkFactPageText(text: string, budget = FACT_RESOLUTION_PAGE_CHAR_BUDGET): string[] {
+  if (budget < 1) {
+    throw new Error("Fact page character budget must be at least 1.");
+  }
+  if (!text) return [];
+  if (text.length <= budget) return [text];
+  const chunks: string[] = [];
+  let offset = 0;
+  while (offset < text.length) {
+    let end = Math.min(offset + budget, text.length);
+    if (end < text.length) {
+      const breakAt = text.lastIndexOf(" ", end);
+      if (breakAt > offset + Math.floor(budget / 2)) end = breakAt;
+    }
+    const slice = text.slice(offset, end);
+    if (slice) chunks.push(slice);
+    offset = end;
+    while (text[offset] === " ") offset += 1;
+  }
+  return chunks;
+}
+
+/**
+ * Expands each page to the slices a fact-resolution call can hold.
+ * The page number stays on every slice so a quote is still checked against the full page.
+ */
+export function expandFactPagesForPrompt(
+  pages: readonly { pageNumber: number; text: string }[],
+  budget = FACT_RESOLUTION_PAGE_CHAR_BUDGET,
+): Array<{ pageNumber: number; text: string }> {
+  return pages.flatMap((page) =>
+    chunkFactPageText(page.text, budget).map((text) => ({ pageNumber: page.pageNumber, text })),
+  );
+}
+
+/**
  * Keeps proposed facts whose quote is on the named page and whose value is inside that quote.
- * Two different amounts (or two vendors, dates, or recommendations) are left unresolved.
+ * Two equal amounts on one page both stay when their quotes differ.
+ * Subject, service, basis, and role are kept only when that same quote states them.
  */
 export function acceptQuotedFacts(input: {
   pages: Array<{ pageNumber: number; text: string }>;
   proposed: MeetingsV3ProposedFact[];
 }): MeetingsV3ItemFacts {
-  const pages = new Map(
-    input.pages.map((page) => [page.pageNumber, normalizeFactText(page.text)]),
-  );
+  const pages = combinedPageText(input.pages);
   const candidates: MeetingsV3FactCandidate[] = [];
   const seen = new Set<string>();
 
@@ -72,20 +183,86 @@ export function acceptQuotedFacts(input: {
     if (!quoteNorm.includes(valueNorm)) continue;
     if (!pageText.includes(quoteNorm)) continue;
     const field = proposed.field as MeetingsV3FactField;
-    const key = `${field}\0${valueNorm}\0${proposed.page}`;
+    const key = `${field}\0${valueNorm}\0${proposed.page}\0${quoteNorm}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    candidates.push({ field, value, page: proposed.page, quote });
+    const candidate: MeetingsV3FactCandidate = { field, value, page: proposed.page, quote };
+    const subject = quotedPhrase(proposed.subject, quoteNorm);
+    const service = quotedPhrase(proposed.service, quoteNorm);
+    const qualifications = quotedPhrase(proposed.qualifications, quoteNorm);
+    if (subject) candidate.subject = subject;
+    if (service) candidate.service = service;
+    if (qualifications) candidate.qualifications = qualifications;
+    if (typeof proposed.basis === "string" && BASIS_SET.has(proposed.basis) && basisSupported(proposed.basis, quoteNorm)) {
+      candidate.basis = proposed.basis as MeetingsV3AmountBasis;
+    }
+    if (typeof proposed.role === "string" && ROLE_SET.has(proposed.role) && roleSupported(proposed.role, quoteNorm)) {
+      candidate.role = proposed.role as MeetingsV3PackageRole;
+    }
+    if (typeof proposed.organizationId === "string" && proposed.organizationId.trim()) {
+      candidate.organizationId = proposed.organizationId.trim();
+    }
+    if (typeof proposed.organizationMatch === "string" && ORG_MATCH_SET.has(proposed.organizationMatch)) {
+      candidate.organizationMatch = proposed.organizationMatch as MeetingsV3OrgMatch;
+    }
+    candidates.push(candidate);
   }
 
-  candidates.sort((left, right) => left.page - right.page || left.field.localeCompare(right.field));
-  const unresolvedFields = MEETINGS_V3_FACT_FIELDS.filter((field) => {
-    const values = new Set(
-      candidates.filter((candidate) => candidate.field === field).map((candidate) => normalizeFactText(candidate.value)),
-    );
-    return values.size > 1;
+  candidates.sort((left, right) => left.page - right.page || left.field.localeCompare(right.field) || left.quote.localeCompare(right.quote));
+  return finishFacts(candidates);
+}
+
+/**
+ * Attaches an organization id when the printed vendor name matches one registry record.
+ * An ambiguous name stays unmatched to a single id. Printed text is unchanged.
+ */
+export function applyOrganizationMatches(
+  facts: MeetingsV3ItemFacts,
+  documents: readonly OrgMentionSearchDocument[],
+): MeetingsV3ItemFacts {
+  const candidates = facts.candidates.map((candidate) => {
+    if (candidate.field !== "vendor") return candidate;
+    const decision = decideOrgMentionResolution({
+      rawName: candidate.value,
+      headerDomains: [],
+      affiliatedOrganizationIds: [],
+      documents,
+    });
+    if (decision.status === "confirmed" && decision.organizationId) {
+      return {
+        ...candidate,
+        organizationId: decision.organizationId,
+        organizationMatch: "confirmed" as const,
+      };
+    }
+    if (decision.candidateOrganizationIds.length > 1) {
+      return { ...candidate, organizationMatch: "ambiguous" as const };
+    }
+    return { ...candidate, organizationMatch: "unmatched" as const };
   });
-  return { candidates, unresolvedFields };
+  return finishFacts(candidates);
+}
+
+/**
+ * Non-blocking notes for the facts screen.
+ * A confirmed organization with several printed names, or several labeled fees, is not a conflict.
+ */
+export function factContextNotes(facts: MeetingsV3ItemFacts): string[] {
+  const notes: string[] = [];
+  const vendors = facts.candidates.filter((candidate) => candidate.field === "vendor");
+  const confirmedIds = new Set(
+    vendors
+      .filter((candidate) => candidate.organizationMatch === "confirmed" && candidate.organizationId)
+      .map((candidate) => candidate.organizationId),
+  );
+  if (confirmedIds.size === 1 && vendors.length > 1) {
+    notes.push("One organization, several printed names.");
+  }
+  const serviced = facts.candidates.filter((candidate) => candidate.field === "amount" && candidate.service);
+  if (serviced.length > 1 && !facts.reviewIssues.some((issue) => issue.code === "conflicting_prices")) {
+    notes.push(`${serviced.length} separate service fees.`);
+  }
+  return notes;
 }
 
 /** Pages included in one fact-resolution call. */
@@ -136,6 +313,7 @@ export function readProposedFacts(
 
 /**
  * The stored fact object, or null when this item has not been resolved.
+ * Quotes from the same page are checked together so a second quote is not dropped.
  */
 export function readStoredItemFacts(value: string | null | undefined): MeetingsV3ItemFacts | null {
   if (!value?.trim()) return null;
@@ -159,4 +337,96 @@ export function readStoredItemFacts(value: string | null | undefined): MeetingsV
       (candidate): candidate is MeetingsV3ProposedFact => candidate != null && typeof candidate === "object",
     ),
   });
+}
+
+function finishFacts(candidates: MeetingsV3FactCandidate[]): MeetingsV3ItemFacts {
+  const reviewIssues = reviewFacts(candidates);
+  const unresolvedFields = MEETINGS_V3_FACT_FIELDS.filter((field) =>
+    reviewIssues.some((issue) =>
+      (field === "amount" && issue.code === "conflicting_prices")
+      || (field === "vendor" && issue.code === "conflicting_award"),
+    ),
+  );
+  return { candidates, unresolvedFields, reviewIssues };
+}
+
+function reviewFacts(candidates: MeetingsV3FactCandidate[]): MeetingsV3FactReview[] {
+  const issues: MeetingsV3FactReview[] = [];
+  for (const candidate of candidates) {
+    if (candidate.field === "vendor" && candidate.organizationMatch === "ambiguous") {
+      issues.push({
+        code: "ambiguous_organization",
+        message: `Organization match is ambiguous for "${candidate.value}".`,
+      });
+    }
+    if (candidate.field === "amount" && !candidate.service && dollarCount(candidate.quote) > 1) {
+      issues.push({
+        code: "fee_needs_verification",
+        message: `Fee description needs verification for ${candidate.value}.`,
+      });
+    }
+  }
+
+  const prices = new Map<string, { service: string; values: Set<string> }>();
+  for (const candidate of candidates) {
+    if (candidate.field !== "amount" || !candidate.subject || !candidate.service) continue;
+    const key = `${normalizeFactText(candidate.subject)}\0${normalizeFactText(candidate.service)}\0${candidate.basis ?? ""}`;
+    const row = prices.get(key) ?? { service: candidate.service, values: new Set<string>() };
+    row.values.add(normalizeFactText(candidate.value));
+    prices.set(key, row);
+  }
+  for (const row of prices.values()) {
+    if (row.values.size > 1) {
+      issues.push({
+        code: "conflicting_prices",
+        message: `Conflicting amounts for ${row.service}.`,
+      });
+    }
+  }
+
+  const awards = new Map<string, MeetingsV3FactCandidate[]>();
+  for (const candidate of candidates) {
+    if (candidate.field !== "vendor" || candidate.role !== "reported_prior_approval" || !candidate.subject) continue;
+    const key = normalizeFactText(candidate.subject);
+    const rows = awards.get(key) ?? [];
+    rows.push(candidate);
+    awards.set(key, rows);
+  }
+  for (const rows of awards.values()) {
+    const ids = new Set(rows.map((row) => row.organizationId).filter((id): id is string => Boolean(id)));
+    const names = new Set(rows.map((row) => normalizeFactText(row.value)));
+    const conflict = ids.size > 1 || (ids.size === 0 && names.size > 1);
+    if (conflict) {
+      issues.push({
+        code: "conflicting_award",
+        message: `Conflicting claims about which company was awarded ${rows[0]?.subject}.`,
+      });
+    }
+  }
+  return issues;
+}
+
+function quotedPhrase(value: unknown, quoteNorm: string): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const phrase = value.replace(/\s+/g, " ").trim();
+  if (!quoteNorm.includes(normalizeFactText(phrase))) return undefined;
+  return phrase;
+}
+
+function basisSupported(basis: string, quoteNorm: string): boolean {
+  if (basis === "per_visit") return /per visit|\/\s*visit/.test(quoteNorm);
+  if (basis === "fixed") return /\bfixed\b/.test(quoteNorm);
+  return false;
+}
+
+function roleSupported(role: string, quoteNorm: string): boolean {
+  if (role === "proposal") return /\bpropos/.test(quoteNorm) || /\bbid\b/.test(quoteNorm);
+  if (role === "recommendation") return /\brecommend/.test(quoteNorm);
+  if (role === "reported_prior_approval") return /\bapprov/.test(quoteNorm);
+  if (role === "historical_event") return /\bincident\b/.test(quoteNorm) || /\boccurred\b/.test(quoteNorm);
+  return false;
+}
+
+function dollarCount(quote: string): number {
+  return quote.match(/\$\s?\d/g)?.length ?? 0;
 }

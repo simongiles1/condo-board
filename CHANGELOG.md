@@ -8,6 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V3 quoted facts** — Reading saved facts no longer drops a second quote from the same page. Two equal amounts on one page both stay when their quotes differ. Fact extraction reads the whole page instead of the first 2,500 characters.
 - **Meetings V3 link attachments** — The agenda list scrolls inside the attachment table while the heading and unlinked-page warning stay visible. Unlinked pages are summarized once in that warning. Linked pages show one badge per contiguous range; opening a badge jumps to the first page in that range. Page range badges sit on the right of each row while long titles wrap.
 - **Meetings V3 resolve facts** — The quoted-facts list scrolls inside the table while the heading and unresolved warning stay visible, matching link attachments.
 - **Meetings V3 additional-business outline** — Ad-hoc items (4.E) stay off Build agenda, Link attachments, and Resolve facts. They appear from Segment transcript onward. A re-run of Segment transcript replaces those extras instead of doubling them.
@@ -29,6 +30,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changes
 
+- **Meetings V3 facts and sources** — Resolve facts keeps what the package quote explicitly reports (a proposal, a recommendation, a prior approval, or a past event) and matches a printed vendor to one organization when the registry match is unambiguous. Several fees or several spellings of one company are no longer treated as a conflict. Group sources links facts that name the same project across pages. Reconcile meeting reads the full transcript stretch and records only what that talk supports. The wizard can finish while a fee row or a real conflict still needs a look before a draft. Re-run Extract and correct to repair attachment fee tables, then Resolve facts, Group sources, and Reconcile meeting.
 - **Meetings V3 meeting page URL** — The wizard step you are on is stored in the `step` query parameter (for example `?step=attachments`). Refreshing or sharing the link returns you to that same step when it is still available.
 
 - **Meetings V3 meeting page layout** — The back control, title, and date sit on one row with a clearer **Back to meetings** link. The wizard drops the top progress strip and the **Done** label on finished steps. Top padding is tighter.

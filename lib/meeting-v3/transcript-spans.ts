@@ -232,7 +232,7 @@ export function packageAgendaItems<T extends { itemNumber: string; title: string
   return items.filter((item) => !isTranscriptOnlyAgendaItem(item, items));
 }
 
-const WIZARD_STEPS_WITH_TRANSCRIPT_EXTRAS = new Set(["transcript", "sources"]);
+const WIZARD_STEPS_WITH_TRANSCRIPT_EXTRAS = new Set(["transcript", "sources", "conclusions"]);
 
 /**
  * Agenda rows for a V3 wizard step.

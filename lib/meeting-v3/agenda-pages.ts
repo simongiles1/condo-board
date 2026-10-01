@@ -27,6 +27,15 @@ export function isAgendaPageForCorrection(
   return pageNumber <= agendaContentEndsAtPage;
 }
 
+/**
+ * True when extracted text puts more than one dollar amount on the same line.
+ * Those attachment pages need the PDF correction pass so a fee stays on its row.
+ */
+export function pageNeedsTableCorrection(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return text.split(/\n/).some((line) => (line.match(/\$\s?\d/g) ?? []).length >= 2);
+}
+
 /** One page the agenda extractor can read. */
 export type AgendaPageText = {
   pageNumber: number;

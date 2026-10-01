@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { pageNeedsTableCorrection } from "../lib/meeting-v3/agenda-pages";
 import { PAGE_REWRITE_SYSTEM_PROMPT, readPageRewriteMarkdown } from "../lib/meeting-v3/page-rewrite";
 import {
   isMeetingsV3Workspace,
@@ -19,6 +20,13 @@ const page = `## Booster pump
 | --- | --- | --- |
 | Base Bid Amount | $210,994.00 | $226,928.00 |
 | Pump Lead Time | 6 months | 6 months |`;
+
+describe("attachment table correction", () => {
+  it("selects a line that stacks more than one fee", () => {
+    assert.equal(pageNeedsTableCorrection("Phase 3 | $2,800 $1,700 $750/Visit"), true);
+    assert.equal(pageNeedsTableCorrection("The fee is $2,800."), false);
+  });
+});
 
 describe("page rewrite markdown", () => {
   it("keeps a markdown page", () => {

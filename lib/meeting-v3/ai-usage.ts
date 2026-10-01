@@ -22,6 +22,7 @@ import { isLikelyDoclingMarkdown } from "@/lib/meeting-v2/pdf";
 import {
   isMeetingsV3Workspace,
   meetingsV3FactGrouping,
+  meetingsV3MeetingReconciliation,
   meetingsV3PackageStage,
   meetingsV3TranscriptSegmentation,
   type MeetingsV3AiUsageSettings,
@@ -273,6 +274,7 @@ export async function persistMeetingsV3AiUsageStage(
     factResolution: settings.v3Package?.factResolution ?? null,
     transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
     factGrouping: meetingsV3FactGrouping(settings),
+    meetingReconciliation: meetingsV3MeetingReconciliation(settings),
     aiUsage: { stages },
   };
 

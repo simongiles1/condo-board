@@ -687,6 +687,13 @@
       "when": 1791400000000,
       "tag": "0097_meetings_v3_transcript_spans",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1791450000000,
+      "tag": "0098_meetings_v3_fact_groups",
+      "breakpoints": true
     }
   ]
 }

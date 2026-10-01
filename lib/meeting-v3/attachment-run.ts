@@ -205,6 +205,7 @@ export async function linkMeetingV3Attachments(meetingId: string): Promise<Attac
         .set({
           sourcePagesJson: JSON.stringify(pages),
           factsJson: null,
+          factGroupsJson: null,
           transcriptSpansJson: null,
         })
         .where(eq(meetingsV3AgendaItems.id, item.id));

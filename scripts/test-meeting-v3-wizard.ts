@@ -13,6 +13,7 @@ const base = {
   attachmentsLinked: false,
   factsResolved: false,
   transcriptSegmented: false,
+  factsGrouped: false,
   agendaContentEndsAtPage: null as number | null,
 };
 
@@ -27,7 +28,7 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.finished, false);
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["current", "upcoming", "upcoming", "upcoming", "upcoming"],
+      ["current", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming"],
     );
   });
 
@@ -47,7 +48,7 @@ describe("v3 wizard progress", () => {
     assert.equal(ready.activeId, "agenda");
     assert.deepEqual(
       ready.steps.map((step) => step.state),
-      ["complete", "current", "upcoming", "upcoming", "upcoming"],
+      ["complete", "current", "upcoming", "upcoming", "upcoming", "upcoming"],
     );
   });
 
@@ -61,7 +62,7 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.activeId, "agenda");
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["complete", "current", "upcoming", "upcoming", "upcoming"],
+      ["complete", "current", "upcoming", "upcoming", "upcoming", "upcoming"],
     );
   });
 
@@ -76,7 +77,7 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.activeId, "attachments");
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["complete", "complete", "current", "upcoming", "upcoming"],
+      ["complete", "complete", "current", "upcoming", "upcoming", "upcoming"],
     );
   });
 
@@ -92,7 +93,7 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.activeId, "facts");
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["complete", "complete", "complete", "current", "upcoming"],
+      ["complete", "complete", "complete", "current", "upcoming", "upcoming"],
     );
   });
 
@@ -109,11 +110,11 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.activeId, "transcript");
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["complete", "complete", "complete", "complete", "current"],
+      ["complete", "complete", "complete", "complete", "current", "upcoming"],
     );
   });
 
-  it("finishes once the transcript has been segmented", () => {
+  it("moves to sources once the transcript has been segmented", () => {
     const progress = meetingsV3WizardProgress({
       ...base,
       pageCount: 4,
@@ -123,8 +124,27 @@ describe("v3 wizard progress", () => {
       factsResolved: true,
       transcriptSegmented: true,
     });
+    assert.equal(progress.finished, false);
+    assert.equal(progress.activeId, "sources");
+    assert.deepEqual(
+      progress.steps.map((step) => step.state),
+      ["complete", "complete", "complete", "complete", "complete", "current"],
+    );
+  });
+
+  it("finishes once quoted facts have been grouped by source", () => {
+    const progress = meetingsV3WizardProgress({
+      ...base,
+      pageCount: 4,
+      correctedPageCount: 4,
+      agendaItemCount: 12,
+      attachmentsLinked: true,
+      factsResolved: true,
+      transcriptSegmented: true,
+      factsGrouped: true,
+    });
     assert.equal(progress.finished, true);
-    assert.equal(progress.activeId, "transcript");
+    assert.equal(progress.activeId, "sources");
     assert.equal(progress.completedCount, MEETINGS_V3_WIZARD_STEPS.length);
   });
 
@@ -142,5 +162,6 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.steps[2]?.state, "upcoming");
     assert.equal(progress.steps[3]?.state, "upcoming");
     assert.equal(progress.steps[4]?.state, "upcoming");
+    assert.equal(progress.steps[5]?.state, "upcoming");
   });
 });

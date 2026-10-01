@@ -1,5 +1,5 @@
 /**
- * V3 meeting AI cost by wizard stage (ingest, correction, agenda, attachments, facts, transcript).
+ * V3 meeting AI cost by wizard stage (ingest, correction, agenda, attachments, facts, transcript, sources).
  */
 
 import { eq } from "drizzle-orm";
@@ -21,6 +21,7 @@ import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { isLikelyDoclingMarkdown } from "@/lib/meeting-v2/pdf";
 import {
   isMeetingsV3Workspace,
+  meetingsV3FactGrouping,
   meetingsV3PackageStage,
   meetingsV3TranscriptSegmentation,
   type MeetingsV3AiUsageSettings,
@@ -36,6 +37,7 @@ export const MEETINGS_V3_AI_USAGE_STAGE_IDS = [
   "v3_attachments",
   "v3_facts",
   "v3_transcript",
+  "v3_sources",
 ] as const;
 
 /** One V3 pipeline stage in the AI usage breakdown. */
@@ -48,6 +50,7 @@ const STAGE_LABELS: Record<MeetingsV3AiUsageStageId, string> = {
   v3_attachments: "Link attachments",
   v3_facts: "Resolve facts",
   v3_transcript: "Segment transcript",
+  v3_sources: "Group sources",
 };
 
 function primaryGeminiModel(calls: GeminiUsageCall[]): string {
@@ -269,6 +272,7 @@ export async function persistMeetingsV3AiUsageStage(
     attachmentLink: settings.v3Package?.attachmentLink ?? null,
     factResolution: settings.v3Package?.factResolution ?? null,
     transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
+    factGrouping: meetingsV3FactGrouping(settings),
     aiUsage: { stages },
   };
 

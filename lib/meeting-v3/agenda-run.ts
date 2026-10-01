@@ -21,6 +21,7 @@ import {
   selectCorrectedAgendaPages,
 } from "@/lib/meeting-v3/agenda-pages";
 import { readStoredItemFacts, type MeetingsV3ItemFacts } from "@/lib/meeting-v3/facts";
+import { readStoredItemFactGroups, type MeetingsV3ItemFactGroups } from "@/lib/meeting-v3/fact-groups";
 import { readStoredItemTranscript, type MeetingsV3ItemTranscript } from "@/lib/meeting-v3/transcript-spans";
 import { listMeetingPageRewrites } from "@/lib/meeting-v3/page-rewrite-run";
 import { meetingsV3SettingsWithAttachmentLink } from "@/lib/meeting-v3/package-status";
@@ -55,6 +56,7 @@ export type MeetingsV3AgendaItem = {
   recommendation: string | null;
   facts: MeetingsV3ItemFacts | null;
   transcript: MeetingsV3ItemTranscript | null;
+  factGroups: MeetingsV3ItemFactGroups | null;
 };
 
 /** The agenda stored for one meeting after a build. */
@@ -142,6 +144,7 @@ export async function buildMeetingV3Agenda(meetingId: string): Promise<AgendaBui
     vendorsJson: vendorNames(topic.contractorsOrVendors),
     recommendation: textOrNull(topic.managementRecommendation),
     factsJson: null,
+    factGroupsJson: null,
     transcriptSpansJson: null,
     createdAt,
   }));
@@ -196,6 +199,7 @@ export async function listMeetingV3Agenda(meetingId: string): Promise<MeetingsV3
       vendorsJson: meetingsV3AgendaItems.vendorsJson,
       recommendation: meetingsV3AgendaItems.recommendation,
       factsJson: meetingsV3AgendaItems.factsJson,
+      factGroupsJson: meetingsV3AgendaItems.factGroupsJson,
       transcriptSpansJson: meetingsV3AgendaItems.transcriptSpansJson,
     })
     .from(meetingsV3AgendaItems)
@@ -228,8 +232,10 @@ function toAgendaItem(row: {
   vendorsJson: string | null;
   recommendation: string | null;
   factsJson?: string | null;
+  factGroupsJson?: string | null;
   transcriptSpansJson?: string | null;
 }): MeetingsV3AgendaItem {
+  const facts = readStoredItemFacts(row.factsJson);
   return {
     itemNumber: row.itemNumber,
     title: row.title,
@@ -240,8 +246,9 @@ function toAgendaItem(row: {
     amount: row.amount,
     vendors: readAgendaVendors(row.vendorsJson),
     recommendation: row.recommendation,
-    facts: readStoredItemFacts(row.factsJson),
+    facts,
     transcript: readStoredItemTranscript(row.transcriptSpansJson),
+    factGroups: readStoredItemFactGroups(row.factGroupsJson, facts),
   };
 }
 

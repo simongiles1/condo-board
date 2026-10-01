@@ -163,6 +163,7 @@ export async function segmentMeetingV3Transcript(meetingId: string): Promise<Tra
         vendorsJson: null,
         recommendation: null,
         factsJson: null,
+        factGroupsJson: null,
         transcriptSpansJson: JSON.stringify(byItem.get(plan.injected.id)),
         createdAt: completedAt,
       });

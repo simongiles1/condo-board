@@ -30,6 +30,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Meetings V3 source groups** — After the transcript is segmented, Group sources keeps a vendor, amount, and date together when one quote on the page contains each of them. A second bid stays a second group. A figure that does not share a quote stays listed on its own. Re-resolving facts, linking attachments again, or rebuilding the agenda clears those groups.
+
 - **Meetings V3 transcript spans** — After quoted facts are stored, Segment transcript reads the meeting transcript one cue at a time. A topic keeps a stretch of talk only when the quoted words are inside that time range. Two topics that claim the same stretch both stay listed. Rebuilding the agenda, correcting pages, or linking attachments again clears those spans. The V2 transcript is left unchanged.
 
 - **Meetings V3 fact resolution** — After attachment pages are linked, Resolve facts reads each topic's corrected pages and linked attachment text. An amount, vendor, date, or recommendation is kept only when its quote is on that page and the value is inside the quote. Two different values stay listed, and neither is chosen. The agenda summary is not used. Re-linking attachments, rebuilding the agenda, or correcting pages clears those facts. The V2 fact ledger is left unchanged.

@@ -29,6 +29,13 @@ export type MeetingsV3TranscriptSegmentation = {
   overlapItemCount: number;
 };
 
+/** A finished pass that grouped quoted facts by the package quote that contains them. */
+export type MeetingsV3FactGrouping = {
+  completedAt: string;
+  groupCount: number;
+  ungroupedCount: number;
+};
+
 /** A finished pass that linked attachment pages onto the V3 agenda. */
 export type MeetingsV3AttachmentLink = {
   completedAt: string;
@@ -71,6 +78,7 @@ export type MeetingsV3PackageSettings = {
   attachmentLink?: MeetingsV3AttachmentLink | null;
   factResolution?: MeetingsV3FactResolution | null;
   transcriptSegmentation?: MeetingsV3TranscriptSegmentation | null;
+  factGrouping?: MeetingsV3FactGrouping | null;
   aiUsage?: MeetingsV3AiUsageSettings | null;
 };
 
@@ -195,6 +203,38 @@ export function meetingsV3TranscriptSegmentation(
     completedAt: record.completedAt,
     spanCount: record.spanCount,
     overlapItemCount: record.overlapItemCount,
+  };
+}
+
+/**
+ * The stored fact grouping, when that stage has been run for the current transcript segmentation.
+ * Returns null when the flag is missing or not a completed grouping.
+ */
+export function meetingsV3FactGrouping(
+  settings: { v3Package?: { factGrouping?: unknown } | null } | null | undefined,
+): MeetingsV3FactGrouping | null {
+  const grouping = settings?.v3Package?.factGrouping;
+  if (!grouping || typeof grouping !== "object") return null;
+  const record = grouping as {
+    completedAt?: unknown;
+    groupCount?: unknown;
+    ungroupedCount?: unknown;
+  };
+  if (typeof record.completedAt !== "string" || !record.completedAt.trim()) return null;
+  if (typeof record.groupCount !== "number" || !Number.isInteger(record.groupCount) || record.groupCount < 0) {
+    return null;
+  }
+  if (
+    typeof record.ungroupedCount !== "number"
+    || !Number.isInteger(record.ungroupedCount)
+    || record.ungroupedCount < 0
+  ) {
+    return null;
+  }
+  return {
+    completedAt: record.completedAt,
+    groupCount: record.groupCount,
+    ungroupedCount: record.ungroupedCount,
   };
 }
 

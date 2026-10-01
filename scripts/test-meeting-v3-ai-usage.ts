@@ -77,6 +77,7 @@ describe("v3 ai usage stages", () => {
       "v3_attachments",
       "v3_facts",
       "v3_transcript",
+      "v3_sources",
     ]);
   });
 });

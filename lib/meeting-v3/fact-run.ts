@@ -168,7 +168,7 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
     for (const item of items) {
       await tx
         .update(meetingsV3AgendaItems)
-        .set({ factsJson: JSON.stringify(factsByItem.get(item.id)) })
+        .set({ factsJson: JSON.stringify(factsByItem.get(item.id)), factGroupsJson: null })
         .where(eq(meetingsV3AgendaItems.id, item.id));
     }
   });

@@ -14,6 +14,7 @@ import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { agendaItemIndentDepth, displayAgendaSegment, isAgendaItemLeaf } from "@/lib/meeting-v2/agenda-outline";
 import { countAgendaPages, formatSourcePages, isAgendaPageForCorrection } from "@/lib/meeting-v3/agenda-pages";
 import type { MeetingsV3FactField, MeetingsV3ItemFacts } from "@/lib/meeting-v3/facts";
+import type { MeetingsV3ItemFactGroups } from "@/lib/meeting-v3/fact-groups";
 import { formatSpanClock, type MeetingsV3ItemTranscript } from "@/lib/meeting-v3/transcript-spans";
 import { cancelPdfCanvasRender, renderPdfPageToCanvas } from "@/lib/pdf/pdfjs-browser";
 import type { MeetingsV3PackageStatus } from "@/lib/meeting-v3/package-status";
@@ -43,6 +44,7 @@ type AgendaItem = {
   recommendation: string | null;
   facts: MeetingsV3ItemFacts | null;
   transcript: MeetingsV3ItemTranscript | null;
+  factGroups: MeetingsV3ItemFactGroups | null;
 };
 
 type PageNavProps = {
@@ -429,7 +431,7 @@ function WizardBar({ steps, shownId, completedCount, busy, onShow }: WizardBarPr
 }
 
 /**
- * Walks a V3 meeting through extract and correct, the agenda, attachment pages, quoted facts, then the transcript.
+ * Walks a V3 meeting through extract and correct, the agenda, attachment pages, quoted facts, the transcript, then source groups.
  * Finished stages stay open. The next stage is another entry on the same bar.
  */
 export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageStatus }) {
@@ -447,7 +449,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [linking, setLinking] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [segmenting, setSegmenting] = useState(false);
-  const [deepSeekConfirm, setDeepSeekConfirm] = useState<"attachments" | "facts" | "transcript" | null>(null);
+  const [grouping, setGrouping] = useState(false);
+  const [deepSeekConfirm, setDeepSeekConfirm] = useState<"attachments" | "facts" | "transcript" | "sources" | null>(null);
   const deepSeekRun = useRef(false);
   const [pickedStep, setPickedStep] = useState<MeetingsV3WizardStep["id"] | null>(null);
   const [aiUsageOpen, setAiUsageOpen] = useState(false);
@@ -458,7 +461,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [selectedAgendaCode, setSelectedAgendaCode] = useState<string | null>(null);
   const transcriptScrollRef = useRef<HTMLDivElement>(null);
 
-  const busy = running || buildingAgenda || linking || resolving || segmenting || status.stage === "extracting" || status.stage === "correcting";
+  const busy = running || buildingAgenda || linking || resolving || segmenting || grouping || status.stage === "extracting" || status.stage === "correcting";
 
   function refreshAiUsage() {
     setAiUsageLoading(true);
@@ -683,6 +686,9 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         transcriptSegmented: false,
         transcriptSpanCount: 0,
         transcriptOverlapItemCount: 0,
+        factsGrouped: false,
+        factGroupCount: 0,
+        ungroupedFactCount: 0,
         unassignedAttachmentPages: [],
         attachmentPagesWithoutText: [],
       }));
@@ -719,6 +725,9 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         transcriptSegmented: false,
         transcriptSpanCount: 0,
         transcriptOverlapItemCount: 0,
+        factsGrouped: false,
+        factGroupCount: 0,
+        ungroupedFactCount: 0,
         unassignedAttachmentPages: payload?.unassignedPages ?? [],
         attachmentPagesWithoutText: payload?.pagesWithoutText ?? [],
         agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
@@ -759,6 +768,9 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         factsResolved: true,
         factCount: payload?.factCount ?? 0,
         unresolvedFactItemCount: payload?.unresolvedItemCount ?? 0,
+        factsGrouped: false,
+        factGroupCount: 0,
+        ungroupedFactCount: 0,
         currentStep:
           (payload?.unresolvedItemCount ?? 0) > 0
             ? "Quoted facts stored; some items have more than one value"
@@ -815,6 +827,47 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     }
   }
 
+  async function groupSources() {
+    if (deepSeekRun.current) return;
+    deepSeekRun.current = true;
+    setGrouping(true);
+    setError(null);
+    setStatus((current) => ({ ...current, currentStep: "Grouping quoted facts by source" }));
+    try {
+      const response = await fetch(`/api/v3/meetings/${status.id}/fact-groups`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            items?: AgendaItem[];
+            groupCount?: number;
+            ungroupedCount?: number;
+            error?: string;
+          }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Fact grouping failed.");
+      }
+      setAgendaItems(payload?.items ?? []);
+      setStatus((current) => ({
+        ...current,
+        factsGrouped: true,
+        factGroupCount: payload?.groupCount ?? 0,
+        ungroupedFactCount: payload?.ungroupedCount ?? 0,
+        agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
+        currentStep:
+          (payload?.ungroupedCount ?? 0) > 0
+            ? "Sources grouped; some figures do not share a quote"
+            : "Quoted facts grouped by source",
+      }));
+    } catch (groupError) {
+      const message = groupError instanceof Error ? groupError.message : "Fact grouping failed.";
+      setError(message);
+    } finally {
+      deepSeekRun.current = false;
+      setGrouping(false);
+      setDeepSeekConfirm(null);
+    }
+  }
+
   const wizard = meetingsV3WizardProgress({
     pageCount: Math.max(status.pageCount, pages.length),
     correctedPageCount: Math.max(status.correctedPageCount, rewrites.length),
@@ -822,6 +875,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     attachmentsLinked: status.attachmentsLinked,
     factsResolved: status.factsResolved,
     transcriptSegmented: status.transcriptSegmented,
+    factsGrouped: status.factsGrouped,
     agendaContentEndsAtPage: status.agendaContentEndsAtPage,
   });
   const shownStep = wizard.steps.find((step) => step.id === pickedStep && step.state !== "upcoming")
@@ -1263,14 +1317,27 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
-            <button
-              type="button"
-              onClick={() => setDeepSeekConfirm("transcript")}
-              disabled={busy || !status.hasTranscript}
-              className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {segmenting ? "Segmenting transcript…" : status.transcriptSegmented ? "Run again" : "Segment transcript"}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              {status.transcriptSegmented && !segmenting ? (
+                <button
+                  type="button"
+                  onClick={() => setPickedStep("sources")}
+                  className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
+                >
+                  Continue to sources
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setDeepSeekConfirm("transcript")}
+                disabled={busy || !status.hasTranscript}
+                className={status.transcriptSegmented && !segmenting
+                  ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                  : "rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"}
+              >
+                {segmenting ? "Segmenting transcript…" : status.transcriptSegmented ? "Run again" : "Segment transcript"}
+              </button>
+            </div>
           </div>
           {!status.hasTranscript ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
@@ -1362,6 +1429,116 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
           )}
         </>
       ) : null}
+
+      {shownStep?.id === "sources" ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
+            <button
+              type="button"
+              onClick={() => setDeepSeekConfirm("sources")}
+              disabled={busy}
+              className={status.factsGrouped && !grouping
+                ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                : "rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"}
+            >
+              {grouping ? "Grouping sources…" : status.factsGrouped ? "Run again" : "Group sources"}
+            </button>
+          </div>
+          {!status.factsGrouped ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              {grouping
+                ? "Reading each topic's quotes and keeping figures together only when one quote contains them."
+                : "Group sources once the transcript spans look right."}
+            </div>
+          ) : agendaItems.length === 0 && status.agendaItemCount > 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              Loading source groups.
+            </div>
+          ) : (
+            <section className="rounded-xl border border-slate-200 bg-white">
+              <h2 className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+                Sources
+              </h2>
+              {status.ungroupedFactCount > 0 ? (
+                <p className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {status.ungroupedFactCount === 1
+                    ? "1 figure does not share a quote with another figure."
+                    : `${status.ungroupedFactCount} figures do not share a quote with another figure.`}
+                </p>
+              ) : null}
+              <ul className="divide-y divide-slate-100">
+                {agendaItems.map((item) => (
+                  <li
+                    key={`${item.itemNumber}-${item.title}`}
+                    className="py-2 pr-3 text-sm"
+                    style={{ paddingLeft: `${12 + agendaItemIndentDepth(item.itemNumber) * 20}px` }}
+                  >
+                    <p>
+                      <span
+                        className="inline-block w-8 font-semibold tabular-nums text-slate-900"
+                        title={item.itemNumber}
+                      >
+                        {displayAgendaSegment(item.itemNumber)}
+                      </span>
+                      <span className="font-medium text-slate-800">{item.title}</span>
+                    </p>
+                    {item.factGroups && item.factGroups.groups.length > 0 ? (
+                      <ul className="mt-2 space-y-3">
+                        {item.factGroups.groups.map((group) => (
+                          <li key={`${group.page}-${group.quote}`}>
+                            <p className="flex flex-wrap gap-x-3 gap-y-1">
+                              {group.members.map((member) => (
+                                <span key={`${member.field}-${member.value}`}>
+                                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    {FACT_FIELD_LABEL[member.field]}
+                                  </span>
+                                  <span className="ml-2 font-medium text-slate-800">{member.value}</span>
+                                  {group.unresolvedFields.includes(member.field) ? (
+                                    <span className="ml-2 text-xs font-medium text-amber-800">Unresolved</span>
+                                  ) : null}
+                                </span>
+                              ))}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPageNumber(group.page);
+                                  setPickedStep("extract");
+                                }}
+                                className="rounded-md border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                Page {group.page}
+                              </button>
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-600">{group.quote}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {item.factGroups && item.factGroups.ungrouped.length > 0 ? (
+                      <ul className="mt-2 space-y-1">
+                        {item.factGroups.ungrouped.map((fact) => (
+                          <li key={`${fact.field}-${fact.page}-${fact.value}`} className="text-xs text-slate-600">
+                            <span className="font-semibold uppercase tracking-wide text-slate-500">
+                              {FACT_FIELD_LABEL[fact.field]}
+                            </span>
+                            <span className="ml-2 text-slate-800">{fact.value}</span>
+                            <span className="ml-2 text-slate-500">Not tied to another figure</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {(!item.factGroups || (item.factGroups.groups.length === 0 && item.factGroups.ungrouped.length === 0))
+                      && isAgendaItemLeaf(item.itemNumber, agendaItems.map((row) => row.itemNumber)) ? (
+                      <p className="mt-1 text-xs text-slate-500">No quoted fact on the linked pages.</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
+      ) : null}
       </div>
 
       {expanded && status.pageCount > 0 ? (
@@ -1405,37 +1582,46 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       <DeepSeekActionConfirmDialog
         open={deepSeekConfirm != null}
         title={
-          deepSeekConfirm === "transcript"
-            ? "Segment transcript?"
-            : deepSeekConfirm === "facts"
-              ? "Resolve facts?"
-              : "Link attachments?"
+          deepSeekConfirm === "sources"
+            ? "Group sources?"
+            : deepSeekConfirm === "transcript"
+              ? "Segment transcript?"
+              : deepSeekConfirm === "facts"
+                ? "Resolve facts?"
+                : "Link attachments?"
         }
         description={
-          deepSeekConfirm === "transcript"
-            ? "This reads the transcript with DeepSeek and keeps a stretch only when its quote is inside that time range. Talk that is not on the agenda is stored as additional business (4.E)."
-            : deepSeekConfirm === "facts"
-              ? "This reads each topic's pages with DeepSeek and keeps a figure only when its quote is on that page."
-              : "Pages the agenda does not already name are matched to topics with DeepSeek."
+          deepSeekConfirm === "sources"
+            ? "This reads each topic's pages with DeepSeek and keeps a vendor, amount, and date together only when one quote contains all of them."
+            : deepSeekConfirm === "transcript"
+              ? "This reads the transcript with DeepSeek and keeps a stretch only when its quote is inside that time range. Talk that is not on the agenda is stored as additional business (4.E)."
+              : deepSeekConfirm === "facts"
+                ? "This reads each topic's pages with DeepSeek and keeps a figure only when its quote is on that page."
+                : "Pages the agenda does not already name are matched to topics with DeepSeek."
         }
         confirmLabel={
-          deepSeekConfirm === "transcript"
-            ? "Segment transcript"
-            : deepSeekConfirm === "facts"
-              ? "Resolve facts"
-              : "Link attachments"
+          deepSeekConfirm === "sources"
+            ? "Group sources"
+            : deepSeekConfirm === "transcript"
+              ? "Segment transcript"
+              : deepSeekConfirm === "facts"
+                ? "Resolve facts"
+                : "Link attachments"
         }
         busyLabel={
-          deepSeekConfirm === "transcript"
-            ? "Segmenting transcript…"
-            : deepSeekConfirm === "facts"
-              ? "Resolving facts…"
-              : "Linking attachments…"
+          deepSeekConfirm === "sources"
+            ? "Grouping sources…"
+            : deepSeekConfirm === "transcript"
+              ? "Segmenting transcript…"
+              : deepSeekConfirm === "facts"
+                ? "Resolving facts…"
+                : "Linking attachments…"
         }
-        busy={linking || resolving || segmenting}
+        busy={linking || resolving || segmenting || grouping}
         onCancel={() => setDeepSeekConfirm(null)}
         onConfirm={() => {
-          if (deepSeekConfirm === "transcript") void segmentTranscript();
+          if (deepSeekConfirm === "sources") void groupSources();
+          else if (deepSeekConfirm === "transcript") void segmentTranscript();
           else if (deepSeekConfirm === "facts") void resolveFacts();
           else void linkAttachments();
         }}

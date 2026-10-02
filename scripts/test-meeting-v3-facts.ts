@@ -170,7 +170,7 @@ describe("v3 quoted facts", () => {
     assert.equal(facts.candidates[0]?.subject, undefined);
   });
 
-  it("flags conflicting prices for the same service and leaves a bare fee line unverified", () => {
+  it("flags a missing bidder for one service and a real price conflict when the bidder is the same", () => {
     const conflict = acceptQuotedFacts({
       pages: [{
         pageNumber: 20,
@@ -195,7 +195,38 @@ describe("v3 quoted facts", () => {
         },
       ],
     });
-    assert.equal(conflict.reviewIssues.some((issue) => issue.code === "conflicting_prices"), true);
+    assert.equal(conflict.reviewIssues.some((issue) => issue.code === "missing_bidder"), true);
+    assert.equal(conflict.reviewIssues.some((issue) => issue.code === "conflicting_prices"), false);
+
+    const sameBidder = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 21,
+        text: "Steam room\nTrace project management is $2,800. Trace project management is $1,700.",
+      }],
+      proposed: [
+        {
+          field: "amount",
+          value: "$2,800",
+          page: 21,
+          quote: "Trace project management is $2,800.",
+          headingQuote: "Steam room",
+          subject: "Steam room",
+          service: "project management",
+          bidder: "Trace",
+        },
+        {
+          field: "amount",
+          value: "$1,700",
+          page: 21,
+          quote: "Trace project management is $1,700.",
+          headingQuote: "Steam room",
+          subject: "Steam room",
+          service: "project management",
+          bidder: "Trace",
+        },
+      ],
+    });
+    assert.equal(sameBidder.reviewIssues.some((issue) => issue.code === "conflicting_prices"), true);
 
     const smashed = acceptQuotedFacts({
       pages: [{
@@ -511,6 +542,32 @@ describe("v3 quoted facts", () => {
     assert.equal(dropped[0]?.quote, "Inspection fee $500");
   });
 
+  it("keeps both amounts when recovery repairs one shared quotation", () => {
+    const row = "Row containing $100 and $200";
+    const merged = mergeProposedFacts(
+      [
+        { field: "amount", value: "$100", page: 1, quote: row },
+        { field: "amount", value: "$200", page: 1, quote: row },
+      ],
+      [
+        { field: "amount", value: "$100", page: 1, quote: row, bidder: "Ambient" },
+        { field: "amount", value: "$200", page: 1, quote: row, bidder: "Applied" },
+      ],
+    );
+    assert.equal(merged.length, 2);
+    assert.equal(merged[0]?.value, "$100");
+    assert.equal(merged[0]?.bidder, "Ambient");
+    assert.equal(merged[1]?.value, "$200");
+    assert.equal(merged[1]?.bidder, "Applied");
+    const accepted = acceptQuotedFacts({
+      pages: [{ pageNumber: 1, text: row }],
+      proposed: merged,
+    });
+    assert.equal(accepted.candidates.length, 2);
+    assert.ok(accepted.candidates.some((candidate) => candidate.value === "$100"));
+    assert.ok(accepted.candidates.some((candidate) => candidate.value === "$200"));
+  });
+
   it("repairs unresolved facts in bounded batches", () => {
     const candidates = Array.from({ length: 13 }, (_, index) => ({
       field: "amount" as const,
@@ -531,6 +588,28 @@ describe("v3 quoted facts", () => {
       service: "Design fee",
     }]);
     assert.deepEqual(clear, []);
+    const conflict = recoveryFactBatches([
+      {
+        field: "amount",
+        value: "$210,994",
+        page: 31,
+        quote: "Ambient base bid $210,994",
+        subject: "Booster Pump",
+        service: "Base Bid Amount",
+        bidder: "Ambient",
+      },
+      {
+        field: "amount",
+        value: "$200,000",
+        page: 31,
+        quote: "Ambient base bid $200,000",
+        subject: "Booster Pump",
+        service: "Base Bid Amount",
+        bidder: "Ambient",
+      },
+    ]);
+    assert.equal(conflict.length, 1);
+    assert.equal(conflict[0]?.facts.length, 2);
   });
 
   it("retries a timed-out fact call when the batch still has more than one page", () => {
@@ -560,6 +639,140 @@ describe("v3 quoted facts", () => {
     assert.equal(readFactResolutionProgress("Quoted facts stored"), null);
     assert.equal(factSliceShouldDivide(new Error("The operation was aborted due to timeout"), 2500), true);
     assert.equal(factSliceShouldDivide(new Error("The operation was aborted due to timeout"), 400), false);
+  });
+
+  it("reports one missing bidder when the same line was extracted twice", () => {
+    const facts = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 31,
+        text: "Booster Pump\nBase Bid Amount $210,994. Base Bid Amount. $226,928.",
+      }],
+      proposed: [
+        {
+          field: "amount",
+          value: "$210,994",
+          page: 31,
+          quote: "Base Bid Amount $210,994.",
+          headingQuote: "Booster Pump",
+          subject: "Booster Pump",
+          service: "Base Bid Amount",
+        },
+        {
+          field: "amount",
+          value: "$226,928",
+          page: 31,
+          quote: "Base Bid Amount. $226,928.",
+          headingQuote: "Booster Pump",
+          subject: "Booster Pump",
+          service: "Base Bid Amount.",
+        },
+      ],
+    });
+    const missing = facts.reviewIssues.filter((issue) => issue.code === "missing_bidder");
+    assert.equal(missing.length, 1);
+    assert.match(missing[0]?.message ?? "", /Base Bid Amount/);
+    assert.equal(facts.reviewIssues.some((issue) => issue.code === "conflicting_prices"), false);
+  });
+
+  it("copies the column heading onto each bid and keeps it after save", () => {
+    const table = [
+      "| Scope | Ambient | Applied |",
+      "| --- | --- | --- |",
+      "| Base Bid Amount | $210,994 | $226,928 |",
+    ].join("\n");
+    const facts = acceptQuotedFacts({
+      pages: [{ pageNumber: 31, text: table }],
+      proposed: [
+        { field: "amount", value: "$210,994", page: 31, quote: "$210,994", subject: "Booster Pump" },
+        { field: "amount", value: "$226,928", page: 31, quote: "$226,928", subject: "Booster Pump" },
+      ],
+    });
+    assert.equal(facts.candidates.find((candidate) => candidate.value === "$210,994")?.bidder, "Ambient");
+    assert.equal(facts.candidates.find((candidate) => candidate.value === "$226,928")?.bidder, "Applied");
+    assert.equal(facts.candidates[0]?.service, "Base Bid Amount");
+    assert.equal(facts.reviewIssues.some((issue) => issue.code === "conflicting_prices" || issue.code === "missing_bidder"), false);
+    assert.equal(facts.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), false);
+    assert.match(factContextNotes(facts).join(" "), /2 alternative prices/);
+    const stored = readStoredItemFacts(JSON.stringify(facts));
+    assert.equal(stored?.candidates.find((candidate) => candidate.value === "$210,994")?.bidder, "Ambient");
+    assert.equal(stored?.candidates.find((candidate) => candidate.value === "$226,928")?.bidder, "Applied");
+  });
+
+  it("does not take a greeting, an image placeholder, or a section label as the project", () => {
+    const named = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 20,
+        text: "<!-- image -->\nI hope you're doing well.\n## ENGINEERING FEES\nSteam Room Heat Pump\nHeat Pump Design $10,500",
+      }],
+      proposed: [{ field: "amount", value: "$10,500", page: 20, quote: "Heat Pump Design $10,500" }],
+    });
+    assert.equal(named.candidates[0]?.subject, "Steam Room Heat Pump");
+
+    const section = acceptQuotedFacts({
+      pages: [{ pageNumber: 20, text: "## ENGINEERING FEES\nDesign fee $10,500" }],
+      proposed: [{ field: "amount", value: "$10,500", page: 20, quote: "Design fee $10,500" }],
+    });
+    assert.equal(section.candidates[0]?.subject, undefined);
+  });
+
+  it("keeps a fee that says plus HST, and counts a reserve without counting cash", () => {
+    const facts = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 8,
+        text: "Acme pump replacement $100 plus HST. Bravo pump replacement $200 plus HST. Cash balance $50. Reserve $80. RBC GIC $1,000.",
+      }],
+      proposed: [
+        {
+          field: "amount",
+          value: "$100",
+          page: 8,
+          quote: "Acme pump replacement $100 plus HST.",
+          subject: "Reserve Fund Investments",
+          service: "pump replacement",
+          bidder: "Acme",
+          qualifications: "plus HST",
+        },
+        {
+          field: "amount",
+          value: "$200",
+          page: 8,
+          quote: "Bravo pump replacement $200 plus HST.",
+          subject: "Reserve Fund Investments",
+          service: "pump replacement",
+          bidder: "Bravo",
+          qualifications: "plus HST",
+        },
+        {
+          field: "amount",
+          value: "$50",
+          page: 8,
+          quote: "Cash balance $50.",
+          subject: "Reserve Fund Investments",
+          service: "Cash balance",
+        },
+        {
+          field: "amount",
+          value: "$80",
+          page: 8,
+          quote: "Reserve $80.",
+          subject: "Reserve Fund Investments",
+          service: "Reserve",
+        },
+        {
+          field: "amount",
+          value: "$1,000",
+          page: 8,
+          quote: "RBC GIC $1,000.",
+          subject: "Reserve Fund Investments",
+          service: "GIC",
+          bidder: "RBC",
+        },
+      ],
+    });
+    const notes = factContextNotes(facts).join(" ");
+    assert.match(notes, /2 alternative prices/);
+    assert.match(notes, /2 investment holdings/);
+    assert.doesNotMatch(notes, /3 investment holdings/);
   });
 
   it("treats a DeepSeek keep-alive as silence and a content line as text", () => {

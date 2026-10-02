@@ -76,6 +76,7 @@ Rules:
 - date is a date the quote states. Do not relabel an incident date as an approval date.
 - Return every distinct amount, including two equal amounts for different services. Do not collapse them.
 - Two bidders for the same work both stay, each with its own bidder. They are alternatives, not one conflicting price. Do not pick a winner.
+- When a table names companies in the column headings, set bidder to that column heading and service to the row label.
 - otherTopicsOnThesePages are different items. Do not return their facts for this agendaItemId.
 - quote is the shortest passage that contains the value. Put the project, the row, and the condition in their own fields.
 - Omit a field the pages do not state. Do not use a summary that is not in the page text.`;
@@ -84,7 +85,8 @@ const FACT_RECOVERY_PROMPT = `You repair package facts that failed validation fo
 Return JSON only: {"items":[{"agendaItemId":"<id>","facts":[{"field":"amount"|"vendor"|"recommendation"|"date","value":"<as printed>","page":14,"quote":"<the quote already stored on this fact>","revisedQuote":"<new verbatim citation, or omit>","headingQuote":"<verbatim or omit>","rowQuote":"<verbatim or omit>","conditionQuote":"<verbatim or omit>","subject":"<or omit>","service":"<or omit>","bidder":"<or omit>","option":"<or omit>","basis":"fixed"|"per_visit","role":"proposal"|"recommendation"|"reported_prior_approval"|"historical_event","qualifications":"<or omit>","omit":true}]}]}.
 Rules:
 - Use only the page text supplied. Do not invent an amount, a company, or a decision.
-- quote must be the quote already stored on the fact you are repairing. The reply is matched to that quote, not to the dollar amount.
+- quote must be the quote already stored on the fact you are repairing, and value must be the amount already stored. The reply is matched to that quote and that amount.
+- When a table names companies in the column headings, set bidder to that column heading and service to the row label.
 - To replace the citation, set revisedQuote to the new verbatim passage from that page. Leave quote as the stored quote.
 - Restate a fact that is missing its project, service, bidder, or condition, and cite the heading, row, or condition from that page.
 - When a row states several amounts, name the role of this amount in service, bidder, or option so it is not confused with the others.

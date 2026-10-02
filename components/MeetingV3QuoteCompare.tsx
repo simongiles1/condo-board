@@ -556,6 +556,57 @@ function FactResolutionProgressBar({ step }: { step: string | null }) {
   );
 }
 
+type QuotedFactsPanel = "review" | "context" | "agenda";
+
+type QuotedFactsTabStripProps = {
+  active: QuotedFactsPanel;
+  reviewCount: number;
+  contextCount: number;
+  onChange: (panel: QuotedFactsPanel) => void;
+};
+
+/**
+ * Switches between review notes, context notes, and the per-agenda quoted-facts list on Resolve facts.
+ */
+function QuotedFactsTabStrip({ active, reviewCount, contextCount, onChange }: QuotedFactsTabStripProps) {
+  const tabs: { id: QuotedFactsPanel; label: string }[] = [
+    { id: "review", label: reviewCount > 0 ? `Needs review (${reviewCount})` : "Needs review" },
+    { id: "context", label: contextCount > 0 ? `Context (${contextCount})` : "Context" },
+    { id: "agenda", label: "By agenda" },
+  ];
+
+  return (
+    <div
+      className="grid w-full grid-cols-3 gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1"
+      role="tablist"
+      aria-label="Quoted facts views"
+    >
+      {tabs.map((tab) => {
+        const selected = active === tab.id;
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => {
+              if (!selected) onChange(tab.id);
+            }}
+            className={`rounded-lg px-2 py-2 text-center text-xs font-semibold leading-tight transition sm:text-sm ${
+              selected
+                ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            {tab.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageStatus }) {
   const [status, setStatus] = useState(initial);
   const [running, setRunning] = useState(
@@ -592,6 +643,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [transcriptCues, setTranscriptCues] = useState<MergedVttCue[] | null>(null);
   const [transcriptLoadError, setTranscriptLoadError] = useState<string | null>(null);
   const [selectedAgendaItemId, setSelectedAgendaItemId] = useState<string | null>(null);
+  const [quotedFactsPanel, setQuotedFactsPanel] = useState<QuotedFactsPanel>("agenda");
   const transcriptScrollRef = useRef<HTMLDivElement>(null);
 
   const busy = running || buildingAgenda || linking || resolving || pingingDeepSeek || segmenting || grouping || reconciling || status.stage === "extracting" || status.stage === "correcting";
@@ -1546,21 +1598,47 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               <h2 className="shrink-0 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
                 Quoted facts
               </h2>
-              {factReviewMessages.length > 0 ? (
-                <ul className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                  {factReviewMessages.map((message) => (
-                    <li key={message}>{message}</li>
-                  ))}
-                </ul>
-              ) : null}
-              {factContextMessages.length > 0 ? (
-                <ul className="shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                  {factContextMessages.map((message) => (
-                    <li key={message}>{message}</li>
-                  ))}
-                </ul>
-              ) : null}
-              <ul className="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto">
+              <div className="shrink-0 border-b border-slate-200 px-3 py-2">
+                <QuotedFactsTabStrip
+                  active={quotedFactsPanel}
+                  reviewCount={factReviewMessages.length}
+                  contextCount={factContextMessages.length}
+                  onChange={setQuotedFactsPanel}
+                />
+              </div>
+              <div
+                className="min-h-0 flex-1 overflow-y-auto"
+                role="tabpanel"
+                aria-label={
+                  quotedFactsPanel === "review"
+                    ? "Needs review"
+                    : quotedFactsPanel === "context"
+                      ? "Context"
+                      : "By agenda"
+                }
+              >
+              {quotedFactsPanel === "review" ? (
+                factReviewMessages.length > 0 ? (
+                  <ul className="divide-y divide-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    {factReviewMessages.map((message) => (
+                      <li key={message} className="py-1.5">{message}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="px-4 py-8 text-center text-sm text-slate-600">Nothing flagged for review.</p>
+                )
+              ) : quotedFactsPanel === "context" ? (
+                factContextMessages.length > 0 ? (
+                  <ul className="divide-y divide-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    {factContextMessages.map((message) => (
+                      <li key={message} className="py-1.5">{message}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="px-4 py-8 text-center text-sm text-slate-600">No context notes.</p>
+                )
+              ) : (
+              <ul className="divide-y divide-slate-100">
                 {shownAgendaItems.map((item) => (
                   <li
                     key={item.id}
@@ -1630,6 +1708,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                   </li>
                 ))}
               </ul>
+              )}
+              </div>
             </section>
           )}
         </>

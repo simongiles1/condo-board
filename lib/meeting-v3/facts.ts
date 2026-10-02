@@ -54,6 +54,8 @@ export type MeetingsV3FactCandidate = {
   rowQuote?: string;
   /** Verbatim nearby sentence for tax, exclusion, or a per-visit condition. */
   conditionQuote?: string;
+  /** Verbatim table header row whose column names the bidder for this amount. */
+  columnQuote?: string;
   bidder?: string;
   option?: string;
   /** Set when a sibling topic's title matches this quote more strongly than this item. */
@@ -68,6 +70,7 @@ export type MeetingsV3FactReview = {
     | "ambiguous_organization"
     | "fee_needs_verification"
     | "conflicting_prices"
+    | "missing_bidder"
     | "conflicting_award"
     | "topic_ownership";
   message: string;
@@ -98,6 +101,7 @@ export type MeetingsV3ProposedFact = {
   headingQuote?: unknown;
   rowQuote?: unknown;
   conditionQuote?: unknown;
+  columnQuote?: unknown;
   bidder?: unknown;
   option?: unknown;
   topicMismatch?: unknown;
@@ -218,7 +222,8 @@ export function acceptQuotedFacts(input: {
     const headingQuote = citedSpan(proposed.headingQuote, pageText);
     const rowQuote = citedSpan(proposed.rowQuote, pageText);
     const conditionQuote = citedSpan(proposed.conditionQuote, pageText);
-    const supportNorm = [quoteNorm, headingQuote, rowQuote, conditionQuote]
+    const columnQuote = citedSpan(proposed.columnQuote, pageText);
+    const supportNorm = [quoteNorm, headingQuote, rowQuote, conditionQuote, columnQuote]
       .filter((span): span is string => Boolean(span))
       .map((span) => normalizeFactText(span))
       .join(" ");
@@ -226,6 +231,7 @@ export function acceptQuotedFacts(input: {
     if (headingQuote) candidate.headingQuote = headingQuote;
     if (rowQuote) candidate.rowQuote = rowQuote;
     if (conditionQuote) candidate.conditionQuote = conditionQuote;
+    if (columnQuote) candidate.columnQuote = columnQuote;
     const subject = quotedPhrase(proposed.subject, supportNorm);
     const service = quotedPhrase(proposed.service, supportNorm);
     const qualifications = quotedPhrase(proposed.qualifications, supportNorm);
@@ -323,7 +329,7 @@ export function factContextNotes(facts: MeetingsV3ItemFacts): string[] {
   const alternatives = new Map<string, Set<string>>();
   for (const candidate of serviced) {
     if (amountKind(candidate) !== "fee" || !candidate.bidder) continue;
-    const key = `${normalizeFactText(candidate.subject ?? "")}\0${normalizeFactText(candidate.service ?? "")}`;
+    const key = `${factLabelKey(candidate.subject ?? "")}\0${factLabelKey(candidate.service ?? "")}`;
     const bidders = alternatives.get(key) ?? new Set<string>();
     bidders.add(normalizeFactText(candidate.bidder));
     alternatives.set(key, bidders);
@@ -480,7 +486,7 @@ export function readStoredItemFacts(value: string | null | undefined): MeetingsV
       if (!candidate || typeof candidate !== "object") return [];
       const row = candidate as MeetingsV3FactCandidate;
       if (typeof row.page !== "number" || typeof row.quote !== "string") return [];
-      return [{ pageNumber: row.page, text: [row.quote, row.headingQuote, row.rowQuote, row.conditionQuote].filter((part) => typeof part === "string").join(" ") }];
+      return [{ pageNumber: row.page, text: [row.quote, row.headingQuote, row.rowQuote, row.conditionQuote, row.columnQuote].filter((part) => typeof part === "string").join(" ") }];
     }),
     proposed: record.candidates.filter(
       (candidate): candidate is MeetingsV3ProposedFact => candidate != null && typeof candidate === "object",
@@ -522,27 +528,28 @@ function reviewFacts(candidates: MeetingsV3FactCandidate[]): MeetingsV3FactRevie
     }
   }
 
-  const prices = new Map<string, { service: string; values: Set<string> }>();
+  const prices = new Map<string, { service: string; bidder: string; values: Set<string> }>();
   for (const candidate of candidates) {
     if (candidate.field !== "amount" || !candidate.subject || !candidate.service) continue;
-    const key = [
-      normalizeFactText(candidate.subject),
-      normalizeFactText(candidate.service),
-      candidate.basis ?? "",
-      normalizeFactText(candidate.bidder ?? ""),
-      normalizeFactText(candidate.option ?? ""),
-    ].join("\0");
-    const row = prices.get(key) ?? { service: candidate.service, values: new Set<string>() };
+    const key = priceGroupKey(candidate);
+    const row = prices.get(key) ?? { service: candidate.service, bidder: candidate.bidder ?? "", values: new Set<string>() };
     row.values.add(normalizeFactText(candidate.value));
     prices.set(key, row);
   }
   for (const row of prices.values()) {
-    if (row.values.size > 1) {
+    if (row.values.size <= 1) continue;
+    const service = tidyFactLabel(row.service);
+    if (!factLabelKey(row.bidder)) {
       issues.push({
-        code: "conflicting_prices",
-        message: `Conflicting amounts for ${row.service}.`,
+        code: "missing_bidder",
+        message: `Bidder is missing for ${service}.`,
       });
+      continue;
     }
+    issues.push({
+      code: "conflicting_prices",
+      message: `Conflicting amounts for ${service}.`,
+    });
   }
 
   const awards = new Map<string, MeetingsV3FactCandidate[]>();
@@ -589,14 +596,32 @@ function roleSupported(role: string, quoteNorm: string): boolean {
 }
 
 function amountKind(candidate: MeetingsV3FactCandidate): "fee" | "tax" | "total" | "balance" | "investment" {
-  const text = normalizeFactText(
-    [candidate.service, candidate.subject, candidate.option, candidate.qualifications].filter(Boolean).join(" "),
-  );
-  if (/\b(hst|gst|vat|harmonized|sales tax)\b/.test(text) || /\btax\b/.test(text)) return "tax";
-  if (/\b(gic|gics|investment|investments|maturity|maturities|term deposit|treasury)\b/.test(text)) return "investment";
-  if (/\b(subtotal|grand total|amount due|invoice total|balance due)\b/.test(text) || /\btotal\b/.test(text)) return "total";
-  if (/\bbalance\b/.test(text)) return "balance";
+  // Purpose comes from what the amount pays for. "Plus HST" on a fee is a condition, and the project title is not the holding.
+  const purpose = normalizeFactText([candidate.service, candidate.option].filter(Boolean).join(" "));
+  if (/\b(hst|gst|vat|harmonized|sales tax)\b/.test(purpose) || /\btax\b/.test(purpose)) return "tax";
+  if (/\b(gic|gics|term deposit|treasury)\b/.test(purpose) || /^(reserve|reserves|reserve fund)$/.test(purpose)) return "investment";
+  if (/\b(subtotal|grand total|amount due|invoice total|balance due)\b/.test(purpose) || /\btotal\b/.test(purpose)) return "total";
+  if (/\bbalance\b/.test(purpose)) return "balance";
   return "fee";
+}
+
+/** Groups the same commercial line when the extracted label only differs by trailing punctuation. */
+function factLabelKey(value: string): string {
+  return normalizeFactText(value).replace(/[\s.|:;…]+$/g, "").trim();
+}
+
+function tidyFactLabel(value: string): string {
+  return value.replace(/\s+/g, " ").trim().replace(/[\s.|:;…]+$/g, "");
+}
+
+function priceGroupKey(candidate: MeetingsV3FactCandidate): string {
+  return [
+    factLabelKey(candidate.subject ?? ""),
+    factLabelKey(candidate.service ?? ""),
+    candidate.basis ?? "",
+    factLabelKey(candidate.bidder ?? ""),
+    factLabelKey(candidate.option ?? ""),
+  ].join("\0");
 }
 
 function dollarCount(quote: string): number {
@@ -639,9 +664,13 @@ function amountNeedsContext(candidate: MeetingsV3FactCandidate): boolean {
   if (!candidate.service || GENERIC_SERVICE.test(candidate.service)) return true;
   const spans = amountSpans(isolating);
   if (spans.length <= 1) return false;
-  if (spans.some((span) => labelIsBlank(span.label))) return true;
   const valueKey = amountKey(candidate.value);
   const own = spans.filter((span) => amountKey(span.value) === valueKey);
+  if (spans.some((span) => labelIsBlank(span.label))) {
+    // A column heading stored on the fact names this cell even when the row text between the figures is blank.
+    if (own.length === 1 && (candidate.bidder?.trim() || candidate.option?.trim())) return false;
+    return true;
+  }
   if (own.length !== 1) return true;
   const markers = [candidate.bidder, candidate.option, candidate.service].filter(
     (marker): marker is string => Boolean(marker?.trim()),
@@ -685,6 +714,7 @@ function enrichFactContext(
     const fromLine = serviceFromAmountLine(candidate.quote, candidate.value);
     if (fromLine) candidate.service = fromLine;
   }
+  applyTableColumns(candidate, pageText);
   if (!candidate.qualifications && lineIndex >= 0) {
     const condition = nearbyCondition(lines, lineIndex);
     if (condition) {
@@ -697,15 +727,98 @@ function enrichFactContext(
   if (siblingOwns(ownershipText, title, siblingTitles)) candidate.topicMismatch = true;
 }
 
+const GENERIC_SECTION = /^(engineering fees|professional fees|consulting fees|fees|introduction|background|summary|scope of work|appendix|table of contents|contents)$/i;
+
 function precedingHeading(lines: string[], index: number): string | undefined {
-  // CONCERN: a short line above the amount is treated as the project heading. A caption or a column label can be copied as the subject.
+  // CONCERN: a short title-case line that is not in the generic-section list can still be stored as the project.
   for (let cursor = index - 1; cursor >= 0 && index - cursor < 30; cursor -= 1) {
     const line = lines[cursor].replace(/\s+/g, " ").trim();
     if (!line || line.includes("$") || line.length > 90) continue;
     if ((line.match(/\|/g) ?? []).length >= 2) continue;
-    return line;
+    if (isProseLine(line)) continue;
+    const title = line.replace(/^#{1,6}\s+/, "").trim();
+    if (!title || GENERIC_SECTION.test(title)) continue;
+    return title;
   }
   return undefined;
+}
+
+function isProseLine(line: string): boolean {
+  if (/^\s*<!--/.test(line)) return true;
+  if (/^(hi|hello|dear|good morning|good afternoon|i hope|we hope|please find|thank you)\b/i.test(line)) return true;
+  const words = line.replace(/^#{1,6}\s+/, "").trim().split(/\s+/);
+  return /[.?!]$/.test(line) && words.length >= 5;
+}
+
+const GENERIC_COLUMN = /^(item|description|scope|details|particulars|amount|amounts|price|prices|total|unit|qty|quantity|notes|comments|remarks|base bid|optional|option|options|service|services|no\.?|#)$/i;
+
+function splitTableCells(line: string): string[] {
+  const trimmed = line.trim();
+  if ((trimmed.match(/\|/g) ?? []).length < 2) return [];
+  const cells = trimmed.split("|").map((cell) => cell.replace(/\s+/g, " ").trim());
+  if (cells[0] === "") cells.shift();
+  if (cells.at(-1) === "") cells.pop();
+  return cells;
+}
+
+function isTableSeparator(cells: string[]): boolean {
+  return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell) || cell === "");
+}
+
+function cellsMatchAmount(cell: string, value: string): boolean {
+  if (!cell.includes("$") || !value.includes("$")) return false;
+  const left = Number(amountKey(cell));
+  const right = Number(amountKey(value));
+  return Number.isFinite(left) && Number.isFinite(right) && left === right && right !== 0;
+}
+
+function isCompanyHeader(cell: string): boolean {
+  if (cell.length < 2 || cell.length > 60 || cell.includes("$")) return false;
+  if (GENERIC_COLUMN.test(cell)) return false;
+  if (/\b(bid|amount|price|total|optional|labour|labor|supply|install)\b/i.test(cell)) return false;
+  return true;
+}
+
+/**
+ * Reads the bidder from the column heading and the service from the row label.
+ * One matching cell is required. A repeated amount is left unchanged.
+ */
+function applyTableColumns(candidate: MeetingsV3FactCandidate, pageText: string): void {
+  if (candidate.field !== "amount") return;
+  const lines = pageText.split(/\n/);
+  const hits: Array<{ lineIndex: number; cellIndex: number; cells: string[] }> = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const cells = splitTableCells(lines[index] ?? "");
+    if (cells.length < 2 || isTableSeparator(cells)) continue;
+    const indexes = cells.flatMap((cell, cellIndex) => (cellsMatchAmount(cell, candidate.value) ? [cellIndex] : []));
+    if (indexes.length === 1) hits.push({ lineIndex: index, cellIndex: indexes[0]!, cells });
+  }
+  if (hits.length !== 1) return;
+  const hit = hits[0]!;
+  let header: string[] | undefined;
+  let headerLine: string | undefined;
+  for (let cursor = hit.lineIndex - 1; cursor >= 0 && hit.lineIndex - cursor < 8; cursor -= 1) {
+    const cells = splitTableCells(lines[cursor] ?? "");
+    if (cells.length === 0) continue;
+    if (isTableSeparator(cells)) continue;
+    if (cells.some((cell) => cell.includes("$"))) break;
+    header = cells;
+    headerLine = (lines[cursor] ?? "").replace(/\s+/g, " ").trim();
+    break;
+  }
+  const headerCell = header?.[hit.cellIndex]?.replace(/\s+/g, " ").trim();
+  const bidder = headerCell && isCompanyHeader(headerCell) ? headerCell : undefined;
+  const serviceCell = hit.cellIndex > 0 ? hit.cells[0] : undefined;
+  const service = serviceCell && !serviceCell.includes("$") && serviceCell.length >= 3 && serviceCell.length <= 120
+    ? serviceCell
+    : undefined;
+  if (bidder && headerLine && !candidate.columnQuote) candidate.columnQuote = headerLine;
+  if (!candidate.rowQuote) {
+    const dataLine = (lines[hit.lineIndex] ?? "").replace(/\s+/g, " ").trim();
+    if (dataLine) candidate.rowQuote = dataLine;
+  }
+  if (!candidate.bidder && bidder) candidate.bidder = bidder;
+  if (service && (!candidate.service || GENERIC_SERVICE.test(candidate.service))) candidate.service = service;
 }
 
 function serviceFromAmountLine(quote: string, value: string): string | undefined {
@@ -785,14 +898,16 @@ export type MeetingsV3RecoveryBatch = {
 
 /**
  * Groups unresolved facts into recovery calls of at most `maxIssues`.
- * A clear fact is left out. An empty list means there is nothing to repair.
+ * A clear fact is left out. A missing bidder and a real price conflict are included.
+ * An empty list means there is nothing to repair.
  */
 export function recoveryFactBatches(
   candidates: readonly MeetingsV3FactCandidate[],
   maxIssues = FACT_RECOVERY_MAX_ISSUES,
 ): MeetingsV3RecoveryBatch[] {
   if (maxIssues < 1) return [];
-  const flagged = candidates.filter(candidateNeedsRecovery);
+  const divided = dividedAmountSet(candidates);
+  const flagged = candidates.filter((candidate) => candidateNeedsRecovery(candidate, divided));
   const batches: MeetingsV3RecoveryBatch[] = [];
   for (let offset = 0; offset < flagged.length; offset += maxIssues) {
     const facts = flagged.slice(offset, offset + maxIssues);
@@ -801,15 +916,38 @@ export function recoveryFactBatches(
   return batches;
 }
 
-function candidateNeedsRecovery(candidate: MeetingsV3FactCandidate): boolean {
+function dividedAmountSet(candidates: readonly MeetingsV3FactCandidate[]): Set<MeetingsV3FactCandidate> {
+  const groups = new Map<string, MeetingsV3FactCandidate[]>();
+  for (const candidate of candidates) {
+    if (candidate.field !== "amount" || !candidate.subject || !candidate.service) continue;
+    const key = priceGroupKey(candidate);
+    const rows = groups.get(key) ?? [];
+    rows.push(candidate);
+    groups.set(key, rows);
+  }
+  const divided = new Set<MeetingsV3FactCandidate>();
+  for (const rows of groups.values()) {
+    const values = new Set(rows.map((row) => normalizeFactText(row.value)));
+    if (values.size > 1) {
+      for (const row of rows) divided.add(row);
+    }
+  }
+  return divided;
+}
+
+function candidateNeedsRecovery(
+  candidate: MeetingsV3FactCandidate,
+  divided: ReadonlySet<MeetingsV3FactCandidate>,
+): boolean {
   if (candidate.field === "amount" && amountNeedsContext(candidate)) return true;
   if (candidate.topicMismatch) return true;
+  if (divided.has(candidate)) return true;
   return candidate.field === "vendor" && candidate.organizationMatch === "ambiguous";
 }
 
 /**
- * Replaces the stored fact whose quote matches.
- * `revisedQuote` changes that citation. `omit` drops that fact. A different amount on the same page stays.
+ * Replaces the stored fact with the same field, page, quote, and amount.
+ * `revisedQuote` changes that citation. `omit` drops that fact. Another amount that shares the quote stays.
  */
 export function mergeProposedFacts(
   base: readonly MeetingsV3ProposedFact[],
@@ -840,5 +978,7 @@ function applyRevisedQuote(fact: MeetingsV3ProposedFact): MeetingsV3ProposedFact
 function sameProposedIdentity(left: MeetingsV3ProposedFact, right: MeetingsV3ProposedFact): boolean {
   if (left.field !== right.field || left.page !== right.page) return false;
   if (typeof left.quote !== "string" || typeof right.quote !== "string") return false;
-  return normalizeFactText(left.quote) === normalizeFactText(right.quote);
+  if (typeof left.value !== "string" || typeof right.value !== "string") return false;
+  return normalizeFactText(left.quote) === normalizeFactText(right.quote)
+    && normalizeFactText(left.value) === normalizeFactText(right.value);
 }

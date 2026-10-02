@@ -8,6 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Features
 
+- **Meetings V3 extract comparison** — The Corrected extract and Docling extract tab bar includes **Copy as markdown** for the active tab’s page text.
 - Segment Compare and segmented transcript views — Each section heading includes a copy control that puts that segment on the clipboard in the same readable transcript format as the meeting documents transcript tab.
 
 - **Meetings V3 minutes draft** — After Reconcile meeting, Check minutes lists open decisions and figures, then Draft minutes writes a formal paragraph for each topic. An unsupported conclusion is not written as approved. Re-run Draft minutes after a new reconciliation.

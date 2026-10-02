@@ -7,6 +7,8 @@ type Props = {
   /** When set, show a format menu with Markdown and JSON copy options. */
   json?: string | null;
   disabled?: boolean;
+  /** Visible label beside the icon; icon-only when omitted. */
+  label?: string;
 };
 
 type CopyFormat = "markdown" | "json";
@@ -19,7 +21,7 @@ function formatJsonForClipboard(raw: string): string {
   }
 }
 
-export function CopyMarkdownButton({ markdown, json, disabled }: Props) {
+export function CopyMarkdownButton({ markdown, json, disabled, label }: Props) {
   const [copied, setCopied] = useState<CopyFormat | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -70,21 +72,27 @@ export function CopyMarkdownButton({ markdown, json, disabled }: Props) {
     }
   }
 
+  const markdownActionLabel = label ?? "Copy markdown";
+  const markdownCopiedLabel = label ? "Copied" : "Copied";
+
   if (!showFormatMenu) {
     return (
       <button
         type="button"
         onClick={() => copy("markdown")}
         disabled={disabled || !canCopyMarkdown}
-        aria-label={copied === "markdown" ? "Copied" : "Copy markdown"}
-        title={copied === "markdown" ? "Copied" : "Copy markdown"}
-        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+        aria-label={copied === "markdown" ? markdownCopiedLabel : markdownActionLabel}
+        title={copied === "markdown" ? markdownCopiedLabel : markdownActionLabel}
+        className={`inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 ${
+          label ? "h-8 gap-1.5 px-2.5 text-xs font-semibold" : "h-8 w-8"
+        }`}
       >
         {copied === "markdown" ? (
           <CheckIcon className="text-emerald-600" />
         ) : (
           <CopyIcon />
         )}
+        {label ? <span>{copied === "markdown" ? "Copied" : label}</span> : null}
       </button>
     );
   }

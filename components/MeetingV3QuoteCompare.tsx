@@ -11,6 +11,7 @@ import type { TranscriptSectionOverlay } from "@/lib/transcript/section-overlay"
 import { AiUsageDialog, AiUsageIconButton } from "@/components/AiUsageDialog";
 import { MeetingDocumentsDialog, MeetingDocumentsIconButton } from "@/components/MeetingDocumentsDialog";
 import { DeepSeekActionConfirmDialog } from "@/components/DeepSeekActionConfirmDialog";
+import { CopyMarkdownButton } from "@/components/CopyMarkdownButton";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { agendaItemIndentDepth, displayAgendaSegment, isAgendaItemLeaf } from "@/lib/meeting-v2/agenda-outline";
@@ -289,32 +290,39 @@ type CompareColumnsProps = {
 function ExtractCompareTabBar({
   active,
   onChange,
+  copyMarkdown,
 }: {
   active: ExtractCompareTab;
   onChange: (tab: ExtractCompareTab) => void;
+  copyMarkdown: string;
 }) {
   const tabs: Array<{ id: ExtractCompareTab; label: string }> = [
     { id: "corrected", label: "Corrected extract" },
     { id: "docling", label: "Docling extract" },
   ];
   return (
-    <div className="flex border-b border-slate-200" role="tablist" aria-label="Extract comparison">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          role="tab"
-          aria-selected={active === tab.id}
-          onClick={() => onChange(tab.id)}
-          className={`px-3 py-2 text-sm font-semibold ${
-            active === tab.id
-              ? "border-b-2 border-teal-700 text-teal-900"
-              : "text-slate-600 hover:bg-slate-50"
-          }`}
-        >
-          {tab.label}
-        </button>
-      ))}
+    <div className="flex items-stretch border-b border-slate-200">
+      <div className="flex min-w-0 flex-1" role="tablist" aria-label="Extract comparison">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={active === tab.id}
+            onClick={() => onChange(tab.id)}
+            className={`px-3 py-2 text-sm font-semibold ${
+              active === tab.id
+                ? "border-b-2 border-teal-700 text-teal-900"
+                : "text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex shrink-0 items-center border-l border-slate-200 px-2">
+        <CopyMarkdownButton markdown={copyMarkdown} label="Copy as markdown" />
+      </div>
     </div>
   );
 }
@@ -425,10 +433,13 @@ function CompareColumns({
   agendaContentEndsAtPage,
 }: CompareColumnsProps) {
   const [extractTab, setExtractTab] = useState<ExtractCompareTab>("corrected");
-  const doclingText = selectedPage?.extractedText?.trim() || "No extracted text on this page.";
+  const doclingMarkdown = selectedPage?.extractedText?.trim() ?? "";
+  const doclingText = doclingMarkdown || "No extracted text on this page.";
   const agendaPage =
     pageNumber != null && isAgendaPageForCorrection(pageNumber, agendaContentEndsAtPage);
-  const corrected = correctedText?.trim()
+  const correctedMarkdown = correctedText?.trim() ?? "";
+  const activeCopyMarkdown = extractTab === "corrected" ? correctedMarkdown : doclingMarkdown;
+  const corrected = correctedMarkdown
     || (busy
       ? agendaPage
         ? "Correcting this agenda page."
@@ -449,7 +460,11 @@ function CompareColumns({
       </section>
 
       <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <ExtractCompareTabBar active={extractTab} onChange={setExtractTab} />
+        <ExtractCompareTabBar
+          active={extractTab}
+          onChange={setExtractTab}
+          copyMarkdown={activeCopyMarkdown}
+        />
         <div className="px-4 py-3" role="tabpanel">
           <MarkdownPreview>{extractTab === "corrected" ? corrected : doclingText}</MarkdownPreview>
         </div>

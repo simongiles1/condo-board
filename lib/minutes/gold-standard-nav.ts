@@ -1,3 +1,4 @@
+import { pairMatchScore } from "@/lib/minutes/gold-standard-item-match";
 import type { CompareAlignment } from "@/lib/minutes/gold-standard-schema";
 
 /** Agenda row used to number compare nav entries and to tell headings from leaves. */
@@ -82,18 +83,38 @@ function agendaHasChildren(itemNumber: string, items: CompareAgendaRef[]): boole
   return items.some((item) => (item.itemNumber || "").trim().startsWith(prefix));
 }
 
+const AGENDA_NAV_MATCH_THRESHOLD = 62;
+
+function isGuestOutlineCode(itemNumber: string | null | undefined): boolean {
+  return /^\d+\.[A-Za-z]$/.test((itemNumber || "").trim());
+}
+
+function outlineSegmentCount(itemNumber: string | null | undefined): number {
+  return (itemNumber || "").split(".").map((part) => part.trim()).filter(Boolean).length;
+}
+
+/**
+ * On an equal score, the property-management project (4.B.1) beats the guest
+ * bullet (1.A) that only introduces the same work.
+ */
+function preferAgendaItem(candidate: CompareAgendaRef, current: CompareAgendaRef): boolean {
+  const candidateGuest = isGuestOutlineCode(candidate.itemNumber);
+  const currentGuest = isGuestOutlineCode(current.itemNumber);
+  if (currentGuest && !candidateGuest) return true;
+  if (candidateGuest && !currentGuest) return false;
+  return outlineSegmentCount(candidate.itemNumber) > outlineSegmentCount(current.itemNumber);
+}
+
 function matchAgenda(label: string, items: CompareAgendaRef[]): CompareAgendaRef | null {
   const target = normalizeTitle(label);
   if (target.length < 8) return null;
   let best: CompareAgendaRef | null = null;
   let bestScore = 0;
   for (const item of items) {
-    const title = normalizeTitle(item.title);
-    if (!title) continue;
-    if (title === target) return item;
-    const contained = title.includes(target) || target.includes(title);
-    const score = Math.min(title.length, target.length);
-    if (contained && score >= 12 && score > bestScore) {
+    if (!item.title.trim()) continue;
+    const score = pairMatchScore(label, item.title);
+    if (score < AGENDA_NAV_MATCH_THRESHOLD) continue;
+    if (!best || score > bestScore || (score === bestScore && preferAgendaItem(item, best))) {
       best = item;
       bestScore = score;
     }

@@ -733,4 +733,57 @@ describe("gold compare nav", () => {
     assert.equal(entries[0]?.number, "4.4(i)");
     assert.equal(entries[0]?.isLeaf, true);
   });
+
+  it("numbers package projects instead of the guest bullet or a blank row", () => {
+    const agendaItems = [
+      { title: "Booster Pump", itemNumber: "1.A", visibility: "PUBLIC" },
+      {
+        title: "Steam Room Heat Pump Design, Tender and Construction Review",
+        itemNumber: "4.A.1",
+        visibility: "PUBLIC",
+      },
+      {
+        title: "Main Lobby / Elevator Lobby Restoration Work - Certificate of Completion",
+        itemNumber: "4.A.2",
+        visibility: "PUBLIC",
+      },
+      {
+        title: "Booster Pump Replacement – Base Specification and Alternative Options",
+        itemNumber: "4.B.1",
+        visibility: "PUBLIC",
+      },
+      {
+        title: "Heat Exchanger Plate Pack Replacement",
+        itemNumber: "4.B.2",
+        visibility: "PUBLIC",
+      },
+      {
+        title: "Make-Up Air (MUA) Unit Leak Repair, Penthouse Mechanical Room",
+        itemNumber: "4.B.3",
+        visibility: "PUBLIC",
+      },
+    ];
+    const rows = [
+      ["steam", "Steam Room Heat Pump Design", "4.A.1"],
+      ["lobby", "Lobby Restoration Certificate of Completion", "4.A.2"],
+      ["pump", "Booster Pump Replacement and Contract", "4.B.1"],
+      ["mua", "Penthouse Mechanical Room MUA Unit Leak Repair", "4.B.3"],
+    ] as const;
+    const entries = buildCompareNavEntries({
+      alignments: rows.map(([id, label]) => ({
+        id,
+        kind: "1:1" as const,
+        goldConceptIds: [],
+        aiConceptIds: [],
+        confidence: "high" as const,
+        label,
+      })),
+      headingsByAlignmentId: new Map(rows.map(([id, label]) => [id, label])),
+      agendaItems: [...agendaItems],
+    });
+    assert.deepEqual(
+      entries.map((entry) => [entry.label, entry.number]),
+      rows.map(([, label, number]) => [label, number]),
+    );
+  });
 });

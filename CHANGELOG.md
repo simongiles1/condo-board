@@ -18,6 +18,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Gold-standard compare outline** — Agenda numbers in the comparison list follow the package item, so a project such as the booster pump is 4.B.1 rather than the guest-presentation bullet 1.A, and lobby restoration and the penthouse MUA repair keep 4.A.2 and 4.B.3.
 - **Meetings V4 draft** — Each item’s “Agenda text and transcript sent” panel has **Transcript** and **Full LLM call** tabs again, alongside Corrected and Docling extract. Full LLM call shows the system instruction and the user JSON (agenda, transcript cues, attachments).
 - **Meetings V4 draft** — Corrected extract stays filled when the page rewrites live on the V3 copy of the same meeting date and this V4 meeting has none of its own. Reload the draft step. The next Draft minutes run sends that corrected text.
 - **Meetings V4 minutes** — A decision made at the meeting is printed as a formal motion: mover, seconder, the resolution, and whether it carried, was defeated, or was deferred. Names appear only when the transcript identifies them. Draft again to add motions to an existing draft.

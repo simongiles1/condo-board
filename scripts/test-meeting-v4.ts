@@ -10,7 +10,6 @@ import {
   agendaTextForItem,
   buildAgendaExtracts,
   resolveAgendaSourcePages,
-  v3SourcePagesByItemNumber,
 } from "../lib/meeting-v4/agenda-text";
 import { assembleMeetingsV4Minutes } from "../lib/meeting-v4/assemble";
 import { minutesJsonForGoldCompare } from "../lib/meeting-v4/workspace";
@@ -73,11 +72,26 @@ describe("v4 inventory", () => {
 
 describe("v4 agenda text", () => {
   it("prefers V3-linked source pages over empty V2 pages", () => {
-    const v3 = v3SourcePagesByItemNumber([
-      { itemNumber: "4.A", sourcePagesJson: "[4]" },
-    ]);
+    const v3Rows = [{ itemNumber: "4.A", title: "Booster pump", sourcePagesJson: "[4]" }];
     assert.deepEqual(
-      resolveAgendaSourcePages({ itemNumber: "4.A", v2Pages: [], v3PagesByItemNumber: v3 }),
+      resolveAgendaSourcePages({ itemNumber: "4.A", title: "Booster pump", v2Pages: [], v3Rows }),
+      [4],
+    );
+  });
+
+  it("matches V3 pages by title when V2 and V3 item numbers differ", () => {
+    const v3Rows = [{
+      itemNumber: "1",
+      title: "Booster Pump Replacement – Base Specification and Alternative Options",
+      sourcePagesJson: "[4]",
+    }];
+    assert.deepEqual(
+      resolveAgendaSourcePages({
+        itemNumber: "4.A",
+        title: "Booster Pump Replacement",
+        v2Pages: [],
+        v3Rows,
+      }),
       [4],
     );
   });

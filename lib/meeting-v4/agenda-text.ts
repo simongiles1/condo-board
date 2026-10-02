@@ -4,6 +4,14 @@
  */
 
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
+import { parentAgendaItemCode } from "@/lib/meeting-v2/agenda-outline";
+
+/** One V3 agenda row used to resolve linked package pages for a V2 item. */
+export type V3AgendaPageLink = {
+  itemNumber: string;
+  title: string;
+  sourcePagesJson: string;
+};
 
 /** Normalizes an agenda code for lookup across V2 and V3 rows. */
 export function agendaItemNumberKey(itemNumber: string): string {
@@ -26,20 +34,66 @@ export function v3SourcePagesByItemNumber(
   return map;
 }
 
+function pagesForItemNumber(
+  itemNumber: string,
+  byNumber: ReadonlyMap<string, readonly number[]>,
+): number[] | null {
+  const pages = byNumber.get(agendaItemNumberKey(itemNumber));
+  return pages && pages.length > 0 ? [...pages] : null;
+}
+
+/**
+ * Resolves package pages for a V2 agenda row.
+ * Matches V3 attachment links by item number, parent codes, title, then V2 pages.
+ */
+export function resolveV3SourcePages(
+  itemNumber: string,
+  title: string,
+  v3Rows: readonly V3AgendaPageLink[],
+  v2Pages: readonly number[],
+): number[] {
+  const byNumber = v3SourcePagesByItemNumber(v3Rows);
+
+  const direct = pagesForItemNumber(itemNumber, byNumber);
+  if (direct) return direct;
+
+  let code = itemNumber.trim();
+  while (code.includes(".")) {
+    const parent = parentAgendaItemCode(code);
+    if (!parent) break;
+    code = parent;
+    const linked = pagesForItemNumber(code, byNumber);
+    if (linked) return linked;
+  }
+
+  const titleKey = title.trim().toLowerCase();
+  if (titleKey) {
+    for (const row of v3Rows) {
+      const rowTitle = row.title.trim().toLowerCase();
+      if (rowTitle === titleKey || rowTitle.includes(titleKey) || titleKey.includes(rowTitle)) {
+        const linked = readAgendaSourcePages(row.sourcePagesJson);
+        if (linked.length > 0) return linked;
+      }
+    }
+  }
+
+  const fromV2 = [...new Set(v2Pages.filter((page) => Number.isInteger(page) && page > 0))].sort(
+    (left, right) => left - right,
+  );
+  return fromV2;
+}
+
 /**
  * Chooses source pages for one agenda row.
  * Prefer V3-linked pages when present; otherwise use the V2 row.
  */
 export function resolveAgendaSourcePages(input: {
   itemNumber: string;
+  title: string;
   v2Pages: readonly number[];
-  v3PagesByItemNumber: ReadonlyMap<string, readonly number[]>;
+  v3Rows: readonly V3AgendaPageLink[];
 }): number[] {
-  const v3 = input.v3PagesByItemNumber.get(agendaItemNumberKey(input.itemNumber));
-  const pages = v3 && v3.length > 0 ? [...v3] : [...input.v2Pages];
-  return [...new Set(pages.filter((page) => Number.isInteger(page) && page > 0))].sort(
-    (left, right) => left - right,
-  );
+  return resolveV3SourcePages(input.itemNumber, input.title, input.v3Rows, input.v2Pages);
 }
 
 /** Corrected, Docling, and the combined text sent to the draft model. */
@@ -83,11 +137,7 @@ export function buildAgendaExtracts(input: {
   });
   const sent = sentParts.length > 0 ? sentParts.join("\n\n") : input.fallback.trim();
 
-  return {
-    sent,
-    corrected: corrected || sent,
-    docling: docling || sent,
-  };
+  return { sent, corrected, docling };
 }
 
 /**

@@ -422,16 +422,26 @@ function Draft({
 
 function AgendaSentPanel({ item }: { item: MeetingsV4ItemResult }) {
   const [extractTab, setExtractTab] = useState<"corrected" | "docling" | "raw">("corrected");
-  const correctedMarkdown = item.bundle.agendaTextCorrected?.trim() || item.bundle.agendaText.trim();
-  const doclingMarkdown = item.bundle.agendaTextDocling?.trim() || item.bundle.agendaText.trim();
-  const sentRaw = item.bundle.agendaText;
+  const correctedMarkdown = item.bundle.agendaTextCorrected?.trim() ?? "";
+  const doclingMarkdown = item.bundle.agendaTextDocling?.trim() ?? "";
+  const sentRaw = item.bundle.agendaText.trim();
   const tabs: Array<{ id: "corrected" | "docling" | "raw"; label: string }> = [
     { id: "corrected", label: "Corrected extract" },
     { id: "docling", label: "Docling extract" },
-    { id: "raw", label: "Raw text" },
+    { id: "raw", label: "Sent to model" },
   ];
   const copyMarkdown =
-    extractTab === "docling" ? doclingMarkdown : extractTab === "raw" ? sentRaw : correctedMarkdown;
+    extractTab === "docling"
+      ? doclingMarkdown
+      : extractTab === "raw"
+        ? sentRaw
+        : correctedMarkdown || sentRaw;
+  const panelBody =
+    extractTab === "raw"
+      ? sentRaw || "Nothing was sent for the agenda field."
+      : extractTab === "docling"
+        ? doclingMarkdown || "No Docling text is linked to this item's source pages."
+        : correctedMarkdown || "No corrected rewrite is stored for this item's source pages yet.";
 
   return (
     <div className="mt-2 overflow-hidden rounded-lg border border-slate-200 bg-white">
@@ -460,10 +470,10 @@ function AgendaSentPanel({ item }: { item: MeetingsV4ItemResult }) {
       </div>
       <div className="px-3 py-2" role="tabpanel">
         {extractTab === "raw" ? (
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap text-xs text-slate-800">{sentRaw}</pre>
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap text-xs text-slate-800">{panelBody}</pre>
         ) : (
           <div className="max-h-96 overflow-auto text-sm">
-            <MarkdownPreview>{extractTab === "corrected" ? correctedMarkdown : doclingMarkdown}</MarkdownPreview>
+            <MarkdownPreview>{panelBody}</MarkdownPreview>
           </div>
         )}
       </div>

@@ -15,8 +15,9 @@ import {
 } from "@/lib/db/schema-v2";
 import { readMeetingV2Settings, type MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
-import { resolveAgendaSourcePages, v3SourcePagesByItemNumber } from "@/lib/meeting-v4/agenda-text";
+import { resolveAgendaSourcePages } from "@/lib/meeting-v4/agenda-text";
 import { assembleMeetingsV4Minutes, type MeetingsV4AssemblyItem } from "@/lib/meeting-v4/assemble";
+import { buildAgendaExtracts } from "@/lib/meeting-v4/agenda-text";
 import { inventoryMeetingsV4, type MeetingsV4Inventory } from "@/lib/meeting-v4/inventory";
 import type { MeetingsV4ItemResult, MeetingsV4Stored } from "@/lib/meeting-v4/types";
 
@@ -97,7 +98,8 @@ export async function loadMeetingsV4Workspace(meetingId: string): Promise<Meetin
     cues: loaded.cues,
     spans: loaded.spans,
   });
-  const draft = loaded.settings.meetingsV4?.draftedAt ? loaded.settings.meetingsV4 : null;
+  const draftStored = loaded.settings.meetingsV4?.draftedAt ? loaded.settings.meetingsV4 : null;
+  const draft = draftStored ? refreshMeetingsV4DraftBundles(loaded, draftStored) : null;
   return {
     id: loaded.id,
     title: loaded.title,
@@ -109,6 +111,39 @@ export async function loadMeetingsV4Workspace(meetingId: string): Promise<Meetin
     inventory,
     draft,
     markdown: draft ? markdownFor(loaded, draft.items) : null,
+  };
+}
+
+/**
+ * Rebuilds each stored draft bundle from current page rewrites and V3 page links.
+ * The draft prompt text updates in the UI without rewriting stored minutes paragraphs.
+ */
+export function refreshMeetingsV4DraftBundles(
+  loaded: NonNullable<Awaited<ReturnType<typeof loadMeetingsV4Source>>>,
+  draft: MeetingsV4Stored,
+): MeetingsV4Stored {
+  const agendaById = new Map(loaded.agenda.map((row) => [row.id, row]));
+  return {
+    ...draft,
+    items: draft.items.map((item) => {
+      const agenda = agendaById.get(item.agendaItemId);
+      if (!agenda) return item;
+      const extracts = buildAgendaExtracts({
+        sourcePages: agenda.sourcePages,
+        correctedPages: loaded.correctedPageText,
+        doclingPages: loaded.doclingPageText,
+        fallback: agenda.sourceText || agenda.title,
+      });
+      return {
+        ...item,
+        bundle: {
+          ...item.bundle,
+          agendaText: extracts.sent,
+          agendaTextCorrected: extracts.corrected,
+          agendaTextDocling: extracts.docling,
+        },
+      };
+    }),
   };
 }
 
@@ -206,6 +241,7 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
     db
       .select({
         itemNumber: meetingsV3AgendaItems.itemNumber,
+        title: meetingsV3AgendaItems.title,
         sourcePagesJson: meetingsV3AgendaItems.sourcePagesJson,
       })
       .from(meetingsV3AgendaItems)
@@ -236,7 +272,6 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
       .from(meetingsV3PageRewrites)
       .where(eq(meetingsV3PageRewrites.meetingV2Id, meetingId)),
   ]);
-  const v3PagesByItemNumber = v3SourcePagesByItemNumber(v3AgendaRows);
   const doclingPageText = new Map<number, string>();
   const correctedPageText = new Map<number, string>();
   for (const page of storedPages) {
@@ -269,8 +304,9 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
         sourceText: row.sourceText?.trim() || "",
         sourcePages: resolveAgendaSourcePages({
           itemNumber,
+          title: row.title,
           v2Pages,
-          v3PagesByItemNumber,
+          v3Rows: v3AgendaRows,
         }),
         sortOrder: row.sortOrder,
       };

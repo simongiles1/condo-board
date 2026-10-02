@@ -19,7 +19,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Meetings V4 minutes** — A decision made at the meeting is printed as a formal motion: mover, seconder, the resolution, and whether it carried, was defeated, or was deferred. Names appear only when the transcript identifies them. Draft again to add motions to an existing draft.
-- **Meetings V4 draft** — Each item uses V3-linked source pages and the corrected page rewrite when one exists, instead of the short V2 notes when page links were missing. The draft detail view switches between corrected extract, Docling extract, and raw prompt text. The Minutes tab renders the assembled document as formatted markdown. Draft again to replace bundles written before this fix.
+- **Meetings V4 draft** — Each item resolves V3-linked source pages by item number, parent code, or title so corrected rewrites apply when V2 and V3 numbering differ. The sent panel keeps corrected, Docling, and prompt text separate instead of repeating the V2 notes fallback. Bundles refresh from current page rewrites when the workspace loads. Draft again so the model receives the corrected extract.
 
 - **Meetings V3 minutes draft** — A topic paragraph no longer pastes a spoken fragment or a list of unverified fees. Those open points stay on Check minutes. Re-run Draft minutes.
 

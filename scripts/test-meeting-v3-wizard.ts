@@ -28,7 +28,7 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.finished, false);
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["current", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming"],
+      ["current", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming"],
     );
   });
 
@@ -48,7 +48,7 @@ describe("v3 wizard progress", () => {
     assert.equal(ready.activeId, "agenda");
     assert.deepEqual(
       ready.steps.map((step) => step.state),
-      ["complete", "current", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming"],
+      ["complete", "current", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming"],
     );
   });
 
@@ -62,7 +62,7 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.activeId, "agenda");
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["complete", "current", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming"],
+      ["complete", "current", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming"],
     );
   });
 
@@ -77,7 +77,7 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.activeId, "attachments");
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["complete", "complete", "current", "upcoming", "upcoming", "upcoming", "upcoming"],
+      ["complete", "complete", "current", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming"],
     );
   });
 
@@ -93,7 +93,7 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.activeId, "facts");
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["complete", "complete", "complete", "current", "upcoming", "upcoming", "upcoming"],
+      ["complete", "complete", "complete", "current", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming"],
     );
   });
 
@@ -110,7 +110,7 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.activeId, "transcript");
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["complete", "complete", "complete", "complete", "current", "upcoming", "upcoming"],
+      ["complete", "complete", "complete", "complete", "current", "upcoming", "upcoming", "upcoming", "upcoming"],
     );
   });
 
@@ -128,7 +128,7 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.activeId, "sources");
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["complete", "complete", "complete", "complete", "complete", "current", "upcoming"],
+      ["complete", "complete", "complete", "complete", "complete", "current", "upcoming", "upcoming", "upcoming"],
     );
   });
 
@@ -149,11 +149,11 @@ describe("v3 wizard progress", () => {
     assert.equal(progress.activeId, "conclusions");
     assert.deepEqual(
       progress.steps.map((step) => step.state),
-      ["complete", "complete", "complete", "complete", "complete", "complete", "current"],
+      ["complete", "complete", "complete", "complete", "complete", "complete", "current", "upcoming", "upcoming"],
     );
   });
 
-  it("allows a working draft when reconciliation is stored, and keeps minutes incomplete while a review is open", () => {
+  it("moves to the minutes check once conclusions are stored", () => {
     const progress = meetingsV3WizardProgress({
       ...base,
       pageCount: 4,
@@ -164,14 +164,32 @@ describe("v3 wizard progress", () => {
       transcriptSegmented: true,
       factsGrouped: true,
       conclusionsRecorded: true,
+    });
+    assert.equal(progress.finished, false);
+    assert.equal(progress.activeId, "validate");
+  });
+
+  it("allows a working draft after the draft is stored, and keeps minutes incomplete while a review is open", () => {
+    const open = meetingsV3WizardProgress({
+      ...base,
+      pageCount: 4,
+      correctedPageCount: 4,
+      agendaItemCount: 12,
+      attachmentsLinked: true,
+      factsResolved: true,
+      transcriptSegmented: true,
+      factsGrouped: true,
+      conclusionsRecorded: true,
+      minutesValidated: true,
+      minutesDrafted: true,
       reviewIssueCount: 1,
     });
-    assert.equal(progress.finished, true);
-    assert.equal(progress.workingDraft, true);
-    assert.equal(progress.readyToDraft, true);
-    assert.equal(progress.minutesComplete, false);
-    assert.equal(progress.activeId, "conclusions");
-    assert.equal(progress.completedCount, MEETINGS_V3_WIZARD_STEPS.length);
+    assert.equal(open.finished, true);
+    assert.equal(open.workingDraft, true);
+    assert.equal(open.readyToDraft, true);
+    assert.equal(open.minutesComplete, false);
+    assert.equal(open.activeId, "draft");
+    assert.equal(open.completedCount, MEETINGS_V3_WIZARD_STEPS.length);
 
     const clear = meetingsV3WizardProgress({
       ...base,
@@ -183,6 +201,8 @@ describe("v3 wizard progress", () => {
       transcriptSegmented: true,
       factsGrouped: true,
       conclusionsRecorded: true,
+      minutesValidated: true,
+      minutesDrafted: true,
     });
     assert.equal(clear.readyToDraft, true);
     assert.equal(clear.minutesComplete, true);
@@ -197,6 +217,8 @@ describe("v3 wizard progress", () => {
       transcriptSegmented: true,
       factsGrouped: true,
       conclusionsRecorded: true,
+      minutesValidated: true,
+      minutesDrafted: true,
       unclearConclusionCount: 1,
     });
     assert.equal(unclear.minutesComplete, false);
@@ -225,6 +247,8 @@ describe("v3 wizard step query param", () => {
     assert.equal(parseMeetingsV3WizardStepId("attachments"), "attachments");
     assert.equal(parseMeetingsV3WizardStepId("sources"), "sources");
     assert.equal(parseMeetingsV3WizardStepId("conclusions"), "conclusions");
+    assert.equal(parseMeetingsV3WizardStepId("validate"), "validate");
+    assert.equal(parseMeetingsV3WizardStepId("draft"), "draft");
     assert.equal(parseMeetingsV3WizardStepId(""), null);
     assert.equal(parseMeetingsV3WizardStepId("agenda-extra"), null);
     assert.equal(parseMeetingsV3WizardStepId(null), null);

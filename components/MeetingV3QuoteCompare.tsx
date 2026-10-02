@@ -626,6 +626,9 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [segmenting, setSegmenting] = useState(false);
   const [grouping, setGrouping] = useState(false);
   const [reconciling, setReconciling] = useState(false);
+  const [checkingMinutes, setCheckingMinutes] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [draftMarkdown, setDraftMarkdown] = useState<string | null>(null);
   const [deepSeekConfirm, setDeepSeekConfirm] = useState<"attachments" | "facts" | "transcript" | "sources" | null>(null);
   const deepSeekRun = useRef(false);
   const [pickedStep, setPickedStep] = useState<MeetingsV3WizardStep["id"] | null>(() =>
@@ -646,7 +649,7 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
   const [quotedFactsPanel, setQuotedFactsPanel] = useState<QuotedFactsPanel>("agenda");
   const transcriptScrollRef = useRef<HTMLDivElement>(null);
 
-  const busy = running || buildingAgenda || linking || resolving || pingingDeepSeek || segmenting || grouping || reconciling || status.stage === "extracting" || status.stage === "correcting";
+  const busy = running || buildingAgenda || linking || resolving || pingingDeepSeek || segmenting || grouping || reconciling || checkingMinutes || drafting || status.stage === "extracting" || status.stage === "correcting";
 
   function refreshAiUsage() {
     setAiUsageLoading(true);
@@ -792,6 +795,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         transcriptSegmented: status.transcriptSegmented,
         factsGrouped: status.factsGrouped,
         conclusionsRecorded: status.conclusionsRecorded,
+        minutesValidated: status.minutesValidated,
+        minutesDrafted: status.minutesDrafted,
         reviewIssueCount: agendaItems.reduce(
           (count, item) => count + (item.facts?.reviewIssues.length ?? 0),
           0,
@@ -812,6 +817,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       status.transcriptSegmented,
       status.factsGrouped,
       status.conclusionsRecorded,
+      status.minutesValidated,
+      status.minutesDrafted,
       agendaItems,
       status.agendaContentEndsAtPage,
     ],
@@ -942,6 +949,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         factGroupCount: 0,
         ungroupedFactCount: 0,
         conclusionsRecorded: false,
+        minutesValidated: false,
+        minutesDrafted: false,
         unassignedAttachmentPages: [],
         attachmentPagesWithoutText: [],
       }));
@@ -982,6 +991,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         factGroupCount: 0,
         ungroupedFactCount: 0,
         conclusionsRecorded: false,
+        minutesValidated: false,
+        minutesDrafted: false,
         unassignedAttachmentPages: payload?.unassignedPages ?? [],
         attachmentPagesWithoutText: payload?.pagesWithoutText ?? [],
         agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
@@ -1041,6 +1052,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         factGroupCount: 0,
         ungroupedFactCount: 0,
         conclusionsRecorded: false,
+        minutesValidated: false,
+        minutesDrafted: false,
         currentStep:
           (payload?.unresolvedItemCount ?? 0) > 0
             ? "Quoted facts stored; some items have more than one value"
@@ -1082,6 +1095,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         transcriptSpanCount: payload?.spanCount ?? 0,
         transcriptOverlapItemCount: payload?.overlapItemCount ?? 0,
         conclusionsRecorded: false,
+        minutesValidated: false,
+        minutesDrafted: false,
         agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
         currentStep:
           (payload?.overlapItemCount ?? 0) > 0
@@ -1162,6 +1177,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
       setStatus((current) => ({
         ...current,
         conclusionsRecorded: true,
+        minutesValidated: false,
+        minutesDrafted: false,
         agendaItemCount: payload?.items?.length ?? current.agendaItemCount,
         currentStep:
           (payload?.unclearCount ?? 0) > 0
@@ -1177,6 +1194,73 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     }
   }
 
+  async function checkMinutes() {
+    setCheckingMinutes(true);
+    setError(null);
+    setDraftMarkdown(null);
+    setStatus((current) => ({ ...current, currentStep: "Checking open points" }));
+    try {
+      const response = await fetch(`/api/v3/meetings/${status.id}/minutes-validation`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            errorCount?: number;
+            warningCount?: number;
+            findings?: MeetingsV3PackageStatus["validationFindings"];
+            error?: string;
+          }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Minutes check failed.");
+      }
+      setStatus((current) => ({
+        ...current,
+        minutesValidated: true,
+        minutesDrafted: false,
+        validationErrorCount: payload?.errorCount ?? 0,
+        validationWarningCount: payload?.warningCount ?? 0,
+        validationFindings: payload?.findings ?? [],
+        currentStep:
+          (payload?.errorCount ?? 0) > 0
+            ? "Minutes checked; open points remain"
+            : "Minutes checked; no open points",
+      }));
+    } catch (checkError) {
+      const message = checkError instanceof Error ? checkError.message : "Minutes check failed.";
+      setError(message);
+    } finally {
+      setCheckingMinutes(false);
+    }
+  }
+
+  async function draftMinutes() {
+    setDrafting(true);
+    setError(null);
+    setStatus((current) => ({ ...current, currentStep: "Drafting minutes" }));
+    try {
+      const response = await fetch(`/api/v3/meetings/${status.id}/minutes-draft`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | { markdown?: string; openPointCount?: number; error?: string }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Minutes draft failed.");
+      }
+      setDraftMarkdown(payload?.markdown ?? "");
+      setStatus((current) => ({
+        ...current,
+        minutesDrafted: true,
+        currentStep:
+          (payload?.openPointCount ?? 0) > 0
+            ? "Working draft stored; open points remain"
+            : "Minutes draft stored",
+      }));
+    } catch (draftError) {
+      const message = draftError instanceof Error ? draftError.message : "Minutes draft failed.";
+      setError(message);
+    } finally {
+      setDrafting(false);
+    }
+  }
+
   const shownStep = wizard.steps.find((step) => step.id === pickedStep && step.state !== "upcoming")
     ?? wizard.steps.find((step) => step.id === wizard.activeId)
     ?? wizard.steps[0];
@@ -1184,6 +1268,21 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
     () => agendaItemsForWizardStep(agendaItems, shownStep?.id),
     [agendaItems, shownStep?.id],
   );
+
+  useEffect(() => {
+    if (shownStep?.id !== "draft" || !status.minutesDrafted || draftMarkdown != null) return;
+    let cancelled = false;
+    void fetch(`/api/v3/meetings/${status.id}/minutes-draft`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok || cancelled) return;
+        const payload = (await response.json()) as { markdown?: string };
+        if (!cancelled) setDraftMarkdown(payload.markdown ?? "");
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [draftMarkdown, shownStep?.id, status.id, status.minutesDrafted]);
   const pageAgenda = agendaItems.filter((item) => item.sourcePages.includes(pageNumber ?? -1));
   const extractRunning = running || status.stage === "extracting" || status.stage === "correcting";
   const hasExtractedPages = status.pageCount > 0 || pages.length > 0;
@@ -1985,16 +2084,27 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
-            <button
-              type="button"
-              onClick={() => void reconcileMeeting()}
-              disabled={busy}
-              className={status.conclusionsRecorded && !reconciling
-                ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-                : "rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"}
-            >
-              {reconciling ? "Reconciling meeting…" : status.conclusionsRecorded ? "Run again" : "Reconcile meeting"}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              {status.conclusionsRecorded && !reconciling ? (
+                <button
+                  type="button"
+                  onClick={() => showWizardStep("validate")}
+                  className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
+                >
+                  Continue to check
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void reconcileMeeting()}
+                disabled={busy}
+                className={status.conclusionsRecorded && !reconciling
+                  ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                  : "rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"}
+              >
+                {reconciling ? "Reconciling meeting…" : status.conclusionsRecorded ? "Run again" : "Reconcile meeting"}
+              </button>
+            </div>
           </div>
           {!status.conclusionsRecorded ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
@@ -2043,6 +2153,84 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                 ))}
               </ul>
             </section>
+          )}
+        </>
+      ) : null}
+
+      {shownStep?.id === "validate" ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
+            <div className="flex flex-wrap gap-2">
+              {status.minutesValidated && !checkingMinutes ? (
+                <button
+                  type="button"
+                  onClick={() => showWizardStep("draft")}
+                  className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
+                >
+                  Continue to draft
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void checkMinutes()}
+                disabled={busy}
+                className={status.minutesValidated && !checkingMinutes
+                  ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                  : "rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"}
+              >
+                {checkingMinutes ? "Checking minutes…" : status.minutesValidated ? "Check again" : "Check minutes"}
+              </button>
+            </div>
+          </div>
+          {!status.minutesValidated ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              {checkingMinutes
+                ? "Comparing each conclusion with the open figures."
+                : "Check the minutes once the meeting has been reconciled."}
+            </div>
+          ) : status.validationFindings.length === 0 ? (
+            <p className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-900">
+              No open points. A draft can treat these topics as supported.
+            </p>
+          ) : (
+            <ul className="divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200 bg-white">
+              {status.validationFindings.map((finding) => (
+                <li key={`${finding.agendaItemId}-${finding.code}-${finding.message}`} className="px-3 py-2 text-sm text-slate-800">
+                  <span className="mr-2 font-semibold tabular-nums text-slate-900">{finding.itemNumber}</span>
+                  {finding.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      ) : null}
+
+      {shownStep?.id === "draft" ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-2xl text-sm text-slate-600">{shownStep.detail}</p>
+            <button
+              type="button"
+              onClick={() => void draftMinutes()}
+              disabled={busy || !status.minutesValidated}
+              className={status.minutesDrafted && !drafting
+                ? "rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                : "rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"}
+            >
+              {drafting ? "Drafting minutes…" : status.minutesDrafted ? "Draft again" : "Draft minutes"}
+            </button>
+          </div>
+          {!status.minutesDrafted && !draftMarkdown ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-10 py-16 text-center text-slate-600">
+              {drafting
+                ? "Assembling the minutes from the reconciled topics."
+                : "Draft the minutes after the check. Open points stay visible."}
+            </div>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4">
+              <MarkdownPreview>{draftMarkdown ?? "Loading the stored draft…"}</MarkdownPreview>
+            </div>
           )}
         </>
       ) : null}

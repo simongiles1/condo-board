@@ -7,7 +7,7 @@ import { countAgendaPages } from "@/lib/meeting-v3/agenda-pages";
 
 /** One stage on the V3 test wizard. */
 export type MeetingsV3WizardStep = {
-  id: "extract" | "agenda" | "attachments" | "facts" | "transcript" | "sources" | "conclusions";
+  id: "extract" | "agenda" | "attachments" | "facts" | "transcript" | "sources" | "conclusions" | "validate" | "draft";
   title: string;
   detail: string;
 };
@@ -51,6 +51,18 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
     title: "Reconcile meeting",
     detail:
       "Each topic's transcript stretch is read in order. A motion is not a decision until the stretch adopts, defeats, or replaces it. The package can name what the talk pointed at. It cannot decide the meeting.",
+  },
+  {
+    id: "validate",
+    title: "Check minutes",
+    detail:
+      "The reconciled conclusion is the investigation. This check lists missing decisions, open package references, and figures that still need review. It does not turn those into settled decisions.",
+  },
+  {
+    id: "draft",
+    title: "Draft minutes",
+    detail:
+      "Minutes are assembled in the same section order as Meetings V2. A topic without a supported decision stays open in the draft.",
   },
 ];
 
@@ -100,6 +112,8 @@ export type MeetingsV3WizardProgress = {
  * The transcript is finished after a segmentation run is stored for those facts.
  * Sources are finished after a grouping run is stored.
  * Reconciliation is finished after meeting conclusions are stored for that transcript.
+ * The minutes check is finished after those conclusions have been checked.
+ * The draft is finished after a minutes draft is stored for that check.
  * `finished` means every stage has been run.
  * `workingDraft` and `readyToDraft` match that: a draft may include marked open points.
  * `minutesComplete` also requires no fact-review issues, no unclear conclusion, and no open package reference.
@@ -113,6 +127,8 @@ export function meetingsV3WizardProgress(input: {
   transcriptSegmented: boolean;
   factsGrouped: boolean;
   conclusionsRecorded?: boolean;
+  minutesValidated?: boolean;
+  minutesDrafted?: boolean;
   reviewIssueCount?: number;
   unclearConclusionCount?: number;
   openReferenceCount?: number;
@@ -126,6 +142,8 @@ export function meetingsV3WizardProgress(input: {
   const transcriptDone = factsDone && input.transcriptSegmented;
   const sourcesDone = transcriptDone && input.factsGrouped;
   const conclusionsDone = sourcesDone && input.conclusionsRecorded === true;
+  const validateDone = conclusionsDone && input.minutesValidated === true;
+  const draftDone = validateDone && input.minutesDrafted === true;
   const doneById = {
     extract: extractDone,
     agenda: agendaDone,
@@ -134,6 +152,8 @@ export function meetingsV3WizardProgress(input: {
     transcript: transcriptDone,
     sources: sourcesDone,
     conclusions: conclusionsDone,
+    validate: validateDone,
+    draft: draftDone,
   };
   const activeId = MEETINGS_V3_WIZARD_STEPS.find((step) => !doneById[step.id])?.id
     ?? MEETINGS_V3_WIZARD_STEPS[MEETINGS_V3_WIZARD_STEPS.length - 1].id;

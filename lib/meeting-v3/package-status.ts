@@ -22,6 +22,8 @@ import {
   meetingsV3FactGrouping,
   meetingsV3FactResolution,
   meetingsV3MeetingReconciliation,
+  meetingsV3MinutesDraft,
+  meetingsV3MinutesValidation,
   meetingsV3PackageError,
   meetingsV3PackageStage,
   meetingsV3TranscriptSegmentation,
@@ -29,6 +31,8 @@ import {
   type MeetingsV3FactGrouping,
   type MeetingsV3FactResolution,
   type MeetingsV3MeetingReconciliation,
+  type MeetingsV3MinutesDraft,
+  type MeetingsV3MinutesValidation,
   type MeetingsV3PackageSettings,
   type MeetingsV3TranscriptSegmentation,
   type MeetingsV3PackageStage,
@@ -50,6 +54,8 @@ export type MeetingsV3WorkspaceCard = {
   factsResolved: boolean;
   transcriptSegmented: boolean;
   factsGrouped: boolean;
+  minutesValidated: boolean;
+  minutesDrafted: boolean;
 };
 
 /** Package progress for one V3 meeting. */
@@ -75,6 +81,11 @@ export type MeetingsV3PackageStatus = {
   factGroupCount: number;
   ungroupedFactCount: number;
   conclusionsRecorded: boolean;
+  minutesValidated: boolean;
+  minutesDrafted: boolean;
+  validationErrorCount: number;
+  validationWarningCount: number;
+  validationFindings: MeetingsV3MinutesValidation["findings"];
   hasTranscript: boolean;
   hasBoardPackage: boolean;
   transcriptFileName: string | null;
@@ -150,6 +161,8 @@ export async function listMeetingsV3Workspaces(): Promise<MeetingsV3WorkspaceCar
     factsResolved: meetingsV3FactResolution(row.settings) != null,
     transcriptSegmented: meetingsV3TranscriptSegmentation(row.settings) != null,
     factsGrouped: meetingsV3FactGrouping(row.settings) != null,
+    minutesValidated: meetingsV3MinutesValidation(row.settings) != null,
+    minutesDrafted: meetingsV3MinutesDraft(row.settings) != null,
   }));
 }
 
@@ -221,6 +234,11 @@ export async function loadMeetingsV3PackageStatus(
     factGroupCount: factGrouping?.groupCount ?? 0,
     ungroupedFactCount: factGrouping?.ungroupedCount ?? 0,
     conclusionsRecorded: meetingsV3MeetingReconciliation(settings) != null,
+    minutesValidated: meetingsV3MinutesValidation(settings) != null,
+    minutesDrafted: meetingsV3MinutesDraft(settings) != null,
+    validationErrorCount: meetingsV3MinutesValidation(settings)?.errorCount ?? 0,
+    validationWarningCount: meetingsV3MinutesValidation(settings)?.warningCount ?? 0,
+    validationFindings: meetingsV3MinutesValidation(settings)?.findings ?? [],
     hasTranscript: Boolean(transcriptPath),
     hasBoardPackage,
     transcriptFileName: transcriptPath ? path.basename(transcriptPath) : null,
@@ -272,6 +290,7 @@ export async function writeMeetingsV3PackageStage(
     transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
     factGrouping: meetingsV3FactGrouping(settings),
     meetingReconciliation: meetingsV3MeetingReconciliation(settings),
+    ...minutesFollowOn(settings, true),
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   await db
@@ -302,6 +321,7 @@ export function meetingsV3SettingsWithAttachmentLink(
     transcriptSegmentation: null,
     factGrouping: null,
     meetingReconciliation: null,
+    ...minutesFollowOn(settings, false),
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
@@ -325,6 +345,7 @@ export function meetingsV3SettingsWithFactResolution(
     transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
     factGrouping: null,
     meetingReconciliation: null,
+    ...minutesFollowOn(settings, false),
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
@@ -394,6 +415,7 @@ export function meetingsV3SettingsWithTranscriptSegmentation(
     transcriptSegmentation,
     factGrouping: meetingsV3FactGrouping(settings),
     meetingReconciliation: null,
+    ...minutesFollowOn(settings, false),
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
@@ -440,6 +462,7 @@ export function meetingsV3SettingsWithFactGrouping(
     transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
     factGrouping,
     meetingReconciliation: meetingsV3MeetingReconciliation(settings),
+    ...minutesFollowOn(settings, true),
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
@@ -486,9 +509,21 @@ export function meetingsV3SettingsWithMeetingReconciliation(
     transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
     factGrouping: meetingsV3FactGrouping(settings),
     meetingReconciliation,
+    ...minutesFollowOn(settings, false),
     aiUsage: settings.v3Package?.aiUsage ?? null,
   };
   return { ...settings, v3Package: next };
+}
+
+function minutesFollowOn(
+  settings: MeetingV2Settings,
+  keep: boolean,
+): Pick<MeetingsV3PackageSettings, "minutesValidation" | "minutesDraft"> {
+  if (!keep) return { minutesValidation: null, minutesDraft: null };
+  return {
+    minutesValidation: meetingsV3MinutesValidation(settings),
+    minutesDraft: meetingsV3MinutesDraft(settings),
+  };
 }
 
 /**
@@ -509,6 +544,102 @@ export async function writeMeetingsV3MeetingReconciliation(
     .update(meetingsV2)
     .set({
       settings: meetingsV3SettingsWithMeetingReconciliation(settings, meetingReconciliation),
+      updatedAt,
+    })
+    .where(eq(meetingsV2.id, meetingId));
+}
+
+/**
+ * Settings with the minutes-check flag replaced.
+ * A new check clears the previous draft because that draft described the previous check.
+ */
+export function meetingsV3SettingsWithMinutesValidation(
+  settings: MeetingV2Settings,
+  minutesValidation: MeetingsV3MinutesValidation | null,
+): MeetingV2Settings {
+  const next: MeetingsV3PackageSettings = {
+    workspace: true,
+    stage: meetingsV3PackageStage(settings),
+    error: meetingsV3PackageError(settings),
+    updatedAt: settings.v3Package?.updatedAt ?? new Date().toISOString(),
+    attachmentLink: meetingsV3AttachmentLink(settings),
+    factResolution: meetingsV3FactResolution(settings),
+    transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
+    factGrouping: meetingsV3FactGrouping(settings),
+    meetingReconciliation: meetingsV3MeetingReconciliation(settings),
+    minutesValidation,
+    minutesDraft: null,
+    aiUsage: settings.v3Package?.aiUsage ?? null,
+  };
+  return { ...settings, v3Package: next };
+}
+
+/**
+ * Stores or clears the minutes check without changing the package stage.
+ */
+export async function writeMeetingsV3MinutesValidation(
+  meetingId: string,
+  minutesValidation: MeetingsV3MinutesValidation | null,
+): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select({ settings: meetingsV2.settings })
+    .from(meetingsV2)
+    .where(eq(meetingsV2.id, meetingId));
+  const settings = readMeetingV2Settings(row?.settings);
+  const updatedAt = new Date().toISOString();
+  await db
+    .update(meetingsV2)
+    .set({
+      settings: meetingsV3SettingsWithMinutesValidation(settings, minutesValidation),
+      updatedAt,
+    })
+    .where(eq(meetingsV2.id, meetingId));
+}
+
+/**
+ * Settings with the minutes-draft flag replaced.
+ * The minutes check stays as it is.
+ */
+export function meetingsV3SettingsWithMinutesDraft(
+  settings: MeetingV2Settings,
+  minutesDraft: MeetingsV3MinutesDraft | null,
+): MeetingV2Settings {
+  const next: MeetingsV3PackageSettings = {
+    workspace: true,
+    stage: meetingsV3PackageStage(settings),
+    error: meetingsV3PackageError(settings),
+    updatedAt: settings.v3Package?.updatedAt ?? new Date().toISOString(),
+    attachmentLink: meetingsV3AttachmentLink(settings),
+    factResolution: meetingsV3FactResolution(settings),
+    transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
+    factGrouping: meetingsV3FactGrouping(settings),
+    meetingReconciliation: meetingsV3MeetingReconciliation(settings),
+    minutesValidation: meetingsV3MinutesValidation(settings),
+    minutesDraft,
+    aiUsage: settings.v3Package?.aiUsage ?? null,
+  };
+  return { ...settings, v3Package: next };
+}
+
+/**
+ * Stores or clears the minutes draft without changing the package stage.
+ */
+export async function writeMeetingsV3MinutesDraft(
+  meetingId: string,
+  minutesDraft: MeetingsV3MinutesDraft | null,
+): Promise<void> {
+  const db = getDb();
+  const [row] = await db
+    .select({ settings: meetingsV2.settings })
+    .from(meetingsV2)
+    .where(eq(meetingsV2.id, meetingId));
+  const settings = readMeetingV2Settings(row?.settings);
+  const updatedAt = new Date().toISOString();
+  await db
+    .update(meetingsV2)
+    .set({
+      settings: meetingsV3SettingsWithMinutesDraft(settings, minutesDraft),
       updatedAt,
     })
     .where(eq(meetingsV2.id, meetingId));

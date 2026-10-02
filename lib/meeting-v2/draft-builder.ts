@@ -237,7 +237,10 @@ function parseDraftContext(value: string | null): AgendaItemContextDocument | nu
   return safeParseObject<AgendaItemContextDocument>(value);
 }
 
-function mapSuggestedSectionPath(item: {
+/**
+ * Minutes section path for an agenda item, from its type and section label.
+ */
+export function mapSuggestedSectionPath(item: {
   itemType: string;
   sectionLabel: string | null;
 }): string {

@@ -219,5 +219,9 @@ describe("transcript-only agenda rows", () => {
       agendaItemsForWizardStep(items, "sources").map((item) => item.itemNumber),
       ["4", "4.D", "4.E", "4.E.a", "5"],
     );
+    assert.deepEqual(
+      agendaItemsForWizardStep(items, "draft").map((item) => item.itemNumber),
+      ["4", "4.D", "4.E", "4.E.a", "5"],
+    );
   });
 });

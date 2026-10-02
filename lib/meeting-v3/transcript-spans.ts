@@ -232,12 +232,18 @@ export function packageAgendaItems<T extends { itemNumber: string; title: string
   return items.filter((item) => !isTranscriptOnlyAgendaItem(item, items));
 }
 
-const WIZARD_STEPS_WITH_TRANSCRIPT_EXTRAS = new Set(["transcript", "sources", "conclusions"]);
+const WIZARD_STEPS_WITH_TRANSCRIPT_EXTRAS = new Set([
+  "transcript",
+  "sources",
+  "conclusions",
+  "validate",
+  "draft",
+]);
 
 /**
  * Agenda rows for a V3 wizard step.
  * Extract, agenda, attachments, and facts hide transcript-only extras.
- * Segment transcript and group sources keep them.
+ * Later stages keep them, including the minutes check and the draft.
  */
 export function agendaItemsForWizardStep<T extends { itemNumber: string; title: string }>(
   items: readonly T[],

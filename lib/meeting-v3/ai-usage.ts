@@ -23,6 +23,8 @@ import {
   isMeetingsV3Workspace,
   meetingsV3FactGrouping,
   meetingsV3MeetingReconciliation,
+  meetingsV3MinutesDraft,
+  meetingsV3MinutesValidation,
   meetingsV3PackageStage,
   meetingsV3TranscriptSegmentation,
   type MeetingsV3AiUsageSettings,
@@ -275,6 +277,8 @@ export async function persistMeetingsV3AiUsageStage(
     transcriptSegmentation: meetingsV3TranscriptSegmentation(settings),
     factGrouping: meetingsV3FactGrouping(settings),
     meetingReconciliation: meetingsV3MeetingReconciliation(settings),
+    minutesValidation: meetingsV3MinutesValidation(settings),
+    minutesDraft: meetingsV3MinutesDraft(settings),
     aiUsage: { stages },
   };
 

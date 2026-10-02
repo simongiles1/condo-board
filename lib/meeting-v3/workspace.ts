@@ -43,6 +43,30 @@ export type MeetingsV3MeetingReconciliation = {
   unclearCount: number;
 };
 
+/** One reason a V3 topic is not ready to print as settled minutes. */
+export type MeetingsV3ValidationFinding = {
+  agendaItemId: string;
+  itemNumber: string;
+  severity: "error" | "warning";
+  code: "missing_conclusion" | "unclear_conclusion" | "open_reference" | "fact_review";
+  message: string;
+};
+
+/** A finished pass that checked conclusions and fact reviews before a draft. */
+export type MeetingsV3MinutesValidation = {
+  completedAt: string;
+  errorCount: number;
+  warningCount: number;
+  findings: MeetingsV3ValidationFinding[];
+};
+
+/** A finished pass that stored a deterministic minutes draft. */
+export type MeetingsV3MinutesDraft = {
+  completedAt: string;
+  draftId: string;
+  openPointCount: number;
+};
+
 /** A finished pass that linked attachment pages onto the V3 agenda. */
 export type MeetingsV3AttachmentLink = {
   completedAt: string;
@@ -87,6 +111,8 @@ export type MeetingsV3PackageSettings = {
   transcriptSegmentation?: MeetingsV3TranscriptSegmentation | null;
   factGrouping?: MeetingsV3FactGrouping | null;
   meetingReconciliation?: MeetingsV3MeetingReconciliation | null;
+  minutesValidation?: MeetingsV3MinutesValidation | null;
+  minutesDraft?: MeetingsV3MinutesDraft | null;
   aiUsage?: MeetingsV3AiUsageSettings | null;
 };
 
@@ -275,6 +301,103 @@ export function meetingsV3MeetingReconciliation(
     completedAt: record.completedAt,
     itemCount: record.itemCount,
     unclearCount: record.unclearCount,
+  };
+}
+
+const VALIDATION_CODES = new Set([
+  "missing_conclusion",
+  "unclear_conclusion",
+  "open_reference",
+  "fact_review",
+]);
+
+function readValidationFinding(value: unknown): MeetingsV3ValidationFinding | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as {
+    agendaItemId?: unknown;
+    itemNumber?: unknown;
+    severity?: unknown;
+    code?: unknown;
+    message?: unknown;
+  };
+  if (typeof record.agendaItemId !== "string" || !record.agendaItemId.trim()) return null;
+  if (typeof record.itemNumber !== "string") return null;
+  if (record.severity !== "error" && record.severity !== "warning") return null;
+  if (typeof record.code !== "string" || !VALIDATION_CODES.has(record.code)) return null;
+  if (typeof record.message !== "string" || !record.message.trim()) return null;
+  return {
+    agendaItemId: record.agendaItemId,
+    itemNumber: record.itemNumber,
+    severity: record.severity,
+    code: record.code as MeetingsV3ValidationFinding["code"],
+    message: record.message.trim(),
+  };
+}
+
+/**
+ * The stored minutes check, when that stage has been run for the current conclusions.
+ * Returns null when the flag is missing or not a completed check.
+ */
+export function meetingsV3MinutesValidation(
+  settings: { v3Package?: { minutesValidation?: unknown } | null } | null | undefined,
+): MeetingsV3MinutesValidation | null {
+  const validation = settings?.v3Package?.minutesValidation;
+  if (!validation || typeof validation !== "object") return null;
+  const record = validation as {
+    completedAt?: unknown;
+    errorCount?: unknown;
+    warningCount?: unknown;
+    findings?: unknown;
+  };
+  if (typeof record.completedAt !== "string" || !record.completedAt.trim()) return null;
+  if (typeof record.errorCount !== "number" || !Number.isInteger(record.errorCount) || record.errorCount < 0) {
+    return null;
+  }
+  if (
+    typeof record.warningCount !== "number"
+    || !Number.isInteger(record.warningCount)
+    || record.warningCount < 0
+  ) {
+    return null;
+  }
+  if (!Array.isArray(record.findings)) return null;
+  const findings = record.findings.map(readValidationFinding);
+  if (findings.some((finding) => finding == null)) return null;
+  return {
+    completedAt: record.completedAt,
+    errorCount: record.errorCount,
+    warningCount: record.warningCount,
+    findings: findings as MeetingsV3ValidationFinding[],
+  };
+}
+
+/**
+ * The stored minutes draft, when that stage has been run for the current check.
+ * Returns null when the flag is missing or not a completed draft.
+ */
+export function meetingsV3MinutesDraft(
+  settings: { v3Package?: { minutesDraft?: unknown } | null } | null | undefined,
+): MeetingsV3MinutesDraft | null {
+  const draft = settings?.v3Package?.minutesDraft;
+  if (!draft || typeof draft !== "object") return null;
+  const record = draft as {
+    completedAt?: unknown;
+    draftId?: unknown;
+    openPointCount?: unknown;
+  };
+  if (typeof record.completedAt !== "string" || !record.completedAt.trim()) return null;
+  if (typeof record.draftId !== "string" || !record.draftId.trim()) return null;
+  if (
+    typeof record.openPointCount !== "number"
+    || !Number.isInteger(record.openPointCount)
+    || record.openPointCount < 0
+  ) {
+    return null;
+  }
+  return {
+    completedAt: record.completedAt,
+    draftId: record.draftId,
+    openPointCount: record.openPointCount,
   };
 }
 

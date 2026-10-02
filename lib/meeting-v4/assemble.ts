@@ -12,9 +12,10 @@ import {
   type AgendaItemV2,
   type ApprovalOfPreviousMinutesV2,
   type MinutesDocumentV2,
+  type MotionV2,
 } from "@/lib/minutes/schema-v2";
+import type { MeetingsV4ItemResult, MeetingsV4MotionNote, MeetingsV4MotionOutcome } from "@/lib/meeting-v4/types";
 import { CORP_LONG } from "@/lib/pdf/corporation";
-import type { MeetingsV4ItemResult } from "@/lib/meeting-v4/types";
 
 /** One drafted row plus the agenda placement fields. */
 export type MeetingsV4AssemblyItem = MeetingsV4ItemResult & {
@@ -33,7 +34,7 @@ const BODY_PATHS = new Set(["call_to_order", "date_of_next_meeting", "terminatio
 /**
  * Places each drafted paragraph into the V2 minutes sections.
  * Throws when the document fails the V2 minutes schema.
- * A formal motion block is omitted. Supported names stay on the item notes.
+ * A decision made at this meeting becomes the formal motion block.
  */
 export function assembleMeetingsV4Minutes(input: {
   title: string;
@@ -114,6 +115,7 @@ function buildDocument(input: {
         approvals.push({
           sourceAgendaItemId: item.agendaItemId,
           summary: agendaItem.summary,
+          motion: agendaItem.motion,
         });
         break;
       default:
@@ -159,7 +161,30 @@ function toAgendaItem(item: MeetingsV4AssemblyItem): AgendaItemV2 {
       assignee: action.owner?.trim() || "Unassigned",
       taskDescription: action.description,
     })),
+    motion: motionForMinutes(item.motion),
     subItems: [],
     restricted: item.restricted || undefined,
+  };
+}
+
+const MOTION_STATUS: Record<MeetingsV4MotionOutcome, MotionV2["status"]> = {
+  carried: "Motion carried.",
+  defeated: "Motion defeated.",
+  deferred: "Deferred.",
+  unrecorded: "Outcome not recorded.",
+};
+
+/**
+ * The motion block for one item.
+ * A stored draft from before resolutions has names only, and those stay off the page.
+ */
+function motionForMinutes(motion: MeetingsV4MotionNote): MotionV2 | undefined {
+  const resolutionText = typeof motion.resolution === "string" ? motion.resolution.trim() : "";
+  if (!resolutionText) return undefined;
+  return {
+    movedBy: motion.mover?.trim() ?? "",
+    secondedBy: motion.seconder?.trim() ?? "",
+    resolutionText,
+    status: MOTION_STATUS[motion.outcome] ?? "Outcome not recorded.",
   };
 }

@@ -52,10 +52,21 @@ export type MeetingsV4Bundle = {
   attachmentPages: [];
 };
 
-/** Motion names kept only when the transcript identified them. */
+/** How the meeting closed a motion. */
+export const MEETINGS_V4_MOTION_OUTCOMES = ["carried", "defeated", "deferred", "unrecorded"] as const;
+
+/** The outcome stored on one drafted motion. */
+export type MeetingsV4MotionOutcome = (typeof MEETINGS_V4_MOTION_OUTCOMES)[number];
+
+/**
+ * The formal motion for one item.
+ * Names are present only when the transcript identified them. A resolution can exist without names.
+ */
 export type MeetingsV4MotionNote = {
   mover: string | null;
   seconder: string | null;
+  resolution: string | null;
+  outcome: MeetingsV4MotionOutcome;
   source: "transcript" | "unsupported";
 };
 

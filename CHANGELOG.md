@@ -17,6 +17,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V4 minutes** — A decision made at the meeting is printed as a formal motion: mover, seconder, the resolution, and whether it carried, was defeated, or was deferred. Names appear only when the transcript identifies them. Draft again to add motions to an existing draft.
 - **Meetings V4 draft** — Each item is drafted from the corrected agenda-page extract, including printed tables, instead of the short stored notes. The Minutes tab renders that document as formatted markdown. Draft again to replace a draft that was written from the notes.
 
 - **Meetings V3 minutes draft** — A topic paragraph no longer pastes a spoken fragment or a list of unverified fees. Those open points stay on Check minutes. Re-run Draft minutes.

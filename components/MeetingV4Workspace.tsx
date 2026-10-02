@@ -273,10 +273,13 @@ function Draft({
             </ul>
           ) : null}
           <p className="mt-1 text-sm text-slate-600">
-            Motion: {item.motion.source === "transcript"
-              ? [item.motion.mover, item.motion.seconder].filter(Boolean).join(", ") || "named in the transcript"
-              : "unsupported"}
+            Motion: {item.motion.resolution
+              ? `${item.motion.outcome}${item.motion.mover ? ` · ${[item.motion.mover, item.motion.seconder].filter(Boolean).join(", ")}` : ""}`
+              : "none"}
           </p>
+          {item.motion.resolution ? (
+            <p className="mt-1 text-sm text-slate-700">{item.motion.resolution}</p>
+          ) : null}
           {item.gaps.length > 0 ? <p className="mt-1 text-sm text-slate-600">Gaps: {item.gaps.join(" ")}</p> : null}
           <details className="mt-2 text-sm text-slate-600">
             <summary className="cursor-pointer">Agenda text and transcript sent</summary>

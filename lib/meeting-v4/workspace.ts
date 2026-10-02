@@ -265,7 +265,7 @@ function emptyResult(item: MeetingsV4AgendaRecord): MeetingsV4ItemResult {
     amount: "not applicable",
     amountBasis: "",
     actions: [],
-    motion: { mover: null, seconder: null, source: "unsupported" },
+    motion: { mover: null, seconder: null, resolution: null, outcome: "unrecorded", source: "unsupported" },
     restricted: false,
     restrictedReason: "",
     gaps: ["No reviewed transcript span was assigned to this item."],

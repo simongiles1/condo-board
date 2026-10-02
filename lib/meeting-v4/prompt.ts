@@ -9,7 +9,9 @@ import {
   type MeetingsV4EvidenceFit,
   type MeetingsV4Finding,
   type MeetingsV4FindingKind,
+  MEETINGS_V4_MOTION_OUTCOMES,
   type MeetingsV4MotionNote,
+  type MeetingsV4MotionOutcome,
 } from "@/lib/meeting-v4/types";
 
 /** System instruction for one item. Prior minutes are not attached. */
@@ -27,11 +29,13 @@ If the transcript is about a different topic, set evidence_fit to "wrong_item" a
 
 Several findings may all be true. "Previously approved the contractor; today directed management to obtain legal review" is a reported prior approval and a direction. Do not drop one to make a single label.
 
-Name a mover or seconder only when the transcript identifies them. Never infer them from who attended or who usually moves. This call has no separate notes.
+When this meeting approved, ratified, rejected, deferred, or directed something, write one motion. The resolution is the formal clause without a leading "THAT". Leave the resolution null when the item was only reported or discussed and this meeting made no decision. A reported prior approval is not, by itself, a motion of this meeting.
+
+Name a mover or seconder only when the transcript identifies them. Never infer them from who attended or who usually moves. Leave both null when the transcript does not name them; still write the resolution and the outcome. This call has no separate notes.
 
 STYLE
 Formal third person, past tense, for a reader who was not in the room. Ordinarily two to four sentences. Do not quote speech. Do not include filler words.
-Do not name a mover or seconder in the minutes paragraph.
+Do not name a mover or seconder in the minutes paragraph. The motion block carries those names.
 The following example is fictional and is only a shape:
 "The board considered the proposal to replace the lobby carpet and the quoted price of $4,200 plus HST. The board approved the replacement by North Flooring, subject to a cancellation clause. Management was directed to issue the purchase order."
 
@@ -43,7 +47,7 @@ Return JSON only:
   "amount": "the figure, uncertain, or not applicable",
   "amount_basis": "string",
   "actions": [{ "owner": "string or null", "description": "string" }],
-  "motion": { "mover": "string or null", "seconder": "string or null", "source": "transcript | unsupported" },
+  "motion": { "mover": "string or null", "seconder": "string or null", "resolution": "string or null", "outcome": "carried | defeated | deferred | unrecorded", "source": "transcript | unsupported" },
   "restricted": false,
   "restricted_reason": "string",
   "gaps": ["string"]
@@ -132,14 +136,38 @@ function readActions(value: unknown): Array<{ owner: string | null; description:
 }
 
 function readMotion(value: unknown): MeetingsV4MotionNote {
-  const empty: MeetingsV4MotionNote = { mover: null, seconder: null, source: "unsupported" };
+  const empty: MeetingsV4MotionNote = {
+    mover: null,
+    seconder: null,
+    resolution: null,
+    outcome: "unrecorded",
+    source: "unsupported",
+  };
   if (!value || typeof value !== "object") return empty;
   const record = value as Record<string, unknown>;
-  if (record.source !== "transcript") return empty;
-  const mover = asText(record.mover);
-  const seconder = asText(record.seconder);
-  if (!mover && !seconder) return empty;
-  return { mover: mover || null, seconder: seconder || null, source: "transcript" };
+  const resolution = asText(record.resolution);
+  const named = record.source === "transcript";
+  const mover = named ? asText(record.mover) : "";
+  const seconder = named ? asText(record.seconder) : "";
+  if (!resolution && !mover && !seconder) return empty;
+  return {
+    mover: mover || null,
+    seconder: seconder || null,
+    resolution: resolution || null,
+    outcome: resolution ? readMotionOutcome(record.outcome) : "unrecorded",
+    source: named && (mover || seconder) ? "transcript" : "unsupported",
+  };
+}
+
+function readMotionOutcome(value: unknown): MeetingsV4MotionOutcome {
+  const text = asText(value).toLowerCase().replace(/\.$/, "");
+  if (text === "motion carried" || text === "carried") return "carried";
+  if (text === "motion defeated" || text === "defeated") return "defeated";
+  if (text === "deferred") return "deferred";
+  if ((MEETINGS_V4_MOTION_OUTCOMES as readonly string[]).includes(text)) {
+    return text as MeetingsV4MotionOutcome;
+  }
+  return "unrecorded";
 }
 
 function readGaps(value: unknown): string[] {

@@ -99,7 +99,7 @@ describe("v4 draft reply", () => {
       amount: "uncertain",
       amount_basis: "Two package figures could match.",
       actions: [{ owner: "Management", description: "Obtain legal review." }],
-      motion: { mover: "Pat", seconder: null, source: "guess" },
+      motion: { mover: "Pat", seconder: null, resolution: "legal review be obtained", outcome: "carried", source: "guess" },
       restricted: false,
       restricted_reason: "",
       gaps: [],
@@ -109,6 +109,8 @@ describe("v4 draft reply", () => {
     assert.equal(parsed?.findings[1]?.kind, "direction");
     assert.equal(parsed?.motion.source, "unsupported");
     assert.equal(parsed?.motion.mover, null);
+    assert.equal(parsed?.motion.resolution, "legal review be obtained");
+    assert.equal(parsed?.motion.outcome, "carried");
     assert.equal(parsed?.amount, "uncertain");
   });
 
@@ -120,18 +122,25 @@ describe("v4 draft reply", () => {
       amount: "$2,492 plus HST",
       amount_basis: "Spoken figure matches the agenda quote.",
       actions: [],
-      motion: { mover: "Pat", seconder: "Sam", source: "transcript" },
+      motion: {
+        mover: "Pat",
+        seconder: "Sam",
+        resolution: "the seal replacement be approved",
+        outcome: "carried",
+        source: "transcript",
+      },
       restricted: false,
       restricted_reason: "",
       gaps: [],
     }));
     assert.equal(parsed?.motion.mover, "Pat");
     assert.equal(parsed?.motion.seconder, "Sam");
+    assert.equal(parsed?.motion.resolution, "the seal replacement be approved");
   });
 });
 
 describe("v4 assembly", () => {
-  it("prints the paragraph and the action, and leaves motion names off the page", () => {
+  it("prints the paragraph, the action, and the formal motion", () => {
     const item = assemblyItem({
       minutes: "The board approved the seal replacement for $2,492 plus HST.",
       findings: [
@@ -139,7 +148,13 @@ describe("v4 assembly", () => {
         { kind: "decision", text: "Approved today." },
       ],
       actions: [{ owner: "Management", description: "Issue the purchase order." }],
-      motion: { mover: "Pat", seconder: "Sam", source: "transcript" },
+      motion: {
+        mover: "Pat",
+        seconder: "Sam",
+        resolution: "the seal replacement be approved for $2,492 plus HST",
+        outcome: "carried",
+        source: "transcript",
+      },
     });
     const assembled = assembleMeetingsV4Minutes({
       title: "Minutes - 2026-08-12 v14",
@@ -149,10 +164,25 @@ describe("v4 assembly", () => {
     assert.equal(item.findings.length, 2);
     assert.match(assembled.markdown, /\$2,492 plus HST/);
     assert.match(assembled.markdown, /Issue the purchase order/);
-    assert.equal(assembled.markdown.includes("MOTION"), false);
-    assert.equal(assembled.markdown.includes("Pat"), false);
+    assert.match(assembled.markdown, /\*\*MOTION by Pat\*\*/);
+    assert.match(assembled.markdown, /\*\*Seconded by Sam\*\*/);
+    assert.match(assembled.markdown, /\*\*THAT the seal replacement be approved for \$2,492 plus HST\*\*/);
+    assert.match(assembled.markdown, /\*\*Motion carried\.\*\*/);
     assert.equal(assembled.document.attendance.present.length, 0);
     assert.equal(assembled.document.dateOfNextMeeting, undefined);
+  });
+
+  it("leaves a motion off the page when this meeting made no decision", () => {
+    const assembled = assembleMeetingsV4Minutes({
+      title: "Minutes - 2026-08-12 v14",
+      meetingDate: "2026-08-12",
+      items: [assemblyItem({
+        minutes: "Management reported the status of the seal replacement.",
+        motion: { mover: "Pat", seconder: null, resolution: null, outcome: "unrecorded", source: "transcript" },
+      })],
+    });
+    assert.equal(assembled.markdown.includes("MOTION"), false);
+    assert.equal(assembled.markdown.includes("Pat"), false);
   });
 
   it("places a restricted item in the addendum", () => {
@@ -185,7 +215,7 @@ function assemblyItem(overrides: Partial<MeetingsV4AssemblyItem>): MeetingsV4Ass
     amount: "not applicable",
     amountBasis: "",
     actions: [],
-    motion: { mover: null, seconder: null, source: "unsupported" },
+    motion: { mover: null, seconder: null, resolution: null, outcome: "unrecorded", source: "unsupported" },
     restricted: false,
     restrictedReason: "",
     gaps: [],

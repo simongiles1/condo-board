@@ -19,12 +19,12 @@ import {
   FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
   FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
   FACT_RESOLUTION_STALL_MS,
-  FACT_RECOVERY_MAX_ISSUES,
   factRequestShouldSplit,
   factSliceShouldDivide,
   formatFactResolutionProgress,
   mergeProposedFacts,
   readProposedFacts,
+  recoveryFactBatches,
   type MeetingsV3ItemFacts,
   type MeetingsV3ProposedFact,
 } from "@/lib/meeting-v3/facts";
@@ -81,11 +81,15 @@ Rules:
 - Omit a field the pages do not state. Do not use a summary that is not in the page text.`;
 
 const FACT_RECOVERY_PROMPT = `You repair package facts that failed validation for one agenda item.
-Return JSON only: {"items":[{"agendaItemId":"<id>","facts":[{"field":"amount"|"vendor"|"recommendation"|"date","value":"<as printed>","page":14,"quote":"<verbatim>","headingQuote":"<verbatim or omit>","rowQuote":"<verbatim or omit>","conditionQuote":"<verbatim or omit>","subject":"<or omit>","service":"<or omit>","bidder":"<or omit>","option":"<or omit>","basis":"fixed"|"per_visit","role":"proposal"|"recommendation"|"reported_prior_approval"|"historical_event","qualifications":"<or omit>","omit":true}]}]}.
+Return JSON only: {"items":[{"agendaItemId":"<id>","facts":[{"field":"amount"|"vendor"|"recommendation"|"date","value":"<as printed>","page":14,"quote":"<the quote already stored on this fact>","revisedQuote":"<new verbatim citation, or omit>","headingQuote":"<verbatim or omit>","rowQuote":"<verbatim or omit>","conditionQuote":"<verbatim or omit>","subject":"<or omit>","service":"<or omit>","bidder":"<or omit>","option":"<or omit>","basis":"fixed"|"per_visit","role":"proposal"|"recommendation"|"reported_prior_approval"|"historical_event","qualifications":"<or omit>","omit":true}]}]}.
 Rules:
 - Use only the page text supplied. Do not invent an amount, a company, or a decision.
+- quote must be the quote already stored on the fact you are repairing. The reply is matched to that quote, not to the dollar amount.
+- To replace the citation, set revisedQuote to the new verbatim passage from that page. Leave quote as the stored quote.
 - Restate a fact that is missing its project, service, bidder, or condition, and cite the heading, row, or condition from that page.
+- When a row states several amounts, name the role of this amount in service, bidder, or option so it is not confused with the others.
 - Two bidders are alternatives. Give each fact its bidder. Do not drop either price.
+- omit true drops only the fact with that quote. Do not omit a different fact that happens to show the same amount.
 - If a fact belongs to otherTopicsOnThesePages, return it with omit true.
 - Leave a fact out of the reply when you cannot support a repair from the page.`;
 
@@ -222,26 +226,9 @@ export async function resolveMeetingV3Facts(meetingId: string): Promise<FactReso
       title: item.title,
       siblingTitles: siblingTitlesFor(item, items),
     });
-    if (
-      withText.length > 0
-      && accepted.reviewIssues.length > 0
-      && accepted.reviewIssues.length <= FACT_RECOVERY_MAX_ISSUES
-      && item.pages.length > 0
-    ) {
-      await setFactStep(
-        meetingId,
-        formatFactResolutionProgress({
-          itemIndex: index + 1,
-          itemCount: items.length,
-          batchIndex: 1,
-          batchCount: 1,
-          label: `Checking ${item.itemNumber} ${item.title}`,
-        }),
-      );
-    }
     let recovered: Awaited<ReturnType<typeof recoverItemFacts>>;
     try {
-      recovered = await recoverItemFacts(item, items, accepted, deepSeekUsage);
+      recovered = await recoverItemFacts(meetingId, item, items, accepted, deepSeekUsage, index, items.length);
     } catch (error) {
       if (!isDeepSeekSilentStall(error)) throw error;
       await setFactStep(meetingId, "Fact resolution stopped because DeepSeek sent no text");
@@ -385,45 +372,73 @@ async function requestItemFacts(
 }
 
 async function recoverItemFacts(
+  meetingId: string,
   item: FactSourceItem,
   items: readonly FactSourceItem[],
   accepted: MeetingsV3ItemFacts,
   deepSeekUsage: DeepSeekGenerationResult[],
+  itemIndex: number,
+  itemCount: number,
 ): Promise<MeetingsV3ProposedFact[] | null> {
-  if (accepted.reviewIssues.length === 0 || accepted.reviewIssues.length > FACT_RECOVERY_MAX_ISSUES) return null;
+  if (accepted.reviewIssues.length === 0) return null;
   if (item.pages.length === 0) return null;
   if (!isDeepSeekKeyConfigured()) return null;
-  try {
-    const response = await generateDeepSeekJson({
-      systemInstruction: FACT_RECOVERY_PROMPT,
-      userText: JSON.stringify({
-        items: [
-          {
-            agendaItemId: item.id,
-            itemNumber: item.itemNumber,
-            title: item.title,
-            otherTopicsOnThesePages: siblingTitlesFor(item, items),
-            issues: accepted.reviewIssues,
-            facts: accepted.candidates,
-            pages: item.pages.map((page) => ({ pageNumber: page.pageNumber, text: page.text })),
-          },
-        ],
+  const batches = recoveryFactBatches(accepted.candidates);
+  if (batches.length === 0) return null;
+  const recovered: MeetingsV3ProposedFact[] = [];
+  let repaired = false;
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+    const batch = batches[batchIndex];
+    if (!batch) continue;
+    await setFactStep(
+      meetingId,
+      formatFactResolutionProgress({
+        itemIndex: itemIndex + 1,
+        itemCount,
+        batchIndex: batchIndex + 1,
+        batchCount: batches.length,
+        label: `Checking ${item.itemNumber} ${item.title}`,
       }),
-      modelName: DEEPSEEK_COMPLETION_MODEL,
-      temperature: 0,
-      thinking: false,
-      maxOutputTokens: FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
-      requestTimeoutMs: FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
-      stallTimeoutMs: FACT_RESOLUTION_STALL_MS,
-    });
-    deepSeekUsage.push(response);
-    return readProposedFacts(response.text).flatMap((entry) =>
-      entry.agendaItemId === item.id ? entry.facts : [],
     );
-  } catch (error) {
-    if (isDeepSeekSilentStall(error)) throw error;
-    return null;
+    const pages = item.pages.filter((page) => batch.facts.some((fact) => fact.page === page.pageNumber));
+    try {
+      const response = await generateDeepSeekJson({
+        systemInstruction: FACT_RECOVERY_PROMPT,
+        userText: JSON.stringify({
+          items: [
+            {
+              agendaItemId: item.id,
+              itemNumber: item.itemNumber,
+              title: item.title,
+              otherTopicsOnThesePages: siblingTitlesFor(item, items),
+              issues: batch.issues,
+              facts: batch.facts,
+              pages: (pages.length > 0 ? pages : item.pages).map((page) => ({
+                pageNumber: page.pageNumber,
+                text: page.text,
+              })),
+            },
+          ],
+        }),
+        modelName: DEEPSEEK_COMPLETION_MODEL,
+        temperature: 0,
+        thinking: false,
+        maxOutputTokens: FACT_RESOLUTION_MAX_OUTPUT_TOKENS,
+        requestTimeoutMs: FACT_RESOLUTION_REQUEST_TIMEOUT_MS,
+        stallTimeoutMs: FACT_RESOLUTION_STALL_MS,
+      });
+      deepSeekUsage.push(response);
+      repaired = true;
+      recovered.push(
+        ...readProposedFacts(response.text).flatMap((entry) =>
+          entry.agendaItemId === item.id ? entry.facts : [],
+        ),
+      );
+    } catch (error) {
+      if (isDeepSeekSilentStall(error)) throw error;
+    }
   }
+  return repaired ? recovered : null;
 }
 
 /** A fact call that DeepSeek accepted and then left empty. Splitting the page will not help. */

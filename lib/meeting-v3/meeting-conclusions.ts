@@ -118,15 +118,16 @@ function isPriorReference(sentence: string): boolean {
 }
 
 function isDefeat(sentence: string): boolean {
-  return /\b(defeated|voted down|withdrawn)\b/i.test(sentence) || /\bmotion (failed|lost)\b/i.test(sentence);
+  return /\b(defeated|voted down|withdrawn|rescinded|reversed|overturned)\b/i.test(sentence)
+    || /\bmotion (failed|lost)\b/i.test(sentence);
 }
 
 function isNegatedAdoption(sentence: string): boolean {
-  return /\b(did not|didn't|do not|don't|never|was not|wasn't)\b(?:\s+\w+){0,6}\b(ratif\w*|approv\w*|adopt\w*|carr\w*|defer\w*)\b/i.test(sentence);
+  return /\b(did not|didn't|do not|don't|never|was not|wasn't|has not|hasn't|have not|haven't|had not|hadn't|not yet)\b(?:\s+\w+){0,6}\s+(ratif\w*|approv\w*|adopt\w*|carr\w*|defer\w*)\b/i.test(sentence);
 }
 
 function isNegatedDeferral(sentence: string): boolean {
-  return /\b(did not|didn't|do not|don't|was not|wasn't)\b(?:\s+\w+){0,6}\b(defer\w*|table\w*|postpone\w*)\b/i.test(sentence);
+  return /\b(did not|didn't|do not|don't|was not|wasn't|has not|hasn't|have not|haven't)\b(?:\s+\w+){0,6}\s+(defer\w*|table\w*|postpone\w*)\b/i.test(sentence);
 }
 
 function isDeferral(sentence: string): boolean {
@@ -152,8 +153,15 @@ function isAdoption(sentence: string): boolean {
 
 function isHypothetical(sentence: string, kind: "adopt" | "defer"): boolean {
   const verb = kind === "defer" ? "defer\\w*|table\\w*|postpone\\w*" : "ratif\\w*|approv\\w*|adopt\\w*|proceed\\w*";
-  return new RegExp(`\\b(can|could|might|may)\\b(?:\\s+\\w+){0,4}\\s+(${verb})\\b`, "i").test(sentence)
-    || (/\blater\b/i.test(sentence) && new RegExp(`\\b(${verb})\\b`, "i").test(sentence) && kind === "adopt");
+  const modalVerb = kind === "adopt" ? `${verb}|carr\\w*` : verb;
+  if (new RegExp(`\\b(can|could|might|may|would|should)\\b(?:\\s+\\w+){0,4}\\s+(${modalVerb})\\b`, "i").test(sentence)) return true;
+  if (kind === "adopt" && /\blater\b/i.test(sentence) && new RegExp(`\\b(${verb})\\b`, "i").test(sentence)) return true;
+  // "If the motion carried, we would notify" states the decision only as a condition.
+  if (kind !== "adopt") return false;
+  const conditional = sentence.match(/^if\b([^,;]+)[,;]\s*(.+)$/i);
+  if (!conditional) return false;
+  const decision = /\b(ratif\w*|approv\w*|adopt\w*|carr\w*|proceed\w*)\b/i;
+  return decision.test(conditional[1] ?? "") && !decision.test(conditional[2] ?? "");
 }
 
 function pointsAtPackage(discussion: string): boolean {

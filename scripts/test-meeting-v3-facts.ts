@@ -26,6 +26,7 @@ import {
   readFactResolutionProgress,
   readProposedFacts,
   readStoredItemFacts,
+  recoveryFactBatches,
   summarizeItemFactReviews,
 } from "../lib/meeting-v3/facts";
 
@@ -325,9 +326,13 @@ describe("v3 quoted facts", () => {
       }],
     });
     assert.equal(facts.candidates[0]?.subject, "Steam Room Heat Pump");
+    assert.equal(facts.candidates[0]?.headingQuote, "Steam Room Heat Pump");
     assert.equal(facts.candidates[0]?.service, "Heat Pump Design");
     assert.match(facts.candidates[0]?.qualifications ?? "", /HST/);
     assert.equal(facts.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), false);
+    const stored = readStoredItemFacts(JSON.stringify(facts));
+    assert.equal(stored?.candidates[0]?.subject, "Steam Room Heat Pump");
+    assert.equal(stored?.candidates[0]?.service, "Heat Pump Design");
   });
 
   it("keeps a subject copied from a heading quote that is not inside the value quote", () => {
@@ -387,6 +392,68 @@ describe("v3 quoted facts", () => {
     assert.match(factContextNotes(bids).join(" "), /alternative prices/);
   });
 
+  it("keeps a row amount whose label is not shared with the other figures", () => {
+    const row = "PML base bid $100,000 | GI base bid $90,000";
+    const distinguished = acceptQuotedFacts({
+      pages: [{ pageNumber: 11, text: row }],
+      proposed: [{
+        field: "amount",
+        value: "$100,000",
+        page: 11,
+        quote: "$100,000",
+        rowQuote: row,
+        service: "base bid",
+        bidder: "PML",
+      }],
+    });
+    assert.equal(distinguished.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), false);
+
+    const unit = acceptQuotedFacts({
+      pages: [{ pageNumber: 12, text: "Unit price $50 | Line total $500" }],
+      proposed: [{
+        field: "amount",
+        value: "$50",
+        page: 12,
+        quote: "$50",
+        rowQuote: "Unit price $50 | Line total $500",
+        service: "Unit price",
+      }],
+    });
+    assert.equal(unit.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), false);
+
+    const unlabeled = acceptQuotedFacts({
+      pages: [{ pageNumber: 12, text: "Unit price $50 | Line total $500" }],
+      proposed: [{
+        field: "amount",
+        value: "$50",
+        page: 12,
+        quote: "$50",
+        rowQuote: "Unit price $50 | Line total $500",
+        service: "filter replacement",
+      }],
+    });
+    assert.equal(unlabeled.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), true);
+  });
+
+  it("does not describe tax, totals, or investments as competing services", () => {
+    const facts = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 30,
+        text: "HST $100. Grand Total $200. RBC GIC $1,000. TD GIC $2,000.",
+      }],
+      proposed: [
+        { field: "amount", value: "$100", page: 30, quote: "HST $100.", service: "HST" },
+        { field: "amount", value: "$200", page: 30, quote: "Grand Total $200.", service: "Grand Total" },
+        { field: "amount", value: "$1,000", page: 30, quote: "RBC GIC $1,000.", service: "GIC", bidder: "RBC" },
+        { field: "amount", value: "$2,000", page: 30, quote: "TD GIC $2,000.", service: "GIC", bidder: "TD" },
+      ],
+    });
+    const notes = factContextNotes(facts).join(" ");
+    assert.doesNotMatch(notes, /services named/);
+    assert.doesNotMatch(notes, /alternative prices/);
+    assert.match(notes, /2 investment holdings/);
+  });
+
   it("flags a quote that names a sibling topic", () => {
     const facts = acceptQuotedFacts({
       title: "Steam Room Heat Pump",
@@ -413,15 +480,57 @@ describe("v3 quoted facts", () => {
     assert.match(summary.join(" "), /4\.A\.1 Steam Room Heat Pump/);
   });
 
-  it("replaces a proposal when recovery returns the same amount", () => {
+  it("repairs the fact with the same quote and leaves another equal amount", () => {
     const merged = mergeProposedFacts(
-      [{ field: "amount", value: "$500", page: 4, quote: "Fee: $500" }],
-      [{ field: "amount", value: "$500", page: 4, quote: "Design fee $500", service: "Design fee" }],
+      [
+        { field: "amount", value: "$500", page: 4, quote: "Design $500", service: "Design" },
+        { field: "amount", value: "$500", page: 4, quote: "Inspection $500", service: "Inspection" },
+      ],
+      [{
+        field: "amount",
+        value: "$500",
+        page: 4,
+        quote: "Inspection $500",
+        revisedQuote: "Inspection fee $500",
+        service: "Inspection fee",
+      }],
     );
-    assert.equal(merged.length, 1);
-    assert.equal(merged[0]?.quote, "Design fee $500");
-    const dropped = mergeProposedFacts(merged, [{ field: "amount", value: "$500", page: 4, omit: true }]);
-    assert.equal(dropped.length, 0);
+    assert.equal(merged.length, 2);
+    assert.equal(merged[0]?.quote, "Design $500");
+    assert.equal(merged[0]?.service, "Design");
+    assert.equal(merged[1]?.quote, "Inspection fee $500");
+    assert.equal(merged[1]?.service, "Inspection fee");
+    const accepted = acceptQuotedFacts({
+      pages: [{ pageNumber: 4, text: "Design $500. Inspection $500. Inspection fee $500." }],
+      proposed: merged,
+    });
+    assert.equal(accepted.candidates.length, 2);
+    assert.ok(accepted.candidates.some((candidate) => candidate.service === "Design"));
+    const dropped = mergeProposedFacts(merged, [{ field: "amount", value: "$500", page: 4, quote: "Design $500", omit: true }]);
+    assert.equal(dropped.length, 1);
+    assert.equal(dropped[0]?.quote, "Inspection fee $500");
+  });
+
+  it("repairs unresolved facts in bounded batches", () => {
+    const candidates = Array.from({ length: 13 }, (_, index) => ({
+      field: "amount" as const,
+      value: `$${index + 1}`,
+      page: 1,
+      quote: `Fee $${index + 1}`,
+      service: "Fee",
+    }));
+    const batches = recoveryFactBatches(candidates);
+    assert.equal(batches.length, 2);
+    assert.equal(batches[0]?.facts.length, 12);
+    assert.equal(batches[1]?.facts.length, 1);
+    const clear = recoveryFactBatches([{
+      field: "amount",
+      value: "$10",
+      page: 1,
+      quote: "Design fee $10",
+      service: "Design fee",
+    }]);
+    assert.deepEqual(clear, []);
   });
 
   it("retries a timed-out fact call when the batch still has more than one page", () => {

@@ -37,14 +37,24 @@ describe("v3 meeting conclusions", () => {
 
   it("does not treat a negated, defeated, or future ratification as a decision", () => {
     assert.equal(concludeFromDiscussion("We did not ratify this proposal.").status, "discussed");
+    assert.equal(concludeFromDiscussion("The board has not approved the proposal.").status, "discussed");
+    assert.equal(concludeFromDiscussion("If the motion carried, we would notify the contractor.").status, "discussed");
     assert.equal(concludeFromDiscussion("So moved. The motion was defeated.").status, "discussed");
     assert.equal(concludeFromDiscussion("We will defer it. Later we can ratify it.").status, "deferred");
     assert.equal(concludeFromDiscussion("We approved this in March.").status, "discussed");
+    assert.equal(
+      concludeFromDiscussion("The board approved the contract. The approval was later rescinded.").status,
+      "discussed",
+    );
   });
 
   it("records an explicit approval, and lets a later sentence replace it", () => {
     assert.equal(
       concludeFromDiscussion("The board approved the new contract unanimously.").status,
+      "ratified",
+    );
+    assert.equal(
+      concludeFromDiscussion("The board approved the contract if funds are available.").status,
       "ratified",
     );
     assert.equal(

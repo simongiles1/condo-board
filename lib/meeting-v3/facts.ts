@@ -102,6 +102,8 @@ export type MeetingsV3ProposedFact = {
   option?: unknown;
   topicMismatch?: unknown;
   omit?: unknown;
+  /** Replacement citation. `quote` remains the stored quote that identifies the fact. */
+  revisedQuote?: unknown;
   organizationId?: unknown;
   organizationMatch?: unknown;
 };
@@ -290,6 +292,7 @@ export function applyOrganizationMatches(
 /**
  * Non-blocking notes for the facts screen.
  * A confirmed organization with several printed names, or several labeled fees, is not a conflict.
+ * Tax, totals, and investment holdings are not counted as services or competing bids.
  */
 export function factContextNotes(facts: MeetingsV3ItemFacts): string[] {
   const notes: string[] = [];
@@ -303,13 +306,23 @@ export function factContextNotes(facts: MeetingsV3ItemFacts): string[] {
     notes.push("One organization, several printed names.");
   }
   const serviced = facts.candidates.filter((candidate) => candidate.field === "amount" && candidate.service);
-  const serviceNames = new Set(serviced.map((candidate) => normalizeFactText(candidate.service ?? "")));
-  if (serviceNames.size > 1 && !facts.reviewIssues.some((issue) => issue.code === "conflicting_prices")) {
-    notes.push(`${serviceNames.size} services named.`);
+  const feeNames = new Set(
+    serviced
+      .filter((candidate) => amountKind(candidate) === "fee")
+      .map((candidate) => normalizeFactText(candidate.service ?? "")),
+  );
+  if (feeNames.size > 1 && !facts.reviewIssues.some((issue) => issue.code === "conflicting_prices")) {
+    notes.push(`${feeNames.size} services named.`);
   }
+  const holdings = new Set(
+    serviced
+      .filter((candidate) => amountKind(candidate) === "investment")
+      .map((candidate) => normalizeFactText(candidate.bidder || candidate.service || candidate.value)),
+  );
+  if (holdings.size > 1) notes.push(`${holdings.size} investment holdings.`);
   const alternatives = new Map<string, Set<string>>();
   for (const candidate of serviced) {
-    if (!candidate.bidder) continue;
+    if (amountKind(candidate) !== "fee" || !candidate.bidder) continue;
     const key = `${normalizeFactText(candidate.subject ?? "")}\0${normalizeFactText(candidate.service ?? "")}`;
     const bidders = alternatives.get(key) ?? new Set<string>();
     bidders.add(normalizeFactText(candidate.bidder));
@@ -344,8 +357,8 @@ export const FACT_RESOLUTION_REQUEST_TIMEOUT_MS = 300_000;
 export const FACT_RESOLUTION_STALL_MS = 45_000;
 
 /**
- * Recovery is one extra call. More open issues than this are left on the item
- * rather than asking the model to rewrite an entire table in one reply.
+ * How many unresolved facts one recovery call may repair.
+ * A larger topic is split into calls of this size. It is not skipped.
  */
 export const FACT_RECOVERY_MAX_ISSUES = 12;
 
@@ -575,17 +588,69 @@ function roleSupported(role: string, quoteNorm: string): boolean {
   return false;
 }
 
+function amountKind(candidate: MeetingsV3FactCandidate): "fee" | "tax" | "total" | "balance" | "investment" {
+  const text = normalizeFactText(
+    [candidate.service, candidate.subject, candidate.option, candidate.qualifications].filter(Boolean).join(" "),
+  );
+  if (/\b(hst|gst|vat|harmonized|sales tax)\b/.test(text) || /\btax\b/.test(text)) return "tax";
+  if (/\b(gic|gics|investment|investments|maturity|maturities|term deposit|treasury)\b/.test(text)) return "investment";
+  if (/\b(subtotal|grand total|amount due|invoice total|balance due)\b/.test(text) || /\btotal\b/.test(text)) return "total";
+  if (/\bbalance\b/.test(text)) return "balance";
+  return "fee";
+}
+
 function dollarCount(quote: string): number {
   return quote.match(/\$\s?\d/g)?.length ?? 0;
 }
 
 const GENERIC_SERVICE = /^(fee|fees|cost|costs|amount|price|total|subtotal)$/i;
+const AMOUNT_SPAN = /\$\s?\d[\d,]*(?:\.\d+)?(?:\s*\/\s*[A-Za-z]+)?/g;
+
+function amountSpans(text: string): Array<{ value: string; label: string }> {
+  const spans: Array<{ value: string; label: string }> = [];
+  const pattern = new RegExp(AMOUNT_SPAN.source, "g");
+  let previousEnd = 0;
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    spans.push({ value: match[0], label: text.slice(previousEnd, index) });
+    previousEnd = index + match[0].length;
+  }
+  return spans;
+}
+
+function amountKey(value: string): string {
+  return value.replace(/[^\d.]/g, "");
+}
+
+function labelIsBlank(label: string): boolean {
+  return normalizeFactText(label.replace(/[|:—–\-.,]+/g, " ")).length < 2;
+}
+
+function labelHasMarker(label: string, marker: string): boolean {
+  const key = normalizeFactText(marker);
+  if (key.length < 2) return false;
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|\\b)${escaped}(?:\\b|$)`).test(normalizeFactText(label));
+}
 
 function amountNeedsContext(candidate: MeetingsV3FactCandidate): boolean {
   if (candidate.field !== "amount") return false;
   const isolating = candidate.rowQuote && dollarCount(candidate.rowQuote) > 0 ? candidate.rowQuote : candidate.quote;
   if (!candidate.service || GENERIC_SERVICE.test(candidate.service)) return true;
-  return dollarCount(isolating) > 1;
+  const spans = amountSpans(isolating);
+  if (spans.length <= 1) return false;
+  if (spans.some((span) => labelIsBlank(span.label))) return true;
+  const valueKey = amountKey(candidate.value);
+  const own = spans.filter((span) => amountKey(span.value) === valueKey);
+  if (own.length !== 1) return true;
+  const markers = [candidate.bidder, candidate.option, candidate.service].filter(
+    (marker): marker is string => Boolean(marker?.trim()),
+  );
+  const others = spans.filter((span) => span !== own[0]);
+  return !markers.some((marker) =>
+    labelHasMarker(own[0]?.label ?? "", marker)
+    && others.every((span) => !labelHasMarker(span.label, marker)),
+  );
 }
 
 function citedSpan(value: unknown, pageNorm: string): string | undefined {
@@ -610,7 +675,11 @@ function enrichFactContext(
   const lineIndex = lines.findIndex((line) => normalizeFactText(line).includes(quoteKey));
   if (!candidate.subject) {
     const heading = lineIndex >= 0 ? precedingHeading(lines, lineIndex) : candidate.headingQuote;
-    if (heading && !siblingOwns(heading, title, siblingTitles)) candidate.subject = heading;
+    if (heading && !siblingOwns(heading, title, siblingTitles)) {
+      candidate.subject = heading;
+      // The stored page is rebuilt from these spans. Without the heading, the subject is dropped on read-back.
+      if (!candidate.headingQuote) candidate.headingQuote = heading;
+    }
   }
   if (candidate.field === "amount" && !candidate.service) {
     const fromLine = serviceFromAmountLine(candidate.quote, candidate.value);
@@ -708,9 +777,39 @@ export function summarizeItemFactReviews(item: {
   return lines;
 }
 
+/** One recovery call: the unresolved facts and the issues those facts still raise. */
+export type MeetingsV3RecoveryBatch = {
+  facts: MeetingsV3FactCandidate[];
+  issues: MeetingsV3FactReview[];
+};
+
 /**
- * Replaces a stored proposal when recovery returns the same field, value, and page.
- * `omit` drops that proposal. A new value is appended.
+ * Groups unresolved facts into recovery calls of at most `maxIssues`.
+ * A clear fact is left out. An empty list means there is nothing to repair.
+ */
+export function recoveryFactBatches(
+  candidates: readonly MeetingsV3FactCandidate[],
+  maxIssues = FACT_RECOVERY_MAX_ISSUES,
+): MeetingsV3RecoveryBatch[] {
+  if (maxIssues < 1) return [];
+  const flagged = candidates.filter(candidateNeedsRecovery);
+  const batches: MeetingsV3RecoveryBatch[] = [];
+  for (let offset = 0; offset < flagged.length; offset += maxIssues) {
+    const facts = flagged.slice(offset, offset + maxIssues);
+    batches.push({ facts, issues: reviewFacts(facts) });
+  }
+  return batches;
+}
+
+function candidateNeedsRecovery(candidate: MeetingsV3FactCandidate): boolean {
+  if (candidate.field === "amount" && amountNeedsContext(candidate)) return true;
+  if (candidate.topicMismatch) return true;
+  return candidate.field === "vendor" && candidate.organizationMatch === "ambiguous";
+}
+
+/**
+ * Replaces the stored fact whose quote matches.
+ * `revisedQuote` changes that citation. `omit` drops that fact. A different amount on the same page stays.
  */
 export function mergeProposedFacts(
   base: readonly MeetingsV3ProposedFact[],
@@ -723,14 +822,23 @@ export function mergeProposedFacts(
       if (index >= 0) next.splice(index, 1);
       continue;
     }
-    if (index >= 0) next[index] = { ...next[index], ...fact };
-    else next.push(fact);
+    const repaired = applyRevisedQuote(fact);
+    if (index >= 0) next[index] = { ...next[index], ...repaired };
+    else next.push(repaired);
   }
   return next;
 }
 
+function applyRevisedQuote(fact: MeetingsV3ProposedFact): MeetingsV3ProposedFact {
+  if (typeof fact.revisedQuote !== "string" || !fact.revisedQuote.trim()) return fact;
+  const quote = fact.revisedQuote.replace(/\s+/g, " ").trim();
+  const rest = { ...fact };
+  delete rest.revisedQuote;
+  return { ...rest, quote };
+}
+
 function sameProposedIdentity(left: MeetingsV3ProposedFact, right: MeetingsV3ProposedFact): boolean {
   if (left.field !== right.field || left.page !== right.page) return false;
-  if (typeof left.value !== "string" || typeof right.value !== "string") return false;
-  return normalizeFactText(left.value) === normalizeFactText(right.value);
+  if (typeof left.quote !== "string" || typeof right.quote !== "string") return false;
+  return normalizeFactText(left.quote) === normalizeFactText(right.quote);
 }

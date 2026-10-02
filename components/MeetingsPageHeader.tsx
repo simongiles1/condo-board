@@ -8,9 +8,11 @@ import { GenerateMeetingV2Dialog } from "@/components/GenerateMeetingV2Dialog";
 export function MeetingsPageHeader({
   isV2 = false,
   isV3 = false,
+  isV4 = false,
 }: {
   isV2?: boolean;
   isV3?: boolean;
+  isV4?: boolean;
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [upcomingOpen, setUpcomingOpen] = useState(false);
@@ -36,16 +38,18 @@ export function MeetingsPageHeader({
               + New meeting
             </button>
           ) : null}
-          <button
-            type="button"
-            onClick={() => setDialogOpen(true)}
-            className="text-sm font-semibold text-teal-700 hover:text-teal-900"
-          >
-            {isV3 ? "+ New V3 upload" : isV2 ? "+ New V2 upload" : "+ New upload"}
-          </button>
+          {isV4 ? null : (
+            <button
+              type="button"
+              onClick={() => setDialogOpen(true)}
+              className="text-sm font-semibold text-teal-700 hover:text-teal-900"
+            >
+              {isV3 ? "+ New V3 upload" : isV2 ? "+ New V2 upload" : "+ New upload"}
+            </button>
+          )}
         </div>
       </div>
-      {isV2 || isV3 ? (
+      {isV4 ? null : isV2 || isV3 ? (
         <>
           <GenerateMeetingV2Dialog
             open={dialogOpen}

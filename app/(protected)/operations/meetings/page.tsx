@@ -7,8 +7,10 @@ import Link from "next/link";
 import { MeetingsGrid } from "@/components/MeetingsGrid";
 import { MeetingsPageHeader } from "@/components/MeetingsPageHeader";
 import { MeetingsV3Dashboard } from "@/components/MeetingsV3Dashboard";
+import { MeetingsV4Dashboard } from "@/components/MeetingsV4Dashboard";
 import { getDb } from "@/lib/db";
 import { meetings, meetingsV2 } from "@/lib/db/schema";
+import { listMeetingsV4Sources } from "@/lib/meeting-v4/workspace";
 import { listMeetingsV3Workspaces } from "@/lib/meeting-v3/package-status";
 import { isMeetingsV3Workspace } from "@/lib/meeting-v3/workspace";
 import { MeetingsV2Dashboard } from "@/app/(protected)/meetings/v2-components";
@@ -25,7 +27,7 @@ function stripTabClass(active: boolean): string {
 export default async function MeetingsPage({ searchParams }: { searchParams: Promise<{ v?: string }> }) {
   const db = getDb();
   const params = await searchParams;
-  const version = params.v === "3" ? "v3" : params.v === "2" ? "v2" : "v1";
+  const version = params.v === "4" ? "v4" : params.v === "3" ? "v3" : params.v === "2" ? "v2" : "v1";
 
   const visibleMeetingRows = version === "v1"
     ? (await db.select().from(meetings).orderBy(desc(meetings.meetingDate))).filter(
@@ -42,11 +44,12 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
     : [];
 
   const meetingV3Cards = version === "v3" ? await listMeetingsV3Workspaces() : [];
+  const meetingV4Cards = version === "v4" ? await listMeetingsV4Sources() : [];
 
   return (
     <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-0 py-4 md:px-6 md:py-6">
       <div className="flex flex-col space-y-4">
-        <MeetingsPageHeader isV2={version === "v2"} isV3={version === "v3"} />
+        <MeetingsPageHeader isV2={version === "v2"} isV3={version === "v3"} isV4={version === "v4"} />
 
         <div className="flex">
           <div className="flex space-x-1 rounded-lg bg-slate-100 p-1">
@@ -58,6 +61,9 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
             </Link>
             <Link href="?v=3" className={stripTabClass(version === "v3")}>
               V3 Pipeline
+            </Link>
+            <Link href="?v=4" className={stripTabClass(version === "v4")}>
+              V4 Pipeline
             </Link>
           </div>
         </div>
@@ -75,6 +81,7 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
       ) : null}
       {version === "v2" ? <MeetingsV2Dashboard meetings={meetingV2Cards} /> : null}
       {version === "v3" ? <MeetingsV3Dashboard meetings={meetingV3Cards} /> : null}
+      {version === "v4" ? <MeetingsV4Dashboard meetings={meetingV4Cards} /> : null}
     </div>
   );
 }

@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Features
 
+- **Meetings V4** — The meetings page has a V4 Pipeline tab for a V2 meeting that already has a reviewed transcript segmentation. Segmentation shows those spans and does not segment again. Inventory lists leaves without a span, later returns, overlapping cues, and unassigned transcript. Draft minutes writes one paragraph per item from the agenda text and those cues, and keeps evidence notes beside it. The assembled minutes leave attendance and the next-meeting line blank.
+
 - **Meetings V3 extract comparison** — The Corrected extract and Docling extract tab bar includes **Copy as markdown** for the active tab’s page text.
 - Segment Compare and segmented transcript views — Each section heading includes a copy control that puts that segment on the clipboard in the same readable transcript format as the meeting documents transcript tab.
 

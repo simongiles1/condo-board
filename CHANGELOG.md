@@ -8,6 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Features
 
+- **Meetings V4 minutes** — The minutes view can copy the document as Markdown and compare it with an official minutes PDF in the same side-by-side gold-standard view used by Meetings V2. That comparison is stored separately from a V2 draft comparison.
 - **Meetings V4** — The meetings page has a V4 Pipeline tab for a V2 meeting that already has a reviewed transcript segmentation. Segmentation shows those spans and does not segment again. Inventory lists leaves without a span, later returns, overlapping cues, and unassigned transcript. Draft minutes writes one paragraph per item from the agenda text and those cues, and keeps evidence notes beside it. The assembled minutes leave attendance and the next-meeting line blank.
 
 - **Meetings V3 extract comparison** — The Corrected extract and Docling extract tab bar includes **Copy as markdown** for the active tab’s page text.

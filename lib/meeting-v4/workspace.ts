@@ -57,10 +57,31 @@ export type MeetingsV4Workspace = {
   meetingDate: string;
   currentStep: string | null;
   goldUpdatedAt: string | null;
+  /** Relative path of an uploaded official minutes PDF. */
+  goldStandardFilePath: string | null;
+  /** Cached comparison of these V4 minutes against that PDF. */
+  goldStandardValidationJson: string | null;
   inventory: MeetingsV4Inventory;
   draft: MeetingsV4Stored | null;
   markdown: string | null;
 };
+
+/**
+ * Picks the minutes text a gold-standard compare reads.
+ * A V4 request uses the assembled V4 document and does not fall back to an older draft.
+ */
+export function minutesJsonForGoldCompare(input: {
+  minutesSource: string | null;
+  v4DocumentJson: string | null;
+  storedMinutesJson: string;
+}): string | null {
+  if (input.minutesSource === "v4") {
+    const text = input.v4DocumentJson?.trim() ?? "";
+    return text || null;
+  }
+  const stored = input.storedMinutesJson.trim();
+  return stored || null;
+}
 
 /**
  * The V4 page for a meeting that has a reviewed segmentation.
@@ -81,10 +102,23 @@ export async function loadMeetingsV4Workspace(meetingId: string): Promise<Meetin
     meetingDate: loaded.meetingDate,
     currentStep: loaded.settings.meetingsV4Run?.progress ?? null,
     goldUpdatedAt: loaded.settings.segmentGoldStandard?.updatedAt ?? null,
+    goldStandardFilePath: loaded.settings.goldStandardFilePath ?? null,
+    goldStandardValidationJson: loaded.settings.meetingsV4GoldStandardValidationJson ?? null,
     inventory,
     draft,
     markdown: draft ? markdownFor(loaded, draft.items) : null,
   };
+}
+
+/**
+ * The assembled V4 minutes as JSON for a gold-standard compare.
+ * Returns null when no draft is stored or the document cannot be assembled.
+ */
+export async function loadMeetingsV4CompareMinutes(meetingId: string): Promise<string | null> {
+  const loaded = await loadMeetingsV4Source(meetingId);
+  if (!loaded?.settings.meetingsV4?.items.length) return null;
+  const assembled = assembleLoaded(loaded, loaded.settings.meetingsV4.items);
+  return assembled ? JSON.stringify(assembled.document) : null;
 }
 
 /**
@@ -232,6 +266,13 @@ function markdownFor(
   loaded: NonNullable<Awaited<ReturnType<typeof loadMeetingsV4Source>>>,
   items: MeetingsV4ItemResult[],
 ): string | null {
+  return assembleLoaded(loaded, items)?.markdown ?? null;
+}
+
+function assembleLoaded(
+  loaded: NonNullable<Awaited<ReturnType<typeof loadMeetingsV4Source>>>,
+  items: MeetingsV4ItemResult[],
+): ReturnType<typeof assembleMeetingsV4Minutes> | null {
   const byId = new Map(items.map((item) => [item.agendaItemId, item]));
   const assemblyItems: MeetingsV4AssemblyItem[] = loaded.agenda.map((item) => {
     const drafted = byId.get(item.id);
@@ -246,7 +287,7 @@ function markdownFor(
       title: loaded.title,
       meetingDate: loaded.meetingDate,
       items: assemblyItems,
-    }).markdown;
+    });
   } catch (error) {
     console.error("[v4-assemble]", error instanceof Error ? error.message : error);
     return null;

@@ -8,6 +8,8 @@ import { describe, it } from "node:test";
 
 import { agendaTextForItem } from "../lib/meeting-v4/agenda-text";
 import { assembleMeetingsV4Minutes } from "../lib/meeting-v4/assemble";
+import { minutesJsonForGoldCompare } from "../lib/meeting-v4/workspace";
+import { buildAiMinutesConcepts } from "../lib/minutes/gold-standard-ai-concepts";
 import { bundleCuesForItem, inventoryMeetingsV4 } from "../lib/meeting-v4/inventory";
 import { readMeetingsV4Draft } from "../lib/meeting-v4/prompt";
 import type { MeetingsV4AssemblyItem } from "../lib/meeting-v4/assemble";
@@ -170,6 +172,35 @@ describe("v4 assembly", () => {
     assert.match(assembled.markdown, /\*\*Motion carried\.\*\*/);
     assert.equal(assembled.document.attendance.present.length, 0);
     assert.equal(assembled.document.dateOfNextMeeting, undefined);
+    const concepts = buildAiMinutesConcepts(JSON.stringify(assembled.document), [{
+      id: "item-1",
+      title: "Seal replacement",
+      itemNumber: "4.A",
+    }]);
+    const seal = concepts.find((concept) => concept.heading.includes("Seal replacement"));
+    assert.ok(seal);
+    assert.match(seal.body, /\$2,492 plus HST/);
+    assert.match(seal.body, /MOTION by Pat/);
+  });
+
+  it("compares the V4 document instead of an older draft", () => {
+    const v4 = JSON.stringify({ title: "V4 minutes" });
+    const older = JSON.stringify({ title: "V2 draft" });
+    assert.equal(minutesJsonForGoldCompare({
+      minutesSource: "v4",
+      v4DocumentJson: v4,
+      storedMinutesJson: older,
+    }), v4);
+    assert.equal(minutesJsonForGoldCompare({
+      minutesSource: "v4",
+      v4DocumentJson: "  ",
+      storedMinutesJson: older,
+    }), null);
+    assert.equal(minutesJsonForGoldCompare({
+      minutesSource: null,
+      v4DocumentJson: v4,
+      storedMinutesJson: older,
+    }), older);
   });
 
   it("leaves a motion off the page when this meeting made no decision", () => {

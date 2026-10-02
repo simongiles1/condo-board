@@ -82,6 +82,8 @@ export type MeetingV2Settings = {
   goldStandardFilePath?: string | null;
   /** Cached gold-standard validation JSON. */
   goldStandardValidationJson?: string | null;
+  /** Cached comparison of the V4 minutes. Kept apart from the V2 draft comparison. */
+  meetingsV4GoldStandardValidationJson?: string | null;
   /** Per-run LLM usage from gold-standard compare (appended each comparison). */
   goldStandardValidationRuns?: GoldStandardValidationUsageRun[];
   /** Human-in-the-loop agenda review approval and transcript alignment. */

@@ -10,6 +10,8 @@ type Props = {
   meetingId: string | null;
   meetingTitle: string | null;
   endpoint?: string;
+  /** Extra form fields sent with the PDF, such as which minutes draft to compare. */
+  extraFields?: Record<string, string>;
   onClose: () => void;
   onSuccess: (validation: GoldStandardValidationResult, aiUsageJson: string) => void;
 };
@@ -19,6 +21,7 @@ export function GoldStandardCompareDialog({
   meetingId,
   meetingTitle,
   endpoint,
+  extraFields,
   onClose,
   onSuccess,
 }: Props) {
@@ -52,6 +55,9 @@ export function GoldStandardCompareDialog({
 
     setError(null);
     const formData = new FormData(event.currentTarget);
+    for (const [key, value] of Object.entries(extraFields ?? {})) {
+      formData.set(key, value);
+    }
 
     try {
       setLoading(true);

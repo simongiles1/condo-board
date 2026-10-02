@@ -28,6 +28,11 @@ import {
 } from "@/lib/minutes/gold-standard-compare-pipeline";
 import { saveMeetingV2GoldStandardArtifact } from "@/lib/meeting-v2/service";
 import type { MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
+import {
+  loadMeetingsV4CompareMinutes,
+  minutesJsonForGoldCompare,
+  MeetingsV4Error,
+} from "@/lib/meeting-v4/workspace";
 
 export async function POST(
   req: Request,
@@ -41,6 +46,8 @@ export async function POST(
     const reuseStored =
       formData.get("reuseStored") === "1" ||
       formData.get("reuseStored") === "true";
+    const minutesSource = formData.get("minutesSource");
+    const comparingV4 = minutesSource === "v4";
 
     const db = getDb();
 
@@ -58,8 +65,8 @@ export async function POST(
       return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
     }
 
-    let minutesJsonToCompare = meeting?.minutesJson?.trim() ?? "";
-    if (!minutesJsonToCompare && v2Meeting) {
+    let storedMinutesJson = meeting?.minutesJson?.trim() ?? "";
+    if (!storedMinutesJson && v2Meeting) {
       const [v2Draft] = await db
         .select()
         .from(meetingsV2MinutesDrafts)
@@ -68,17 +75,33 @@ export async function POST(
         .limit(1);
 
       if (v2Draft?.summaryJson) {
-        minutesJsonToCompare = v2Draft.summaryJson;
+        storedMinutesJson = v2Draft.summaryJson;
       } else if (v2Draft?.contentMarkdown) {
-        minutesJsonToCompare = v2Draft.contentMarkdown;
+        storedMinutesJson = v2Draft.contentMarkdown;
       }
     }
+
+    let v4DocumentJson: string | null = null;
+    if (comparingV4 && v2Meeting) {
+      try {
+        v4DocumentJson = await loadMeetingsV4CompareMinutes(id);
+      } catch (error) {
+        if (!(error instanceof MeetingsV4Error)) throw error;
+      }
+    }
+
+    const minutesJsonToCompare = minutesJsonForGoldCompare({
+      minutesSource: typeof minutesSource === "string" ? minutesSource : null,
+      v4DocumentJson,
+      storedMinutesJson,
+    });
 
     if (!minutesJsonToCompare) {
       return NextResponse.json(
         {
-          error:
-            "No structured minutes or draft found to compare. Please generate a minutes draft first.",
+          error: comparingV4
+            ? "Draft the V4 minutes before comparing them to the gold standard."
+            : "No structured minutes or draft found to compare. Please generate a minutes draft first.",
         },
         { status: 400 },
       );
@@ -169,7 +192,7 @@ export async function POST(
     });
     const aiUsageJson = appendAiUsageRun(baseUsageJson, validationUsageRun);
 
-    if (meeting) {
+    if (meeting && !comparingV4) {
       await db
         .update(meetings)
         .set({
@@ -181,22 +204,25 @@ export async function POST(
     }
 
     if (v2Meeting) {
+      const validationRuns = [
+        ...(existingSettings.goldStandardValidationRuns ?? []),
+        {
+          id: validationUsageRun.id,
+          label: validationUsageRun.label,
+          ranAt: validationUsageRun.ranAt,
+          modelName: validationUsageRun.modelName,
+          inputTokens: validationUsageRun.inputTokens,
+          outputTokens: validationUsageRun.outputTokens,
+          totalTokens: validationUsageRun.totalTokens,
+        },
+      ];
       const nextSettings: MeetingV2Settings = {
         ...existingSettings,
         goldStandardFilePath,
-        goldStandardValidationJson: serialized,
-        goldStandardValidationRuns: [
-          ...(existingSettings.goldStandardValidationRuns ?? []),
-          {
-            id: validationUsageRun.id,
-            label: validationUsageRun.label,
-            ranAt: validationUsageRun.ranAt,
-            modelName: validationUsageRun.modelName,
-            inputTokens: validationUsageRun.inputTokens,
-            outputTokens: validationUsageRun.outputTokens,
-            totalTokens: validationUsageRun.totalTokens,
-          },
-        ],
+        goldStandardValidationRuns: validationRuns,
+        ...(comparingV4
+          ? { meetingsV4GoldStandardValidationJson: serialized }
+          : { goldStandardValidationJson: serialized }),
       };
       await db
         .update(meetingsV2)

@@ -4,7 +4,16 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 
+import { CopyMarkdownButton } from "@/components/CopyMarkdownButton";
+import { GoldStandardCompareDialog } from "@/components/GoldStandardCompareDialog";
+import { GoldStandardValidationSidePanel } from "@/components/GoldStandardValidationSidePanel";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
+import { headlineValidationScore } from "@/lib/minutes/gold-standard-compare";
+import {
+  parseStoredGoldStandardValidation,
+  validationScoreLabel,
+  type GoldStandardValidationResult,
+} from "@/lib/minutes/gold-standard-schema";
 import { MEETINGS_V4_DRAFT_PROMPT } from "@/lib/meeting-v4/prompt";
 import type { MeetingsV4ItemResult } from "@/lib/meeting-v4/types";
 import {
@@ -24,11 +33,22 @@ export function MeetingV4Workspace({ initial }: { initial: MeetingsV4Workspace }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stepLabel, setStepLabel] = useState<string | null>(initial.currentStep);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [reCompareBusy, setReCompareBusy] = useState(false);
+  const [liveValidation, setLiveValidation] = useState<GoldStandardValidationResult | null>(null);
+  const [goldFilePath, setGoldFilePath] = useState(initial.goldStandardFilePath);
   const requested = parseMeetingsV4WizardStepId(searchParams.get(MEETINGS_V4_WIZARD_STEP_QUERY_PARAM));
   const shownId = requested ?? "segmentation";
   const shown = MEETINGS_V4_WIZARD_STEPS.find((step) => step.id === shownId) ?? MEETINGS_V4_WIZARD_STEPS[0];
   const inventory = workspace.inventory;
   const draftItems = workspace.draft?.items ?? [];
+  const storedValidation = useMemo(
+    () => parseStoredGoldStandardValidation(workspace.goldStandardValidationJson),
+    [workspace.goldStandardValidationJson],
+  );
+  const validation = liveValidation ?? storedValidation;
+  const validationScore = validation ? headlineValidationScore(validation) : null;
   const counts = useMemo(() => ({
     spans: inventory.spans.length,
     missing: inventory.missingLeaves.length,
@@ -65,6 +85,62 @@ export function MeetingV4Workspace({ initial }: { initial: MeetingsV4Workspace }
     } finally {
       window.clearInterval(poll);
       setBusy(false);
+    }
+  }
+
+  function openCompare() {
+    if (validationScore !== null) {
+      setPanelOpen(true);
+      return;
+    }
+    setCompareOpen(true);
+  }
+
+  function handleCompareSuccess(result: GoldStandardValidationResult) {
+    setLiveValidation(result);
+    setGoldFilePath((current) => current || "stored");
+    setCompareOpen(false);
+    setPanelOpen(true);
+    void fetch(`/api/v4/meetings/${workspace.id}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: MeetingsV4Workspace | null) => {
+        if (!payload?.goldStandardFilePath) return;
+        setGoldFilePath(payload.goldStandardFilePath);
+        setWorkspace((current) => ({
+          ...current,
+          goldStandardFilePath: payload.goldStandardFilePath,
+          goldStandardValidationJson: payload.goldStandardValidationJson,
+        }));
+      })
+      .catch(() => undefined);
+  }
+
+  async function recompare() {
+    if (!goldFilePath) {
+      setPanelOpen(false);
+      setCompareOpen(true);
+      return;
+    }
+    setReCompareBusy(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.set("reuseStored", "1");
+      formData.set("minutesSource", "v4");
+      const response = await fetch(`/api/meetings/${workspace.id}/compare-gold-standard`, {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json().catch(() => null) as { error?: string; validation?: GoldStandardValidationResult } | null;
+      if (!response.ok || !payload?.validation) {
+        throw new Error(payload?.error || "Re-compare failed.");
+      }
+      setLiveValidation(payload.validation);
+    } catch (compareError) {
+      setError(compareError instanceof Error ? compareError.message : "Re-compare failed.");
+      setCompareOpen(true);
+    } finally {
+      setReCompareBusy(false);
     }
   }
 
@@ -115,8 +191,52 @@ export function MeetingV4Workspace({ initial }: { initial: MeetingsV4Workspace }
             onDraft={() => void draft()}
           />
         ) : null}
-        {shown.id === "minutes" ? <Minutes markdown={workspace.markdown} /> : null}
+        {shown.id === "minutes" ? (
+          <Minutes
+            markdown={workspace.markdown}
+            compareLabel={
+              validationScore !== null
+                ? `Gold standard · ${validationScoreLabel(validationScore)}`
+                : "Compare against gold standard"
+            }
+            onCompare={openCompare}
+          />
+        ) : null}
       </div>
+      <GoldStandardCompareDialog
+        open={compareOpen}
+        meetingId={workspace.id}
+        meetingTitle={workspace.title}
+        extraFields={{ minutesSource: "v4" }}
+        onClose={() => setCompareOpen(false)}
+        onSuccess={(result) => handleCompareSuccess(result)}
+      />
+      <GoldStandardValidationSidePanel
+        meeting={
+          panelOpen
+            ? {
+                id: workspace.id,
+                title: workspace.title,
+                meetingDate: workspace.meetingDate,
+                goldStandardFilePath: goldFilePath,
+              }
+            : null
+        }
+        validation={panelOpen ? validation : null}
+        reCompareBusy={reCompareBusy}
+        agendaItems={inventory.items.map((item) => ({
+          title: item.title,
+          itemNumber: item.itemNumber,
+        }))}
+        onClose={() => setPanelOpen(false)}
+        onReCompare={() => {
+          void recompare();
+        }}
+        onUploadDifferent={() => {
+          setPanelOpen(false);
+          setCompareOpen(true);
+        }}
+      />
     </div>
   );
 }
@@ -299,9 +419,31 @@ function Draft({
   );
 }
 
-function Minutes({ markdown }: { markdown: string | null }) {
+function Minutes({
+  markdown,
+  compareLabel,
+  onCompare,
+}: {
+  markdown: string | null;
+  compareLabel: string;
+  onCompare: () => void;
+}) {
   if (!markdown) {
     return <p className="text-sm text-slate-600">Draft the minutes to assemble this document. Attendance and the next-meeting line stay blank.</p>;
   }
-  return <MarkdownPreview>{markdown}</MarkdownPreview>;
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <CopyMarkdownButton markdown={markdown} label="Copy as Markdown" />
+        <button
+          type="button"
+          onClick={onCompare}
+          className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
+        >
+          {compareLabel}
+        </button>
+      </div>
+      <MarkdownPreview>{markdown}</MarkdownPreview>
+    </div>
+  );
 }

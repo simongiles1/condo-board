@@ -421,32 +421,23 @@ function Draft({
 }
 
 function AgendaSentPanel({ item }: { item: MeetingsV4ItemResult }) {
-  const [extractTab, setExtractTab] = useState<"corrected" | "docling" | "raw">("corrected");
+  const [extractTab, setExtractTab] = useState<"corrected" | "docling">("corrected");
   const correctedMarkdown = item.bundle.agendaTextCorrected?.trim() ?? "";
   const doclingMarkdown = item.bundle.agendaTextDocling?.trim() ?? "";
-  const sentRaw = item.bundle.agendaText.trim();
-  const tabs: Array<{ id: "corrected" | "docling" | "raw"; label: string }> = [
+  const tabs: Array<{ id: "corrected" | "docling"; label: string }> = [
     { id: "corrected", label: "Corrected extract" },
     { id: "docling", label: "Docling extract" },
-    { id: "raw", label: "Sent to model" },
   ];
-  const copyMarkdown =
-    extractTab === "docling"
-      ? doclingMarkdown
-      : extractTab === "raw"
-        ? sentRaw
-        : correctedMarkdown || sentRaw;
+  const copyMarkdown = extractTab === "docling" ? doclingMarkdown : correctedMarkdown;
   const panelBody =
-    extractTab === "raw"
-      ? sentRaw || "Nothing was sent for the agenda field."
-      : extractTab === "docling"
-        ? doclingMarkdown || "No Docling text is linked to this item's source pages."
-        : correctedMarkdown || "No corrected rewrite is stored for this item's source pages yet.";
+    extractTab === "docling"
+      ? doclingMarkdown || "No Docling text is linked to this item's source pages."
+      : correctedMarkdown || "No corrected rewrite is stored for this item's source pages yet.";
 
   return (
     <div className="mt-2 overflow-hidden rounded-lg border border-slate-200 bg-white">
       <div className="flex items-stretch border-b border-slate-200">
-        <div className="flex min-w-0 flex-1 flex-wrap" role="tablist" aria-label="Agenda extract sent to the model">
+        <div className="flex min-w-0 flex-1" role="tablist" aria-label="Agenda extract">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -468,17 +459,11 @@ function AgendaSentPanel({ item }: { item: MeetingsV4ItemResult }) {
           <CopyMarkdownButton markdown={copyMarkdown} label="Copy as markdown" />
         </div>
       </div>
-      <div className="px-3 py-2" role="tabpanel">
-        {extractTab === "raw" ? (
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap text-xs text-slate-800">{panelBody}</pre>
-        ) : (
-          <div className="max-h-96 overflow-auto text-sm">
-            <MarkdownPreview>{panelBody}</MarkdownPreview>
-          </div>
-        )}
+      <div className="max-h-96 overflow-auto px-3 py-2 text-sm" role="tabpanel">
+        <MarkdownPreview>{panelBody}</MarkdownPreview>
       </div>
       <p className="border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-500">
-        The draft prompt uses corrected pages when available, then Docling. Run Draft again after page corrections change.
+        The draft prompt sends the corrected extract from the same page rewrites as the V3 package comparison. When a linked page has no rewrite yet, Docling is used for that page only.
       </p>
     </div>
   );

@@ -73,8 +73,15 @@ describe("v4 inventory", () => {
 describe("v4 agenda text", () => {
   it("prefers V3-linked source pages over empty V2 pages", () => {
     const v3Rows = [{ itemNumber: "4.A", title: "Booster pump", sourcePagesJson: "[4]" }];
+    const corrected = new Map([[4, "clean table"]]);
     assert.deepEqual(
-      resolveAgendaSourcePages({ itemNumber: "4.A", title: "Booster pump", v2Pages: [], v3Rows }),
+      resolveAgendaSourcePages({
+        itemNumber: "4.A",
+        title: "Booster pump",
+        v2Pages: [],
+        v3Rows,
+        correctedPages: corrected,
+      }),
       [4],
     );
   });
@@ -85,12 +92,32 @@ describe("v4 agenda text", () => {
       title: "Booster Pump Replacement – Base Specification and Alternative Options",
       sourcePagesJson: "[4]",
     }];
+    const corrected = new Map([[4, "clean table"]]);
     assert.deepEqual(
       resolveAgendaSourcePages({
         itemNumber: "4.A",
         title: "Booster Pump Replacement",
         v2Pages: [],
         v3Rows,
+        correctedPages: corrected,
+      }),
+      [4],
+    );
+  });
+
+  it("prefers the V3 link whose pages have corrected rewrites", () => {
+    const v3Rows = [
+      { itemNumber: "x", title: "Booster Pump Replacement", sourcePagesJson: "[18]" },
+      { itemNumber: "1", title: "Booster Pump Replacement – Base Specification", sourcePagesJson: "[4]" },
+    ];
+    const corrected = new Map([[4, "clean table"]]);
+    assert.deepEqual(
+      resolveAgendaSourcePages({
+        itemNumber: "4.A",
+        title: "Booster Pump Replacement",
+        v2Pages: [],
+        v3Rows,
+        correctedPages: corrected,
       }),
       [4],
     );
@@ -130,11 +157,23 @@ describe("v4 agenda text", () => {
 
   it("keeps the stored notes when no corrected page is available", () => {
     const text = agendaTextForItem({
-      sourcePages: [4],
+      sourcePages: [],
       pageText: new Map(),
       fallback: "Amount: $214,194.00 plus HST.",
     });
     assert.equal(text, "Amount: $214,194.00 plus HST.");
+  });
+
+  it("does not use V2 notes when linked pages exist but have no rewrite yet", () => {
+    const extracts = buildAgendaExtracts({
+      sourcePages: [4],
+      correctedPages: new Map(),
+      doclingPages: new Map([[4, "Docling table on page 4"]]),
+      fallback: "Amount: $214,194.00 plus HST.",
+    });
+    assert.match(extracts.sent, /Docling table/);
+    assert.equal(extracts.sent.includes("$214,194.00"), false);
+    assert.equal(extracts.corrected, "");
   });
 });
 

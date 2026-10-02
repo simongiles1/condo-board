@@ -1,10 +1,13 @@
 /**
  * Agenda text sent with one V4 item.
- * Corrected page markdown is the printed package. Docling is the raw extract for review.
+ * Uses the same page rewrites and Docling pages as the V3 package comparison modal.
  */
 
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
-import { parentAgendaItemCode } from "@/lib/meeting-v2/agenda-outline";
+import {
+  compareAgendaItemCodes,
+  parentAgendaItemCode,
+} from "@/lib/meeting-v2/agenda-outline";
 
 /** One V3 agenda row used to resolve linked package pages for a V2 item. */
 export type V3AgendaPageLink = {
@@ -18,61 +21,80 @@ export function agendaItemNumberKey(itemNumber: string): string {
   return itemNumber.trim().replace(/\s+/g, " ");
 }
 
-/**
- * Builds a map of V3-linked source pages keyed by item number.
- * V4 segmentation uses V2 ids; V3 attachment linking holds the authoritative page list.
- */
-export function v3SourcePagesByItemNumber(
-  rows: ReadonlyArray<{ itemNumber: string; sourcePagesJson: string }>,
-): Map<string, number[]> {
-  const map = new Map<string, number[]>();
-  for (const row of rows) {
-    const pages = readAgendaSourcePages(row.sourcePagesJson);
-    if (pages.length === 0) continue;
-    map.set(agendaItemNumberKey(row.itemNumber), pages);
-  }
-  return map;
+function titleMatches(left: string, right: string): boolean {
+  const a = left.trim().toLowerCase();
+  const b = right.trim().toLowerCase();
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
 }
 
-function pagesForItemNumber(
-  itemNumber: string,
-  byNumber: ReadonlyMap<string, readonly number[]>,
-): number[] | null {
-  const pages = byNumber.get(agendaItemNumberKey(itemNumber));
-  return pages && pages.length > 0 ? [...pages] : null;
+function scorePageList(
+  pages: readonly number[],
+  correctedPages: ReadonlyMap<number, string>,
+): number {
+  let score = 0;
+  for (const page of pages) {
+    const corrected = correctedPages.get(page)?.trim() ?? "";
+    if (corrected) score += 100;
+    else if (correctedPages.has(page)) score += 1;
+  }
+  return score;
+}
+
+function pickBestPageList(
+  candidates: readonly (readonly number[])[],
+  correctedPages: ReadonlyMap<number, string>,
+): number[] {
+  let best: number[] = [];
+  let bestScore = -1;
+  for (const pages of candidates) {
+    if (pages.length === 0) continue;
+    const score = scorePageList(pages, correctedPages);
+    if (score > bestScore || (score === bestScore && pages.length < best.length)) {
+      bestScore = score;
+      best = [...pages];
+    }
+  }
+  return [...new Set(best.filter((page) => Number.isInteger(page) && page > 0))].sort(
+    (left, right) => left - right,
+  );
 }
 
 /**
  * Resolves package pages for a V2 agenda row.
- * Matches V3 attachment links by item number, parent codes, title, then V2 pages.
+ * Picks the V3 link whose pages have corrected rewrites when several rows match.
  */
 export function resolveV3SourcePages(
   itemNumber: string,
   title: string,
   v3Rows: readonly V3AgendaPageLink[],
   v2Pages: readonly number[],
+  correctedPages: ReadonlyMap<number, string>,
 ): number[] {
-  const byNumber = v3SourcePagesByItemNumber(v3Rows);
+  const candidates: number[][] = [];
 
-  const direct = pagesForItemNumber(itemNumber, byNumber);
-  if (direct) return direct;
+  for (const row of v3Rows) {
+    if (compareAgendaItemCodes(itemNumber, row.itemNumber) === 0) {
+      candidates.push(readAgendaSourcePages(row.sourcePagesJson));
+    }
+  }
 
   let code = itemNumber.trim();
   while (code.includes(".")) {
     const parent = parentAgendaItemCode(code);
     if (!parent) break;
     code = parent;
-    const linked = pagesForItemNumber(code, byNumber);
-    if (linked) return linked;
+    for (const row of v3Rows) {
+      if (compareAgendaItemCodes(code, row.itemNumber) === 0) {
+        candidates.push(readAgendaSourcePages(row.sourcePagesJson));
+      }
+    }
   }
 
-  const titleKey = title.trim().toLowerCase();
-  if (titleKey) {
+  if (title.trim()) {
     for (const row of v3Rows) {
-      const rowTitle = row.title.trim().toLowerCase();
-      if (rowTitle === titleKey || rowTitle.includes(titleKey) || titleKey.includes(rowTitle)) {
-        const linked = readAgendaSourcePages(row.sourcePagesJson);
-        if (linked.length > 0) return linked;
+      if (titleMatches(row.title, title)) {
+        candidates.push(readAgendaSourcePages(row.sourcePagesJson));
       }
     }
   }
@@ -80,7 +102,9 @@ export function resolveV3SourcePages(
   const fromV2 = [...new Set(v2Pages.filter((page) => Number.isInteger(page) && page > 0))].sort(
     (left, right) => left - right,
   );
-  return fromV2;
+  if (fromV2.length > 0) candidates.push(fromV2);
+
+  return pickBestPageList(candidates, correctedPages);
 }
 
 /**
@@ -92,12 +116,20 @@ export function resolveAgendaSourcePages(input: {
   title: string;
   v2Pages: readonly number[];
   v3Rows: readonly V3AgendaPageLink[];
+  correctedPages: ReadonlyMap<number, string>;
 }): number[] {
-  return resolveV3SourcePages(input.itemNumber, input.title, input.v3Rows, input.v2Pages);
+  return resolveV3SourcePages(
+    input.itemNumber,
+    input.title,
+    input.v3Rows,
+    input.v2Pages,
+    input.correctedPages,
+  );
 }
 
-/** Corrected, Docling, and the combined text sent to the draft model. */
+/** Corrected, Docling, and the text sent to the draft model. */
 export type MeetingsV4AgendaExtracts = {
+  /** Corrected rewrites for the linked pages; Docling only when a page has no rewrite. */
   sent: string;
   corrected: string;
   docling: string;
@@ -115,8 +147,8 @@ function joinPageText(
 }
 
 /**
- * Joins corrected page text for the item's source pages, in page order.
- * Builds Docling-only and corrected-first bundles for the draft prompt and UI.
+ * Builds corrected and Docling extracts for one item's linked pages.
+ * The draft prompt receives the corrected extract; missing rewrites fall back to Docling per page.
  */
 export function buildAgendaExtracts(input: {
   sourcePages: readonly number[];
@@ -135,7 +167,10 @@ export function buildAgendaExtracts(input: {
     const text = (input.correctedPages.get(page) ?? input.doclingPages.get(page))?.trim() ?? "";
     return text ? [`Page ${page}\n${text}`] : [];
   });
-  const sent = sentParts.length > 0 ? sentParts.join("\n\n") : input.fallback.trim();
+  const sentFromPages = sentParts.join("\n\n");
+  const sent =
+    sentFromPages
+    || (ordered.length === 0 ? input.fallback.trim() : "");
 
   return { sent, corrected, docling };
 }

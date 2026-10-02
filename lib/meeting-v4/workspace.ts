@@ -11,10 +11,10 @@ import {
   meetingsV2DocumentPages,
   meetingsV2TranscriptSegments,
   meetingsV3AgendaItems,
-  meetingsV3PageRewrites,
 } from "@/lib/db/schema-v2";
 import { readMeetingV2Settings, type MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
+import { listMeetingPageRewrites } from "@/lib/meeting-v3/page-rewrite-run";
 import { resolveAgendaSourcePages } from "@/lib/meeting-v4/agenda-text";
 import { assembleMeetingsV4Minutes, type MeetingsV4AssemblyItem } from "@/lib/meeting-v4/assemble";
 import { buildAgendaExtracts } from "@/lib/meeting-v4/agenda-text";
@@ -264,13 +264,7 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
       })
       .from(meetingsV2DocumentPages)
       .where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
-    db
-      .select({
-        pageNumber: meetingsV3PageRewrites.pageNumber,
-        correctedText: meetingsV3PageRewrites.correctedText,
-      })
-      .from(meetingsV3PageRewrites)
-      .where(eq(meetingsV3PageRewrites.meetingV2Id, meetingId)),
+    listMeetingPageRewrites(meetingId),
   ]);
   const doclingPageText = new Map<number, string>();
   const correctedPageText = new Map<number, string>();
@@ -307,6 +301,7 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
           title: row.title,
           v2Pages,
           v3Rows: v3AgendaRows,
+          correctedPages: correctedPageText,
         }),
         sortOrder: row.sortOrder,
       };

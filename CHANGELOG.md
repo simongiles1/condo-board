@@ -17,6 +17,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V4 draft** — Each item is drafted from the corrected agenda-page extract, including printed tables, instead of the short stored notes. The Minutes tab renders that document as formatted markdown. Draft again to replace a draft that was written from the notes.
+
 - **Meetings V3 minutes draft** — A topic paragraph no longer pastes a spoken fragment or a list of unverified fees. Those open points stay on Check minutes. Re-run Draft minutes.
 
 - **Meetings V3 quoted facts** — A comparison table no longer keeps the previous page’s suppliers when the next page opens with a section heading. A price stops asking for context when that supplier’s column contains it, including when the row also shows a crossed-out price or a compliance note. A supplier named somewhere else in the quotation still needs review. Re-run Resolve facts, then Group sources.

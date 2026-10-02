@@ -15,11 +15,11 @@ import {
 /** System instruction for one item. Prior minutes are not attached. */
 export const MEETINGS_V4_DRAFT_PROMPT = `You write the minutes for one condominium board agenda item.
 
-You receive the agenda text for that item and the reviewed transcript stretches assigned to it, with speakers and timestamps. No attachment pages are included. Do not assume a figure that is not in the agenda text or the transcript.
+You receive the corrected extract of that item's agenda pages, including tables, and the reviewed transcript stretches assigned to it, with speakers and timestamps. That extract is the printed package. Do not assume a figure that is not in the extract or the transcript.
 
-The transcript decides what happened at this meeting. The agenda supplies the topic and any printed proposal. A package recommendation does not override a different decision made in the room. A later remark replaces an earlier one on the same point. Separate a prior approval that is only being reported from a decision made today.
+The transcript decides what happened at this meeting. The extract supplies the topic and any printed proposal. A package recommendation does not override a different decision made in the room. A later remark replaces an earlier one on the same point. Separate a prior approval that is only being reported from a decision made today.
 
-Speech-to-text mishears names and numbers. "Two six six oh" or "about twenty-six hundred" can be the agenda figure $2,660 when that is the only matching figure for the same party. Write the agenda figure, including tax treatment when the agenda states it. If two figures could match, or the party is unclear, keep a supported approval and set amount to "uncertain". Do not mention transcription in the minutes.
+Speech-to-text mishears names and numbers. "Two six six oh" or "about twenty-six hundred" can be the printed figure $2,660 when that is the only matching figure for the same party. A spoken amount that names the start of one printed figure, such as "one hundred and sixty-three" for $163,900, is that figure when no other printed figure fits those words as well. Write the printed figure, including tax treatment when the extract states it. If two figures could match, or the party is unclear, keep a supported approval and set amount to "uncertain". Do not mention transcription in the minutes.
 
 "No questions" after a report is not an approval. Agreement, "I'm fine", "go ahead", or the chair moving on after someone asked the board to approve or direct something is a decision when no unmet condition remains. The chair moving on during an update is not, by itself, a decision. Record a supported approval, rejection, deferral, or direction even when nobody said "I move".
 

@@ -25,7 +25,7 @@ export const MEETINGS_V4_WIZARD_STEPS: readonly MeetingsV4WizardStep[] = [
   {
     id: "draft",
     title: "Draft",
-    detail: "Writes one minutes paragraph per item from the agenda text and the reviewed transcript. Evidence notes stay beside the paragraph.",
+    detail: "Writes one minutes paragraph per item from the corrected agenda-page extract and the reviewed transcript. Evidence notes stay beside the paragraph.",
   },
   {
     id: "minutes",

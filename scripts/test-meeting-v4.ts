@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { agendaTextForItem } from "../lib/meeting-v4/agenda-text";
 import { assembleMeetingsV4Minutes } from "../lib/meeting-v4/assemble";
 import { bundleCuesForItem, inventoryMeetingsV4 } from "../lib/meeting-v4/inventory";
 import { readMeetingsV4Draft } from "../lib/meeting-v4/prompt";
@@ -60,6 +61,29 @@ describe("v4 inventory", () => {
     });
     assert.equal(inventory.overlappingCues.length, 1);
     assert.deepEqual(inventory.overlappingCues[0]?.itemNumbers.sort(), ["1", "2"]);
+  });
+});
+
+describe("v4 agenda text", () => {
+  it("sends the corrected page extract, including a table figure missing from the notes", () => {
+    const text = agendaTextForItem({
+      sourcePages: [4],
+      pageText: new Map([
+        [4, "Total Bid Amount based on Alternative | NWP $163,900.00"],
+      ]),
+      fallback: "Amount: $214,194.00 plus HST. The transcript said 163.",
+    });
+    assert.match(text, /\$163,900\.00/);
+    assert.equal(text.includes("$214,194.00"), false);
+  });
+
+  it("keeps the stored notes when no corrected page is available", () => {
+    const text = agendaTextForItem({
+      sourcePages: [4],
+      pageText: new Map(),
+      fallback: "Amount: $214,194.00 plus HST.",
+    });
+    assert.equal(text, "Amount: $214,194.00 plus HST.");
   });
 });
 

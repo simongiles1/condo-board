@@ -5,8 +5,15 @@
 import { asc, eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
-import { meetingsV2, meetingsV2AgendaItems, meetingsV2TranscriptSegments } from "@/lib/db/schema-v2";
+import {
+  meetingsV2,
+  meetingsV2AgendaItems,
+  meetingsV2DocumentPages,
+  meetingsV2TranscriptSegments,
+  meetingsV3PageRewrites,
+} from "@/lib/db/schema-v2";
 import { readMeetingV2Settings, type MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
+import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
 import { assembleMeetingsV4Minutes, type MeetingsV4AssemblyItem } from "@/lib/meeting-v4/assemble";
 import { inventoryMeetingsV4, type MeetingsV4Inventory } from "@/lib/meeting-v4/inventory";
 import type { MeetingsV4ItemResult, MeetingsV4Stored } from "@/lib/meeting-v4/types";
@@ -30,6 +37,7 @@ export type MeetingsV4AgendaRecord = {
   itemType: string;
   sectionLabel: string;
   sourceText: string;
+  sourcePages: number[];
   sortOrder: number;
 };
 
@@ -122,6 +130,7 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
   settings: MeetingV2Settings;
   agenda: MeetingsV4AgendaRecord[];
   cues: MeetingsV4CueRecord[];
+  pageText: Map<number, string>;
   spans: NonNullable<MeetingV2Settings["segmentGoldStandard"]>["spans"];
 } | null> {
   const db = getDb();
@@ -141,7 +150,7 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
   if (spans.length === 0) {
     throw new MeetingsV4Error("This meeting has no reviewed transcript segmentation.", 404);
   }
-  const [agendaRows, cueRows] = await Promise.all([
+  const [agendaRows, cueRows, storedPages, rewrites] = await Promise.all([
     db
       .select({
         id: meetingsV2AgendaItems.id,
@@ -150,6 +159,7 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
         itemType: meetingsV2AgendaItems.itemType,
         sectionLabel: meetingsV2AgendaItems.sectionLabel,
         sourceText: meetingsV2AgendaItems.sourceText,
+        sourcePagesJson: meetingsV2AgendaItems.sourcePagesJson,
         sortOrder: meetingsV2AgendaItems.sortOrder,
       })
       .from(meetingsV2AgendaItems)
@@ -166,7 +176,30 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
       .from(meetingsV2TranscriptSegments)
       .where(eq(meetingsV2TranscriptSegments.meetingV2Id, meetingId))
       .orderBy(asc(meetingsV2TranscriptSegments.sequence)),
+    db
+      .select({
+        pageNumber: meetingsV2DocumentPages.pageNumber,
+        extractedText: meetingsV2DocumentPages.extractedText,
+      })
+      .from(meetingsV2DocumentPages)
+      .where(eq(meetingsV2DocumentPages.meetingV2Id, meetingId)),
+    db
+      .select({
+        pageNumber: meetingsV3PageRewrites.pageNumber,
+        correctedText: meetingsV3PageRewrites.correctedText,
+      })
+      .from(meetingsV3PageRewrites)
+      .where(eq(meetingsV3PageRewrites.meetingV2Id, meetingId)),
   ]);
+  const pageText = new Map<number, string>();
+  for (const page of storedPages) {
+    const extracted = page.extractedText.trim();
+    if (extracted) pageText.set(page.pageNumber, extracted);
+  }
+  for (const page of rewrites) {
+    const corrected = page.correctedText.trim();
+    if (corrected) pageText.set(page.pageNumber, corrected);
+  }
   return {
     id: meeting.id,
     title: meeting.title,
@@ -180,8 +213,10 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
       itemType: row.itemType,
       sectionLabel: row.sectionLabel?.trim() || "",
       sourceText: row.sourceText?.trim() || "",
+      sourcePages: readAgendaSourcePages(row.sourcePagesJson),
       sortOrder: row.sortOrder,
     })),
+    pageText,
     cues: cueRows.map((row, index) => ({
       index,
       start: row.startTimestamp,

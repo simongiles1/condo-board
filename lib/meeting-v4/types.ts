@@ -43,8 +43,8 @@ export type MeetingsV4BundleCue = {
 };
 
 /**
- * The exact agenda text and transcript cues sent for one item.
- * Attachment pages stay empty until a later test supplies them.
+ * The corrected agenda-page extract and transcript cues sent for one item.
+ * Attachment pages stay empty. The extract already includes that item's printed pages.
  */
 export type MeetingsV4Bundle = {
   agendaText: string;

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 
+import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { MEETINGS_V4_DRAFT_PROMPT } from "@/lib/meeting-v4/prompt";
 import type { MeetingsV4ItemResult } from "@/lib/meeting-v4/types";
 import {
@@ -299,5 +300,5 @@ function Minutes({ markdown }: { markdown: string | null }) {
   if (!markdown) {
     return <p className="text-sm text-slate-600">Draft the minutes to assemble this document. Attendance and the next-meeting line stay blank.</p>;
   }
-  return <pre className="whitespace-pre-wrap text-sm text-slate-800">{markdown}</pre>;
+  return <MarkdownPreview>{markdown}</MarkdownPreview>;
 }

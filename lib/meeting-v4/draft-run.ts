@@ -1,6 +1,6 @@
 /**
  * Drafts V4 minutes from the reviewed segmentation.
- * Each call receives that item's agenda text and transcript cues. No attachment pages.
+ * Each call receives that item's corrected agenda-page extract and transcript cues.
  */
 
 import { randomUUID } from "node:crypto";
@@ -11,6 +11,7 @@ import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2MinutesDrafts } from "@/lib/db/schema-v2";
 import { DEEPSEEK_COMPLETION_MODEL, generateDeepSeekJson } from "@/lib/deepseek/client";
 import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
+import { agendaTextForItem } from "@/lib/meeting-v4/agenda-text";
 import { bundleCuesForItem, inventoryMeetingsV4 } from "@/lib/meeting-v4/inventory";
 import { MEETINGS_V4_DRAFT_PROMPT, readMeetingsV4Draft } from "@/lib/meeting-v4/prompt";
 import type { MeetingsV4ItemResult, MeetingsV4Stored } from "@/lib/meeting-v4/types";
@@ -42,7 +43,11 @@ export async function draftMeetingsV4(meetingId: string): Promise<MeetingsV4Work
   const results: MeetingsV4ItemResult[] = leaves.map((item) => ({
     ...blankItem(item),
     bundle: {
-      agendaText: item.sourceText || item.title,
+      agendaText: agendaTextForItem({
+        sourcePages: item.sourcePages,
+        pageText: source.pageText,
+        fallback: item.sourceText || item.title,
+      }),
       cues: bundleCuesForItem(item.id, source.cues, source.spans).map((cue) => ({
         index: cue.index,
         start: cue.start,

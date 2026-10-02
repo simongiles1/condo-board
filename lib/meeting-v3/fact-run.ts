@@ -85,13 +85,13 @@ const FACT_RECOVERY_PROMPT = `You repair package facts that failed validation fo
 Return JSON only: {"items":[{"agendaItemId":"<id>","facts":[{"field":"amount"|"vendor"|"recommendation"|"date","value":"<as printed>","page":14,"quote":"<the quote already stored on this fact>","revisedQuote":"<new verbatim citation, or omit>","headingQuote":"<verbatim or omit>","rowQuote":"<verbatim or omit>","conditionQuote":"<verbatim or omit>","subject":"<or omit>","service":"<or omit>","bidder":"<or omit>","option":"<or omit>","basis":"fixed"|"per_visit","role":"proposal"|"recommendation"|"reported_prior_approval"|"historical_event","qualifications":"<or omit>","omit":true}]}]}.
 Rules:
 - Use only the page text supplied. Do not invent an amount, a company, or a decision.
-- quote must be the quote already stored on the fact you are repairing, and value must be the amount already stored. The reply is matched to that quote and that amount.
+- quote must be the quote already stored on the fact you are repairing, and value must be the amount already stored. When the stored fact names a bidder, keep that bidder. The reply is matched to that quote, that amount, and that bidder.
+- omit true drops only the fact with that quote, amount, and bidder. Do not omit a different supplier that shows the same amount.
 - When a table names companies in the column headings, set bidder to that column heading and service to the row label.
 - To replace the citation, set revisedQuote to the new verbatim passage from that page. Leave quote as the stored quote.
 - Restate a fact that is missing its project, service, bidder, or condition, and cite the heading, row, or condition from that page.
 - When a row states several amounts, name the role of this amount in service, bidder, or option so it is not confused with the others.
 - Two bidders are alternatives. Give each fact its bidder. Do not drop either price.
-- omit true drops only the fact with that quote. Do not omit a different fact that happens to show the same amount.
 - If a fact belongs to otherTopicsOnThesePages, return it with omit true.
 - Leave a fact out of the reply when you cannot support a repair from the page.`;
 

@@ -775,6 +775,101 @@ describe("v3 quoted facts", () => {
     assert.doesNotMatch(notes, /3 investment holdings/);
   });
 
+  it("keeps the same price from two suppliers on one quotation", () => {
+    const row = "| Base Bid Amount | $100 | $100 |";
+    const merged = mergeProposedFacts(
+      [
+        { field: "amount", value: "$100", page: 31, quote: row, bidder: "Ambient" },
+        { field: "amount", value: "$100", page: 31, quote: row, bidder: "Applied" },
+      ],
+      [
+        { field: "amount", value: "$100", page: 31, quote: row, bidder: "Ambient", service: "Base Bid Amount" },
+        { field: "amount", value: "$100", page: 31, quote: row, bidder: "Applied", service: "Base Bid Amount" },
+      ],
+    );
+    assert.equal(merged.length, 2);
+    assert.equal(merged[0]?.bidder, "Ambient");
+    assert.equal(merged[1]?.bidder, "Applied");
+  });
+
+  it("keeps supplier columns on every money row of the saved bid tables", () => {
+    const booster = [
+      "| Item Description | Ambient | Applied | NWP | ABM | |",
+      "| :--- | :---: | :---: | :---: | :---: | :---: |",
+      "| Base Bid Amount | $210,994.00 | $226,928.00 | Not provided | $248,900.00 | |",
+      "| Recommended Optional Item 1. | $3,200.00 | $4,636.00 | - | $10,000.00 | |",
+      "| **Total Bid Amount based on Base Specs for Bell & Gossett Pump Set.** | **$214,194.00** | **$231,564.00** | - | **$258,900.00** | |",
+      "| Pump Lead Time | 6 months | 6 months | | 6 months | |",
+      "| Percent Difference | - | 8.1% | - | 20.8% | |",
+      "| Total Bid Amount based on Alternative to the base bid specs. | $179,994.00 | $152,844.00 | **$163,900.00** | $179,600.00 | $218,900.00 |",
+      "| **Alternative** | Armstrong | TACO | Armstrong | WILO | Grundfos |",
+      "| Delivery | 12-13 Weeks | 5 Weeks | 12-13 Weeks | 13-14 Weeks | |",
+    ].join("\n");
+    const boosterFacts = acceptQuotedFacts({
+      pages: [{ pageNumber: 31, text: booster }],
+      proposed: [
+        { field: "amount", value: "$210,994.00", page: 31, quote: "$210,994.00", subject: "Booster Pump" },
+        { field: "amount", value: "$226,928.00", page: 31, quote: "$226,928.00", subject: "Booster Pump" },
+        { field: "amount", value: "$248,900.00", page: 31, quote: "$248,900.00", subject: "Booster Pump" },
+        { field: "amount", value: "$3,200.00", page: 31, quote: "$3,200.00", subject: "Booster Pump" },
+        { field: "amount", value: "$214,194.00", page: 31, quote: "**$214,194.00**", subject: "Booster Pump" },
+        { field: "amount", value: "**$163,900.00**", page: 31, quote: "**$163,900.00**", subject: "Booster Pump" },
+        { field: "amount", value: "$218,900.00", page: 31, quote: "$218,900.00", subject: "Booster Pump" },
+      ],
+    });
+    const bidderFor = (value: string) => boosterFacts.candidates.find((candidate) => candidate.value === value)?.bidder;
+    assert.equal(bidderFor("$210,994.00"), "Ambient");
+    assert.equal(bidderFor("$226,928.00"), "Applied");
+    assert.equal(bidderFor("$248,900.00"), "ABM");
+    assert.equal(bidderFor("$3,200.00"), "Ambient");
+    assert.equal(bidderFor("$214,194.00"), "Ambient");
+    assert.equal(bidderFor("**$163,900.00**"), "NWP");
+    assert.equal(bidderFor("$218,900.00"), undefined);
+    assert.equal(boosterFacts.candidates.find((candidate) => candidate.value === "$3,200.00")?.service, "Recommended Optional Item 1");
+    assert.equal(
+      boosterFacts.candidates.find((candidate) => candidate.value === "$214,194.00")?.service,
+      "Total Bid Amount based on Base Specs for Bell & Gossett Pump Set",
+    );
+    assert.equal(boosterFacts.candidates.some((candidate) => candidate.bidder === "20.8%" || candidate.bidder === "6 months" || candidate.bidder === "Armstrong"), false);
+    assert.match(factContextNotes(boosterFacts).join(" "), /Base Bid Amount: 3 alternative prices \(Ambient, Applied, ABM\)/);
+    const storedBooster = readStoredItemFacts(JSON.stringify(boosterFacts));
+    assert.equal(storedBooster?.candidates.find((candidate) => candidate.value === "$210,994.00")?.bidder, "Ambient");
+    assert.equal(storedBooster?.candidates.find((candidate) => candidate.value === "**$163,900.00**")?.bidder, "NWP");
+
+    const tanks = "| 4.0 | Provide two (2) new 1135 L double-wall fuel storage tanks, complete with all required piping, fittings, switches, gauges, and accessories. Scope shall include all necessary valves, connections, control instruments, and accessories not included in the base scope, to provide a complete and fully operational fuel system installation. | **$18,000.00** | $25,525.00 | $22,000.00 |";
+    const silencer = "| 6.0 | Provide a new emergency generator exhaust silencer complete with all required accessories, supports, | **$18,000.00** | $25,525.00 | $24,400.00 |";
+    const generator = [
+      "| No. | Item Description | PML | GI | ESI |",
+      "| :--- | :--- | :--- | :--- | :--- |",
+      "| 1.0 | Demolish two (2) existing fuel storage tanks, including all associated valves, appurtenances, and connections, as shown on the drawings. | **$ 3,000.00** | $4,250.00 | $5,500.00 |",
+      tanks,
+      silencer,
+    ].join("\n");
+    const generatorFacts = acceptQuotedFacts({
+      pages: [{ pageNumber: 124, text: generator }],
+      proposed: [
+        { field: "amount", value: "$ 3,000.00", page: 124, quote: "**$ 3,000.00**", subject: "Generator" },
+        { field: "amount", value: "$4,250.00", page: 124, quote: "$4,250.00", subject: "Generator" },
+        { field: "amount", value: "$5,500.00", page: 124, quote: "$5,500.00", subject: "Generator" },
+        { field: "amount", value: "**$18,000.00**", page: 124, quote: tanks, subject: "Generator" },
+        { field: "amount", value: "**$18,000.00**", page: 124, quote: silencer, subject: "Generator" },
+        { field: "amount", value: "$18,000.00", page: 124, quote: "$18,000.00", subject: "Generator" },
+      ],
+    });
+    assert.equal(generatorFacts.candidates.find((candidate) => candidate.value === "$ 3,000.00")?.bidder, "PML");
+    assert.equal(generatorFacts.candidates.find((candidate) => candidate.value === "$4,250.00")?.bidder, "GI");
+    assert.equal(generatorFacts.candidates.find((candidate) => candidate.value === "$5,500.00")?.bidder, "ESI");
+    assert.match(generatorFacts.candidates.find((candidate) => candidate.value === "$ 3,000.00")?.service ?? "", /^Demolish two/);
+    const eighteen = generatorFacts.candidates.filter((candidate) => candidate.value === "**$18,000.00**");
+    assert.equal(eighteen.length, 2);
+    assert.ok(eighteen.every((candidate) => candidate.bidder === "PML"));
+    assert.notEqual(eighteen[0]?.service, eighteen[1]?.service);
+    const ambiguous = generatorFacts.candidates.find((candidate) => candidate.value === "$18,000.00");
+    assert.equal(ambiguous?.bidder, undefined);
+    const storedGenerator = readStoredItemFacts(JSON.stringify(generatorFacts));
+    assert.equal(storedGenerator?.candidates.filter((candidate) => candidate.value === "**$18,000.00**" && candidate.bidder === "PML").length, 2);
+  });
+
   it("treats a DeepSeek keep-alive as silence and a content line as text", () => {
     assert.equal(readDeepSeekStreamLine(": keep-alive"), null);
     assert.equal(readDeepSeekStreamLine("data: [DONE]"), null);

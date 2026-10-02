@@ -185,7 +185,7 @@ export function expandFactPagesForPrompt(
 
 /**
  * Keeps proposed facts whose quote is on the named page and whose value is inside that quote.
- * Two equal amounts on one page both stay when their quotes differ.
+ * Two equal amounts on one page both stay when their quotes or their bidders differ.
  * A heading, a row, or a condition may supply subject, service, bidder, or qualifications when that span is on the same page.
  * A quote that names a sibling topic more strongly than this item is kept and flagged.
  */
@@ -198,6 +198,7 @@ export function acceptQuotedFacts(input: {
   const pages = combinedPageText(input.pages);
   const candidates: MeetingsV3FactCandidate[] = [];
   const seen = new Set<string>();
+  const claimedCells = new Set<string>();
 
   for (const proposed of input.proposed) {
     if (typeof proposed.field !== "string" || !FIELD_SET.has(proposed.field)) continue;
@@ -215,9 +216,6 @@ export function acceptQuotedFacts(input: {
     if (!quoteNorm.includes(valueNorm)) continue;
     if (!pageText.includes(quoteNorm)) continue;
     const field = proposed.field as MeetingsV3FactField;
-    const key = `${field}\0${valueNorm}\0${proposed.page}\0${quoteNorm}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
     const pageOriginal = input.pages.find((page) => page.pageNumber === proposed.page)?.text ?? "";
     const headingQuote = citedSpan(proposed.headingQuote, pageText);
     const rowQuote = citedSpan(proposed.rowQuote, pageText);
@@ -249,7 +247,7 @@ export function acceptQuotedFacts(input: {
     if (typeof proposed.role === "string" && ROLE_SET.has(proposed.role) && roleSupported(proposed.role, quoteNorm)) {
       candidate.role = proposed.role as MeetingsV3PackageRole;
     }
-    enrichFactContext(candidate, pageOriginal, input.title, input.siblingTitles ?? []);
+    enrichFactContext(candidate, pageOriginal, input.title, input.siblingTitles ?? [], claimedCells);
     if (proposed.topicMismatch === true) candidate.topicMismatch = true;
     if (typeof proposed.organizationId === "string" && proposed.organizationId.trim()) {
       candidate.organizationId = proposed.organizationId.trim();
@@ -257,6 +255,16 @@ export function acceptQuotedFacts(input: {
     if (typeof proposed.organizationMatch === "string" && ORG_MATCH_SET.has(proposed.organizationMatch)) {
       candidate.organizationMatch = proposed.organizationMatch as MeetingsV3OrgMatch;
     }
+    const identity = [
+      field,
+      valueNorm,
+      String(proposed.page),
+      quoteNorm,
+      factLabelKey(candidate.bidder ?? ""),
+      factLabelKey(candidate.option ?? ""),
+    ].join("\0");
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     candidates.push(candidate);
   }
 
@@ -326,16 +334,20 @@ export function factContextNotes(facts: MeetingsV3ItemFacts): string[] {
       .map((candidate) => normalizeFactText(candidate.bidder || candidate.service || candidate.value)),
   );
   if (holdings.size > 1) notes.push(`${holdings.size} investment holdings.`);
-  const alternatives = new Map<string, Set<string>>();
+  const alternatives = new Map<string, { service: string; bidders: Map<string, string> }>();
   for (const candidate of serviced) {
     if (amountKind(candidate) !== "fee" || !candidate.bidder) continue;
     const key = `${factLabelKey(candidate.subject ?? "")}\0${factLabelKey(candidate.service ?? "")}`;
-    const bidders = alternatives.get(key) ?? new Set<string>();
-    bidders.add(normalizeFactText(candidate.bidder));
-    alternatives.set(key, bidders);
+    const row = alternatives.get(key) ?? { service: candidate.service ?? "", bidders: new Map<string, string>() };
+    const bidderId = factLabelKey(candidate.bidder);
+    if (!row.bidders.has(bidderId)) row.bidders.set(bidderId, candidate.bidder);
+    alternatives.set(key, row);
   }
-  for (const bidders of alternatives.values()) {
-    if (bidders.size > 1) notes.push(`${bidders.size} alternative prices.`);
+  for (const row of alternatives.values()) {
+    if (row.bidders.size > 1) {
+      const names = [...row.bidders.values()].join(", ");
+      notes.push(`${tidyFactLabel(row.service)}: ${row.bidders.size} alternative prices (${names}).`);
+    }
   }
   return notes;
 }
@@ -606,12 +618,16 @@ function amountKind(candidate: MeetingsV3FactCandidate): "fee" | "tax" | "total"
 }
 
 /** Groups the same commercial line when the extracted label only differs by trailing punctuation. */
+function stripFactEmphasis(value: string): string {
+  return value.replace(/[*_`]/g, "");
+}
+
 function factLabelKey(value: string): string {
-  return normalizeFactText(value).replace(/[\s.|:;…]+$/g, "").trim();
+  return normalizeFactText(stripFactEmphasis(value)).replace(/[\s.|:;…]+$/g, "").trim();
 }
 
 function tidyFactLabel(value: string): string {
-  return value.replace(/\s+/g, " ").trim().replace(/[\s.|:;…]+$/g, "");
+  return stripFactEmphasis(value).replace(/\s+/g, " ").trim().replace(/[\s.|:;…]+$/g, "");
 }
 
 function priceGroupKey(candidate: MeetingsV3FactCandidate): string {
@@ -698,6 +714,7 @@ function enrichFactContext(
   pageText: string,
   title: string | undefined,
   siblingTitles: readonly string[],
+  claimedCells: Set<string>,
 ): void {
   const lines = pageText.split(/\n/);
   const quoteKey = normalizeFactText(candidate.quote).slice(0, 48);
@@ -714,7 +731,7 @@ function enrichFactContext(
     const fromLine = serviceFromAmountLine(candidate.quote, candidate.value);
     if (fromLine) candidate.service = fromLine;
   }
-  applyTableColumns(candidate, pageText);
+  applyTableColumns(candidate, pageText, claimedCells);
   if (!candidate.qualifications && lineIndex >= 0) {
     const condition = nearbyCondition(lines, lineIndex);
     if (condition) {
@@ -772,52 +789,148 @@ function cellsMatchAmount(cell: string, value: string): boolean {
   return Number.isFinite(left) && Number.isFinite(right) && left === right && right !== 0;
 }
 
-function isCompanyHeader(cell: string): boolean {
-  if (cell.length < 2 || cell.length > 60 || cell.includes("$")) return false;
-  if (GENERIC_COLUMN.test(cell)) return false;
-  if (/\b(bid|amount|price|total|optional|labour|labor|supply|install)\b/i.test(cell)) return false;
+function isSupplierCell(cell: string): boolean {
+  const text = stripFactEmphasis(cell).replace(/\s+/g, " ").trim();
+  if (text.length < 2 || text.length > 60) return false;
+  if (/[$%]/.test(text)) return false;
+  if (!/[A-Za-z]/.test(text)) return false;
+  if (/^\d/.test(text)) return false;
+  if (/\b(day|days|week|weeks|month|months|year|years)\b/i.test(text)) return false;
+  if (GENERIC_COLUMN.test(text)) return false;
+  if (/^(no\.?|item description|description|item|scope|alternative|alternatives)$/i.test(text)) return false;
+  if (/\b(bid|amount|price|total|optional|percent|difference|delivery|lead time|not provided)\b/i.test(text)) return false;
   return true;
 }
 
-/**
- * Reads the bidder from the column heading and the service from the row label.
- * One matching cell is required. A repeated amount is left unchanged.
- */
-function applyTableColumns(candidate: MeetingsV3FactCandidate, pageText: string): void {
-  if (candidate.field !== "amount") return;
+type TableMoneyCell = {
+  lineIndex: number;
+  cellIndex: number;
+  line: string;
+  cells: string[];
+  headerCells: string[];
+  bidder?: string;
+  headerLine: string;
+};
+
+function isMoneyRow(cells: string[]): boolean {
+  return cells.some((cell) => cell.includes("$"));
+}
+
+function isSupplierHeader(cells: string[]): boolean {
+  if (isMoneyRow(cells)) return false;
+  return cells.filter((cell) => isSupplierCell(cell)).length >= 2;
+}
+
+function moneyCells(pageText: string): TableMoneyCell[] {
   const lines = pageText.split(/\n/);
-  const hits: Array<{ lineIndex: number; cellIndex: number; cells: string[] }> = [];
+  const placed: TableMoneyCell[] = [];
+  let block: Array<{ lineIndex: number; line: string; cells: string[] }> = [];
+  const flush = () => {
+    placed.push(...supplierCellsInBlock(block));
+    block = [];
+  };
   for (let index = 0; index < lines.length; index += 1) {
-    const cells = splitTableCells(lines[index] ?? "");
-    if (cells.length < 2 || isTableSeparator(cells)) continue;
-    const indexes = cells.flatMap((cell, cellIndex) => (cellsMatchAmount(cell, candidate.value) ? [cellIndex] : []));
-    if (indexes.length === 1) hits.push({ lineIndex: index, cellIndex: indexes[0]!, cells });
+    const line = lines[index] ?? "";
+    const cells = splitTableCells(line);
+    if (cells.length >= 2) {
+      block.push({ lineIndex: index, line: line.replace(/\s+/g, " ").trim(), cells });
+      continue;
+    }
+    flush();
   }
-  if (hits.length !== 1) return;
-  const hit = hits[0]!;
-  let header: string[] | undefined;
-  let headerLine: string | undefined;
-  for (let cursor = hit.lineIndex - 1; cursor >= 0 && hit.lineIndex - cursor < 8; cursor -= 1) {
-    const cells = splitTableCells(lines[cursor] ?? "");
-    if (cells.length === 0) continue;
-    if (isTableSeparator(cells)) continue;
-    if (cells.some((cell) => cell.includes("$"))) break;
-    header = cells;
-    headerLine = (lines[cursor] ?? "").replace(/\s+/g, " ").trim();
-    break;
+  flush();
+  return placed;
+}
+
+function supplierCellsInBlock(
+  rows: Array<{ lineIndex: number; line: string; cells: string[] }>,
+): TableMoneyCell[] {
+  const body = rows.filter((row) => !isTableSeparator(row.cells));
+  const headerIndexes = body.flatMap((row, index) => (isSupplierHeader(row.cells) ? [index] : []));
+  const active = new Map<number, { cells: string[]; line: string }>();
+  for (const headerIndex of headerIndexes) {
+    const header = body[headerIndex];
+    if (!header) continue;
+    let applies = false;
+    for (let cursor = headerIndex + 1; cursor < body.length; cursor += 1) {
+      const row = body[cursor];
+      if (!row) continue;
+      if (isSupplierHeader(row.cells)) break;
+      if (isMoneyRow(row.cells)) {
+        applies = true;
+        break;
+      }
+    }
+    if (!applies) continue;
+    for (let cursor = headerIndex + 1; cursor < body.length; cursor += 1) {
+      const row = body[cursor];
+      if (!row || isSupplierHeader(row.cells)) break;
+      active.set(row.lineIndex, { cells: header.cells, line: header.line });
+    }
   }
-  const headerCell = header?.[hit.cellIndex]?.replace(/\s+/g, " ").trim();
-  const bidder = headerCell && isCompanyHeader(headerCell) ? headerCell : undefined;
-  const serviceCell = hit.cellIndex > 0 ? hit.cells[0] : undefined;
-  const service = serviceCell && !serviceCell.includes("$") && serviceCell.length >= 3 && serviceCell.length <= 120
-    ? serviceCell
-    : undefined;
-  if (bidder && headerLine && !candidate.columnQuote) candidate.columnQuote = headerLine;
-  if (!candidate.rowQuote) {
-    const dataLine = (lines[hit.lineIndex] ?? "").replace(/\s+/g, " ").trim();
-    if (dataLine) candidate.rowQuote = dataLine;
+  const cells: TableMoneyCell[] = [];
+  for (const row of body) {
+    const header = active.get(row.lineIndex);
+    if (!header || !isMoneyRow(row.cells)) continue;
+    row.cells.forEach((cell, cellIndex) => {
+      if (!cell.includes("$")) return;
+      const headerCell = stripFactEmphasis(header.cells[cellIndex] ?? "").replace(/\s+/g, " ").trim();
+      cells.push({
+        lineIndex: row.lineIndex,
+        cellIndex,
+        line: row.line,
+        cells: row.cells,
+        headerCells: header.cells,
+        bidder: isSupplierCell(headerCell) ? headerCell : undefined,
+        headerLine: header.line,
+      });
+    });
   }
-  if (!candidate.bidder && bidder) candidate.bidder = bidder;
+  return cells;
+}
+
+function rowLabel(cells: string[], headerCells: string[]): string | undefined {
+  let label = "";
+  for (let index = 0; index < cells.length; index += 1) {
+    if (isSupplierCell(headerCells[index] ?? "")) break;
+    const text = tidyFactLabel(cells[index] ?? "");
+    if (!text || text.includes("$") || /^\d+(?:\.\d+)?$/.test(text)) continue;
+    if (text.length >= 3 && text.length <= 400) label = text;
+  }
+  return label || undefined;
+}
+
+function citationMatchesLine(line: string, candidate: MeetingsV3FactCandidate): boolean {
+  const haystack = normalizeFactText(line);
+  const row = candidate.rowQuote ? normalizeFactText(candidate.rowQuote) : "";
+  const quote = normalizeFactText(candidate.quote);
+  if (row && haystack.includes(row)) return true;
+  return Boolean(quote) && haystack.includes(quote);
+}
+
+/**
+ * Copies one supplier header onto every money row in that table.
+ * A later header replaces it only when that header has prices under it.
+ * Equal prices in one row are taken left to right. A repeated amount on another row is left alone unless the quotation names that row.
+ */
+function applyTableColumns(candidate: MeetingsV3FactCandidate, pageText: string, claimedCells: Set<string>): void {
+  if (candidate.field !== "amount") return;
+  const matches = moneyCells(pageText).filter((cell) => cellsMatchAmount(cell.cells[cell.cellIndex] ?? "", candidate.value));
+  if (matches.length === 0) return;
+  const cited = matches.filter((cell) => citationMatchesLine(cell.line, candidate));
+  const pool = (cited.length > 0 ? cited : matches).filter((cell) => !claimedCells.has(`${candidate.page}:${cell.lineIndex}:${cell.cellIndex}`));
+  let choice = pool.find((cell) => cell.bidder && candidate.bidder && factLabelKey(cell.bidder) === factLabelKey(candidate.bidder));
+  if (!choice && pool.length === 1) choice = pool[0];
+  if (!choice && pool.length > 1 && new Set(pool.map((cell) => cell.lineIndex)).size === 1) {
+    // CONCERN: when one row repeats a price, facts are paired to columns from left to right in the order they were proposed.
+    choice = pool[0];
+  }
+  if (!choice?.bidder) return;
+  claimedCells.add(`${candidate.page}:${choice.lineIndex}:${choice.cellIndex}`);
+  if (!candidate.columnQuote) candidate.columnQuote = choice.headerLine;
+  if (!candidate.rowQuote) candidate.rowQuote = choice.line;
+  if (!candidate.bidder) candidate.bidder = choice.bidder;
+  const service = rowLabel(choice.cells, choice.headerCells);
   if (service && (!candidate.service || GENERIC_SERVICE.test(candidate.service))) candidate.service = service;
 }
 
@@ -946,8 +1059,9 @@ function candidateNeedsRecovery(
 }
 
 /**
- * Replaces the stored fact with the same field, page, quote, and amount.
- * `revisedQuote` changes that citation. `omit` drops that fact. Another amount that shares the quote stays.
+ * Replaces the stored fact with the same field, page, quote, amount, and bidder.
+ * `revisedQuote` changes that citation. `omit` drops that fact.
+ * Another amount, or the same amount from another supplier, stays.
  */
 export function mergeProposedFacts(
   base: readonly MeetingsV3ProposedFact[],
@@ -955,7 +1069,7 @@ export function mergeProposedFacts(
 ): MeetingsV3ProposedFact[] {
   const next = [...base];
   for (const fact of recovered) {
-    const index = next.findIndex((row) => sameProposedIdentity(row, fact));
+    const index = storedFactIndex(next, fact);
     if (fact.omit === true) {
       if (index >= 0) next.splice(index, 1);
       continue;
@@ -967,6 +1081,18 @@ export function mergeProposedFacts(
   return next;
 }
 
+function storedFactIndex(rows: readonly MeetingsV3ProposedFact[], fact: MeetingsV3ProposedFact): number {
+  const hits = rows.flatMap((row, index) => (sameProposedCore(row, fact) ? [index] : []));
+  const bidder = proposedBidderKey(fact);
+  if (bidder) {
+    const named = hits.find((index) => proposedBidderKey(rows[index] ?? {}) === bidder);
+    if (named !== undefined) return named;
+    const open = hits.find((index) => !proposedBidderKey(rows[index] ?? {}));
+    return open ?? -1;
+  }
+  return hits.length === 1 ? hits[0]! : -1;
+}
+
 function applyRevisedQuote(fact: MeetingsV3ProposedFact): MeetingsV3ProposedFact {
   if (typeof fact.revisedQuote !== "string" || !fact.revisedQuote.trim()) return fact;
   const quote = fact.revisedQuote.replace(/\s+/g, " ").trim();
@@ -975,7 +1101,11 @@ function applyRevisedQuote(fact: MeetingsV3ProposedFact): MeetingsV3ProposedFact
   return { ...rest, quote };
 }
 
-function sameProposedIdentity(left: MeetingsV3ProposedFact, right: MeetingsV3ProposedFact): boolean {
+function proposedBidderKey(fact: MeetingsV3ProposedFact): string {
+  return typeof fact.bidder === "string" ? factLabelKey(fact.bidder) : "";
+}
+
+function sameProposedCore(left: MeetingsV3ProposedFact, right: MeetingsV3ProposedFact): boolean {
   if (left.field !== right.field || left.page !== right.page) return false;
   if (typeof left.quote !== "string" || typeof right.quote !== "string") return false;
   if (typeof left.value !== "string" || typeof right.value !== "string") return false;

@@ -41,6 +41,7 @@ export const MEETINGS_V3_AI_USAGE_STAGE_IDS = [
   "v3_facts",
   "v3_transcript",
   "v3_sources",
+  "v3_draft",
 ] as const;
 
 /** One V3 pipeline stage in the AI usage breakdown. */
@@ -54,6 +55,7 @@ const STAGE_LABELS: Record<MeetingsV3AiUsageStageId, string> = {
   v3_facts: "Resolve facts",
   v3_transcript: "Segment transcript",
   v3_sources: "Group sources",
+  v3_draft: "Draft minutes",
 };
 
 function primaryGeminiModel(calls: GeminiUsageCall[]): string {

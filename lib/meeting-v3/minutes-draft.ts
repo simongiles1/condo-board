@@ -26,6 +26,8 @@ export type MeetingsV3DraftSourceItem = {
   itemType: string;
   conclusion: MeetingsV3ItemConclusion | null;
   reviewIssues: readonly MeetingsV3FactReview[];
+  /** Formal minutes paragraph. When missing, the draft uses a short status sentence. */
+  minutesSummary?: string | null;
 };
 
 /** A minutes document plus the markdown a reviewer reads. */
@@ -35,7 +37,57 @@ export type MeetingsV3DraftAssembly = {
   warnings: string[];
 };
 
-const DISCUSSION_LIMIT = 700;
+const STRUCTURAL_PATHS = new Set(["call_to_order", "date_of_next_meeting", "termination"]);
+
+/**
+ * Instructions for the minutes paragraph written for one topic.
+ * The outcome is already fixed. The paragraph must not reprint speech or unverified figures.
+ */
+export const MEETINGS_V3_MINUTES_PROSE_PROMPT = `You write one paragraph of condominium board minutes.
+
+The outcome is already decided. Do not change it.
+Write two to four sentences in formal third person, for a reader who was not in the room.
+Say what the board considered and what happened next.
+Do not quote speech. Do not include filler such as "uh" or "um".
+Do not print a withheld figure, and do not write the word "Open".
+Do not invent a mover, a seconder, a vote count, or a dollar amount.
+When the outcome is discussed or unclear, say that no decision was recorded. Do not say the board approved the item.
+
+Return JSON only: { "summary": "string" }`;
+
+/**
+ * Topics that appear in the minutes body and need a written paragraph.
+ * Headings and call-to-order, next-meeting, and adjournment rows are left out.
+ */
+export function meetingsV3ItemsNeedingMinutesProse(
+  items: readonly MeetingsV3DraftSourceItem[],
+): MeetingsV3DraftSourceItem[] {
+  return items.filter((item) => itemAppearsInMinutes(item, items));
+}
+
+/**
+ * Reads a minutes paragraph from a model reply.
+ * Returns null when the reply is empty, still sounds like speech, or dumps open points.
+ */
+export function readMeetingsV3MinutesProse(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  let summary = trimmed;
+  const fenced = trimmed.match(/\{[\s\S]*\}/);
+  if (fenced) {
+    try {
+      const parsed = JSON.parse(fenced[0]) as { summary?: unknown };
+      if (typeof parsed.summary === "string" && parsed.summary.trim()) summary = parsed.summary.trim();
+    } catch {
+      return null;
+    }
+  }
+  summary = summary.replace(/\s+/g, " ").trim();
+  if (summary.length < 24) return null;
+  if (/\b(uh|um)\b/i.test(summary)) return null;
+  if (/\bopen\s*:/i.test(summary)) return null;
+  return summary;
+}
 
 /**
  * Assembles minutes from reconciled topics and renders them.
@@ -68,8 +120,8 @@ export function assembleMeetingsV3Minutes(input: {
 export function meetingsV3DraftMarkdown(document: MinutesDocumentV2, openPointCount: number): string {
   const body = v2ToMarkdown(document);
   if (openPointCount <= 0) return body;
-  const label = openPointCount === 1 ? "point stays" : "points stay";
-  return `> Working draft. ${openPointCount} open ${label} in the topic summaries. These minutes are incomplete until each open decision or figure is supported.\n\n${body}`;
+  const label = openPointCount === 1 ? "point is listed" : "points are listed";
+  return `> Working draft. ${openPointCount} open ${label} on Check minutes. These minutes are incomplete until each open decision or figure is supported.\n\n${body}`;
 }
 
 function buildMinutesDocument(input: {
@@ -193,29 +245,34 @@ function statusFor(status: MeetingsV3ItemConclusion["status"]): AgendaItemStatus
 }
 
 function summaryFor(item: MeetingsV3DraftSourceItem): string {
-  const parts: string[] = [];
-  const conclusion = item.conclusion;
-  if (!conclusion || conclusion.status === "unclear") {
-    parts.push("This topic has no settled decision in the assigned transcript.");
-  } else {
-    const talk = conclusion.quote?.trim() || truncate(conclusion.discussion);
-    if (talk) parts.push(talk);
-    if (conclusion.packageQuote && !conclusion.openReference) {
-      parts.push(`The discussion pointed at: ${conclusion.packageQuote}`);
-    }
-  }
-  if (conclusion?.openReference) {
-    parts.push("Open: the discussion points at a package fact this topic does not have.");
-  }
-  for (const issue of item.reviewIssues) {
-    parts.push(`Open: ${issue.message}`);
-  }
-  const summary = parts.join(" ").replace(/\s+/g, " ").trim();
-  return summary || item.title.trim() || "No discussion was recorded.";
+  const written = item.minutesSummary?.replace(/\s+/g, " ").trim();
+  if (written) return written;
+  const title = item.title.trim() || "this topic";
+  const status = item.conclusion?.status;
+  if (status === "ratified" && item.conclusion?.openReference !== true) return `The Board approved ${title}.`;
+  if (status === "deferred") return `The Board deferred ${title}.`;
+  if (status === "discussed") return `The Board discussed ${title}. No decision was recorded.`;
+  return `The assigned transcript does not record a decision on ${title}.`;
 }
 
-function truncate(value: string): string {
-  const text = value.replace(/\s+/g, " ").trim();
-  if (text.length <= DISCUSSION_LIMIT) return text;
-  return `${text.slice(0, DISCUSSION_LIMIT - 3).trimEnd()}...`;
+function itemAppearsInMinutes(
+  item: MeetingsV3DraftSourceItem,
+  items: readonly MeetingsV3DraftSourceItem[],
+): boolean {
+  if (isHeading(item, items)) return false;
+  const sectionPath = mapSuggestedSectionPath({
+    itemType: item.itemType,
+    sectionLabel: item.sectionLabel,
+  });
+  return !STRUCTURAL_PATHS.has(sectionPath);
+}
+
+function isHeading(
+  item: MeetingsV3DraftSourceItem,
+  items: readonly MeetingsV3DraftSourceItem[],
+): boolean {
+  const numbers = items.map((entry) => entry.itemNumber);
+  if (new Set(numbers).size !== numbers.length) return false;
+  return item.itemNumber.split(".").length < 3
+    && items.some((other) => other.itemNumber.startsWith(`${item.itemNumber}.`) && other.id !== item.id);
 }

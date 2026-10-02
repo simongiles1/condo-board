@@ -1,6 +1,6 @@
 /**
- * Checks a reconciled V3 meeting and stores a deterministic minutes draft.
- * The draft reuses the V2 minutes shape. It does not call the unused V2 draft prompt.
+ * Checks a reconciled V3 meeting and stores minutes in the V2 section order.
+ * Each topic paragraph is written from the transcript stretch. Unverified figures stay off the page.
  */
 
 import { randomUUID } from "node:crypto";
@@ -11,7 +11,18 @@ import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2MinutesDrafts } from "@/lib/db/schema-v2";
 import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { listMeetingV3Agenda } from "@/lib/meeting-v3/agenda-run";
-import { assembleMeetingsV3Minutes, type MeetingsV3DraftSourceItem } from "@/lib/meeting-v3/minutes-draft";
+import { DEEPSEEK_COMPLETION_MODEL, generateDeepSeekJson, type DeepSeekGenerationResult } from "@/lib/deepseek/client";
+import {
+  buildMeetingsV3DeepSeekStageRow,
+  persistMeetingsV3AiUsageStage,
+} from "@/lib/meeting-v3/ai-usage";
+import {
+  assembleMeetingsV3Minutes,
+  MEETINGS_V3_MINUTES_PROSE_PROMPT,
+  meetingsV3ItemsNeedingMinutesProse,
+  readMeetingsV3MinutesProse,
+  type MeetingsV3DraftSourceItem,
+} from "@/lib/meeting-v3/minutes-draft";
 import { collectMeetingsV3ValidationFindings } from "@/lib/meeting-v3/minutes-validation";
 import {
   writeMeetingsV3MinutesDraft,
@@ -111,6 +122,7 @@ export async function draftMeetingV3Minutes(meetingId: string): Promise<Meetings
   }
 
   const items = await loadDraftSources(meetingId);
+  const proseUsage = await writeMinutesProse(meetingId, items);
   const assembled = assembleMeetingsV3Minutes({
     title: meeting.title,
     meetingDate: meeting.meetingDate,
@@ -127,11 +139,11 @@ export async function draftMeetingV3Minutes(meetingId: string): Promise<Meetings
     title,
     contentMarkdown: assembled.markdown,
     summaryJson: JSON.stringify({
-      assemblyMode: "v3_deterministic",
+      assemblyMode: proseUsage.length > 0 ? "v3_minutes_prose" : "v3_minutes_fallback",
       openPointCount: validation.errorCount + validation.warningCount,
       warnings: assembled.warnings,
     }),
-    modelName: "v3-deterministic-assembly",
+    modelName: proseUsage.length > 0 ? DEEPSEEK_COMPLETION_MODEL : "v3-minutes-fallback",
     usageJson: JSON.stringify({ agendaItemCount: items.length }),
     createdAt: completedAt,
     updatedAt: completedAt,
@@ -141,6 +153,12 @@ export async function draftMeetingV3Minutes(meetingId: string): Promise<Meetings
     draftId,
     openPointCount: validation.errorCount + validation.warningCount,
   });
+  if (proseUsage.length > 0) {
+    await persistMeetingsV3AiUsageStage(
+      meetingId,
+      buildMeetingsV3DeepSeekStageRow("v3_draft", proseUsage),
+    );
+  }
   await db
     .update(meetingsV2)
     .set({
@@ -201,6 +219,75 @@ export async function loadMeetingV3MinutesDraft(meetingId: string): Promise<{
     markdown: row.contentMarkdown,
     openPointCount,
   };
+}
+
+const PROSE_CONCURRENCY = 4;
+const PROSE_DISCUSSION_LIMIT = 6000;
+
+async function writeMinutesProse(
+  meetingId: string,
+  items: MeetingsV3DraftSourceItem[],
+): Promise<DeepSeekGenerationResult[]> {
+  const targets = meetingsV3ItemsNeedingMinutesProse(items).filter((item) => {
+    const discussion = item.conclusion?.discussion.replace(/\s+/g, " ").trim() ?? "";
+    return discussion.length >= 40;
+  });
+  const usage: DeepSeekGenerationResult[] = [];
+  if (targets.length === 0) return usage;
+  let finished = 0;
+  await setDraftStep(meetingId, `Writing minutes 0 of ${targets.length}`);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < targets.length) {
+      const index = next;
+      next += 1;
+      const item = targets[index];
+      if (!item) continue;
+      const summary = await requestMinutesProse(item, usage);
+      if (summary) item.minutesSummary = summary;
+      finished += 1;
+      await setDraftStep(meetingId, `Writing minutes ${finished} of ${targets.length}`);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(PROSE_CONCURRENCY, targets.length) }, () => worker()),
+  );
+  return usage;
+}
+
+async function requestMinutesProse(
+  item: MeetingsV3DraftSourceItem,
+  usage: DeepSeekGenerationResult[],
+): Promise<string | null> {
+  const discussion = (item.conclusion?.discussion ?? "").replace(/\s+/g, " ").trim().slice(0, PROSE_DISCUSSION_LIMIT);
+  try {
+    const response = await generateDeepSeekJson({
+      systemInstruction: MEETINGS_V3_MINUTES_PROSE_PROMPT,
+      userText: JSON.stringify({
+        topic: item.title,
+        outcome: item.conclusion?.status ?? "unclear",
+        discussion,
+        withheld: item.reviewIssues.map((issue) => issue.message),
+      }),
+      modelName: DEEPSEEK_COMPLETION_MODEL,
+      temperature: 0,
+      thinking: false,
+      maxOutputTokens: 800,
+    });
+    usage.push(response);
+    return readMeetingsV3MinutesProse(response.text);
+  } catch (error) {
+    console.error("[v3-minutes-prose]", item.itemNumber, error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+async function setDraftStep(meetingId: string, currentStep: string): Promise<void> {
+  const db = getDb();
+  await db
+    .update(meetingsV2)
+    .set({ currentStep, updatedAt: new Date().toISOString() })
+    .where(eq(meetingsV2.id, meetingId));
 }
 
 async function loadDraftSources(meetingId: string): Promise<MeetingsV3DraftSourceItem[]> {

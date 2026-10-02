@@ -56,13 +56,13 @@ export const MEETINGS_V3_WIZARD_STEPS: readonly MeetingsV3WizardStep[] = [
     id: "validate",
     title: "Check minutes",
     detail:
-      "The reconciled conclusion is the investigation. This check lists missing decisions, open package references, and figures that still need review. It does not turn those into settled decisions.",
+      "Lists missing decisions, open package references, and figures that still need review. This check is immediate. It does not write the minutes.",
   },
   {
     id: "draft",
     title: "Draft minutes",
     detail:
-      "Minutes are assembled in the same section order as Meetings V2. A topic without a supported decision stays open in the draft.",
+      "Writes a formal paragraph for each topic from the transcript stretch. Unverified figures stay off the page. A topic without a supported decision is not written as approved.",
   },
 ];
 

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+export const maxDuration = 800;
+
 import {
   draftMeetingV3Minutes,
   loadMeetingV3MinutesDraft,

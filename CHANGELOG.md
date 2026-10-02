@@ -8,9 +8,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Features
 
-- **Meetings V3 minutes draft** — After Reconcile meeting, Check minutes lists open decisions and figures, then Draft minutes writes a working draft in the same section order as Meetings V2. An unsupported conclusion stays open in that draft. Re-run Check minutes after a new reconciliation.
+- **Meetings V3 minutes draft** — After Reconcile meeting, Check minutes lists open decisions and figures, then Draft minutes writes a formal paragraph for each topic. An unsupported conclusion is not written as approved. Re-run Draft minutes after a new reconciliation.
 
 ### Fixed
+
+- **Meetings V3 minutes draft** — A topic paragraph no longer pastes a spoken fragment or a list of unverified fees. Those open points stay on Check minutes. Re-run Draft minutes.
 
 - **Meetings V3 quoted facts** — A comparison table no longer keeps the previous page’s suppliers when the next page opens with a section heading. A price stops asking for context when that supplier’s column contains it, including when the row also shows a crossed-out price or a compliance note. A supplier named somewhere else in the quotation still needs review. Re-run Resolve facts, then Group sources.
 - **Meetings V3 quoted facts** — A comparison table that continues after a letterhead, a rule, or a “3 of 7” footer still keeps each supplier, including the optional total on that same table. Bold markers in a price row no longer make a labeled total look unresolved, and the stored quotation keeps its original wording. Re-run Resolve facts, then Group sources.

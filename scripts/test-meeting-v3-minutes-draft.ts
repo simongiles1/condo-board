@@ -6,7 +6,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { assembleMeetingsV3Minutes } from "../lib/meeting-v3/minutes-draft";
+import {
+  assembleMeetingsV3Minutes,
+  readMeetingsV3MinutesProse,
+} from "../lib/meeting-v3/minutes-draft";
 import { collectMeetingsV3ValidationFindings } from "../lib/meeting-v3/minutes-validation";
 import type { MeetingsV3DraftSourceItem } from "../lib/meeting-v3/minutes-draft";
 
@@ -97,9 +100,52 @@ describe("v3 minutes draft", () => {
     });
     assert.equal(assembled.document.managementReport.itemsForApproval.length, 1);
     assert.equal(assembled.document.managementReport.itemsForApproval[0]?.status, "Motion carried.");
+    assert.equal(
+      assembled.document.managementReport.itemsForApproval[0]?.summary,
+      "The Board approved Hot water valve.",
+    );
     assert.equal(assembled.document.managementReport.itemsForDiscussion[0]?.status, "Outcome not recorded.");
     assert.match(assembled.markdown, /Working draft/);
     assert.match(assembled.markdown, /Hot water valve/);
     assert.doesNotMatch(assembled.document.managementReport.itemsForDiscussion[0]?.summary ?? "", /Motion carried/);
+  });
+
+  it("keeps a spoken fragment and unverified fees out of the paragraph", () => {
+    const assembled = assembleMeetingsV3Minutes({
+      title: "Minutes - 2026-08-12",
+      meetingDate: "2026-08-12",
+      openPointCount: 11,
+      items: [
+        item({
+          id: "pump",
+          itemNumber: "4.A",
+          title: "Booster Pump Replacement – Base Specification and Alternative Options",
+          conclusion: {
+            status: "discussed",
+            discussion: "But the uh, did we ratify the e-mail ratification?",
+            quote: "But the uh, did we ratify the e-mail ratification?",
+            openReference: false,
+          },
+          reviewIssues: [
+            { code: "fee_needs_verification", message: "Fee description needs verification for $214,194.00." },
+            { code: "missing_bidder", message: "Bidder is missing for Total Bid Amount based on Alternative to the base bid specs." },
+          ],
+        }),
+      ],
+    });
+    const summary = assembled.document.managementReport.itemsForApproval[0]?.summary ?? "";
+    assert.equal(
+      summary,
+      "The Board discussed Booster Pump Replacement – Base Specification and Alternative Options. No decision was recorded.",
+    );
+    assert.doesNotMatch(summary, /uh|Open:|214,194/);
+  });
+
+  it("drops a reply that still sounds like speech", () => {
+    assert.equal(readMeetingsV3MinutesProse('{"summary":"But the uh, did we ratify the email?" }'), null);
+    assert.match(
+      readMeetingsV3MinutesProse('{"summary":"The Board discussed the booster pump replacement. No decision was recorded."}') ?? "",
+      /No decision was recorded/,
+    );
   });
 });

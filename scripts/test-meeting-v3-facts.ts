@@ -813,6 +813,8 @@ describe("v3 quoted facts", () => {
         { field: "amount", value: "$248,900.00", page: 31, quote: "$248,900.00", subject: "Booster Pump" },
         { field: "amount", value: "$3,200.00", page: 31, quote: "$3,200.00", subject: "Booster Pump" },
         { field: "amount", value: "$214,194.00", page: 31, quote: "**$214,194.00**", subject: "Booster Pump" },
+        { field: "amount", value: "$231,564.00", page: 31, quote: "**$231,564.00**", subject: "Booster Pump" },
+        { field: "amount", value: "$258,900.00", page: 31, quote: "**$258,900.00**", subject: "Booster Pump" },
         { field: "amount", value: "**$163,900.00**", page: 31, quote: "**$163,900.00**", subject: "Booster Pump" },
         { field: "amount", value: "$218,900.00", page: 31, quote: "$218,900.00", subject: "Booster Pump" },
       ],
@@ -823,8 +825,16 @@ describe("v3 quoted facts", () => {
     assert.equal(bidderFor("$248,900.00"), "ABM");
     assert.equal(bidderFor("$3,200.00"), "Ambient");
     assert.equal(bidderFor("$214,194.00"), "Ambient");
+    assert.equal(bidderFor("$231,564.00"), "Applied");
+    assert.equal(bidderFor("$258,900.00"), "ABM");
     assert.equal(bidderFor("**$163,900.00**"), "NWP");
     assert.equal(bidderFor("$218,900.00"), undefined);
+    for (const value of ["$214,194.00", "$231,564.00", "$258,900.00"]) {
+      assert.equal(
+        boosterFacts.reviewIssues.some((issue) => issue.code === "fee_needs_verification" && issue.message.includes(value)),
+        false,
+      );
+    }
     assert.equal(boosterFacts.candidates.find((candidate) => candidate.value === "$3,200.00")?.service, "Recommended Optional Item 1");
     assert.equal(
       boosterFacts.candidates.find((candidate) => candidate.value === "$214,194.00")?.service,
@@ -835,6 +845,31 @@ describe("v3 quoted facts", () => {
     const storedBooster = readStoredItemFacts(JSON.stringify(boosterFacts));
     assert.equal(storedBooster?.candidates.find((candidate) => candidate.value === "$210,994.00")?.bidder, "Ambient");
     assert.equal(storedBooster?.candidates.find((candidate) => candidate.value === "**$163,900.00**")?.bidder, "NWP");
+    const savedService = "Total Bid Amount based on Base Specs for Bell & Gossett Pump Set.";
+    const savedBold = acceptQuotedFacts({
+      pages: [{ pageNumber: 31, text: booster }],
+      proposed: ["$214,194.00", "$231,564.00", "$258,900.00"].map((value) => ({
+        field: "amount",
+        value,
+        page: 31,
+        quote: `**${value}**`,
+        rowQuote: "| **Total Bid Amount based on Base Specs for Bell & Gossett Pump Set.** | **$214,194.00** | **$231,564.00** | - | **$258,900.00** | |",
+        service: savedService,
+        subject: "Booster Pump",
+      })),
+    });
+    assert.equal(savedBold.candidates.length, 3);
+    assert.equal(savedBold.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), false);
+    assert.equal(savedBold.candidates.every((candidate) => candidate.service === savedService), true);
+    assert.match(savedBold.candidates[0]?.quote ?? "", /\*\*/);
+    assert.match(savedBold.candidates[0]?.rowQuote ?? "", /\*\*/);
+    const storedSaved = readStoredItemFacts(JSON.stringify(savedBold));
+    assert.equal(storedSaved?.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), false);
+    assert.equal(storedSaved?.candidates.every((candidate) => candidate.service === savedService), true);
+    assert.deepEqual(
+      storedSaved?.candidates.map((candidate) => candidate.bidder).sort(),
+      ["ABM", "Ambient", "Applied"],
+    );
 
     const tanks = "| 4.0 | Provide two (2) new 1135 L double-wall fuel storage tanks, complete with all required piping, fittings, switches, gauges, and accessories. Scope shall include all necessary valves, connections, control instruments, and accessories not included in the base scope, to provide a complete and fully operational fuel system installation. | **$18,000.00** | $25,525.00 | $22,000.00 |";
     const silencer = "| 6.0 | Provide a new emergency generator exhaust silencer complete with all required accessories, supports, | **$18,000.00** | $25,525.00 | $24,400.00 |";
@@ -942,19 +977,55 @@ describe("v3 quoted facts", () => {
       "| :--- | :--- | :--- | :--- | :--- |",
       "| 1.0 | Demolish two existing fuel storage tanks | $3,000.00 | $4,250.00 | $5,500.00 |",
       "| 6.0 | Provide a new emergency generator exhaust silencer | $18,000.00 | $25,525.00 | $24,400.00 |",
-      "124",
+      "3 of 7.",
     ].join("\n");
     const continued = "| 7.0 | Provide a new access pathway | $1,100.00 | $1,200.00 | $1,300.00 |";
-    const page125 = [continued, "Generator letter quotes $999.00 for a different scope."].join("\n");
-    const unrelated = "| 1.0 | Paint the lobby | $400.00 | $500.00 | $600.00 |";
+    const optional = "| | OPTIONAL PRICING | $10,000.00 | $11,000.00 | $12,000.00 |";
+    const page125 = [
+      "Premier Mechanical Ltd.",
+      "100 King Street",
+      "---",
+      continued,
+      optional,
+      "Generator letter quotes $999.00 for a different scope.",
+    ].join("\n");
+    const unrelated = [
+      "Premier Mechanical Ltd.",
+      "---",
+      "| 1.0 | Paint the lobby | $400.00 | $500.00 | $600.00 |",
+    ].join("\n");
     const narrow = "| 8.0 | Paint the stair | $50.00 |";
+    const restarted = [
+      header,
+      "| :--- | :--- | :--- | :--- | :--- |",
+      "| 6.0 | Demolish the silencer | $18,000.00 | $25,525.00 | $24,400.00 |",
+      "4 of 7.",
+    ].join("\n");
+    const restartedNext = [
+      "Premier Mechanical Ltd.",
+      "---",
+      "| 1.0 | Paint the lobby again | $400.00 | $500.00 | $600.00 |",
+    ].join("\n");
+    const headedEnd = [
+      header,
+      "| :--- | :--- | :--- | :--- | :--- |",
+      "| 6.0 | Demolish the silencer again | $18,000.00 | $25,525.00 | $24,400.00 |",
+    ].join("\n");
+    const proseNext = [
+      "This schedule belongs to a different contract.",
+      "| 9.0 | Paint the stairwell | $70.00 | $80.00 | $90.00 |",
+    ].join("\n");
     const proposed = [
       { field: "amount", value: "$3,000.00", page: 124, quote: "$3,000.00", subject: "Generator" },
       { field: "amount", value: "$1,100.00", page: 125, quote: continued, subject: "Generator" },
       { field: "amount", value: "$1,200.00", page: 125, quote: continued, subject: "Generator" },
+      { field: "amount", value: "$10,000.00", page: 125, quote: optional, subject: "Generator" },
+      { field: "amount", value: "$11,000.00", page: 125, quote: optional, subject: "Generator" },
       { field: "amount", value: "$999.00", page: 125, quote: "Generator letter quotes $999.00 for a different scope.", subject: "Generator" },
       { field: "amount", value: "$400.00", page: 126, quote: unrelated, subject: "Generator" },
       { field: "amount", value: "$50.00", page: 127, quote: narrow, subject: "Generator" },
+      { field: "amount", value: "$400.00", page: 131, quote: "| 1.0 | Paint the lobby again | $400.00 | $500.00 | $600.00 |", subject: "Generator" },
+      { field: "amount", value: "$70.00", page: 133, quote: "| 9.0 | Paint the stairwell | $70.00 | $80.00 | $90.00 |", subject: "Generator" },
     ];
     const facts = acceptQuotedFacts({
       pages: [
@@ -962,23 +1033,38 @@ describe("v3 quoted facts", () => {
         { pageNumber: 125, text: page125 },
         { pageNumber: 126, text: unrelated },
         { pageNumber: 127, text: narrow },
+        { pageNumber: 130, text: restarted },
+        { pageNumber: 131, text: restartedNext },
+        { pageNumber: 132, text: headedEnd },
+        { pageNumber: 133, text: proseNext },
       ],
       proposed,
     });
     const pathway = facts.candidates.find((candidate) => candidate.value === "$1,100.00");
     const otherColumn = facts.candidates.find((candidate) => candidate.value === "$1,200.00");
     const letter = facts.candidates.find((candidate) => candidate.value === "$999.00");
-    const paint = facts.candidates.find((candidate) => candidate.value === "$400.00");
+    const paint = facts.candidates.find((candidate) => candidate.page === 126);
     const stair = facts.candidates.find((candidate) => candidate.value === "$50.00");
+    const optionalTotal = facts.candidates.find((candidate) => candidate.value === "$10,000.00");
+    const optionalOther = facts.candidates.find((candidate) => candidate.value === "$11,000.00");
+    const restartedPaint = facts.candidates.find((candidate) => candidate.page === 131);
+    const proseTable = facts.candidates.find((candidate) => candidate.value === "$70.00");
     assert.equal(pathway?.bidder, "PML");
     assert.equal(pathway?.service, "Provide a new access pathway");
     assert.equal(pathway?.columnPage, 124);
     assert.match(pathway?.columnQuote ?? "", /PML/);
     assert.equal(pathway?.quote.includes("PML"), false);
     assert.equal(otherColumn?.bidder, "GI");
+    assert.equal(optionalTotal?.bidder, "PML");
+    assert.equal(optionalTotal?.service, "OPTIONAL PRICING");
+    assert.equal(optionalTotal?.columnPage, 124);
+    assert.match(optionalTotal?.columnQuote ?? "", /PML/);
+    assert.equal(optionalOther?.bidder, "GI");
     assert.equal(letter?.bidder, undefined);
     assert.equal(paint?.bidder, undefined);
     assert.equal(stair?.bidder, undefined);
+    assert.equal(restartedPaint?.bidder, undefined);
+    assert.equal(proseTable?.bidder, undefined);
     assert.equal(facts.candidates.filter((candidate) => candidate.field === "amount").length, proposed.length);
 
     const merged = mergeProposedFacts(proposed, [
@@ -991,6 +1077,10 @@ describe("v3 quoted facts", () => {
         { pageNumber: 125, text: page125 },
         { pageNumber: 126, text: unrelated },
         { pageNumber: 127, text: narrow },
+        { pageNumber: 130, text: restarted },
+        { pageNumber: 131, text: restartedNext },
+        { pageNumber: 132, text: headedEnd },
+        { pageNumber: 133, text: proseNext },
       ],
       proposed: merged,
     });

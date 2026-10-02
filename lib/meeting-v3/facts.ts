@@ -195,6 +195,7 @@ export function expandFactPagesForPrompt(
  * Two equal amounts on one page both stay when their quotes or their bidders differ.
  * A heading, a row, or a condition may supply subject, service, bidder, or qualifications when that span is on the same page.
  * A supplier header carries onto the next page only when that table continues, and the header stays cited on the page that prints it.
+ * A letterhead, a rule, or a page mark between those pages does not break the table. A sentence does.
  * A quote that names a sibling topic more strongly than this item is kept and flagged.
  */
 export function acceptQuotedFacts(input: {
@@ -701,7 +702,9 @@ function amountKey(value: string): string {
 }
 
 function labelIsBlank(label: string): boolean {
-  return normalizeFactText(label.replace(/[|:—–\-.,]+/g, " ")).length < 2;
+  // Bold markers are presentation. They must not turn the empty gap between price columns into a label.
+  const plain = stripFactEmphasis(label).replace(/[|:—–\-.,]+/g, " ");
+  return normalizeFactText(plain).length < 2;
 }
 
 function labelHasMarker(label: string, marker: string): boolean {
@@ -946,12 +949,28 @@ function continuedSupplierHeader(
 }
 
 function significantLines(text: string): string[] {
-  return text.split(/\n/).map((line) => line.trim()).filter((line) => line && !isPageFurniture(line));
+  return text.split(/\n/).map((line) => line.trim()).filter((line) => line && !isEdgeDecoration(line));
+}
+
+function isEdgeDecoration(line: string): boolean {
+  // Letterhead and page marks sit against a continued table. A sentence still ends that table.
+  if (isPageFurniture(line)) return true;
+  if (splitTableCells(line).length >= 2) return false;
+  if (line.includes("$")) return false;
+  if (isProseLine(line)) return false;
+  const text = stripFactEmphasis(line).replace(/\s+/g, " ").trim();
+  if (/[.?!]$/.test(text) && text.split(/\s+/).length >= 4) return false;
+  return text.length > 0 && text.length <= 120;
 }
 
 function isPageFurniture(line: string): boolean {
   // A printed page number under the table is not a new section.
-  return /^\d{1,4}$/.test(line) || /^page\s+\d{1,4}$/i.test(line);
+  const text = stripFactEmphasis(line).replace(/\s+/g, " ").trim();
+  if (/^\d{1,4}$/.test(text)) return true;
+  if (/^page\s+\d{1,4}(?:\s+of\s+\d{1,4})?\.?$/i.test(text)) return true;
+  if (/^\d{1,4}\s+of\s+\d{1,4}\.?$/i.test(text)) return true;
+  if (/^[-=_*~.]{3,}$/.test(text)) return true;
+  return false;
 }
 
 function blockOpensWithSupplierHeader(rows: readonly TableRow[]): boolean {

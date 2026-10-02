@@ -1620,8 +1620,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               {quotedFactsPanel === "review" ? (
                 factReviewMessages.length > 0 ? (
                   <ul className="divide-y divide-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                    {factReviewMessages.map((message) => (
-                      <li key={message} className="py-1.5">{message}</li>
+                    {factReviewMessages.map((message, index) => (
+                      <li key={`review-${index}`} className="py-1.5">{message}</li>
                     ))}
                   </ul>
                 ) : (
@@ -1630,8 +1630,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
               ) : quotedFactsPanel === "context" ? (
                 factContextMessages.length > 0 ? (
                   <ul className="divide-y divide-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                    {factContextMessages.map((message) => (
-                      <li key={message} className="py-1.5">{message}</li>
+                    {factContextMessages.map((message, index) => (
+                      <li key={`context-${index}`} className="py-1.5">{message}</li>
                     ))}
                   </ul>
                 ) : (
@@ -1656,10 +1656,10 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                     </p>
                     {item.facts && item.facts.candidates.length > 0 ? (
                       <ul className="mt-1 space-y-2">
-                        {item.facts.candidates.map((fact) => {
+                        {item.facts.candidates.map((fact, factIndex) => {
                           const unresolved = item.facts?.unresolvedFields.includes(fact.field);
                           return (
-                            <li key={`${fact.field}-${fact.page}-${fact.value}`}>
+                            <li key={`${item.id}-fact-${factIndex}`}>
                               <p>
                                 <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                                   {FACT_FIELD_LABEL[fact.field]}
@@ -1958,8 +1958,8 @@ export function MeetingV3QuoteCompare({ initial }: { initial: MeetingsV3PackageS
                     ) : null}
                     {item.factGroups && item.factGroups.ungrouped.length > 0 ? (
                       <ul className="mt-2 space-y-1">
-                        {item.factGroups.ungrouped.map((fact) => (
-                          <li key={`${fact.field}-${fact.page}-${fact.value}`} className="text-xs text-slate-600">
+                        {item.factGroups.ungrouped.map((fact, factIndex) => (
+                          <li key={`${item.id}-ungrouped-${factIndex}`} className="text-xs text-slate-600">
                             <span className="font-semibold uppercase tracking-wide text-slate-500">
                               {FACT_FIELD_LABEL[fact.field]}
                             </span>

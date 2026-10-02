@@ -870,6 +870,160 @@ describe("v3 quoted facts", () => {
     assert.equal(storedGenerator?.candidates.filter((candidate) => candidate.value === "**$18,000.00**" && candidate.bidder === "PML").length, 2);
   });
 
+  it("rejects a placeholder bidder and keeps a real column supplier", () => {
+    const bare = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 125,
+        text: "Generator Optional Pricing --- $10.00. Generator Optional Pricing --- $12.00.",
+      }],
+      proposed: [
+        { field: "amount", value: "$10.00", page: 125, quote: "Generator Optional Pricing --- $10.00", bidder: "---", service: "Optional Pricing", subject: "Generator" },
+        { field: "amount", value: "$12.00", page: 125, quote: "Generator Optional Pricing --- $12.00", bidder: "---", service: "Optional Pricing", subject: "Generator" },
+      ],
+    });
+    assert.equal(bare.candidates.length, 2);
+    assert.equal(bare.candidates.some((candidate) => candidate.bidder === "---"), false);
+    assert.equal(bare.reviewIssues.some((issue) => issue.code === "conflicting_prices"), false);
+    assert.equal(bare.reviewIssues.some((issue) => issue.code === "missing_bidder"), true);
+
+    const row = "| --- | $210,994.00 | $226,928.00 |";
+    const table = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 31,
+        text: ["| Item Description | Ambient | Applied |", "| :--- | :---: | :---: |", row].join("\n"),
+      }],
+      proposed: [
+        { field: "amount", value: "$210,994.00", page: 31, quote: row, bidder: "---", subject: "Booster" },
+      ],
+    });
+    assert.equal(table.candidates[0]?.bidder, "Ambient");
+  });
+
+  it("shares one cited cell and still separates equal prices on that row", () => {
+    const row = "| Base Bid Amount | $210,994.00 | $226,928.00 |";
+    const shared = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 31,
+        text: [
+          "Ambient proposes $210,994.00 for the base bid.",
+          "| Item Description | Ambient | Applied |",
+          "| :--- | :---: | :---: |",
+          row,
+        ].join("\n"),
+      }],
+      proposed: [
+        { field: "amount", value: "$210,994.00", page: 31, quote: "Ambient proposes $210,994.00 for the base bid.", bidder: "Ambient", subject: "Booster" },
+        { field: "amount", value: "$210,994.00", page: 31, quote: row, subject: "Booster" },
+      ],
+    });
+    assert.equal(shared.candidates.length, 2);
+    assert.deepEqual(shared.candidates.map((candidate) => candidate.bidder), ["Ambient", "Ambient"]);
+
+    const tied = "| Base Bid Amount | $100.00 | $100.00 |";
+    const equals = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 31,
+        text: ["| Item Description | Ambient | Applied |", "| :--- | :---: | :---: |", tied].join("\n"),
+      }],
+      proposed: [
+        { field: "amount", value: "$100.00", page: 31, quote: "$100.00", subject: "Booster" },
+        { field: "amount", value: "$100.00", page: 31, quote: "$100.00", subject: "Booster" },
+      ],
+    });
+    assert.equal(equals.candidates.length, 2);
+    assert.deepEqual(equals.candidates.map((candidate) => candidate.bidder).sort(), ["Ambient", "Applied"]);
+  });
+
+  it("carries a continued supplier header without taking an unrelated table or an unlabeled amount", () => {
+    const header = "| No. | Item Description | PML | GI | ESI |";
+    const page124 = [
+      "Generator fuel upgrade",
+      header,
+      "| :--- | :--- | :--- | :--- | :--- |",
+      "| 1.0 | Demolish two existing fuel storage tanks | $3,000.00 | $4,250.00 | $5,500.00 |",
+      "| 6.0 | Provide a new emergency generator exhaust silencer | $18,000.00 | $25,525.00 | $24,400.00 |",
+      "124",
+    ].join("\n");
+    const continued = "| 7.0 | Provide a new access pathway | $1,100.00 | $1,200.00 | $1,300.00 |";
+    const page125 = [continued, "Generator letter quotes $999.00 for a different scope."].join("\n");
+    const unrelated = "| 1.0 | Paint the lobby | $400.00 | $500.00 | $600.00 |";
+    const narrow = "| 8.0 | Paint the stair | $50.00 |";
+    const proposed = [
+      { field: "amount", value: "$3,000.00", page: 124, quote: "$3,000.00", subject: "Generator" },
+      { field: "amount", value: "$1,100.00", page: 125, quote: continued, subject: "Generator" },
+      { field: "amount", value: "$1,200.00", page: 125, quote: continued, subject: "Generator" },
+      { field: "amount", value: "$999.00", page: 125, quote: "Generator letter quotes $999.00 for a different scope.", subject: "Generator" },
+      { field: "amount", value: "$400.00", page: 126, quote: unrelated, subject: "Generator" },
+      { field: "amount", value: "$50.00", page: 127, quote: narrow, subject: "Generator" },
+    ];
+    const facts = acceptQuotedFacts({
+      pages: [
+        { pageNumber: 124, text: page124 },
+        { pageNumber: 125, text: page125 },
+        { pageNumber: 126, text: unrelated },
+        { pageNumber: 127, text: narrow },
+      ],
+      proposed,
+    });
+    const pathway = facts.candidates.find((candidate) => candidate.value === "$1,100.00");
+    const otherColumn = facts.candidates.find((candidate) => candidate.value === "$1,200.00");
+    const letter = facts.candidates.find((candidate) => candidate.value === "$999.00");
+    const paint = facts.candidates.find((candidate) => candidate.value === "$400.00");
+    const stair = facts.candidates.find((candidate) => candidate.value === "$50.00");
+    assert.equal(pathway?.bidder, "PML");
+    assert.equal(pathway?.service, "Provide a new access pathway");
+    assert.equal(pathway?.columnPage, 124);
+    assert.match(pathway?.columnQuote ?? "", /PML/);
+    assert.equal(pathway?.quote.includes("PML"), false);
+    assert.equal(otherColumn?.bidder, "GI");
+    assert.equal(letter?.bidder, undefined);
+    assert.equal(paint?.bidder, undefined);
+    assert.equal(stair?.bidder, undefined);
+    assert.equal(facts.candidates.filter((candidate) => candidate.field === "amount").length, proposed.length);
+
+    const merged = mergeProposedFacts(proposed, [
+      { field: "amount", value: "$1,100.00", page: 125, quote: continued, bidder: "PML", columnQuote: header, columnPage: 124 },
+    ]);
+    assert.equal(merged.length, proposed.length);
+    const recovered = acceptQuotedFacts({
+      pages: [
+        { pageNumber: 124, text: page124 },
+        { pageNumber: 125, text: page125 },
+        { pageNumber: 126, text: unrelated },
+        { pageNumber: 127, text: narrow },
+      ],
+      proposed: merged,
+    });
+    const stored = readStoredItemFacts(JSON.stringify(recovered));
+    const storedPathway = stored?.candidates.find((candidate) => candidate.value === "$1,100.00");
+    assert.equal(storedPathway?.bidder, "PML");
+    assert.equal(storedPathway?.columnPage, 124);
+    assert.equal(storedPathway?.quote.includes("PML"), false);
+    const storedLetter = stored?.candidates.find((candidate) => candidate.value === "$999.00");
+    assert.ok(storedLetter);
+    assert.equal(storedLetter?.bidder, undefined);
+    assert.equal(stored?.candidates.find((candidate) => candidate.value === "$400.00")?.bidder, undefined);
+    assert.equal(recoveryFactBatches(recovered.candidates).some((batch) => batch.facts.some((fact) => fact.value === "$1,100.00")), false);
+  });
+
+  it("shows one context line for the same service and bidders", () => {
+    const facts = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 31,
+        text: "One Base Bid Amount Ambient $1.00. One Base Bid Amount Applied $2.00. Two Base Bid Amount Ambient $1.00. Two Base Bid Amount Applied $2.00.",
+      }],
+      proposed: [
+        { field: "amount", value: "$1.00", page: 31, quote: "One Base Bid Amount Ambient $1.00", bidder: "Ambient", service: "Base Bid Amount", subject: "One" },
+        { field: "amount", value: "$2.00", page: 31, quote: "One Base Bid Amount Applied $2.00", bidder: "Applied", service: "Base Bid Amount", subject: "One" },
+        { field: "amount", value: "$1.00", page: 31, quote: "Two Base Bid Amount Ambient $1.00", bidder: "Ambient", service: "Base Bid Amount", subject: "Two" },
+        { field: "amount", value: "$2.00", page: 31, quote: "Two Base Bid Amount Applied $2.00", bidder: "Applied", service: "Base Bid Amount", subject: "Two" },
+      ],
+    });
+    assert.equal(facts.candidates.length, 4);
+    const notes = factContextNotes(facts).filter((note) => note.includes("alternative prices"));
+    assert.deepEqual(notes, ["Base Bid Amount: 2 alternative prices (Ambient, Applied)."]);
+  });
+
   it("treats a DeepSeek keep-alive as silence and a content line as text", () => {
     assert.equal(readDeepSeekStreamLine(": keep-alive"), null);
     assert.equal(readDeepSeekStreamLine("data: [DONE]"), null);

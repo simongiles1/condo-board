@@ -195,7 +195,7 @@ export function expandFactPagesForPrompt(
  * Two equal amounts on one page both stay when their quotes or their bidders differ.
  * A heading, a row, or a condition may supply subject, service, bidder, or qualifications when that span is on the same page.
  * A supplier header carries onto the next page only when that table continues, and the header stays cited on the page that prints it.
- * A letterhead, a rule, or a page mark between those pages does not break the table. A sentence does.
+ * A letterhead, a rule, or a page mark between those pages does not break the table. A sentence or a section heading does.
  * A quote that names a sibling topic more strongly than this item is kept and flagged.
  */
 export function acceptQuotedFacts(input: {
@@ -714,16 +714,31 @@ function labelHasMarker(label: string, marker: string): boolean {
   return new RegExp(`(?:^|\\b)${escaped}(?:\\b|$)`).test(normalizeFactText(label));
 }
 
+function supplierColumnContainsAmount(candidate: MeetingsV3FactCandidate): boolean {
+  // The bidder has to be the header of the cell that holds this price. A name elsewhere in the quotation does not.
+  if (!candidate.bidder?.trim() || !candidate.columnQuote || !candidate.rowQuote) return false;
+  const header = splitTableCells(candidate.columnQuote);
+  const row = splitTableCells(candidate.rowQuote);
+  if (header.length < 2 || header.length !== row.length) return false;
+  const column = header.findIndex((cell) => factLabelKey(cell) === factLabelKey(candidate.bidder ?? ""));
+  if (column < 0) return false;
+  const cell = row[column] ?? "";
+  const valueKey = amountKey(candidate.value);
+  return amountSpans(cell).some((span) => amountKey(span.value) === valueKey);
+}
+
 function amountNeedsContext(candidate: MeetingsV3FactCandidate): boolean {
   if (candidate.field !== "amount") return false;
   const isolating = candidate.rowQuote && dollarCount(candidate.rowQuote) > 0 ? candidate.rowQuote : candidate.quote;
   if (!candidate.service || GENERIC_SERVICE.test(candidate.service)) return true;
   const spans = amountSpans(isolating);
   if (spans.length <= 1) return false;
+  if (supplierColumnContainsAmount(candidate)) return false;
   const valueKey = amountKey(candidate.value);
   const own = spans.filter((span) => amountKey(span.value) === valueKey);
   if (spans.some((span) => labelIsBlank(span.label))) {
-    // A column heading stored on the fact names this cell even when the row text between the figures is blank.
+    // A stored column heading was already checked. A bidder named somewhere else does not identify this cell.
+    if (candidate.columnQuote) return true;
     if (own.length === 1 && (candidate.bidder?.trim() || candidate.option?.trim())) return false;
     return true;
   }
@@ -953,14 +968,30 @@ function significantLines(text: string): string[] {
 }
 
 function isEdgeDecoration(line: string): boolean {
-  // Letterhead and page marks sit against a continued table. A sentence still ends that table.
-  if (isPageFurniture(line)) return true;
+  // Page marks and letterhead can sit against a continued table. Any other line is a new section.
   if (splitTableCells(line).length >= 2) return false;
   if (line.includes("$")) return false;
-  if (isProseLine(line)) return false;
+  if (isPageFurniture(line)) return true;
+  return isRunningLetterhead(line);
+}
+
+function isSectionBoundary(text: string): boolean {
+  if (/^#{1,6}\s+/.test(text)) return true;
+  if (/^(new attachment|attachment|appendix|schedule|section|part)\b/i.test(text)) return true;
+  if (/:/.test(text) && !/^(tel|telephone|phone|fax|email|e-mail|web)\b/i.test(text)) return true;
+  return false;
+}
+
+function isRunningLetterhead(line: string): boolean {
   const text = stripFactEmphasis(line).replace(/\s+/g, " ").trim();
-  if (/[.?!]$/.test(text) && text.split(/\s+/).length >= 4) return false;
-  return text.length > 0 && text.length <= 120;
+  if (!text || text.length > 120 || isSectionBoundary(text)) return false;
+  if (/\b(street|st\.|avenue|ave\.|road|rd\.|boulevard|blvd\.|drive|dr\.|suite|floor|postal|p\.?\s*o\.?\s*box)\b/i.test(text)) return true;
+  if (/\b[A-Z]\d[A-Z]\s?\d[A-Z]\d\b/.test(text)) return true;
+  if (/,\s*(ON|QC|BC|AB|MB|SK|NS|NB|NL|PE|NT|NU|YT)\b/.test(text)) return true;
+  if (/^(tel|telephone|phone|fax|email|e-mail|web)\b/i.test(text)) return true;
+  if (/\b(phone|fax|www\.|https?:\/\/)/i.test(text)) return true;
+  if (/\b(ltd|limited|inc|incorporated|corp|corporation|llp|llc)\.?$/i.test(text)) return true;
+  return false;
 }
 
 function isPageFurniture(line: string): boolean {

@@ -984,6 +984,8 @@ describe("v3 quoted facts", () => {
     const page125 = [
       "Premier Mechanical Ltd.",
       "100 King Street",
+      "Toronto, ON M5V 1A1",
+      "Tel: 416-555-0199",
       "---",
       continued,
       optional,
@@ -1094,6 +1096,104 @@ describe("v3 quoted facts", () => {
     assert.equal(storedLetter?.bidder, undefined);
     assert.equal(stored?.candidates.find((candidate) => candidate.value === "$400.00")?.bidder, undefined);
     assert.equal(recoveryFactBatches(recovered.candidates).some((batch) => batch.facts.some((fact) => fact.value === "$1,100.00")), false);
+  });
+
+  it("does not carry a supplier header across a section heading", () => {
+    const header = "| No. | Item Description | PML | GI | ESI |";
+    const previous = [
+      header,
+      "| :--- | :--- | :--- | :--- | :--- |",
+      "| 6.0 | Demolish the silencer | $18,000.00 | $25,525.00 | $24,400.00 |",
+      "3 of 7.",
+    ].join("\n");
+    const titled = "| 7.0 | Paint the lobby | $1,100.00 | $1,200.00 | $1,300.00 |";
+    const named = "| 7.0 | Paint the lobby again | $1,100.00 | $1,200.00 | $1,300.00 |";
+    const attachment = acceptQuotedFacts({
+      pages: [
+        { pageNumber: 124, text: previous },
+        { pageNumber: 125, text: ["New attachment: Lobby restoration", titled].join("\n") },
+      ],
+      proposed: [{ field: "amount", value: "$1,100.00", page: 125, quote: titled, subject: "Lobby" }],
+    });
+    const plainHeading = acceptQuotedFacts({
+      pages: [
+        { pageNumber: 124, text: previous },
+        { pageNumber: 125, text: ["Lobby restoration", named].join("\n") },
+      ],
+      proposed: [{ field: "amount", value: "$1,100.00", page: 125, quote: named, subject: "Lobby" }],
+    });
+    assert.equal(attachment.candidates[0]?.bidder, undefined);
+    assert.equal(plainHeading.candidates[0]?.bidder, undefined);
+  });
+
+  it("clears a warning only when the supplier column contains that price", () => {
+    const header = "| No. | Item Description | PML | GI | ESI |";
+    const ladder = "| 7.1 | New ladder on the elevator machine room roof. Steps and ladder are mutually exclusive. | ~~$2,200.00~~ $1,100.00 | $1,200.00 | $1,300.00 |";
+    const valveHeader = "| Item Description | Ambient | Applied | ABM |";
+    const valve = "| Isolation valve | $500.00 | NSF-61 required $600.00 | lead-free $700.00 |";
+    const established = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 125,
+        text: [header, "| :--- | :--- | :--- | :--- | :--- |", ladder].join("\n"),
+      }],
+      proposed: [{
+        field: "amount",
+        value: "$1,100.00",
+        page: 125,
+        quote: ladder,
+        rowQuote: ladder,
+        columnQuote: header,
+        bidder: "PML",
+        service: "New ladder on the elevator machine room roof. Steps and ladder are mutually exclusive",
+        subject: "Generator",
+      }],
+    });
+    const ladderFact = established.candidates[0];
+    assert.equal(ladderFact?.bidder, "PML");
+    assert.match(ladderFact?.rowQuote ?? "", /~~\$2,200\.00~~/);
+    assert.match(ladderFact?.rowQuote ?? "", /mutually exclusive/);
+    assert.equal(established.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), false);
+
+    const noted = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 31,
+        text: [valveHeader, "| :--- | :--- | :--- | :--- |", valve].join("\n"),
+      }],
+      proposed: [{
+        field: "amount",
+        value: "$600.00",
+        page: 31,
+        quote: valve,
+        rowQuote: valve,
+        columnQuote: valveHeader,
+        bidder: "Applied",
+        service: "Isolation valve",
+        subject: "Booster",
+      }],
+    });
+    assert.equal(noted.candidates[0]?.bidder, "Applied");
+    assert.match(noted.candidates[0]?.rowQuote ?? "", /NSF-61 required/);
+    assert.equal(noted.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), false);
+
+    const misplaced = acceptQuotedFacts({
+      pages: [{
+        pageNumber: 125,
+        text: [header, "| :--- | :--- | :--- | :--- | :--- |", ladder].join("\n"),
+      }],
+      proposed: [{
+        field: "amount",
+        value: "$1,100.00",
+        page: 125,
+        quote: ladder,
+        rowQuote: ladder,
+        columnQuote: header,
+        bidder: "GI",
+        service: "New ladder on the elevator machine room roof. Steps and ladder are mutually exclusive",
+        subject: "Generator",
+      }],
+    });
+    assert.equal(misplaced.candidates[0]?.bidder, "GI");
+    assert.equal(misplaced.reviewIssues.some((issue) => issue.code === "fee_needs_verification"), true);
   });
 
   it("shows one context line for the same service and bidders", () => {

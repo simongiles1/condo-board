@@ -6,7 +6,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { agendaTextForItem } from "../lib/meeting-v4/agenda-text";
+import {
+  agendaTextForItem,
+  buildAgendaExtracts,
+  resolveAgendaSourcePages,
+  v3SourcePagesByItemNumber,
+} from "../lib/meeting-v4/agenda-text";
 import { assembleMeetingsV4Minutes } from "../lib/meeting-v4/assemble";
 import { minutesJsonForGoldCompare } from "../lib/meeting-v4/workspace";
 import { buildAiMinutesConcepts } from "../lib/minutes/gold-standard-ai-concepts";
@@ -67,6 +72,36 @@ describe("v4 inventory", () => {
 });
 
 describe("v4 agenda text", () => {
+  it("prefers V3-linked source pages over empty V2 pages", () => {
+    const v3 = v3SourcePagesByItemNumber([
+      { itemNumber: "4.A", sourcePagesJson: "[4]" },
+    ]);
+    assert.deepEqual(
+      resolveAgendaSourcePages({ itemNumber: "4.A", v2Pages: [], v3PagesByItemNumber: v3 }),
+      [4],
+    );
+  });
+
+  it("sends corrected text before Docling and keeps Docling separate", () => {
+    const extracts = buildAgendaExtracts({
+      sourcePages: [4],
+      correctedPages: new Map([
+        [4, "| Total Bid Amount based on Alternative | NWP $163,900.00 | ABM $179,600.00 |"],
+      ]),
+      doclingPages: new Map([
+        [4, "| Total Bid Amount | $179,994.00 $152,844.00 $163,900.00 $179,600.00 $218,900.00 |"],
+      ]),
+      fallback: "Amount: $214,194.00 plus HST.",
+    });
+    assert.match(extracts.sent, /\$163,900\.00/);
+    assert.match(extracts.sent, /\$179,600\.00/);
+    assert.equal(extracts.sent.includes("$214,194.00"), false);
+    assert.match(extracts.docling, /\$218,900\.00/);
+    assert.equal(extracts.docling.includes("$214,194.00"), false);
+    assert.match(extracts.corrected, /\$179,600\.00/);
+    assert.equal(extracts.corrected.includes("$218,900.00"), false);
+  });
+
   it("sends the corrected page extract, including a table figure missing from the notes", () => {
     const text = agendaTextForItem({
       sourcePages: [4],
@@ -239,7 +274,7 @@ function assemblyItem(overrides: Partial<MeetingsV4AssemblyItem>): MeetingsV4Ass
     title: "Seal replacement",
     itemType: "discussion_topic",
     sectionLabel: "",
-    bundle: { agendaText: "Seal replacement", cues: [], attachmentPages: [] },
+    bundle: { agendaText: "Seal replacement", agendaTextDocling: "", cues: [], attachmentPages: [] },
     minutes: "The board discussed the seal replacement.",
     findings: [],
     evidenceFit: "on_topic",

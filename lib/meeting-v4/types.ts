@@ -47,7 +47,12 @@ export type MeetingsV4BundleCue = {
  * Attachment pages stay empty. The extract already includes that item's printed pages.
  */
 export type MeetingsV4Bundle = {
+  /** Corrected-first page extract sent as the agenda field in the draft prompt. */
   agendaText: string;
+  /** Docling-only text for the same source pages. */
+  agendaTextDocling: string;
+  /** Corrected rewrite text only, when stored for an older draft review. */
+  agendaTextCorrected?: string;
   cues: MeetingsV4BundleCue[];
   attachmentPages: [];
 };

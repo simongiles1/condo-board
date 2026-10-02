@@ -10,10 +10,12 @@ import {
   meetingsV2AgendaItems,
   meetingsV2DocumentPages,
   meetingsV2TranscriptSegments,
+  meetingsV3AgendaItems,
   meetingsV3PageRewrites,
 } from "@/lib/db/schema-v2";
 import { readMeetingV2Settings, type MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
+import { resolveAgendaSourcePages, v3SourcePagesByItemNumber } from "@/lib/meeting-v4/agenda-text";
 import { assembleMeetingsV4Minutes, type MeetingsV4AssemblyItem } from "@/lib/meeting-v4/assemble";
 import { inventoryMeetingsV4, type MeetingsV4Inventory } from "@/lib/meeting-v4/inventory";
 import type { MeetingsV4ItemResult, MeetingsV4Stored } from "@/lib/meeting-v4/types";
@@ -165,6 +167,8 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
   agenda: MeetingsV4AgendaRecord[];
   cues: MeetingsV4CueRecord[];
   pageText: Map<number, string>;
+  correctedPageText: Map<number, string>;
+  doclingPageText: Map<number, string>;
   spans: NonNullable<MeetingV2Settings["segmentGoldStandard"]>["spans"];
 } | null> {
   const db = getDb();
@@ -184,7 +188,7 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
   if (spans.length === 0) {
     throw new MeetingsV4Error("This meeting has no reviewed transcript segmentation.", 404);
   }
-  const [agendaRows, cueRows, storedPages, rewrites] = await Promise.all([
+  const [agendaRows, v3AgendaRows, cueRows, storedPages, rewrites] = await Promise.all([
     db
       .select({
         id: meetingsV2AgendaItems.id,
@@ -199,6 +203,13 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
       .from(meetingsV2AgendaItems)
       .where(eq(meetingsV2AgendaItems.meetingV2Id, meetingId))
       .orderBy(asc(meetingsV2AgendaItems.sortOrder)),
+    db
+      .select({
+        itemNumber: meetingsV3AgendaItems.itemNumber,
+        sourcePagesJson: meetingsV3AgendaItems.sourcePagesJson,
+      })
+      .from(meetingsV3AgendaItems)
+      .where(eq(meetingsV3AgendaItems.meetingV2Id, meetingId)),
     db
       .select({
         startTimestamp: meetingsV2TranscriptSegments.startTimestamp,
@@ -225,14 +236,20 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
       .from(meetingsV3PageRewrites)
       .where(eq(meetingsV3PageRewrites.meetingV2Id, meetingId)),
   ]);
-  const pageText = new Map<number, string>();
+  const v3PagesByItemNumber = v3SourcePagesByItemNumber(v3AgendaRows);
+  const doclingPageText = new Map<number, string>();
+  const correctedPageText = new Map<number, string>();
   for (const page of storedPages) {
     const extracted = page.extractedText.trim();
-    if (extracted) pageText.set(page.pageNumber, extracted);
+    if (extracted) doclingPageText.set(page.pageNumber, extracted);
   }
   for (const page of rewrites) {
     const corrected = page.correctedText.trim();
-    if (corrected) pageText.set(page.pageNumber, corrected);
+    if (corrected) correctedPageText.set(page.pageNumber, corrected);
+  }
+  const pageText = new Map(doclingPageText);
+  for (const [pageNumber, text] of correctedPageText) {
+    pageText.set(pageNumber, text);
   }
   return {
     id: meeting.id,
@@ -240,17 +257,27 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
     meetingDate: meeting.meetingDate,
     currentStep: meeting.currentStep,
     settings,
-    agenda: agendaRows.map((row) => ({
-      id: row.id,
-      itemNumber: row.itemNumber?.trim() || "",
-      title: row.title,
-      itemType: row.itemType,
-      sectionLabel: row.sectionLabel?.trim() || "",
-      sourceText: row.sourceText?.trim() || "",
-      sourcePages: readAgendaSourcePages(row.sourcePagesJson),
-      sortOrder: row.sortOrder,
-    })),
+    agenda: agendaRows.map((row) => {
+      const v2Pages = readAgendaSourcePages(row.sourcePagesJson);
+      const itemNumber = row.itemNumber?.trim() || "";
+      return {
+        id: row.id,
+        itemNumber,
+        title: row.title,
+        itemType: row.itemType,
+        sectionLabel: row.sectionLabel?.trim() || "",
+        sourceText: row.sourceText?.trim() || "",
+        sourcePages: resolveAgendaSourcePages({
+          itemNumber,
+          v2Pages,
+          v3PagesByItemNumber,
+        }),
+        sortOrder: row.sortOrder,
+      };
+    }),
     pageText,
+    correctedPageText,
+    doclingPageText,
     cues: cueRows.map((row, index) => ({
       index,
       start: row.startTimestamp,
@@ -299,7 +326,7 @@ function emptyResult(item: MeetingsV4AgendaRecord): MeetingsV4ItemResult {
     agendaItemId: item.id,
     itemNumber: item.itemNumber,
     title: item.title,
-    bundle: { agendaText: item.sourceText || item.title, cues: [], attachmentPages: [] },
+    bundle: { agendaText: item.sourceText || item.title, agendaTextDocling: "", cues: [], attachmentPages: [] },
     minutes: null,
     findings: [],
     evidenceFit: "transcript_missing",

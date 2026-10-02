@@ -8,7 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Features
 
-- **Meetings V4 minutes** — The minutes view can copy the document as Markdown and compare it with an official minutes PDF in the same side-by-side gold-standard view used by Meetings V2. That comparison is stored separately from a V2 draft comparison.
+- **Meetings V4 minutes** — The minutes view can copy the document as Markdown and compare it with an official minutes PDF in the same side-by-side gold-standard view used by Meetings V2. That comparison is stored separately from a V2 draft comparison. The compare dialog labels the V4 draft explicitly instead of the underlying V2 meeting title.
 - **Meetings V4** — The meetings page has a V4 Pipeline tab for a V2 meeting that already has a reviewed transcript segmentation. Segmentation shows those spans and does not segment again. Inventory lists leaves without a span, later returns, overlapping cues, and unassigned transcript. Draft minutes writes one paragraph per item from the agenda text and those cues, and keeps evidence notes beside it. The assembled minutes leave attendance and the next-meeting line blank.
 
 - **Meetings V3 extract comparison** — The Corrected extract and Docling extract tab bar includes **Copy as markdown** for the active tab’s page text.
@@ -19,7 +19,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Meetings V4 minutes** — A decision made at the meeting is printed as a formal motion: mover, seconder, the resolution, and whether it carried, was defeated, or was deferred. Names appear only when the transcript identifies them. Draft again to add motions to an existing draft.
-- **Meetings V4 draft** — Each item is drafted from the corrected agenda-page extract, including printed tables, instead of the short stored notes. The Minutes tab renders that document as formatted markdown. Draft again to replace a draft that was written from the notes.
+- **Meetings V4 draft** — Each item uses V3-linked source pages and the corrected page rewrite when one exists, instead of the short V2 notes when page links were missing. The draft detail view switches between corrected extract, Docling extract, and raw prompt text. The Minutes tab renders the assembled document as formatted markdown. Draft again to replace bundles written before this fix.
 
 - **Meetings V3 minutes draft** — A topic paragraph no longer pastes a spoken fragment or a list of unverified fees. Those open points stay on Check minutes. Re-run Draft minutes.
 

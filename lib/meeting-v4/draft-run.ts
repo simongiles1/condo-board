@@ -11,7 +11,7 @@ import { getDb } from "@/lib/db";
 import { meetingsV2, meetingsV2MinutesDrafts } from "@/lib/db/schema-v2";
 import { DEEPSEEK_COMPLETION_MODEL, generateDeepSeekJson } from "@/lib/deepseek/client";
 import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
-import { agendaTextForItem } from "@/lib/meeting-v4/agenda-text";
+import { buildAgendaExtracts } from "@/lib/meeting-v4/agenda-text";
 import { bundleCuesForItem, inventoryMeetingsV4 } from "@/lib/meeting-v4/inventory";
 import { MEETINGS_V4_DRAFT_PROMPT, readMeetingsV4Draft } from "@/lib/meeting-v4/prompt";
 import type { MeetingsV4ItemResult, MeetingsV4Stored } from "@/lib/meeting-v4/types";
@@ -40,24 +40,30 @@ export async function draftMeetingsV4(meetingId: string): Promise<MeetingsV4Work
   });
   const headings = new Set(inventory.items.filter((item) => item.heading).map((item) => item.id));
   const leaves = source.agenda.filter((item) => !headings.has(item.id));
-  const results: MeetingsV4ItemResult[] = leaves.map((item) => ({
-    ...blankItem(item),
-    bundle: {
-      agendaText: agendaTextForItem({
-        sourcePages: item.sourcePages,
-        pageText: source.pageText,
-        fallback: item.sourceText || item.title,
-      }),
-      cues: bundleCuesForItem(item.id, source.cues, source.spans).map((cue) => ({
-        index: cue.index,
-        start: cue.start,
-        end: cue.end,
-        speaker: cue.speaker,
-        text: cue.text,
-      })),
-      attachmentPages: [],
-    },
-  }));
+  const results: MeetingsV4ItemResult[] = leaves.map((item) => {
+    const extracts = buildAgendaExtracts({
+      sourcePages: item.sourcePages,
+      correctedPages: source.correctedPageText,
+      doclingPages: source.doclingPageText,
+      fallback: item.sourceText || item.title,
+    });
+    return {
+      ...blankItem(item),
+      bundle: {
+        agendaText: extracts.sent,
+        agendaTextDocling: extracts.docling,
+        agendaTextCorrected: extracts.corrected,
+        cues: bundleCuesForItem(item.id, source.cues, source.spans).map((cue) => ({
+          index: cue.index,
+          start: cue.start,
+          end: cue.end,
+          speaker: cue.speaker,
+          text: cue.text,
+        })),
+        attachmentPages: [],
+      },
+    };
+  });
   for (const item of results) {
     if (item.bundle.cues.length > 0) continue;
     item.evidenceFit = "transcript_missing";
@@ -168,7 +174,7 @@ function blankItem(item: MeetingsV4AgendaRecord): MeetingsV4ItemResult {
     agendaItemId: item.id,
     itemNumber: item.itemNumber,
     title: item.title,
-    bundle: { agendaText: item.sourceText || item.title, cues: [], attachmentPages: [] },
+    bundle: { agendaText: item.sourceText || item.title, agendaTextDocling: "", cues: [], attachmentPages: [] },
     minutes: null,
     findings: [],
     evidenceFit: "transcript_missing",

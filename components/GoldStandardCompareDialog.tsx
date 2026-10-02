@@ -12,6 +12,8 @@ type Props = {
   endpoint?: string;
   /** Extra form fields sent with the PDF, such as which minutes draft to compare. */
   extraFields?: Record<string, string>;
+  /** When set, the intro names which AI minutes are compared (e.g. Meetings V4 draft). */
+  aiMinutesSourceLabel?: string | null;
   onClose: () => void;
   onSuccess: (validation: GoldStandardValidationResult, aiUsageJson: string) => void;
 };
@@ -22,6 +24,7 @@ export function GoldStandardCompareDialog({
   meetingTitle,
   endpoint,
   extraFields,
+  aiMinutesSourceLabel,
   onClose,
   onSuccess,
 }: Props) {
@@ -134,9 +137,11 @@ export function GoldStandardCompareDialog({
           <p className="mt-1 text-sm text-slate-600">{meetingTitle}</p>
         ) : null}
         <p className="mt-3 text-sm text-slate-600">
-          Upload the board-approved official minutes PDF. The AI minutes are
-          split into agenda concepts and compared side by side with the gold
-          document — this can take a minute.
+          Upload the board-approved official minutes PDF.{" "}
+          {aiMinutesSourceLabel
+            ? `${aiMinutesSourceLabel} are split into agenda concepts and compared side by side with that PDF`
+            : "The AI minutes are split into agenda concepts and compared side by side with the gold document"}
+          {" — this can take a minute."}
         </p>
 
         <form key={formKey} className="mt-5 space-y-4" onSubmit={submit}>

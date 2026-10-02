@@ -206,7 +206,8 @@ export function MeetingV4Workspace({ initial }: { initial: MeetingsV4Workspace }
       <GoldStandardCompareDialog
         open={compareOpen}
         meetingId={workspace.id}
-        meetingTitle={workspace.title}
+        meetingTitle={`${workspace.meetingDate} · Meetings V4 draft`}
+        aiMinutesSourceLabel="Your V4 assembled minutes"
         extraFields={{ minutesSource: "v4" }}
         onClose={() => setCompareOpen(false)}
         onSuccess={(result) => handleCompareSuccess(result)}
@@ -216,7 +217,7 @@ export function MeetingV4Workspace({ initial }: { initial: MeetingsV4Workspace }
           panelOpen
             ? {
                 id: workspace.id,
-                title: workspace.title,
+                title: `${workspace.meetingDate} · V4 vs official minutes`,
                 meetingDate: workspace.meetingDate,
                 goldStandardFilePath: goldFilePath,
               }
@@ -403,8 +404,8 @@ function Draft({
           {item.gaps.length > 0 ? <p className="mt-1 text-sm text-slate-600">Gaps: {item.gaps.join(" ")}</p> : null}
           <details className="mt-2 text-sm text-slate-600">
             <summary className="cursor-pointer">Agenda text and transcript sent</summary>
-            <p className="mt-2 whitespace-pre-wrap">{item.bundle.agendaText}</p>
-            <ul className="mt-2 space-y-1">
+            <AgendaSentPanel item={item} />
+            <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3">
               {item.bundle.cues.map((cue) => (
                 <li key={cue.index}>
                   <span className="tabular-nums text-slate-500">{cue.start}</span>
@@ -415,6 +416,60 @@ function Draft({
           </details>
         </article>
       ))}
+    </div>
+  );
+}
+
+function AgendaSentPanel({ item }: { item: MeetingsV4ItemResult }) {
+  const [extractTab, setExtractTab] = useState<"corrected" | "docling" | "raw">("corrected");
+  const correctedMarkdown = item.bundle.agendaTextCorrected?.trim() || item.bundle.agendaText.trim();
+  const doclingMarkdown = item.bundle.agendaTextDocling?.trim() || item.bundle.agendaText.trim();
+  const sentRaw = item.bundle.agendaText;
+  const tabs: Array<{ id: "corrected" | "docling" | "raw"; label: string }> = [
+    { id: "corrected", label: "Corrected extract" },
+    { id: "docling", label: "Docling extract" },
+    { id: "raw", label: "Raw text" },
+  ];
+  const copyMarkdown =
+    extractTab === "docling" ? doclingMarkdown : extractTab === "raw" ? sentRaw : correctedMarkdown;
+
+  return (
+    <div className="mt-2 overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div className="flex items-stretch border-b border-slate-200">
+        <div className="flex min-w-0 flex-1 flex-wrap" role="tablist" aria-label="Agenda extract sent to the model">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={extractTab === tab.id}
+              onClick={() => setExtractTab(tab.id)}
+              className={`px-3 py-2 text-xs font-semibold ${
+                extractTab === tab.id
+                  ? "border-b-2 border-teal-700 text-teal-900"
+                  : "text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex shrink-0 items-center border-l border-slate-200 px-2">
+          <CopyMarkdownButton markdown={copyMarkdown} label="Copy as markdown" />
+        </div>
+      </div>
+      <div className="px-3 py-2" role="tabpanel">
+        {extractTab === "raw" ? (
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap text-xs text-slate-800">{sentRaw}</pre>
+        ) : (
+          <div className="max-h-96 overflow-auto text-sm">
+            <MarkdownPreview>{extractTab === "corrected" ? correctedMarkdown : doclingMarkdown}</MarkdownPreview>
+          </div>
+        )}
+      </div>
+      <p className="border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-500">
+        The draft prompt uses corrected pages when available, then Docling. Run Draft again after page corrections change.
+      </p>
     </div>
   );
 }

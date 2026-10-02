@@ -1,6 +1,6 @@
 /**
  * Agenda text sent with one V4 item.
- * Uses the same page rewrites and Docling pages as the V3 package comparison modal.
+ * Uses this meeting's page rewrites, or the same-date V3 package whose Docling pages match.
  */
 
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
@@ -125,6 +125,51 @@ export function resolveAgendaSourcePages(input: {
     input.v2Pages,
     input.correctedPages,
   );
+}
+
+/** One other meeting that already stores corrected pages. */
+export type CorrectedPageDonor = {
+  doclingByPage: ReadonlyMap<number, string>;
+  correctedByPage: ReadonlyMap<number, string>;
+};
+
+/**
+ * Corrected markdown for this meeting's pages.
+ * Keeps this meeting's rewrites when any exist. Otherwise copies rewrites from the
+ * donor whose Docling text matches, preferring the donor with more corrected pages.
+ */
+export function selectCorrectedPageText(input: {
+  ownDocling: ReadonlyMap<number, string>;
+  ownCorrected: ReadonlyMap<number, string>;
+  donors: readonly CorrectedPageDonor[];
+}): Map<number, string> {
+  const own = new Map<number, string>();
+  for (const [page, text] of input.ownCorrected) {
+    const trimmed = text.trim();
+    if (trimmed) own.set(page, trimmed);
+  }
+  if (own.size > 0) return own;
+
+  let best: { pages: Map<number, string>; matched: number; stored: number } | null = null;
+  for (const donor of input.donors) {
+    const pages = new Map<number, string>();
+    for (const [page, ownText] of input.ownDocling) {
+      const donorDocling = donor.doclingByPage.get(page)?.trim() ?? "";
+      const corrected = donor.correctedByPage.get(page)?.trim() ?? "";
+      if (!donorDocling || !corrected || donorDocling !== ownText.trim()) continue;
+      pages.set(page, corrected);
+    }
+    if (pages.size === 0) continue;
+    const stored = [...donor.correctedByPage.values()].filter((text) => text.trim()).length;
+    if (
+      !best
+      || pages.size > best.matched
+      || (pages.size === best.matched && stored > best.stored)
+    ) {
+      best = { pages, matched: pages.size, stored };
+    }
+  }
+  return best?.pages ?? new Map();
 }
 
 /** Corrected, Docling, and the text sent to the draft model. */

@@ -10,6 +10,7 @@ import {
   agendaTextForItem,
   buildAgendaExtracts,
   resolveAgendaSourcePages,
+  selectCorrectedPageText,
 } from "../lib/meeting-v4/agenda-text";
 import { assembleMeetingsV4Minutes } from "../lib/meeting-v4/assemble";
 import { minutesJsonForGoldCompare } from "../lib/meeting-v4/workspace";
@@ -162,6 +163,43 @@ describe("v4 agenda text", () => {
       fallback: "Amount: $214,194.00 plus HST.",
     });
     assert.equal(text, "Amount: $214,194.00 plus HST.");
+  });
+
+  it("uses the same-date package whose pages match when this meeting has no rewrites", () => {
+    const ownDocling = new Map([[4, "docling page 4"]]);
+    const shortPackage = {
+      doclingByPage: ownDocling,
+      correctedByPage: new Map([[4, "short correction"]]),
+    };
+    const fullPackage = {
+      doclingByPage: new Map([
+        [4, "docling page 4"],
+        [29, "attachment"],
+      ]),
+      correctedByPage: new Map([
+        [4, "Ambient Mechanical table"],
+        [29, "attachment correction"],
+      ]),
+    };
+    const selected = selectCorrectedPageText({
+      ownDocling,
+      ownCorrected: new Map(),
+      donors: [shortPackage, fullPackage],
+    });
+    assert.equal(selected.get(4), "Ambient Mechanical table");
+    assert.equal(selected.has(29), false);
+  });
+
+  it("keeps this meeting's rewrites instead of a same-date package", () => {
+    const selected = selectCorrectedPageText({
+      ownDocling: new Map([[4, "docling page 4"]]),
+      ownCorrected: new Map([[4, "local correction"]]),
+      donors: [{
+        doclingByPage: new Map([[4, "docling page 4"]]),
+        correctedByPage: new Map([[4, "other meeting"]]),
+      }],
+    });
+    assert.equal(selected.get(4), "local correction");
   });
 
   it("does not use V2 notes when linked pages exist but have no rewrite yet", () => {

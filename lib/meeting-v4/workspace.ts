@@ -2,7 +2,7 @@
  * Loads a V4 workspace from a V2 meeting that already has a reviewed segmentation.
  */
 
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import {
@@ -11,13 +11,18 @@ import {
   meetingsV2DocumentPages,
   meetingsV2TranscriptSegments,
   meetingsV3AgendaItems,
+  meetingsV3PageRewrites,
 } from "@/lib/db/schema-v2";
 import { readMeetingV2Settings, type MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
 import { listMeetingPageRewrites } from "@/lib/meeting-v3/page-rewrite-run";
-import { resolveAgendaSourcePages } from "@/lib/meeting-v4/agenda-text";
+import {
+  buildAgendaExtracts,
+  resolveAgendaSourcePages,
+  selectCorrectedPageText,
+  type CorrectedPageDonor,
+} from "@/lib/meeting-v4/agenda-text";
 import { assembleMeetingsV4Minutes, type MeetingsV4AssemblyItem } from "@/lib/meeting-v4/assemble";
-import { buildAgendaExtracts } from "@/lib/meeting-v4/agenda-text";
 import { inventoryMeetingsV4, type MeetingsV4Inventory } from "@/lib/meeting-v4/inventory";
 import type { MeetingsV4ItemResult, MeetingsV4Stored } from "@/lib/meeting-v4/types";
 
@@ -192,6 +197,45 @@ export async function listMeetingsV4Sources(): Promise<Array<{
   }).sort((left, right) => right.meetingDate.localeCompare(left.meetingDate) || left.title.localeCompare(right.title));
 }
 
+async function listSameDateCorrectedDonors(
+  meetingId: string,
+  meetingDate: string,
+): Promise<CorrectedPageDonor[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      donorId: meetingsV3PageRewrites.meetingV2Id,
+      pageNumber: meetingsV3PageRewrites.pageNumber,
+      correctedText: meetingsV3PageRewrites.correctedText,
+      extractedText: meetingsV2DocumentPages.extractedText,
+    })
+    .from(meetingsV3PageRewrites)
+    .innerJoin(meetingsV2, eq(meetingsV2.id, meetingsV3PageRewrites.meetingV2Id))
+    .innerJoin(
+      meetingsV2DocumentPages,
+      and(
+        eq(meetingsV2DocumentPages.meetingV2Id, meetingsV3PageRewrites.meetingV2Id),
+        eq(meetingsV2DocumentPages.pageNumber, meetingsV3PageRewrites.pageNumber),
+      ),
+    )
+    .where(and(eq(meetingsV2.meetingDate, meetingDate), ne(meetingsV2.id, meetingId)));
+
+  const byMeeting = new Map<string, {
+    doclingByPage: Map<number, string>;
+    correctedByPage: Map<number, string>;
+  }>();
+  for (const row of rows) {
+    let donor = byMeeting.get(row.donorId);
+    if (!donor) {
+      donor = { doclingByPage: new Map(), correctedByPage: new Map() };
+      byMeeting.set(row.donorId, donor);
+    }
+    donor.doclingByPage.set(row.pageNumber, row.extractedText);
+    donor.correctedByPage.set(row.pageNumber, row.correctedText);
+  }
+  return [...byMeeting.values()];
+}
+
 /** Agenda, cues, and reviewed spans for a draft run. */
 export async function loadMeetingsV4Source(meetingId: string): Promise<{
   id: string;
@@ -272,9 +316,20 @@ export async function loadMeetingsV4Source(meetingId: string): Promise<{
     const extracted = page.extractedText.trim();
     if (extracted) doclingPageText.set(page.pageNumber, extracted);
   }
+  const ownCorrected = new Map<number, string>();
   for (const page of rewrites) {
     const corrected = page.correctedText.trim();
-    if (corrected) correctedPageText.set(page.pageNumber, corrected);
+    if (corrected) ownCorrected.set(page.pageNumber, corrected);
+  }
+  const donors = ownCorrected.size > 0
+    ? []
+    : await listSameDateCorrectedDonors(meetingId, meeting.meetingDate);
+  for (const [pageNumber, text] of selectCorrectedPageText({
+    ownDocling: doclingPageText,
+    ownCorrected,
+    donors,
+  })) {
+    correctedPageText.set(pageNumber, text);
   }
   const pageText = new Map(doclingPageText);
   for (const [pageNumber, text] of correctedPageText) {

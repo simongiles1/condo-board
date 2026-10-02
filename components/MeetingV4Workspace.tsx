@@ -463,7 +463,7 @@ function AgendaSentPanel({ item }: { item: MeetingsV4ItemResult }) {
         <MarkdownPreview>{panelBody}</MarkdownPreview>
       </div>
       <p className="border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-500">
-        The draft prompt sends the corrected extract from the same page rewrites as the V3 package comparison. When a linked page has no rewrite yet, Docling is used for that page only.
+        The draft prompt sends the corrected extract. This meeting's rewrites are used when they exist. Otherwise the text comes from the V3 package on the same meeting date whose pages match. A page with no rewrite yet uses Docling for that page only.
       </p>
     </div>
   );

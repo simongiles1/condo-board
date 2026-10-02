@@ -104,6 +104,19 @@ export function formatReadableTranscript(merged: MergedVttCue[]): string {
   return merged.map((cue) => formatReadableCueLine(cue)).join("\n\n");
 }
 
+/** Format selected cue indexes using the same readable layout as a full transcript copy. */
+export function formatReadableTranscriptForCueIndexes(
+  cues: MergedVttCue[],
+  cueIndexes: readonly number[],
+): string {
+  const selected: MergedVttCue[] = [];
+  for (const index of cueIndexes) {
+    const cue = cues[index];
+    if (cue) selected.push(cue);
+  }
+  return formatReadableTranscript(selected);
+}
+
 /** Parse VTT and merge consecutive same-speaker cues. */
 export function vttToMergedCues(vtt: string): MergedVttCue[] {
   const cues = parseVttCues(vtt);

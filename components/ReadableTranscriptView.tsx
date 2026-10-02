@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import type { MergedVttCue } from "@/lib/parsers/vtt";
 import { formatVttTimestamp, parseVttTimestampMs } from "@/lib/parsers/vtt";
 import { SearchHighlightedText } from "@/components/SearchHighlightedText";
+import { TranscriptSegmentCopyButton } from "@/components/TranscriptSegmentCopyButton";
 import type { CueTextMatch } from "@/lib/transcript/search";
 import {
   groupCuesByTranscriptSections,
@@ -235,29 +236,43 @@ export function ReadableTranscriptView({
                     ? `Overlap: ${distinctSections.map(sectionLabel).join(" · ")}`
                     : label;
                   const className =
-                    "max-w-[90%] truncate rounded-full border bg-white px-2.5 py-0.5 text-xs font-semibold shadow-sm";
+                    "inline-flex max-w-[90%] items-center gap-0.5 truncate rounded-full border bg-white py-0.5 pl-2.5 pr-1 text-xs font-semibold shadow-sm";
+                  const pillStyle = { borderColor: color, color };
+                  const copyButton = (
+                    <TranscriptSegmentCopyButton
+                      cues={cues}
+                      cueIndexes={group.cueIndexes}
+                      sectionLabel={label}
+                    />
+                  );
                   if (onSectionClick) {
                     return (
-                      <button
+                      <span
                         key={`${section.id}-${section.startSeconds}`}
-                        type="button"
-                        className={`${className} cursor-pointer hover:bg-slate-50`}
-                        style={{ borderColor: color, color }}
+                        className={className}
+                        style={pillStyle}
                         title={`${overlapTitle} — view linked chunks`}
-                        onClick={() => onSectionClick(section)}
                       >
-                        {label}
-                      </button>
+                        <button
+                          type="button"
+                          className="min-w-0 truncate cursor-pointer hover:underline"
+                          onClick={() => onSectionClick(section)}
+                        >
+                          {label}
+                        </button>
+                        {copyButton}
+                      </span>
                     );
                   }
                   return (
                     <span
                       key={`${section.id}-${section.startSeconds}`}
                       className={className}
-                      style={{ borderColor: color, color }}
+                      style={pillStyle}
                       title={overlapTitle}
                     >
-                      {label}
+                      <span className="min-w-0 truncate">{label}</span>
+                      {copyButton}
                     </span>
                   );
                 })}

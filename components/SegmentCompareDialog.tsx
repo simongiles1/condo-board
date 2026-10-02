@@ -6,6 +6,7 @@ import {
   SECTION_BORDER_COLORS,
   speakerBackgroundColor,
 } from "@/components/ReadableTranscriptView";
+import { TranscriptSegmentCopyButton } from "@/components/TranscriptSegmentCopyButton";
 import type { MergedVttCue } from "@/lib/parsers/vtt";
 import { formatVttTimestamp } from "@/lib/parsers/vtt";
 import {
@@ -939,6 +940,7 @@ type ComparePairedCueGridProps = {
     partnerMeta: CueSegmentMeta;
     pairedRow: PairedCueRowLayout;
     segmentLabelAbove: boolean;
+    segmentCueIndexes: number[];
   }) => ReactNode;
   pairedRowForIndex?: (cueIndex: number, base: PairedCueRowLayout) => PairedCueRowLayout;
 };
@@ -977,7 +979,13 @@ function ComparePairedCueGrid({
             <div className="pointer-events-none absolute inset-0 z-20 overflow-visible">
               <div className="sticky z-20 flex justify-center [top:var(--compare-pane-header-offset,3.25rem)] -mx-0.5 px-0.5 pt-0.5 mb-1">
                 <div className="pointer-events-auto bg-gradient-to-b from-white from-70% to-transparent pb-1 px-1 rounded-full">
-                  <SegmentLabelRow meta={primaryMeta} colors={colors} visible />
+                  <SegmentLabelRow
+                    meta={primaryMeta}
+                    colors={colors}
+                    visible
+                    cues={cues}
+                    segmentCueIndexes={group.cueIndexes}
+                  />
                 </div>
               </div>
             </div>
@@ -1011,6 +1019,7 @@ function ComparePairedCueGrid({
                   partnerMeta: cuePartnerMeta,
                   pairedRow,
                   segmentLabelAbove: showInvisibleLabel,
+                  segmentCueIndexes: group.cueIndexes,
                 })}
               </div>
             );
@@ -1061,10 +1070,14 @@ function SegmentLabelRow({
   meta,
   colors,
   visible,
+  cues,
+  segmentCueIndexes,
 }: {
   meta: CueSegmentMeta;
   colors: Map<string, string>;
   visible: boolean;
+  cues?: MergedVttCue[];
+  segmentCueIndexes?: readonly number[];
 }) {
   const { sections } = meta;
   if (sections.length === 0) return null;
@@ -1096,11 +1109,18 @@ function SegmentLabelRow({
         return (
           <span
             key={`${section.id}-${section.startSeconds}`}
-            className="max-w-[95%] truncate rounded-full border bg-white px-2.5 py-0.5 text-xs font-semibold shadow-sm"
+            className="inline-flex max-w-[95%] items-center gap-0.5 truncate rounded-full border bg-white py-0.5 pl-2.5 pr-1 text-xs font-semibold shadow-sm"
             style={{ borderColor: sectionColor, color: sectionColor }}
             title={overlapTitle}
           >
-            {label}
+            <span className="min-w-0 truncate">{label}</span>
+            {cues && segmentCueIndexes && segmentCueIndexes.length > 0 ? (
+              <TranscriptSegmentCopyButton
+                cues={cues}
+                cueIndexes={segmentCueIndexes}
+                sectionLabel={label}
+              />
+            ) : null}
           </span>
         );
       })}
@@ -1125,6 +1145,8 @@ function CueCell({
   onGoldResizePointerDown,
   goldCueRow = false,
   segmentLabelAbove = false,
+  cues,
+  segmentCueIndexes,
 }: {
   cue: MergedVttCue;
   meta: CueSegmentMeta;
@@ -1147,6 +1169,8 @@ function CueCell({
   ) => void;
   goldCueRow?: boolean;
   segmentLabelAbove?: boolean;
+  cues?: MergedVttCue[];
+  segmentCueIndexes?: readonly number[];
 }) {
   const { sections, position, showLabel } = meta;
   const hasSection = sections.length > 0;
@@ -1250,7 +1274,13 @@ function CueCell({
           </div>
         ) : null}
         {inlineLabel ? (
-          <SegmentLabelRow meta={labelSource!} colors={colors} visible={showLabel} />
+          <SegmentLabelRow
+            meta={labelSource!}
+            colors={colors}
+            visible={showLabel}
+            cues={cues}
+            segmentCueIndexes={segmentCueIndexes}
+          />
         ) : null}
         <div className="flex items-baseline justify-between gap-3">
           <span className="text-sm font-semibold text-slate-900">
@@ -1884,6 +1914,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                       partnerMeta,
                       pairedRow,
                       segmentLabelAbove,
+                      segmentCueIndexes,
                     }) => {
                       const cue = cues[index];
                       if (side === "left") {
@@ -1896,6 +1927,8 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                             colors={colors}
                             cueIndex={index}
                             segmentLabelAbove={segmentLabelAbove}
+                            cues={cues}
+                            segmentCueIndexes={segmentCueIndexes}
                           />
                         );
                       }
@@ -1945,6 +1978,8 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                           colors={colors}
                           cueIndex={index}
                           segmentLabelAbove={segmentLabelAbove}
+                          cues={cues}
+                          segmentCueIndexes={segmentCueIndexes}
                           onCueClick={
                             goldSpanSettingActive ? handleGoldCueClick : undefined
                           }
@@ -2076,6 +2111,7 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                     partnerMeta,
                     pairedRow,
                     segmentLabelAbove,
+                    segmentCueIndexes,
                   }) => (
                     <CueCell
                       cue={cues[index]}
@@ -2085,6 +2121,8 @@ export function SegmentCompareDialog({ open, meetingId, onClose }: Props) {
                       colors={colors}
                       cueIndex={index}
                       segmentLabelAbove={segmentLabelAbove}
+                      cues={cues}
+                      segmentCueIndexes={segmentCueIndexes}
                     />
                   )}
                 />

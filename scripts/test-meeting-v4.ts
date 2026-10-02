@@ -16,7 +16,12 @@ import { assembleMeetingsV4Minutes } from "../lib/meeting-v4/assemble";
 import { minutesJsonForGoldCompare } from "../lib/meeting-v4/workspace";
 import { buildAiMinutesConcepts } from "../lib/minutes/gold-standard-ai-concepts";
 import { bundleCuesForItem, inventoryMeetingsV4 } from "../lib/meeting-v4/inventory";
-import { readMeetingsV4Draft } from "../lib/meeting-v4/prompt";
+import {
+  buildMeetingsV4DraftUserPayload,
+  meetingsV4DraftFullCallMarkdown,
+  meetingsV4DraftTranscriptMarkdown,
+} from "../lib/meeting-v4/draft-payload";
+import { MEETINGS_V4_DRAFT_PROMPT, readMeetingsV4Draft } from "../lib/meeting-v4/prompt";
 import type { MeetingsV4AssemblyItem } from "../lib/meeting-v4/assemble";
 import { RESTRICTED_ADDENDUM_TITLE } from "../lib/minutes/restricted-addendum-boilerplate";
 
@@ -212,6 +217,42 @@ describe("v4 agenda text", () => {
     assert.match(extracts.sent, /Docling table/);
     assert.equal(extracts.sent.includes("$214,194.00"), false);
     assert.equal(extracts.corrected, "");
+  });
+});
+
+describe("v4 draft payload", () => {
+  it("matches the user message sent on draft", () => {
+    const payload = buildMeetingsV4DraftUserPayload({
+      title: "Booster Pump",
+      itemNumber: "4.B.1",
+      bundle: {
+        agendaText: "Page 4\n| Ambient | $210,994 |",
+        agendaTextDocling: "docling",
+        agendaTextCorrected: "Page 4\n| Ambient | $210,994 |",
+        cues: [{
+          index: 0,
+          start: "00:00:02.000",
+          end: "00:00:04.000",
+          speaker: "Ben",
+          text: "Booster pump.",
+        }],
+        attachmentPages: [],
+      },
+    });
+    assert.equal(payload.agenda.includes("Ambient"), true);
+    assert.equal(payload.transcript.length, 1);
+    assert.match(meetingsV4DraftTranscriptMarkdown(payload.transcript.map((cue, index) => ({
+      index,
+      ...cue,
+    }))), /Ben/);
+    assert.match(
+      meetingsV4DraftFullCallMarkdown(MEETINGS_V4_DRAFT_PROMPT, payload),
+      /=== System instruction ===/,
+    );
+    assert.match(
+      meetingsV4DraftFullCallMarkdown(MEETINGS_V4_DRAFT_PROMPT, payload),
+      /"itemNumber": "4.B.1"/,
+    );
   });
 });
 

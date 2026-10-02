@@ -13,6 +13,7 @@ import { DEEPSEEK_COMPLETION_MODEL, generateDeepSeekJson } from "@/lib/deepseek/
 import { readMeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { buildAgendaExtracts } from "@/lib/meeting-v4/agenda-text";
 import { bundleCuesForItem, inventoryMeetingsV4 } from "@/lib/meeting-v4/inventory";
+import { buildMeetingsV4DraftUserPayload, meetingsV4DraftUserText } from "@/lib/meeting-v4/draft-payload";
 import { MEETINGS_V4_DRAFT_PROMPT, readMeetingsV4Draft } from "@/lib/meeting-v4/prompt";
 import type { MeetingsV4ItemResult, MeetingsV4Stored } from "@/lib/meeting-v4/types";
 import {
@@ -130,20 +131,14 @@ export async function draftMeetingsV4(meetingId: string): Promise<MeetingsV4Work
 
 async function writeOne(item: MeetingsV4ItemResult): Promise<void> {
   try {
+    const userPayload = buildMeetingsV4DraftUserPayload({
+      title: item.title,
+      itemNumber: item.itemNumber,
+      bundle: item.bundle,
+    });
     const response = await generateDeepSeekJson({
       systemInstruction: MEETINGS_V4_DRAFT_PROMPT,
-      userText: JSON.stringify({
-        topic: item.title,
-        itemNumber: item.itemNumber,
-        agenda: item.bundle.agendaText,
-        transcript: item.bundle.cues.map((cue) => ({
-          speaker: cue.speaker,
-          start: cue.start,
-          end: cue.end,
-          text: cue.text,
-        })),
-        attachments: item.bundle.attachmentPages,
-      }),
+      userText: meetingsV4DraftUserText(userPayload),
       modelName: DEEPSEEK_COMPLETION_MODEL,
       temperature: 0,
       thinking: false,

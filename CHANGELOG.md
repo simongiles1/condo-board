@@ -18,6 +18,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Meetings V4 draft** — Each item’s “Agenda text and transcript sent” panel has **Transcript** and **Full LLM call** tabs again, alongside Corrected and Docling extract. Full LLM call shows the system instruction and the user JSON (agenda, transcript cues, attachments).
 - **Meetings V4 draft** — Corrected extract stays filled when the page rewrites live on the V3 copy of the same meeting date and this V4 meeting has none of its own. Reload the draft step. The next Draft minutes run sends that corrected text.
 - **Meetings V4 minutes** — A decision made at the meeting is printed as a formal motion: mover, seconder, the resolution, and whether it carried, was defeated, or was deferred. Names appear only when the transcript identifies them. Draft again to add motions to an existing draft.
 - **Meetings V4 draft** — Each item resolves V3-linked pages from the same `meetings_v3_page_rewrites` rows as the package comparison modal, preferring links that already have corrected rewrites. The draft panel shows only Corrected and Docling extracts; the prompt sends corrected text (Docling per page only when a rewrite is missing). Reload the workspace or draft again after linking or correcting pages.

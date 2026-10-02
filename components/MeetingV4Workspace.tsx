@@ -14,6 +14,11 @@ import {
   validationScoreLabel,
   type GoldStandardValidationResult,
 } from "@/lib/minutes/gold-standard-schema";
+import {
+  buildMeetingsV4DraftUserPayload,
+  meetingsV4DraftFullCallMarkdown,
+  meetingsV4DraftTranscriptMarkdown,
+} from "@/lib/meeting-v4/draft-payload";
 import { MEETINGS_V4_DRAFT_PROMPT } from "@/lib/meeting-v4/prompt";
 import type { MeetingsV4ItemResult } from "@/lib/meeting-v4/types";
 import {
@@ -405,14 +410,6 @@ function Draft({
           <details className="mt-2 text-sm text-slate-600">
             <summary className="cursor-pointer">Agenda text and transcript sent</summary>
             <AgendaSentPanel item={item} />
-            <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3">
-              {item.bundle.cues.map((cue) => (
-                <li key={cue.index}>
-                  <span className="tabular-nums text-slate-500">{cue.start}</span>
-                  {cue.speaker ? ` ${cue.speaker}` : ""} — {cue.text}
-                </li>
-              ))}
-            </ul>
           </details>
         </article>
       ))}
@@ -420,33 +417,63 @@ function Draft({
   );
 }
 
+type AgendaSentTabId = "corrected" | "docling" | "transcript" | "full";
+
 function AgendaSentPanel({ item }: { item: MeetingsV4ItemResult }) {
-  const [extractTab, setExtractTab] = useState<"corrected" | "docling">("corrected");
+  const [activeTab, setActiveTab] = useState<AgendaSentTabId>("corrected");
   const correctedMarkdown = item.bundle.agendaTextCorrected?.trim() ?? "";
   const doclingMarkdown = item.bundle.agendaTextDocling?.trim() ?? "";
-  const tabs: Array<{ id: "corrected" | "docling"; label: string }> = [
+  const userPayload = useMemo(
+    () => buildMeetingsV4DraftUserPayload({
+      title: item.title,
+      itemNumber: item.itemNumber,
+      bundle: item.bundle,
+    }),
+    [item.title, item.itemNumber, item.bundle],
+  );
+  const transcriptMarkdown = useMemo(
+    () => meetingsV4DraftTranscriptMarkdown(item.bundle.cues),
+    [item.bundle.cues],
+  );
+  const fullCallMarkdown = useMemo(
+    () => meetingsV4DraftFullCallMarkdown(MEETINGS_V4_DRAFT_PROMPT, userPayload),
+    [userPayload],
+  );
+  const tabs: Array<{ id: AgendaSentTabId; label: string }> = [
     { id: "corrected", label: "Corrected extract" },
     { id: "docling", label: "Docling extract" },
+    { id: "transcript", label: "Transcript" },
+    { id: "full", label: "Full LLM call" },
   ];
-  const copyMarkdown = extractTab === "docling" ? doclingMarkdown : correctedMarkdown;
-  const panelBody =
-    extractTab === "docling"
-      ? doclingMarkdown || "No Docling text is linked to this item's source pages."
-      : correctedMarkdown || "No corrected rewrite is stored for this item's source pages yet.";
+  const panelBody = (() => {
+    switch (activeTab) {
+      case "docling":
+        return doclingMarkdown || "No Docling text is linked to this item's source pages.";
+      case "transcript":
+        return transcriptMarkdown;
+      case "full":
+        return fullCallMarkdown;
+      default:
+        return correctedMarkdown || "No corrected rewrite is stored for this item's source pages yet.";
+    }
+  })();
+  const copyMarkdown = panelBody;
+  const copyJson = activeTab === "full" ? JSON.stringify(userPayload, null, 2) : null;
+  const useMarkdownPreview = activeTab === "corrected" || activeTab === "docling";
 
   return (
     <div className="mt-2 overflow-hidden rounded-lg border border-slate-200 bg-white">
       <div className="flex items-stretch border-b border-slate-200">
-        <div className="flex min-w-0 flex-1" role="tablist" aria-label="Agenda extract">
+        <div className="flex min-w-0 flex-1 overflow-x-auto" role="tablist" aria-label="Draft input sent to the model">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               type="button"
               role="tab"
-              aria-selected={extractTab === tab.id}
-              onClick={() => setExtractTab(tab.id)}
-              className={`px-3 py-2 text-xs font-semibold ${
-                extractTab === tab.id
+              aria-selected={activeTab === tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`shrink-0 px-3 py-2 text-xs font-semibold ${
+                activeTab === tab.id
                   ? "border-b-2 border-teal-700 text-teal-900"
                   : "text-slate-600 hover:bg-slate-50"
               }`}
@@ -456,14 +483,22 @@ function AgendaSentPanel({ item }: { item: MeetingsV4ItemResult }) {
           ))}
         </div>
         <div className="flex shrink-0 items-center border-l border-slate-200 px-2">
-          <CopyMarkdownButton markdown={copyMarkdown} label="Copy as markdown" />
+          <CopyMarkdownButton markdown={copyMarkdown} json={copyJson} label="Copy" />
         </div>
       </div>
       <div className="max-h-96 overflow-auto px-3 py-2 text-sm" role="tabpanel">
-        <MarkdownPreview>{panelBody}</MarkdownPreview>
+        {useMarkdownPreview ? (
+          <MarkdownPreview>{panelBody}</MarkdownPreview>
+        ) : (
+          <pre className="whitespace-pre-wrap font-mono text-xs text-slate-800">{panelBody}</pre>
+        )}
       </div>
       <p className="border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-500">
-        The draft prompt sends the corrected extract. This meeting's rewrites are used when they exist. Otherwise the text comes from the V3 package on the same meeting date whose pages match. A page with no rewrite yet uses Docling for that page only.
+        {activeTab === "full"
+          ? "Full LLM call shows the system instruction and the user JSON message. The agenda field is corrected-first page text; attachments are empty for V4."
+          : activeTab === "transcript"
+            ? "Transcript lists the reviewed cues sent in the user message for this item."
+            : "The draft prompt sends the corrected extract. This meeting's rewrites are used when they exist. Otherwise the text comes from the V3 package on the same meeting date whose pages match. A page with no rewrite yet uses Docling for that page only."}
       </p>
     </div>
   );

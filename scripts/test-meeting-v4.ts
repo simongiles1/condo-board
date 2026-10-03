@@ -13,6 +13,7 @@ import {
   selectCorrectedPageText,
 } from "../lib/meeting-v4/agenda-text";
 import { assembleMeetingsV4Minutes } from "../lib/meeting-v4/assemble";
+import { MEETINGS_V4_PIPELINE_PROMPT_TABS, MEETINGS_V4_RESTRICTED_CLASSIFICATION_PROMPT } from "../lib/meeting-v4/pipeline-prompts";
 import { minutesJsonForGoldCompare } from "../lib/meeting-v4/workspace";
 import { buildAiMinutesConcepts } from "../lib/minutes/gold-standard-ai-concepts";
 import { bundleCuesForItem, inventoryMeetingsV4 } from "../lib/meeting-v4/inventory";
@@ -308,6 +309,16 @@ describe("v4 draft reply", () => {
   });
 });
 
+describe("v4 pipeline prompts", () => {
+  it("lists draft, restricted, and assembly tabs for the minutes prompt viewer", () => {
+    const ids = MEETINGS_V4_PIPELINE_PROMPT_TABS.map((tab) => tab.id);
+    assert.ok(ids.includes("draft"));
+    assert.ok(ids.includes("restricted"));
+    assert.ok(ids.includes("assembly"));
+    assert.match(MEETINGS_V4_RESTRICTED_CLASSIFICATION_PROMPT, /restricted/);
+  });
+});
+
 describe("v4 assembly", () => {
   it("prints the paragraph, the action, and the formal motion", () => {
     const item = assemblyItem({
@@ -381,6 +392,140 @@ describe("v4 assembly", () => {
     });
     assert.equal(assembled.markdown.includes("MOTION"), false);
     assert.equal(assembled.markdown.includes("Pat"), false);
+  });
+
+  it("numbers one presentation section and keeps later sections in discussion order", () => {
+    const assembled = assembleMeetingsV4Minutes({
+      title: "Minutes - 2026-08-06 v4",
+      meetingDate: "2026-08-06",
+      items: [
+        assemblyItem({
+          agendaItemId: "call",
+          itemNumber: "1",
+          title: "Call to Order",
+          itemType: "call_to_order",
+          minutes: "Proper notice having been given, Management called the meeting to order at 6:04 p.m.",
+        }),
+        assemblyItem({
+          agendaItemId: "fuel",
+          itemNumber: "2.1",
+          title: "General Fuel Delivery and Exhaust System Upgrade",
+          itemType: "guest_presentation",
+          minutes: "Trace presented the tender review.",
+        }),
+        assemblyItem({
+          agendaItemId: "riser",
+          itemNumber: "2.2",
+          title: "Riser Expansion",
+          itemType: "guest_presentation",
+          minutes: "Trace presented the riser expansion.",
+        }),
+        assemblyItem({
+          agendaItemId: "close",
+          itemNumber: "4",
+          title: "Meeting Conclusion",
+          itemType: "adjournment",
+          minutes: "There being no further business to discuss, the meeting was unanimously concluded at 8:50 p.m.",
+        }),
+      ],
+    });
+    assert.match(assembled.markdown, /\*\*MINUTES\*\* of the meeting/);
+    assert.match(assembled.markdown, /## 1\. CALL TO ORDER/);
+    assert.match(assembled.markdown, /## 2\. PRESENTATION/);
+    assert.match(assembled.markdown, /### 2\.1 General Fuel Delivery and Exhaust System Upgrade/);
+    assert.match(assembled.markdown, /### 2\.2 Riser Expansion/);
+    assert.match(assembled.markdown, /## 3\. MEETING CONCLUSION/);
+    assert.match(assembled.markdown, /was concluded at 8:50 p\.m\./);
+    assert.equal(assembled.markdown.includes("unanimously"), false);
+    assert.equal(assembled.markdown.includes("DATE OF NEXT MEETING"), false);
+    assert.equal(assembled.markdown.includes("was not recorded"), false);
+  });
+
+  it("keeps a restricted management letter and gives completed work its own subsection", () => {
+    const assembled = assembleMeetingsV4Minutes({
+      title: "Minutes - 2026-08-12 v14",
+      meetingDate: "2026-08-12",
+      items: [
+        assemblyItem({
+          agendaItemId: "a",
+          itemNumber: "4.A",
+          title: "Status certificates",
+          itemType: "ratification_line_item",
+          sectionLabel: "Management Report",
+          minutes: "The status certificate was ratified.",
+        }),
+        assemblyItem({
+          agendaItemId: "b",
+          itemNumber: "4.B",
+          title: "Chargeback dispute",
+          itemType: "discussion_approval",
+          sectionLabel: "Management Report",
+          minutes: "The board considered the chargeback dispute.",
+          restricted: true,
+        }),
+        assemblyItem({
+          agendaItemId: "c",
+          itemNumber: "4.C",
+          title: "Lobby restoration",
+          itemType: "discussion_approval",
+          sectionLabel: "Management Report",
+          minutes: "The lobby restoration was discussed.",
+        }),
+        assemblyItem({
+          agendaItemId: "done",
+          itemNumber: "4.D",
+          title: "Roof repair",
+          itemType: "completed_items",
+          sectionLabel: "Items completed",
+          minutes: "The roof repair was finished.",
+          actions: [{ owner: "Management", description: "File the completion report." }],
+        }),
+      ],
+    });
+    const addendumAt = assembled.markdown.indexOf(RESTRICTED_ADDENDUM_TITLE);
+    const publicText = assembled.markdown.slice(0, addendumAt);
+    const addendumText = assembled.markdown.slice(addendumAt);
+    assert.match(publicText, /\*\*\(a\)\*\* Status certificates/);
+    assert.match(publicText, /\*\*\(c\)\*\* Lobby restoration/);
+    assert.equal(publicText.includes("Chargeback dispute"), false);
+    assert.match(publicText, /### 1\.3 Work Completed/);
+    assert.match(publicText, /\*\*Action: Management File the completion report\.\*\*/);
+    assert.match(addendumText, /\*\*\(b\)\*\* Chargeback dispute/);
+    assert.match(addendumText, /## 1\. MANAGEMENT REPORT, CONTINUED/);
+  });
+
+  it("prints a guest departure and a recording-secretary exit on the section where they happened", () => {
+    const assembled = assembleMeetingsV4Minutes({
+      title: "Minutes - 2026-08-06 v4",
+      meetingDate: "2026-08-06",
+      items: [
+        assemblyItem({
+          agendaItemId: "fuel",
+          itemNumber: "2.1",
+          title: "General Fuel Delivery",
+          itemType: "guest_presentation",
+          minutes: "Trace presented the tender review.",
+        }),
+        assemblyItem({
+          agendaItemId: "budget",
+          itemNumber: "8",
+          title: "Budget Discussion",
+          itemType: "discussion_topic",
+          minutes: "The board discussed the budget.",
+        }),
+      ],
+      departures: [
+        { name: "Ryan Ratcliff", time: "8:09 p.m.", role: "guest", afterSectionId: "presentations" },
+        { name: "Gretta Averbukh", role: "recording_secretary", afterSectionId: "post:Budget Discussion" },
+      ],
+    });
+    const presentationAt = assembled.markdown.indexOf("## 1. PRESENTATION");
+    const departureAt = assembled.markdown.indexOf("Ryan Ratcliff was thanked for attending and departed the meeting at 8:09 p.m.");
+    const budgetAt = assembled.markdown.indexOf("## 2. BUDGET DISCUSSION");
+    const secretaryAt = assembled.markdown.indexOf("The Recording Secretary was excused.");
+    assert.ok(presentationAt >= 0 && departureAt > presentationAt && budgetAt > departureAt);
+    assert.ok(secretaryAt > budgetAt);
+    assert.equal(assembled.markdown.includes("The guests left the meeting"), false);
   });
 
   it("places a restricted item in the addendum", () => {

@@ -2,12 +2,16 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { AiUsageDialog, AiUsageIconButton } from "@/components/AiUsageDialog";
 import { CopyMarkdownButton } from "@/components/CopyMarkdownButton";
 import { GoldStandardCompareDialog } from "@/components/GoldStandardCompareDialog";
 import { GoldStandardValidationSidePanel } from "@/components/GoldStandardValidationSidePanel";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
+import { MeetingDocumentsDialog, MeetingDocumentsIconButton } from "@/components/MeetingDocumentsDialog";
+import { MeetingsV4PromptsDialog, MeetingsV4PromptsIconButton } from "@/components/MeetingsV4PromptsDialog";
+import type { AiUsageStageRow } from "@/lib/gemini/usage";
 import { headlineValidationScore } from "@/lib/minutes/gold-standard-compare";
 import {
   parseStoredGoldStandardValidation,
@@ -43,6 +47,11 @@ export function MeetingV4Workspace({ initial }: { initial: MeetingsV4Workspace }
   const [reCompareBusy, setReCompareBusy] = useState(false);
   const [liveValidation, setLiveValidation] = useState<GoldStandardValidationResult | null>(null);
   const [goldFilePath, setGoldFilePath] = useState(initial.goldStandardFilePath);
+  const [documentsDialogOpen, setDocumentsDialogOpen] = useState(false);
+  const [aiUsageOpen, setAiUsageOpen] = useState(false);
+  const [promptsOpen, setPromptsOpen] = useState(false);
+  const [aiUsageStages, setAiUsageStages] = useState<AiUsageStageRow[] | null>(null);
+  const [aiUsageLoading, setAiUsageLoading] = useState(false);
   const requested = parseMeetingsV4WizardStepId(searchParams.get(MEETINGS_V4_WIZARD_STEP_QUERY_PARAM));
   const shownId = requested ?? "segmentation";
   const shown = MEETINGS_V4_WIZARD_STEPS.find((step) => step.id === shownId) ?? MEETINGS_V4_WIZARD_STEPS[0];
@@ -60,6 +69,33 @@ export function MeetingV4Workspace({ initial }: { initial: MeetingsV4Workspace }
     unassigned: inventory.unassignedCues.length,
     overlaps: inventory.overlappingCues.length,
   }), [inventory]);
+  const hasMeetingDocuments = workspace.hasTranscript || workspace.hasBoardPackage;
+  const documentsAgendaOverlay = useMemo(
+    () =>
+      inventory.items.map((item) => ({
+        id: item.id,
+        title: item.title,
+        itemNumber: item.itemNumber,
+      })),
+    [inventory.items],
+  );
+
+  function refreshAiUsage() {
+    setAiUsageLoading(true);
+    void fetch(`/api/v3/meetings/${workspace.id}/ai-usage`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const payload = (await response.json()) as { stages?: AiUsageStageRow[] };
+        setAiUsageStages(payload.stages ?? []);
+      })
+      .catch(() => undefined)
+      .finally(() => setAiUsageLoading(false));
+  }
+
+  useEffect(() => {
+    if (!aiUsageOpen) return;
+    refreshAiUsage();
+  }, [aiUsageOpen, workspace.id]);
 
   function openStep(id: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -205,6 +241,10 @@ export function MeetingV4Workspace({ initial }: { initial: MeetingsV4Workspace }
                 : "Compare against gold standard"
             }
             onCompare={openCompare}
+            hasMeetingDocuments={hasMeetingDocuments}
+            onOpenDocuments={() => setDocumentsDialogOpen(true)}
+            onOpenAiUsage={() => setAiUsageOpen(true)}
+            onOpenPrompts={() => setPromptsOpen(true)}
           />
         ) : null}
       </div>
@@ -217,6 +257,22 @@ export function MeetingV4Workspace({ initial }: { initial: MeetingsV4Workspace }
         onClose={() => setCompareOpen(false)}
         onSuccess={(result) => handleCompareSuccess(result)}
       />
+      <AiUsageDialog
+        open={aiUsageOpen}
+        stages={aiUsageStages}
+        loading={aiUsageLoading}
+        onClose={() => setAiUsageOpen(false)}
+      />
+      <MeetingDocumentsDialog
+        open={documentsDialogOpen}
+        meetingId={workspace.id}
+        transcriptFileName={workspace.transcriptFileName ?? undefined}
+        hasTranscript={workspace.hasTranscript}
+        hasBoardPackage={workspace.hasBoardPackage}
+        agendaItems={documentsAgendaOverlay}
+        onClose={() => setDocumentsDialogOpen(false)}
+      />
+      <MeetingsV4PromptsDialog open={promptsOpen} onClose={() => setPromptsOpen(false)} />
       <GoldStandardValidationSidePanel
         meeting={
           panelOpen
@@ -508,10 +564,18 @@ function Minutes({
   markdown,
   compareLabel,
   onCompare,
+  hasMeetingDocuments,
+  onOpenDocuments,
+  onOpenAiUsage,
+  onOpenPrompts,
 }: {
   markdown: string | null;
   compareLabel: string;
   onCompare: () => void;
+  hasMeetingDocuments: boolean;
+  onOpenDocuments: () => void;
+  onOpenAiUsage: () => void;
+  onOpenPrompts: () => void;
 }) {
   if (!markdown) {
     return <p className="text-sm text-slate-600">Draft the minutes to assemble this document. Attendance and the next-meeting line stay blank.</p>;
@@ -519,6 +583,14 @@ function Minutes({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-end gap-2">
+        {hasMeetingDocuments ? (
+          <MeetingDocumentsIconButton
+            onClick={onOpenDocuments}
+            title="Transcript and board package"
+          />
+        ) : null}
+        <AiUsageIconButton onClick={onOpenAiUsage} title="View AI usage and cost" />
+        <MeetingsV4PromptsIconButton onClick={onOpenPrompts} title="View V4 pipeline prompts" />
         <CopyMarkdownButton markdown={markdown} label="Copy as Markdown" />
         <button
           type="button"

@@ -8,6 +8,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Features
 
+- **Meetings V4 minutes view** — On the Minutes stage, open the transcript and board package, AI usage and cost (same controls as Meetings V3), and a pipeline prompts modal with tabbed system instructions including restricted-item classification.
+- **Meetings V4 minutes** — The assembled minutes follow the order topics were discussed. Presentation is one numbered section, and each presentation inside it is 2.1, 2.2, and so on. Empty topics are left out. A restricted item keeps its original letter or number and moves to the addendum. Completed work is its own management subsection. The conclusion no longer says “unanimously.” The opening title is included, and an action line names the person responsible.
 - **Meetings V4 minutes** — The minutes view can copy the document as Markdown and compare it with an official minutes PDF in the same side-by-side gold-standard view used by Meetings V2. That comparison is stored separately from a V2 draft comparison. The compare dialog labels the V4 draft explicitly instead of the underlying V2 meeting title.
 - **Meetings V4** — The meetings page has a V4 Pipeline tab for a V2 meeting that already has a reviewed transcript segmentation. Segmentation shows those spans and does not segment again. Inventory lists leaves without a span, later returns, overlapping cues, and unassigned transcript. Draft minutes writes one paragraph per item from the agenda text and those cues, and keeps evidence notes beside it. The assembled minutes leave attendance and the next-meeting line blank.
 

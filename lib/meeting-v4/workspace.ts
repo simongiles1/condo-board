@@ -2,9 +2,12 @@
  * Loads a V4 workspace from a V2 meeting that already has a reviewed segmentation.
  */
 
+import path from "path";
+
 import { and, asc, eq, ne } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
+import { meetings } from "@/lib/db/schema";
 import {
   meetingsV2,
   meetingsV2AgendaItems,
@@ -13,6 +16,7 @@ import {
   meetingsV3AgendaItems,
   meetingsV3PageRewrites,
 } from "@/lib/db/schema-v2";
+import { loadMeetingBoardPackageMeta } from "@/lib/meeting-v2/board-package";
 import { readMeetingV2Settings, type MeetingV2Settings } from "@/lib/meeting-v2/extraction-diagnostics";
 import { readAgendaSourcePages } from "@/lib/meeting-v3/agenda-pages";
 import { listMeetingPageRewrites } from "@/lib/meeting-v3/page-rewrite-run";
@@ -72,6 +76,9 @@ export type MeetingsV4Workspace = {
   inventory: MeetingsV4Inventory;
   draft: MeetingsV4Stored | null;
   markdown: string | null;
+  hasTranscript: boolean;
+  hasBoardPackage: boolean;
+  transcriptFileName: string | null;
 };
 
 /**
@@ -105,6 +112,7 @@ export async function loadMeetingsV4Workspace(meetingId: string): Promise<Meetin
   });
   const draftStored = loaded.settings.meetingsV4?.draftedAt ? loaded.settings.meetingsV4 : null;
   const draft = draftStored ? refreshMeetingsV4DraftBundles(loaded, draftStored) : null;
+  const documents = await loadMeetingsV4DocumentFlags(meetingId);
   return {
     id: loaded.id,
     title: loaded.title,
@@ -116,6 +124,30 @@ export async function loadMeetingsV4Workspace(meetingId: string): Promise<Meetin
     inventory,
     draft,
     markdown: draft ? markdownFor(loaded, draft.items) : null,
+    ...documents,
+  };
+}
+
+/** Transcript and board-package availability for the meeting documents dialog. */
+export async function loadMeetingsV4DocumentFlags(meetingId: string): Promise<{
+  hasTranscript: boolean;
+  hasBoardPackage: boolean;
+  transcriptFileName: string | null;
+}> {
+  const db = getDb();
+  const [legacy, boardPackageMeta] = await Promise.all([
+    db
+      .select({ vttFilePath: meetings.vttFilePath })
+      .from(meetings)
+      .where(eq(meetings.id, meetingId))
+      .then((rows) => rows[0] ?? null),
+    loadMeetingBoardPackageMeta(meetingId),
+  ]);
+  const transcriptPath = legacy?.vttFilePath?.trim() || null;
+  return {
+    hasTranscript: Boolean(transcriptPath),
+    hasBoardPackage: boardPackageMeta.ok && boardPackageMeta.payload.available,
+    transcriptFileName: transcriptPath ? path.basename(transcriptPath) : null,
   };
 }
 

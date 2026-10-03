@@ -1,12 +1,12 @@
 /**
- * Assembles V4 item drafts into the V2 minutes document.
- * Procedural items stay in the body so their paragraphs can be read.
- * Dedicated attendance and closing fields stay empty.
+ * Assembles V4 item drafts into the V2 minutes document and the V4 minutes markdown.
+ * The markdown numbers sections in discussion order. Presentations stay one section.
+ * Dedicated attendance and closing fields on the stored document stay empty.
  */
 
 import { parentAgendaItemCode } from "@/lib/meeting-v2/agenda-outline";
 import { mapSuggestedSectionPath } from "@/lib/meeting-v2/draft-builder";
-import { v2ToMarkdown } from "@/lib/minutes/v2-to-markdown";
+import { renderMeetingsV4Minutes, type MeetingsV4Departure } from "@/lib/meeting-v4/minutes-outline";
 import {
   validateMinutesV2,
   type AgendaItemV2,
@@ -39,7 +39,9 @@ const BODY_PATHS = new Set(["call_to_order", "date_of_next_meeting", "terminatio
 export function assembleMeetingsV4Minutes(input: {
   title: string;
   meetingDate: string;
+  meetingTime?: string;
   items: readonly MeetingsV4AssemblyItem[];
+  departures?: readonly MeetingsV4Departure[];
 }): MeetingsV4Assembly {
   if (!input.title.trim()) {
     throw new Error("A meeting title is required before assembling minutes.");
@@ -49,7 +51,16 @@ export function assembleMeetingsV4Minutes(input: {
   if (!validated.value || validated.errors.length > 0) {
     throw new Error(validated.errors.join(" ") || "The minutes draft failed validation.");
   }
-  return { document: validated.value, markdown: v2ToMarkdown(validated.value) };
+  return {
+    document: validated.value,
+    markdown: renderMeetingsV4Minutes({
+      meetingDate: input.meetingDate,
+      items: input.items,
+      attendance: validated.value.attendance,
+      departures: input.departures,
+      meetingTime: input.meetingTime,
+    }),
+  };
 }
 
 function buildDocument(input: {

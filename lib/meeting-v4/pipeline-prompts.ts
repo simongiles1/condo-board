@@ -3,7 +3,7 @@
  * Shown in the V4 minutes prompt viewer; not sent to models from here.
  */
 
-import { TRANSCRIPT_SYSTEM_PROMPT } from "@/lib/meeting-v2/agenda-ai";
+import { TRANSCRIPT_SYSTEM_PROMPT } from "@/lib/meeting-v2/agenda-ai-prompts";
 import { PAGE_REWRITE_SYSTEM_PROMPT } from "@/lib/meeting-v3/page-rewrite";
 import { CONFIDENTIAL_FLAG_PROMPT } from "@/lib/minutes/confidential-definition";
 import { MEETINGS_V4_DRAFT_PROMPT } from "@/lib/meeting-v4/prompt";
